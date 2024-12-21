@@ -49,9 +49,9 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.in_state_time % 10 == 0 {
             let direction = {
-                if let Some(empty_zone) = self.find_empty_zone_between_opponents(ctx) {
-                    return Some(empty_zone);
-                }
+                // if let Some(empty_zone) = self.find_empty_zone_between_opponents(ctx) {
+                //     return Some(empty_zone);
+                // }
 
                 ctx.ball().direction_to_opponent_goal()
             };

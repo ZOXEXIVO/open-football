@@ -19,20 +19,6 @@ pub struct MidfielderStandingState {}
 
 impl StateProcessingHandler for MidfielderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if !ctx.team().is_control_ball() {
-            if ctx.ball().distance() < 150.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Tackling,
-                ));
-            }
-
-            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
-        }
-
         if ctx.player.has_ball(ctx) {
             // Decide whether to hold possession or distribute the ball
             return if self.should_hold_possession(ctx) {
@@ -46,12 +32,30 @@ impl StateProcessingHandler for MidfielderStandingState {
             };
         }
 
-        // 2. Check if the ball is close and the midfielder should attempt to gain possession
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-            // Transition to Tackling state to try and win the ball
+        if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
+                MidfielderState::Running,
             ));
+        }
+        else {
+            if ctx.ball().distance() < 150.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
+
+            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Intercepting,
+                ));
+            }
+
+            if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
+                // Transition to Tackling state to try and win the ball
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
         }
 
         // 3. Check if an opponent is nearby and pressing is needed

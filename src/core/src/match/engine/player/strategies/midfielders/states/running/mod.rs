@@ -8,7 +8,6 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
-use crate::r#match::defenders::states::DefenderState;
 
 static MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
@@ -50,7 +49,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             if !ctx.team().is_control_ball() {
                 if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.9) {
                     return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Intercepting
+                        MidfielderState::Intercepting,
                     ));
                 }
             }
@@ -98,11 +97,20 @@ impl StateProcessingHandler for MidfielderRunningState {
                 .calculate(ctx.player)
                 .velocity,
             )
-        } else if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
+        } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
                     target: ctx.ball().direction_to_opponent_goal(),
-                    slowing_distance: 150.0,
+                    slowing_distance: 100.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
+        } else if ctx.team().is_control_ball() {
+            Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.ball().direction_to_opponent_goal(),
+                    slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
                 .velocity,
@@ -133,7 +141,7 @@ impl MidfielderRunningState {
 
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
         if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
-            return ctx.player().has_clear_shot()
+            return ctx.player().has_clear_shot();
         }
 
         false

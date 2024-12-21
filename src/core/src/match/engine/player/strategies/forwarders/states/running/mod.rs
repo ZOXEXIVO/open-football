@@ -1,14 +1,14 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
+use itertools::Itertools;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
-use itertools::Itertools;
-use crate::r#match::midfielders::states::MidfielderState;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
@@ -43,7 +43,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            if ctx.players().opponents().exists(100.0) {
+            if ctx.players().opponents().exists(50.0) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
@@ -58,18 +58,22 @@ impl StateProcessingHandler for ForwardRunningState {
             }
         } else {
             if ctx.team().is_control_ball() {
-                if self.should_support_attack(ctx) || !self.is_leading_forward(ctx){
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Assisting));
+                if self.should_support_attack(ctx) || !self.is_leading_forward(ctx) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Assisting,
+                    ));
                 }
 
                 if self.should_create_space(ctx) {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::CreatingSpace));
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::CreatingSpace,
+                    ));
                 }
             }
 
             if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
                 return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Intercepting
+                    ForwardState::Intercepting,
                 ));
             }
 
@@ -104,13 +108,38 @@ impl StateProcessingHandler for ForwardRunningState {
 
             Some(player_goal_velocity)
         } else {
-            let result = SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 10.0,
-            }
-            .calculate(ctx.player);
+            if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
+                let players =  ctx.players();
+                let opponents = players.opponents();
 
-            Some(result.velocity)
+                if let Some(goalkeeper) = opponents.goalkeeper().next() {
+                    let result = SteeringBehavior::Evade {
+                        target: goalkeeper.position,
+                    }
+                    .calculate(ctx.player)
+                    .velocity;
+
+                   return  Some(result);
+                }
+
+                None
+            } else {
+                let slowing_distance: f32 = {
+                    if ctx.player().goal_distance() < 200.0 {
+                        100.0
+                    } else {
+                        10.0
+                    }
+                };
+                let result = SteeringBehavior::Arrive {
+                    target: ctx.tick_context.positions.ball.position,
+                    slowing_distance,
+                }
+                .calculate(ctx.player)
+                .velocity;
+
+                Some(result)
+            }
         }
     }
 
@@ -125,7 +154,7 @@ impl ForwardRunningState {
 
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
         if ctx.ball().distance_to_opponent_goal() < SHOOTING_DISTANCE_THRESHOLD {
-            return ctx.player().has_clear_shot()
+            return ctx.player().has_clear_shot();
         }
 
         false
@@ -234,23 +263,6 @@ impl ForwardRunningState {
     }
 
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        let opponents_nearby = ctx.players()
-            .opponents()
-            .nearby(50.0)
-            .collect_vec();
-
-        // Check if there are opponents nearby
-        if !opponents_nearby.is_empty() {
-            // Find the largest gap between opponents
-            let max_gap = opponents_nearby.windows(2).map(|w| (w[1].position - w[0].position).magnitude()).max_by(|a, b| a.partial_cmp(b).unwrap());
-
-            if let Some(gap) = max_gap {
-                // Check if the gap is large enough for the player to exploit
-                let gap_threshold = 10.0; // Adjust the threshold as needed
-                return gap > gap_threshold;
-            }
-        }
-
-        false
+        ctx.players().opponents().exists(50.0)
     }
 }

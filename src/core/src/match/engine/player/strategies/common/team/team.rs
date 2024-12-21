@@ -19,7 +19,15 @@ impl<'b> TeamOperationsImpl<'b> {
     pub fn is_control_ball(&self) -> bool {
         let current_player_team_id = self.ctx.player.team_id;
 
-        if let Some(owner_id) = self.ctx.ball().owner_id() {
+        let ball_owner: Option<u32> = {
+            if let Some(owner_id) = self.ctx.ball().owner_id() {
+                Some(owner_id)
+            } else {
+                self.ctx.ball().previous_owner_id()
+            }
+        };
+
+        if let Some(owner_id) = ball_owner {
             if let Some(ball_owner) = self.ctx.context.players.by_id(owner_id) {
                 return ball_owner.team_id == current_player_team_id;
             }
