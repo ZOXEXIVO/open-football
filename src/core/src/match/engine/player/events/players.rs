@@ -1,5 +1,5 @@
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PassingEventModel;
+use crate::r#match::player::events::{PassingEventModel, ShootingEventModel};
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField};
@@ -16,7 +16,7 @@ pub enum PlayerEvent {
     PassTo(PassingEventModel),
     ClearBall(Vector3<f32>),
     RushOut(u32),
-    Shoot(u32, Vector3<f32>),
+    Shoot(ShootingEventModel),
     MovePlayer(u32, Vector3<f32>),
     StayInGoal(u32),
     MoveBall(u32, Vector3<f32>),
@@ -61,8 +61,8 @@ impl PlayerEventDispatcher {
             PlayerEvent::BallOwnerChange(player_id) => {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
-            PlayerEvent::PassTo(event_model) => {
-                Self::handle_pass_to_event(event_model, field);
+            PlayerEvent::PassTo(pass_event_model) => {
+                Self::handle_pass_to_event(pass_event_model, field);
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::handle_claim_ball_event(player_id, field);
@@ -73,8 +73,8 @@ impl PlayerEventDispatcher {
             PlayerEvent::GainBall(player_id) => {
                 Self::handle_gain_ball_event(player_id, field);
             }
-            PlayerEvent::Shoot(player_id, target_direction) => {
-                Self::handle_shoot_event(player_id, target_direction, field);
+            PlayerEvent::Shoot(shoot_event_model) => {
+                Self::handle_shoot_event(shoot_event_model, field);
             }
             PlayerEvent::UnClaimBall(player_id) => {
                 Self::handle_unclaim_ball_event(player_id, field);
@@ -173,12 +173,16 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = Some(player_id);
     }
 
-    fn handle_shoot_event(player_id: u32, target_direction: Vector3<f32>, field: &mut MatchField) {
-        let ball_pass_vector = target_direction - field.ball.position;
+    fn handle_shoot_event(shoot_event_model: ShootingEventModel, field: &mut MatchField) {
+        let ball_pass_vector = shoot_event_model.target - field.ball.position;
+        let direction = ball_pass_vector.normalize();
 
-        field.ball.previous_owner = Some(player_id);
+        // Calculate the initial velocity based on the shoot force
+        let initial_velocity = direction * shoot_event_model.force as f32;
+
+        field.ball.previous_owner = Some(shoot_event_model.from_player_id);
         field.ball.current_owner = None;
-        field.ball.velocity = ball_pass_vector.normalize();
+        field.ball.velocity = initial_velocity;
 
         field.ball.flags.in_passing_state_time = 100;
     }

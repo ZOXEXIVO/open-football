@@ -5,7 +5,7 @@ use nalgebra::Vector3;
 use std::sync::LazyLock;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
 
 static MIDFIELDER_DISTANCE_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_distance_shooting_data.json"))
@@ -45,7 +45,11 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             // Transition to shooting state
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
-                Event::PlayerEvent(PlayerEvent::Shoot(ctx.player.id, shot_direction)),
+                Event::PlayerEvent(PlayerEvent::Shoot(ShootingEventModel::build()
+                    .with_player_id(ctx.player.id)
+                    .with_target(ctx.player().opponent_goal_position())
+                    .with_force(ctx.player().shoot_goal_power())
+                    .build())),
             ));
         }
 

@@ -21,9 +21,14 @@ impl<'p> PlayerOperationsImpl<'p> {
         MatchPlayerLite {
             id: player_id,
             position: self.ctx.tick_context.positions.players.position(player_id),
-            tactical_positions: self.ctx.context.players.by_id(player_id).expect(&format!(
-                "unknown player = {}", player_id
-            )).tactical_position.current_position
+            tactical_positions: self
+                .ctx
+                .context
+                .players
+                .by_id(player_id)
+                .expect(&format!("unknown player = {}", player_id))
+                .tactical_position
+                .current_position,
         }
     }
 
@@ -75,10 +80,10 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
 
-        let raw_power = (distance / (pass_skill * 100.0)) as f64;
+        let raw_power = (distance / (pass_skill * 10.0)) as f64;
 
-        let min_power = 0.1;
-        let max_power = 1.0;
+        let min_power = 0.5;
+        let max_power = 1.2;
         let normalized_power = (raw_power - min_power) / (max_power - min_power);
 
         normalized_power.clamp(0.0, 1.0)
@@ -118,6 +123,33 @@ impl<'p> PlayerOperationsImpl<'p> {
         let normalized_power = (raw_power - min_power) / (max_power - min_power);
 
         normalized_power.clamp(0.0, 1.0)
+    }
+
+    pub fn shoot_goal_power(&self) -> f64 {
+        let goal_distance = self.goal_distance();
+
+        // Calculate the base shooting power based on the player's relevant skills
+        let shooting_technique = self.ctx.player.skills.technical.technique;
+        let shooting_power = self.ctx.player.skills.technical.long_shots;
+        let player_strength = self.ctx.player.skills.physical.strength;
+
+        // Normalize the skill values to a range of 0.5 to 1.5
+        let technique_factor = 0.5 + (shooting_technique - 1.0) / 19.0;
+        let power_factor = 0.5 + (shooting_power - 1.0) / 19.0;
+        let strength_factor = 0.5 + (player_strength - 1.0) / 19.0;
+
+        // Calculate the shooting power based on the normalized skill values and goal distance
+        let base_power = 10.0; // Adjust this value to control the overall shooting power
+        let distance_factor = (self.ctx.context.field_size.width as f32 / 2.0 - goal_distance)
+            / (self.ctx.context.field_size.width as f32 / 2.0);
+        let shooting_power =
+            base_power * technique_factor * power_factor * strength_factor * distance_factor;
+
+        // Ensure the shooting power is within a reasonable range
+        let min_power = 0.5;
+        let max_power = 2.0;
+
+        shooting_power.clamp(min_power, max_power) as f64
     }
 
     pub fn distance_to_player(&self, player_id: u32) -> f32 {

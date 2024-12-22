@@ -285,27 +285,24 @@ impl Ball {
     }
 
     fn update_velocity(&mut self) {
-        let gravity = Vector3::new(0.0, 0.0, -9.81);
-
-        const FRICTION_COEFFICIENT: f32 = 1.5;
+        const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
-        const STOPPING_THRESHOLD: f32 = 0.01;
-
-        let velocity_norm = self.velocity.norm();
-        let friction = if velocity_norm > 0.0 {
-            -self.velocity.normalize() * FRICTION_COEFFICIENT
-        } else {
-            Vector3::zeros()
-        };
-
-        let total_force = gravity * BALL_MASS - friction;
-        let acceleration = total_force / BALL_MASS;
-
+        const DRAG_COEFFICIENT: f32 = 0.25;
+        const ROLLING_RESISTANCE_COEFFICIENT: f32 = 0.02;
+        const STOPPING_THRESHOLD: f32 = 0.1;
         const TIME_STEP: f32 = 0.01;
 
-        self.velocity += acceleration * TIME_STEP;
+        let velocity_norm = self.velocity.norm();
 
-        if self.velocity.norm() < STOPPING_THRESHOLD {
+        if velocity_norm > STOPPING_THRESHOLD {
+            let drag_force = -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
+            let rolling_resistance_force = -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
+
+            let total_force = drag_force + rolling_resistance_force;
+            let acceleration = total_force / BALL_MASS;
+
+            self.velocity += acceleration * TIME_STEP;
+        } else {
             self.velocity = Vector3::zeros();
         }
     }
