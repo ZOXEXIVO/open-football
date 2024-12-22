@@ -48,13 +48,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                     GoalkeeperState::Catching,
                 ));
             }
-
-            // Transition to Coming Out if necessary
-            if self.should_come_out(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::ComingOut,
-                ));
-            }
         }
 
         None
@@ -98,13 +91,6 @@ impl GoalkeeperPreparingForSaveState {
         ball_distance < goalkeeper_reach && ball_speed < 10.0
     }
 
-    fn should_come_out(&self, ctx: &StateProcessingContext) -> bool {
-        let ball_distance = ctx.ball().distance();
-        let goalkeeper_skills = &ctx.player.skills;
-
-        ball_distance < 150.0 && goalkeeper_skills.mental.decisions > 8.0
-    }
-    
     fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let goal_position = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;

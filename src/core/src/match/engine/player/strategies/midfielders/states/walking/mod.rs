@@ -17,8 +17,20 @@ pub struct MidfielderWalkingState {}
 
 impl StateProcessingHandler for MidfielderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+        
         if ctx.team().is_control_ball() {
-            if ctx.ball().is_towards_player_with_angle(0.8) {
+            if ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Intercepting,
+                ));
+            }
+            
+            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));
@@ -28,6 +40,12 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 MidfielderState::Running,
             ));
         } else {
+            if ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Intercepting,
+                ));
+            }
+            
             if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,

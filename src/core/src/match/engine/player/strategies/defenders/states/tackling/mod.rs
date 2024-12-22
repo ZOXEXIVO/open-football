@@ -3,7 +3,10 @@ use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
 use rand::Rng;
 use std::sync::LazyLock;
@@ -104,38 +107,14 @@ impl StateProcessingHandler for DefenderTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Move towards the opponent to attempt the sliding tackle
-
-        if ctx.in_state_time % 100 == 0 {
-            if ctx.team().is_control_ball() {
-                let opponent_goal = ctx.ball().direction_to_opponent_goal();
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: opponent_goal,
-                        slowing_distance: 10.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity,
-                );
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.tick_context.positions.ball.position,
+                slowing_distance: 10.0,
             }
-
-            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: opponent.position,
-                        slowing_distance: 10.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity,
-                );
-            } else {
-                // No opponent with the ball found
-                // Remain stationary or move back to position
-                return Some(Vector3::new(0.0, 0.0, 0.0));
-            }
-        }
-
-        None
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {

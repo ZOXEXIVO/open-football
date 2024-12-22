@@ -50,6 +50,12 @@ impl StateProcessingHandler for DefenderRunningState {
                         DefenderState::Intercepting,
                     ));
                 }
+
+                if ctx.ball().distance() < 200.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
             }
         }
 

@@ -142,9 +142,9 @@ impl<'p> PlayerOperationsImpl<'p> {
         let player_strength = self.ctx.player.skills.physical.strength;
 
         // Normalize the skill values to a range of 0.5 to 1.5
-        let technique_factor = 0.5 + (shooting_technique - 1.0) / 19.0;
-        let power_factor = 0.5 + (shooting_power - 1.0) / 19.0;
-        let strength_factor = 0.5 + (player_strength - 1.0) / 19.0;
+        let technique_factor = 0.7 + (shooting_technique - 1.0) / 19.0;
+        let power_factor = 0.9 + (shooting_power - 1.0) / 19.0;
+        let strength_factor = 0.2 + (player_strength - 1.0) / 19.0;
 
         // Calculate the shooting power based on the normalized skill values and goal distance
         let base_power = 10.0; // Adjust this value to control the overall shooting power
@@ -155,7 +155,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         // Ensure the shooting power is within a reasonable range
         let min_power = 0.5;
-        let max_power = 2.0;
+        let max_power = 2.5;
 
         shooting_power.clamp(min_power, max_power) as f64
     }
