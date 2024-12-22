@@ -28,7 +28,7 @@ impl StateProcessingHandler for ForwardAssistingState {
         }
 
         // Check if the player is on the opponent's side of the field
-        if !ctx.player().on_own_side() && ctx.players().opponents().exists(100.0){
+        if ctx.team().is_control_ball() && !ctx.player().on_own_side() && ctx.players().opponents().exists(100.0){
             // If not on the opponent's side, focus on creating space and moving forward
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::CreatingSpace,
