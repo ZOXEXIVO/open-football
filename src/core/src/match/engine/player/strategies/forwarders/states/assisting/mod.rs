@@ -1,10 +1,7 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
-};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
@@ -18,14 +15,20 @@ pub struct ForwardAssistingState {}
 
 impl StateProcessingHandler for ForwardAssistingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 150.0 {
+        if !ctx.team().is_control_ball(){
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Pressing,
+                ForwardState::Running,
+            ));
+        }
+
+        if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting
             ));
         }
 
         // Check if the player is on the opponent's side of the field
-        if self.is_on_opponent_side(ctx) && ctx.players().opponents().exists(100.0){
+        if ctx.team().is_control_ball() && !ctx.player().on_own_side() && ctx.players().opponents().exists(100.0){
             // If not on the opponent's side, focus on creating space and moving forward
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::CreatingSpace,
@@ -75,7 +78,7 @@ impl StateProcessingHandler for ForwardAssistingState {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.ball().direction_to_opponent_goal(),
-                slowing_distance: 200.0,
+                slowing_distance: 10.0,
             }
             .calculate(ctx.player)
             .velocity,
@@ -127,10 +130,5 @@ impl ForwardAssistingState {
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
         ctx.player.skills.mental.off_the_ball > 15.0
             && ctx.players().teammates().exists(100.0)
-    }
-
-    fn is_on_opponent_side(&self, ctx: &StateProcessingContext) -> bool {
-        let field_half_length = ctx.context.field_size.width as f32 / 2.0;
-        ctx.player.position.x > field_half_length
     }
 }

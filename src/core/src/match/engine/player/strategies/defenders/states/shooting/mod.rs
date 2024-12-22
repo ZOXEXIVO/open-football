@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -20,8 +20,11 @@ impl StateProcessingHandler for DefenderShootingState {
         Some(StateChangeResult::with_defender_state_and_event(
             DefenderState::Standing,
             Event::PlayerEvent(PlayerEvent::Shoot(
-                ctx.player.id,
-                ctx.ball().direction_to_opponent_goal(),
+                ShootingEventModel::build()
+                    .with_player_id(ctx.player.id)
+                    .with_target(ctx.player().opponent_goal_position())
+                    .with_force(ctx.player().shoot_goal_power())
+                    .build()
             )),
         ))
     }

@@ -1,6 +1,6 @@
 use async_compression::tokio::write::GzipEncoder;
 use core::r#match::MatchResult;
-use log::info;
+use log::{debug, info};
 use std::fmt::format;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -47,7 +47,7 @@ impl MatchStore {
             let file_data =
                 serde_json::to_vec(&res.position_data).expect("failed to serialize data");
 
-            info!("uncompressed size = {}", file_data.len());
+            debug!("uncompressed size = {}", file_data.len());
 
             compressed_file
                 .write_all(&file_data)

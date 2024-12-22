@@ -26,14 +26,6 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // Check if the player is under pressure
-        // if player_ops.is_under_pressure() {
-        //     // Transition to Dribbling state if under pressure
-        //     return Some(StateChangeResult::with_forward_state(
-        //         ForwardState::Dribbling,
-        //     ));
-        // }
-
         // Find the best passing option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_forward_state_and_event(
@@ -91,17 +83,83 @@ impl ForwardPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
 
-        if let Some(player) = players
-            .teammates()
-            .nearby(300.0)
-            .choose(&mut rand::thread_rng())
+        let attacking_third_start = if ctx.player.side == Some(PlayerSide::Left) {
+            field_width * (2.0 / 3.0)
+        } else {
+            field_width / 3.0
+        };
+
+        if player_position.x >= attacking_third_start {
+            // Player is in the attacking third, prioritize teammates near the opponent's goal
+            self.find_best_pass_option_attacking_third(ctx)
+        } else if player_position.x >= field_width / 3.0
+            && player_position.x <= field_width * (2.0 / 3.0)
         {
-            return Some(player);
+            // Player is in the middle third, prioritize teammates in advanced positions
+            self.find_best_pass_option_middle_third(ctx)
+        } else {
+            // Player is in the defensive third, prioritize safe passes to nearby teammates
+            self.find_best_pass_option_defensive_third(ctx)
         }
+    }
 
-        None
+    fn find_best_pass_option_attacking_third(
+        &self,
+        ctx: &StateProcessingContext<'_>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_to_goal = teammates
+            .all()
+            .filter(|teammate| {
+                // Check if the teammate is in a dangerous position near the opponent's goal
+                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
+                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                    < goal_distance_threshold
+            })
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+
+        nearest_to_goal
+    }
+
+    fn find_best_pass_option_middle_third(
+        &self,
+        ctx: &StateProcessingContext<'_>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_teammate = teammates.nearby(200.0).min_by(|a, b| {
+            let dist_a = (a.position - ctx.player.position).magnitude();
+            let dist_b = (b.position - ctx.player.position).magnitude();
+            dist_a.partial_cmp(&dist_b).unwrap()
+        });
+
+        nearest_teammate
+    }
+
+    fn find_best_pass_option_defensive_third(
+        &self,
+        ctx: &StateProcessingContext<'_>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_teammate = teammates.nearby(300.0).min_by(|a, b| {
+            let dist_a = (a.position - ctx.player.position).magnitude();
+            let dist_b = (b.position - ctx.player.position).magnitude();
+            dist_a.partial_cmp(&dist_b).unwrap()
+        });
+
+        nearest_teammate
     }
 
     fn is_open_for_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayer) -> bool {

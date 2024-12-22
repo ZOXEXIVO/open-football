@@ -107,23 +107,7 @@ impl ForwardStandingState {
 
     /// Calculates the optimal attacking position for the forward.
     fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Example logic: position towards the opponent's goal center
-        let goal_position = self.get_opponent_goal_position(ctx);
-        goal_position
-    }
-
-    /// Gets the position of the opponent's goal.
-    fn get_opponent_goal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let field_length = ctx.context.field_size.width as f32;
-        let field_width = ctx.context.field_size.width as f32;
-
-        if ctx.player.side == Some(PlayerSide::Left) {
-            // Attacking towards the right (positive x)
-            Vector3::new(field_length, field_width / 2.0, 0.0)
-        } else {
-            // Attacking towards the left (negative x)
-            Vector3::new(0.0, field_width / 2.0, 0.0)
-        }
+        ctx.player().goal_position()
     }
 
     /// Calculates the distance from the forward to the opponent's goal.

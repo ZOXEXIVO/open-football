@@ -22,7 +22,7 @@ impl StateProcessingHandler for DefenderWalkingState {
         let mut result = StateChangeResult::new();
 
         // Transition to Intercepting only if ball moving slowly or player very close
-        if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < INTERCEPTION_DISTANCE{
+        if ctx.ball().distance() < INTERCEPTION_DISTANCE{
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

@@ -27,7 +27,7 @@ impl DatabaseGenerator {
         let current_date = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
             NaiveTime::default(),
-        ); // Utc::now().date_naive().and_hms_opt(0, 0, 0).unwrap();
+        );
 
         let continents = data
             .continents

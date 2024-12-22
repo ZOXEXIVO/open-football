@@ -10,7 +10,7 @@ use crate::r#match::{
     PlayerOperationsImpl, PlayersOperationsImpl, TeamOperationsImpl,
 };
 use crate::PlayerFieldPositionGroup;
-use log::info;
+use log::{debug, info};
 use nalgebra::Vector3;
 
 pub trait StateProcessingHandler {
@@ -99,7 +99,7 @@ impl<'p> StateProcessor<'p> {
                                mut result: StateProcessingResult| {
             if let Some(state) = state_results.state {
                 if need_extended_state_logging {
-                    info!("Player, Id={}, State {:?}", player_id, state);
+                    debug!("Player, Id={}, State {:?}", player_id, state);
                 }
                 result.state = Some(state);
                 result.events = state_results.events;

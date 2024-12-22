@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{MatchContext, MatchField};
-use log::info;
+use log::{debug, info};
 
 #[derive(Copy, Clone, Debug)]
 pub enum BallEvent {
@@ -28,7 +28,7 @@ impl BallEventDispatcher {
     ) -> Vec<Event> {
         let mut remaining_events = Vec::new();
 
-        info!("BALL EVENT: {:?}", event);
+        debug!("Ball event: {:?}", event);
 
         match event {
             BallEvent::Goal(side, goalscorer_player_id) => {

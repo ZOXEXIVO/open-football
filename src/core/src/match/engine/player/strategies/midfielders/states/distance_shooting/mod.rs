@@ -1,11 +1,11 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
 
 static MIDFIELDER_DISTANCE_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_distance_shooting_data.json"))
@@ -24,10 +24,7 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        // Check if the midfielder is within shooting range
-        let shooting_range = 300.0; // Adjust this value based on your game's scale
-        let distance_to_goal = self.distance_to_goal(ctx);
-        if distance_to_goal > shooting_range {
+        if ctx.player().goal_distance() > 300.0 {
             // Too far from the goal, consider other options
             if self.should_pass(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -48,7 +45,11 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             // Transition to shooting state
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
-                Event::PlayerEvent(PlayerEvent::Shoot(ctx.player.id, shot_direction)),
+                Event::PlayerEvent(PlayerEvent::Shoot(ShootingEventModel::build()
+                    .with_player_id(ctx.player.id)
+                    .with_target(ctx.player().opponent_goal_position())
+                    .with_force(ctx.player().shoot_goal_power())
+                    .build())),
             ));
         }
 
@@ -60,28 +61,28 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        None
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.ball().direction_to_opponent_goal(),
+                slowing_distance: 150.0,
+            }
+                .calculate(ctx.player)
+                .velocity,
+        )
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl MidfielderDistanceShootingState {
-    fn distance_to_goal(&self, ctx: &StateProcessingContext) -> f32 {
-        // Calculate the distance from the player to the goal
-        let player_position = ctx.player.position;
-        let goal_position = self.get_opponent_goal_position(ctx);
-        (player_position - goal_position).magnitude()
-    }
-
     fn is_favorable_shooting_opportunity(&self, ctx: &StateProcessingContext) -> bool {
         // Evaluate the shooting opportunity based on various factors
-        let distance_to_goal = self.distance_to_goal(ctx);
-        let angle_to_goal = self.angle_to_goal(ctx);
+        let distance_to_goal = ctx.player().goal_distance();
+        let angle_to_goal = ctx.player().goal_angle();
         let has_clear_shot = self.has_clear_shot(ctx);
 
         // Adjust the thresholds based on your game's balance
-        let distance_threshold = 25.0; // Maximum favorable shooting distance
+        let distance_threshold = 300.0; // Maximum favorable shooting distance
         let angle_threshold = std::f32::consts::PI / 6.0; // 30 degrees
 
         distance_to_goal <= distance_threshold && angle_to_goal <= angle_threshold && has_clear_shot
@@ -96,7 +97,7 @@ impl MidfielderDistanceShootingState {
         // Adjust the shot power based on player attributes and distance to goal
         let base_shot_power = 10.0;
         let shooting_skill = ctx.player.skills.technical.finishing as f32 / 20.0;
-        let distance_factor = self.distance_to_goal(ctx) / 30.0;
+        let distance_factor = ctx.player().goal_distance() / 30.0;
         let shot_power = base_shot_power * shooting_skill * distance_factor;
 
         (shot_direction, shot_power)
@@ -151,13 +152,6 @@ impl MidfielderDistanceShootingState {
         }
     }
 
-    fn angle_to_goal(&self, ctx: &StateProcessingContext) -> f32 {
-        // Calculate the angle between the player's facing direction and the goal direction
-        let player_direction = ctx.player.velocity.normalize();
-        let goal_direction = (self.get_opponent_goal_position(ctx) - ctx.player.position).normalize();
-        player_direction.angle(&goal_direction)
-    }
-
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player has a clear shot to the goal without any obstructing opponents
         let player_position = ctx.player.position;
@@ -167,7 +161,7 @@ impl MidfielderDistanceShootingState {
         let ray_cast_result = ctx.tick_context.space.cast_ray(
             player_position,
             shot_direction,
-            self.distance_to_goal(ctx),
+            ctx.player().goal_distance(),
             false,
         );
 

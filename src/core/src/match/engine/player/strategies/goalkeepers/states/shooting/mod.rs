@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -27,13 +27,14 @@ impl StateProcessingHandler for GoalkeeperShootingState {
             ));
         }
 
-        // 3. Calculate the shooting direction and power
-        let shooting_direction = ctx.ball().direction_to_opponent_goal();
-
         // 4. Shoot the ball towards the opponent's goal
         let mut events = EventCollection::new();
 
-        events.add_player_event(PlayerEvent::Shoot(ctx.player.id, shooting_direction));
+        events.add_player_event(PlayerEvent::Shoot(ShootingEventModel::build()
+            .with_player_id(ctx.player.id)
+            .with_target(ctx.player().opponent_goal_position())
+            .with_force(ctx.player().shoot_goal_power())
+            .build()));
 
         Some(StateChangeResult::with_events(events))
     }

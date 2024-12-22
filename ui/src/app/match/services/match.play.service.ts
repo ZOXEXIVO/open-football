@@ -1,6 +1,6 @@
-import {Injectable} from "@angular/core";
-import {Subject} from "rxjs";
-import {MatchDataService} from "./match.data.service";
+import { Injectable } from "@angular/core";
+import { Subject } from "rxjs";
+import { MatchDataService } from "./match.data.service";
 
 @Injectable({
     providedIn: 'root',
@@ -15,21 +15,28 @@ export class MatchPlayService {
     public timeChanged$ = this.timeChanged.asObservable();
 
     currentTime = 0;
-    changeTimeStamp = 10;
+    private lastFrameTime = 0;
+    private playbackSpeed = 0.8;
 
     constructor(private matchDataService: MatchDataService) {
     }
 
-    tick() {
+    tick(currentTime: number) {
         if (this.currentState === MatchEvent.InProcess) {
-            this.incrementTime();
+            if (this.lastFrameTime === 0) {
+                this.lastFrameTime = currentTime;
+            }
 
+            const deltaTime = (currentTime - this.lastFrameTime) * this.playbackSpeed;
+            this.lastFrameTime = currentTime;
+
+            this.incrementTime(deltaTime);
             this.matchDataService.refreshData(this.currentTime);
         }
     }
 
-    incrementTime() {
-        this.currentTime += this.changeTimeStamp;
+    incrementTime(deltaTime: number) {
+        this.currentTime += deltaTime;
         this.timeChanged.next(this.currentTime);
     }
 
@@ -46,8 +53,13 @@ export class MatchPlayService {
         this.matchEvents.next(MatchEvent.Ended);
     }
 
-    reset(){
+    reset() {
         this.currentTime = 0;
+        this.lastFrameTime = 0;
+    }
+
+    setPlaybackSpeed(speed: number) {
+        this.playbackSpeed = speed;
     }
 }
 

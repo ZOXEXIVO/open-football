@@ -50,5 +50,5 @@ async fn write_match_results(result: SimulationResult) {
 
     let elapsed = now.elapsed().as_millis();
 
-    info!("match results stored in {} ms", elapsed);
+    debug!("match results stored in {} ms", elapsed);
 }

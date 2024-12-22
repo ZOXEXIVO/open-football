@@ -1,7 +1,7 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
@@ -50,6 +50,12 @@ impl StateProcessingHandler for DefenderRunningState {
                         DefenderState::Intercepting,
                     ));
                 }
+
+                if ctx.ball().distance() < 200.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
             }
         }
 
@@ -86,16 +92,52 @@ impl DefenderRunningState {
             return true;
         }
 
-        let wait_ticks = match ctx.player.skills.mental.decisions {
-            0.0..5.0 => 1000,
-            5.0..10.0 => 800,
-            10.0..13.0 => 500,
-            14.0..17.0 => 100,
-            17.0..20.0 => 10,
-            _ => 1000,
+        let game_vision_skill = ctx.player.skills.mental.vision;
+        let game_vision_threshold = 14.0; // Adjust this value based on your game balance
+
+        if game_vision_skill >= game_vision_threshold {
+            if let Some(_) = self.find_open_teammate_on_opposite_side(ctx) {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    fn find_open_teammate_on_opposite_side(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let opposite_side_x = match ctx.player.side {
+            Some(PlayerSide::Left) => field_width * 0.75,
+            Some(PlayerSide::Right) => field_width * 0.25,
+            None => return None,
         };
 
-        ctx.in_state_time > wait_ticks
+        let mut open_teammates: Vec<MatchPlayerLite> = ctx
+            .players()
+            .teammates()
+            .nearby(200.0)
+            .filter(|teammate| {
+                let is_on_opposite_side = match ctx.player.side {
+                    Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
+                    Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
+                    None => false,
+                };
+                let is_open = !ctx.players().opponents().nearby(20.0).any(|opponent| opponent.id == teammate.id);
+                is_on_opposite_side && is_open
+            })
+            .collect();
+
+        if open_teammates.is_empty() {
+            None
+        } else {
+            open_teammates.sort_by(|a, b| {
+                let dist_a = (a.position - player_position).magnitude();
+                let dist_b = (b.position - player_position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+            Some(open_teammates[0])
+        }
     }
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {

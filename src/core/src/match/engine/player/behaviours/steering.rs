@@ -14,8 +14,7 @@ pub enum SteeringBehavior {
         target: Vector3<f32>
     },
     Evade {
-        target: Vector3<f32>,
-        velocity: Vector3<f32>,
+        target: Vector3<f32>
     },
     Wander {
         target: Vector3<f32>,
@@ -130,11 +129,11 @@ impl SteeringBehavior {
                     rotation: 0.0,
                 }
             }
-            SteeringBehavior::Evade { target, velocity } => {
+            SteeringBehavior::Evade { target } => {
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
                 let prediction = distance / player.skills.max_speed().max(f32::EPSILON);
-                let target_position = target + velocity * prediction;
+                let target_position = target + player.velocity * prediction;
                 let to_player = player.position - target_position;
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * player.skills.max_speed()

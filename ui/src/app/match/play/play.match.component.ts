@@ -195,7 +195,8 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
                         return;
                     }
 
-                    this.matchPlayService.tick();
+                    const currentTime = performance.now();
+                    this.matchPlayService.tick(currentTime);
                 });
             }
         );

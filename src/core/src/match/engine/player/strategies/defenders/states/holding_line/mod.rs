@@ -9,9 +9,9 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, State
 static DEFENDER_HOLDING_LINE_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_holding_line_data.json")));
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 50.0;
+const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 100.0;
 const BALL_PROXIMITY_THRESHOLD: f32 = 100.0;
-const MARKING_DISTANCE_THRESHOLD: f32 = 5.0;
+const MARKING_DISTANCE_THRESHOLD: f32 = 30.0;
 
 #[derive(Default)]
 pub struct DefenderHoldingLineState {}

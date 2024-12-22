@@ -1,7 +1,7 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
 use crate::r#match::player::PlayerSide;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -25,14 +25,16 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
-        let shot_direction = self.calculate_shot_direction(ctx);
-
         // Create an event to change the ball's velocity
         let mut state_change = StateChangeResult::with_midfielder_state(MidfielderState::Standing);
 
         state_change
             .events
-            .add_player_event(PlayerEvent::Shoot(ctx.player.id, shot_direction));
+            .add_player_event(PlayerEvent::Shoot(ShootingEventModel::build()
+                .with_player_id(ctx.player.id)
+                .with_target(ctx.player().opponent_goal_position())
+                .with_force(ctx.player().shoot_goal_power())
+                .build()));
 
         // Transition to the next appropriate state (e.g., Standing)
         Some(state_change)

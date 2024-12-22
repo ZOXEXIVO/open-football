@@ -8,12 +8,11 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
-use crate::r#match::defenders::states::DefenderState;
 
 static MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
+const MAX_SHOOTING_DISTANCE: f32 = 250.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 10.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
 #[derive(Default)]
@@ -22,6 +21,12 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            if self.has_clear_shot(ctx) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+
             // If the player has the ball, consider shooting, passing, or dribbling
             if self.in_shooting_range(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -44,7 +49,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             if !ctx.team().is_control_ball() {
                 if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.9) {
                     return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Intercepting
+                        MidfielderState::Intercepting,
                     ));
                 }
             }
@@ -92,11 +97,20 @@ impl StateProcessingHandler for MidfielderRunningState {
                 .calculate(ctx.player)
                 .velocity,
             )
-        } else if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
+        } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
                     target: ctx.ball().direction_to_opponent_goal(),
-                    slowing_distance: 150.0,
+                    slowing_distance: 100.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
+        } else if ctx.team().is_control_ball() {
+            Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.ball().direction_to_opponent_goal(),
+                    slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
                 .velocity,
@@ -123,6 +137,14 @@ impl MidfielderRunningState {
     fn in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         (MIN_SHOOTING_DISTANCE..=MAX_SHOOTING_DISTANCE)
             .contains(&ctx.ball().distance_to_opponent_goal())
+    }
+
+    fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
+            return ctx.player().has_clear_shot();
+        }
+
+        false
     }
 
     fn find_open_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<u32> {
@@ -156,7 +178,10 @@ impl MidfielderRunningState {
         let mut nearest_opponents = opponents.nearby_raw(200.0);
 
         if let Some((first_id, _)) = nearest_opponents.next() {
-            if let Some((second_id, _)) = nearest_opponents.next() {
+            while let Some((second_id, _)) = nearest_opponents.next() {
+                if first_id == second_id {
+                    continue;
+                }
                 let distance_between_opponents =
                     ctx.tick_context.distances.get(first_id, second_id);
                 if distance_between_opponents > 10.0 {

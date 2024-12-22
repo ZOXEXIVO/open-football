@@ -21,7 +21,7 @@ pub struct PassingEventBuilder {
 
 impl Default for PassingEventBuilder {
     fn default() -> Self {
-        Self::new()
+        PassingEventBuilder::new()
     }
 }
 

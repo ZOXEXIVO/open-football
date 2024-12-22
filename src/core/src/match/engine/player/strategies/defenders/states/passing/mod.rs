@@ -3,12 +3,11 @@ use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::{Event, EventCollection};
 use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
 use std::sync::LazyLock;
+use crate::r#match::midfielders::states::MidfielderState;
 
 static DEFENDER_PASSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_passing_data.json")));
@@ -24,16 +23,14 @@ impl StateProcessingHandler for DefenderPassingState {
             ));
         }
 
-        if let Some(teammate_id) = self.find_best_pass_option(ctx) {
-            let teammate_player_position = ctx.tick_context.positions.players.position(teammate_id);
-
+        if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Returning,
+                DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventModel::build()
                         .with_player_id(ctx.player.id)
-                        .with_target(teammate_player_position)
-                        .with_force(ctx.player().pass_teammate_power(teammate_id))
+                        .with_target(teammate.position)
+                        .with_force(ctx.player().pass_teammate_power(teammate.id))
                         .build()
                 )),
             ));
@@ -76,17 +73,97 @@ impl StateProcessingHandler for DefenderPassingState {
 }
 
 impl DefenderPassingState {
-    fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<u32> {
-        if let Some((teammate_id, _)) = ctx
-            .players()
-            .teammates()
-            .nearby_ids(250.0)
-            .choose(&mut rand::thread_rng())
-        {
-            return Some(teammate_id);
-        }
+    fn find_best_pass_option<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
 
-        None
+        let attacking_third_start = if ctx.player.side == Some(PlayerSide::Left) {
+            field_width * (2.0 / 3.0)
+        } else {
+            field_width / 3.0
+        };
+
+        if player_position.x >= attacking_third_start {
+            // Player is in the attacking third, prioritize teammates near the opponent's goal
+            self.find_best_pass_option_attacking_third(ctx)
+        } else if player_position.x >= field_width / 3.0
+            && player_position.x <= field_width * (2.0 / 3.0)
+        {
+            // Player is in the middle third, prioritize teammates in advanced positions
+            self.find_best_pass_option_middle_third(ctx)
+        } else {
+            // Player is in the defensive third, prioritize safe passes to nearby teammates
+            self.find_best_pass_option_defensive_third(ctx)
+        }
+    }
+
+    fn find_best_pass_option_attacking_third(
+        &self,
+        ctx: &StateProcessingContext<'_>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_to_goal = teammates
+            .all()
+            .filter(|teammate| {
+                // Check if the teammate is in a dangerous position near the opponent's goal
+                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
+                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                    < goal_distance_threshold
+            })
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+
+        nearest_to_goal
+    }
+
+    fn find_best_pass_option_defensive_third<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_teammate = teammates
+            .nearby(200.0)
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.player.position).magnitude();
+                let dist_b = (b.position - ctx.player.position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+
+        nearest_teammate
+    }
+
+    fn find_best_pass_option_middle_third(
+        &self,
+        ctx: &StateProcessingContext<'_>,
+    ) -> Option<MatchPlayerLite> {
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        let nearest_to_goal = teammates
+            .all()
+            .filter(|teammate| {
+                // Check if the teammate is in a dangerous position near the opponent's goal
+                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
+                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                    < goal_distance_threshold
+            })
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+
+        nearest_to_goal
     }
 
     pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {

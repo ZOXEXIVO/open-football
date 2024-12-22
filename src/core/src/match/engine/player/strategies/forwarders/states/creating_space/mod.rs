@@ -20,9 +20,7 @@ pub struct ForwardCreatingSpaceState {}
 impl StateProcessingHandler for ForwardCreatingSpaceState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Check if the player has created enough space
@@ -41,11 +39,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
-        // Check if the player should run to the opponent's side between opponents
-        // if self.should_run_to_opponent_side(ctx) {
-        //     return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        // }
-
         None
     }
 
@@ -54,13 +47,22 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Flee {
-                target: ctx.tick_context.positions.ball.position
+        let direction = {
+            // if let Some(empty_zone) = self.find_empty_zone_between_opponents(ctx) {
+            //     return Some(empty_zone);
+            // }
+
+            ctx.ball().direction_to_opponent_goal()
+        };
+
+        return Some(
+            SteeringBehavior::Arrive {
+                target: direction,
+                slowing_distance: 50.0,
             }
-            .calculate(ctx.player)
-            .velocity,
-        )
+                .calculate(ctx.player)
+                .velocity,
+        );
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
@@ -74,14 +76,9 @@ impl ForwardCreatingSpaceState {
     }
 
     fn is_too_close_to_opponent(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(OPPONENT_DISTANCE_THRESHOLD)
-    }
-
-    fn should_run_to_opponent_side(&self, ctx: &StateProcessingContext) -> bool {
-        let player_position = ctx.player.position;
-        let field_half_length = ctx.context.field_size.width as f32 / 2.0;
-
-        player_position.x < field_half_length && self.has_space_between_opponents(ctx)
+        ctx.players()
+            .opponents()
+            .exists(OPPONENT_DISTANCE_THRESHOLD)
     }
 
     fn has_space_between_opponents(&self, ctx: &StateProcessingContext) -> bool {
@@ -103,5 +100,42 @@ impl ForwardCreatingSpaceState {
         }
 
         false
+    }
+
+    fn find_empty_zone_between_opponents(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<Vector3<f32>> {
+        let players = ctx.players();
+        let opponents = players.opponents();
+
+        let mut opponents_positions: Vec<Vector3<f32>> =
+            opponents.all().map(|opponent| opponent.position).collect();
+        opponents_positions.sort_by(|a, b| a.x.partial_cmp(&b.x).unwrap());
+
+        let mut largest_gap = 0.0;
+        let mut largest_gap_position = None;
+
+        for window in opponents_positions.windows(2) {
+            let gap = (window[1] - window[0]).magnitude();
+            if gap > largest_gap {
+                largest_gap = gap;
+                largest_gap_position = Some((window[0] + window[1]) / 2.0);
+            }
+        }
+
+        if let Some(position) = largest_gap_position {
+            // Clamp the position within the field boundaries
+            let field_width = ctx.context.field_size.width as f32;
+            let field_height = ctx.context.field_size.height as f32;
+            let clamped_position = Vector3::new(
+                position.x.clamp(0.0, field_width),
+                position.y.clamp(0.0, field_height),
+                0.0,
+            );
+            Some(clamped_position)
+        } else {
+            None
+        }
     }
 }
