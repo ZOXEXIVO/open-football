@@ -5,6 +5,7 @@ use crate::r#match::{
 };
 use crate::PlayerSkills;
 use nalgebra::Vector3;
+use rand::Rng;
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -78,15 +79,22 @@ impl<'p> PlayerOperationsImpl<'p> {
             .distances
             .get(self.ctx.player.id, teammate_id);
 
-        let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
+        let pass_skill = self.ctx.player.skills.technical.passing;
 
-        let raw_power = (distance / (pass_skill * 10.0)) as f64;
+        // Calculate the base power based on distance and passing skill
+        let base_power = distance / ((pass_skill as f32 + 30.0) * 20.0);
 
-        let min_power = 0.5;
-        let max_power = 1.2;
-        let normalized_power = (raw_power - min_power) / (max_power - min_power);
+        // Introduce a random component to add variability
+        let random_factor = rand::thread_rng().gen_range(0.8..1.2);
 
-        normalized_power.clamp(0.0, 1.0)
+        // Calculate the final pass power
+        let pass_power = base_power * random_factor;
+
+        // Clamp the pass power between a minimum and maximum value
+        let min_power = 1.0;
+        let max_power = 2.0;
+
+        pass_power.clamp(min_power, max_power) as f64
     }
 
     pub fn kick_teammate_power(&self, teammate_id: u32) -> f64 {
