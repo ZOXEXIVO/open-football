@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 static FORWARD_CREATING_SPACE_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_creating_space_data.json")));
 
-const CREATING_SPACE_THRESHOLD: f32 = 100.0;
+const CREATING_SPACE_THRESHOLD: f32 = 50.0;
 const OPPONENT_DISTANCE_THRESHOLD: f32 = 20.0;
 
 #[derive(Default)]
@@ -47,26 +47,22 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.in_state_time % 10 == 0 {
-            let direction = {
-                // if let Some(empty_zone) = self.find_empty_zone_between_opponents(ctx) {
-                //     return Some(empty_zone);
-                // }
+        let direction = {
+            // if let Some(empty_zone) = self.find_empty_zone_between_opponents(ctx) {
+            //     return Some(empty_zone);
+            // }
 
-                ctx.ball().direction_to_opponent_goal()
-            };
+            ctx.ball().direction_to_opponent_goal()
+        };
 
-            return Some(
-                SteeringBehavior::Arrive {
-                    target: direction,
-                    slowing_distance: 50.0,
-                }
-                    .calculate(ctx.player)
-                    .velocity,
-            );
-        }
-
-        None
+        return Some(
+            SteeringBehavior::Arrive {
+                target: direction,
+                slowing_distance: 50.0,
+            }
+                .calculate(ctx.player)
+                .velocity,
+        );
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
