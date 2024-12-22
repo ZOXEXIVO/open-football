@@ -135,16 +135,15 @@ impl ForwardPassingState {
         ctx: &StateProcessingContext<'_>,
     ) -> Option<MatchPlayerLite> {
         let players = ctx.players();
+        let teammates = players.teammates();
 
-        if let Some(player) = players
-            .teammates()
-            .nearby(300.0)
-            .choose(&mut rand::thread_rng())
-        {
-            return Some(player);
-        }
+        let nearest_teammate = teammates.nearby(200.0).min_by(|a, b| {
+            let dist_a = (a.position - ctx.player.position).magnitude();
+            let dist_b = (b.position - ctx.player.position).magnitude();
+            dist_a.partial_cmp(&dist_b).unwrap()
+        });
 
-        None
+        nearest_teammate
     }
 
     fn find_best_pass_option_defensive_third(
@@ -154,7 +153,7 @@ impl ForwardPassingState {
         let players = ctx.players();
         let teammates = players.teammates();
 
-        let nearest_teammate = teammates.nearby(200.0).min_by(|a, b| {
+        let nearest_teammate = teammates.nearby(300.0).min_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
             dist_a.partial_cmp(&dist_b).unwrap()

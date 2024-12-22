@@ -159,16 +159,23 @@ impl MidfielderPassingState {
         ctx: &StateProcessingContext<'_>,
     ) -> Option<MatchPlayerLite> {
         let players = ctx.players();
+        let teammates = players.teammates();
 
-        if let Some(player) = players
-            .teammates()
-            .nearby(300.0)
-            .choose(&mut rand::thread_rng())
-        {
-            return Some(player);
-        }
+        let nearest_to_goal = teammates
+            .all()
+            .filter(|teammate| {
+                // Check if the teammate is in a dangerous position near the opponent's goal
+                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
+                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                    < goal_distance_threshold
+            })
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
 
-        None
+        nearest_to_goal
     }
 
     /// Checks if the pass to the target teammate is feasible using ray tracing.

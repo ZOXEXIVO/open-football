@@ -142,7 +142,7 @@ impl PlayerEventDispatcher {
         let ball_pass_vector = event_model.pass_target - field.ball.position;
         let direction = ball_pass_vector.normalize();
         let pass_force = event_model.pass_force as f32;
-        let pass_force_multiplier = 2.1;
+        let pass_force_multiplier = 1.5;
 
         let velocity = direction * (pass_force * pass_force_multiplier);
 
