@@ -13,15 +13,15 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
 
 impl<'b> PlayerOpponentsOperationsImpl<'b> {
     pub fn all(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.opponents_for_team(self.ctx.player.team_id, None)
+        self.opponents_for_team(self.ctx.player.id, self.ctx.player.team_id, None)
     }
 
     pub fn with_ball(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.opponents_for_team(self.ctx.player.team_id, Some(true))
+        self.opponents_for_team(self.ctx.player.id, self.ctx.player.team_id, Some(true))
     }
 
     pub fn without_ball(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.opponents_for_team(self.ctx.player.team_id, Some(false))
+        self.opponents_for_team(self.ctx.player.id, self.ctx.player.team_id, Some(false))
     }
 
     pub fn nearby(&self, distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
@@ -87,6 +87,7 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
 
     fn opponents_for_team(
         &'b self,
+        player_id: u32,
         team_id: u32,
         has_ball: Option<bool>,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
@@ -96,10 +97,8 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             .players
             .values()
             .filter(move |player| {
-                // opponent
-                player.team_id != team_id
-                    && (has_ball.is_none()
-                        || (self.ctx.ball().owner_id() == Some(self.ctx.player.id)))
+                player.id != player_id && player.team_id != team_id
+                    && (has_ball.is_none() || (self.ctx.ball().owner_id() == Some(self.ctx.player.id)))
             })
             .map(|player| MatchPlayerLite {
                 id: player.id,

@@ -13,15 +13,15 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
 
 impl<'b> PlayerTeammatesOperationsImpl<'b> {
     pub fn all(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.teammates_for_team(self.ctx.player.team_id, None)
+        self.teammates_for_team(self.ctx.player.id, self.ctx.player.team_id, None)
     }
 
     pub fn players_with_ball(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.teammates_for_team(self.ctx.player.team_id, Some(true))
+        self.teammates_for_team(self.ctx.player.id, self.ctx.player.team_id, Some(true))
     }
 
     pub fn players_without_ball(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        self.teammates_for_team(self.ctx.player.team_id, Some(false))
+        self.teammates_for_team(self.ctx.player.id, self.ctx.player.team_id, Some(false))
     }
 
     pub fn defenders(&'b self) -> impl Iterator<Item = MatchPlayerLite> + 'b {
@@ -55,6 +55,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
 
     fn teammates_for_team(
         &'b self,
+        player_id: u32,
         team_id: u32,
         has_ball: Option<bool>,
     ) -> impl Iterator<Item = MatchPlayerLite> + 'b {
@@ -64,10 +65,8 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
             .players
             .values()
             .filter(move |player| {
-                // opponent
-                player.team_id == team_id
-                    && (has_ball.is_none()
-                        || (self.ctx.ball().owner_id() == Some(self.ctx.player.id)))
+                player.id != player_id && player.team_id == team_id
+                    && (has_ball.is_none()  || (self.ctx.ball().owner_id() == Some(self.ctx.player.id)))
             })
             .map(|player| MatchPlayerLite {
                 id: player.id,
