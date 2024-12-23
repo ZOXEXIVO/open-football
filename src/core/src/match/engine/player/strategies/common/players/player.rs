@@ -1,3 +1,4 @@
+use log::debug;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -93,6 +94,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         // Clamp the pass power between a minimum and maximum value
         let min_power = 1.0;
         let max_power = 2.0;
+
+        debug!("Pass to teamate_id = {}", teammate_id);
 
         pass_power.clamp(min_power, max_power) as f64
     }

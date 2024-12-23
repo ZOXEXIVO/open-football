@@ -22,6 +22,15 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 GoalkeeperState::Passing,
             ));
         } else {
+            // Transition to Walking if the ball is far away
+            if ctx.ball().distance() < 20.0 {
+                if self.is_ball_catchable(ctx) {
+                    return Some(StateChangeResult::with_goalkeeper_state(
+                        GoalkeeperState::Catching,
+                    ));
+                }
+            }
+
             if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ReturningToGoal
@@ -39,13 +48,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             if self.should_dive(ctx) {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Diving,
-                ));
-            }
-
-            // Transition to Catching if the ball is catchable
-            if self.is_ball_catchable(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Catching,
                 ));
             }
         }
