@@ -38,7 +38,7 @@ impl StateProcessingHandler for DefenderPassingState {
         let mut best_player_id = None;
         let mut highest_score = 0.0;
 
-        for (player_id, teammate_distance) in ctx.players().teammates().nearby_ids(30.0) {
+        for (player_id, teammate_distance) in ctx.players().teammates().nearby_ids(200.0) {
             let score = 1.0 / (teammate_distance + 1.0);
             if score > highest_score {
                 highest_score = score;
