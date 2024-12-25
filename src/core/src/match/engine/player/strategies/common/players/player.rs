@@ -82,20 +82,21 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let pass_skill = self.ctx.player.skills.technical.passing;
 
-        // Calculate the base power based on distance and passing skill
-        let base_power = distance / ((pass_skill as f32 + 30.0) * 20.0);
+        // Calculate the distance factor relative to the field size
+        let distance_factor = distance / (self.ctx.context.field_size.width as f32);
+
+        // Calculate the base power based on passing skill and distance factor
+        let base_power = pass_skill / 20.0 * (1.0 - distance_factor);
 
         // Introduce a random component to add variability
-        let random_factor = rand::thread_rng().gen_range(0.8..1.2);
+        let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 
         // Calculate the final pass power
         let pass_power = base_power * random_factor;
 
         // Clamp the pass power between a minimum and maximum value
-        let min_power = 1.0;
-        let max_power = 2.0;
-
-        debug!("Pass to teamate_id = {}", teammate_id);
+        let min_power = 0.1;
+        let max_power = 1.0;
 
         pass_power.clamp(min_power, max_power) as f64
     }

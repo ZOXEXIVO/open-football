@@ -35,6 +35,7 @@ impl StateProcessingHandler for DefenderPassingState {
                 )),
             ));
         }
+        
         let mut best_player_id = None;
         let mut highest_score = 0.0;
 
@@ -66,7 +67,7 @@ impl StateProcessingHandler for DefenderPassingState {
     }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}

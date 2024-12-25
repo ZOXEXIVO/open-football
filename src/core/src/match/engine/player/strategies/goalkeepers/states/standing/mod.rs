@@ -25,6 +25,13 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                 GoalkeeperState::Passing,
             ));
         }
+        else {
+            if ctx.ball().distance() < 150.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::ComingOut
+                ));
+            }
+        }
 
         match ctx.player().position_to_distance() {
             PlayerDistanceFromStartPosition::Small => {
