@@ -20,6 +20,18 @@ impl StateProcessingHandler for ForwardReturningState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting,
+            ));
+        }
+
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Tackling,
+            ));
+        }
+
         // Stay in returning state until very close to start position
         if ctx.player().distance_from_start_position() < 2.0 {
             return Some(StateChangeResult::with_forward_state(

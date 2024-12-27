@@ -39,9 +39,6 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
 
         // Evaluate shooting opportunity
         if self.is_favorable_shooting_opportunity(ctx) {
-            // Calculate shot direction and power
-            let (shot_direction, _) = self.calculate_shot(ctx);
-
             // Transition to shooting state
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
