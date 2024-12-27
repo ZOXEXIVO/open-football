@@ -24,16 +24,6 @@ pub struct GoalkeeperTacklingState {}
 
 impl StateProcessingHandler for GoalkeeperTacklingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Check goalkeeper's stamina
-        let stamina = ctx.player.player_attributes.condition_percentage() as f32;
-        if stamina < STAMINA_THRESHOLD {
-            // Transition to Resting state if stamina is too low
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Resting,
-            ));
-        }
-
-        // 2. Identify the opponent player with the ball
         let players = ctx.players();
         let opponents = players.opponents();
         let mut opponents_with_ball = opponents.with_ball();

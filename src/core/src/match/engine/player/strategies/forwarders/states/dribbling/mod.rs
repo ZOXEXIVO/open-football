@@ -20,6 +20,10 @@ impl StateProcessingHandler for ForwardDribblingState {
         let mut result = StateChangeResult::new();
         let players_ops = ctx.players();
 
+        if ctx.ball().distance_to_opponent_goal() < 250.0 && ctx.player().has_clear_shot() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+        }
+        
         if !ctx.player.has_ball(ctx) {
             // Transition to Running state if the player doesn't have the ball
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));

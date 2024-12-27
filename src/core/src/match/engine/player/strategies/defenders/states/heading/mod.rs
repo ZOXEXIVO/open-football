@@ -7,6 +7,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use std::sync::LazyLock;
+use crate::r#match::events::Event;
 
 static DEFENDER_HEADING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_heading_data.json")));
@@ -39,21 +40,13 @@ impl StateProcessingHandler for DefenderHeadingState {
        
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
-            // 3. Generate event to change ball's velocity (e.g., clear the ball)
-            let mut state_change =
-                StateChangeResult::with_defender_state(DefenderState::HoldingLine);
-
-            state_change
-                .events
-                .add_player_event(PlayerEvent::Shoot(
-                    ShootingEventModel::build()
-                        .with_player_id(ctx.player.id)
-                        .with_target(ctx.player().opponent_goal_position())
-                        .with_force(ctx.player().shoot_goal_power())
-                        .build()
-                ));
-
-            Some(state_change)
+            Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
+                ShootingEventModel::build()
+                    .with_player_id(ctx.player.id)
+                    .with_target(ctx.player().opponent_goal_position())
+                    .with_force(ctx.player().shoot_goal_power())
+                    .build()
+            ))))
         } else {
             // Heading failed; transition to appropriate state (e.g., Standing)
             Some(StateChangeResult::with_defender_state(

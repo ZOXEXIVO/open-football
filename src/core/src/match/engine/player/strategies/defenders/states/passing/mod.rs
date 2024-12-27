@@ -35,10 +35,11 @@ impl StateProcessingHandler for DefenderPassingState {
                 )),
             ));
         }
+        
         let mut best_player_id = None;
         let mut highest_score = 0.0;
 
-        for (player_id, teammate_distance) in ctx.players().teammates().nearby_ids(30.0) {
+        for (player_id, teammate_distance) in ctx.players().teammates().nearby_ids(200.0) {
             let score = 1.0 / (teammate_distance + 1.0);
             if score > highest_score {
                 highest_score = score;
@@ -66,7 +67,7 @@ impl StateProcessingHandler for DefenderPassingState {
     }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
@@ -109,6 +110,7 @@ impl DefenderPassingState {
 
         let nearest_to_goal = teammates
             .all()
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
@@ -133,6 +135,7 @@ impl DefenderPassingState {
 
         let nearest_teammate = teammates
             .nearby(200.0)
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .min_by(|a, b| {
                 let dist_a = (a.position - ctx.player.position).magnitude();
                 let dist_b = (b.position - ctx.player.position).magnitude();
@@ -151,6 +154,7 @@ impl DefenderPassingState {
 
         let nearest_to_goal = teammates
             .all()
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;

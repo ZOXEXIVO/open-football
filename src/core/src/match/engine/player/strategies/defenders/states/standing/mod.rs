@@ -5,7 +5,10 @@ use nalgebra::Vector3;
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, VectorExtensions,
+};
 
 static DEFENDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
@@ -25,7 +28,22 @@ pub struct DefenderStandingState {}
 impl StateProcessingHandler for DefenderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
+        let team_ops = ctx.team();
         let player_ops = ctx.player();
+
+        if ball_ops.distance() < 200.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Tackling,
+            ));
+        }
+
+        if !team_ops.is_control_ball() {
+            if ball_ops.is_towards_player_with_angle(0.8) && ball_ops.distance() < 250.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
+            }
+        }
 
         if ball_ops.on_own_side() {
             // Ball is on the defender's side
@@ -48,7 +66,8 @@ impl StateProcessingHandler for DefenderStandingState {
             } else {
                 // Ball is not towards the player
                 if let Some(opponent) = ctx.players().opponents().nearby(PRESSING_DISTANCE).next() {
-                    if opponent.has_ball(ctx) && opponent.position.distance_to(&ctx.player.position) < PRESSING_DISTANCE
+                    if opponent.has_ball(ctx)
+                        && opponent.position.distance_to(&ctx.player.position) < PRESSING_DISTANCE
                     {
                         // Only press if opponent has ball and is very close
                         return Some(StateChangeResult::with_defender_state(
@@ -124,7 +143,12 @@ impl DefenderStandingState {
         let standing_too_long = ctx.in_state_time > STANDING_TIME_LIMIT;
         let ball_far_away = ball_ops.distance() > INTERCEPTION_DISTANCE * 2.0;
 
-        let no_immediate_threat = ctx.players().opponents().nearby(CLEARING_DISTANCE).next().is_some();
+        let no_immediate_threat = ctx
+            .players()
+            .opponents()
+            .nearby(CLEARING_DISTANCE)
+            .next()
+            .is_some();
 
         let close_to_optimal_position =
             player_ops.distance_from_start_position() < WALK_DISTANCE_THRESHOLD;
@@ -172,14 +196,18 @@ impl DefenderStandingState {
             > ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
             && ball_ops.distance_to_own_goal()
                 > ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
-        let no_immediate_threat = ctx.players().opponents().nearby(MARKING_DISTANCE).next().is_some();
+        let no_immediate_threat = ctx
+            .players()
+            .opponents()
+            .nearby(MARKING_DISTANCE)
+            .next()
+            .is_some();
 
         let not_in_optimal_position =
             player_ops.distance_from_start_position() > WALK_DISTANCE_THRESHOLD;
 
         ball_in_middle_third && no_immediate_threat && not_in_optimal_position
     }
-
 
     fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players()

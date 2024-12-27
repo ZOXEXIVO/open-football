@@ -55,7 +55,6 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
                     .with_force(ctx.player().throw_teammate_power(teammate.id))
                     .build()
             ));
-            events.add_player_event(PlayerEvent::UnClaimBall(ctx.player.id));
 
             return Some(StateChangeResult::with_events(events));
         }

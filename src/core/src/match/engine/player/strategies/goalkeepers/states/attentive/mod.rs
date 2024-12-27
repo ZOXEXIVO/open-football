@@ -10,39 +10,40 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
+static GOALKEEPER_ATTENTIVE_STATE_NETWORK: LazyLock<NeuralNetwork> =
+    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_attentive_data.json")));
 
 #[derive(Default)]
-pub struct GoalkeeperWalkingState {}
+pub struct GoalkeeperAttentiveState {}
 
-impl StateProcessingHandler for GoalkeeperWalkingState {
+impl StateProcessingHandler for GoalkeeperAttentiveState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
+                GoalkeeperState::Distributing,
             ));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Attentive,
-            ));
-        }
+        if ctx.ball().on_own_side() {
+            if ctx.ball().distance() < 150.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
 
-        if ctx.ball().distance() < 150.0 {
+            if self.should_come_out(ctx) && ctx.ball().distance() < 200.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::ComingOut,
+                ));
+            } else if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < 250.0
+            {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
+        } else {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::PreparingForSave,
-            ));
-        } else if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < 250.0 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::PreparingForSave,
-            ));
-        }
-
-        if self.should_come_out(ctx) && ctx.ball().distance() < 200.0 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::ComingOut,
+                GoalkeeperState::Walking,
             ));
         }
 
@@ -84,7 +85,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
     fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
-impl GoalkeeperWalkingState {
+impl GoalkeeperAttentiveState {
     fn is_out_of_position(&self, ctx: &StateProcessingContext) -> bool {
         let optimal_position = self.calculate_optimal_position(ctx);
         ctx.player.position.distance_to(&optimal_position) > 100.0 // Reduced threshold for more frequent adjustments

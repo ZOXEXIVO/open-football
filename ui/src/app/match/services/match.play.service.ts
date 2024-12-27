@@ -16,7 +16,7 @@ export class MatchPlayService {
 
     currentTime = 0;
     private lastFrameTime = 0;
-    private playbackSpeed = 0.8;
+    private playbackSpeed = 0.7;
 
     constructor(private matchDataService: MatchDataService) {
     }

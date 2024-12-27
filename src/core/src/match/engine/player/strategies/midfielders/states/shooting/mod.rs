@@ -8,6 +8,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use std::sync::LazyLock;
+use crate::r#match::events::Event;
 
 static MIDFIELDER_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_shooting_data.json")));
@@ -25,19 +26,13 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
-        // Create an event to change the ball's velocity
-        let mut state_change = StateChangeResult::with_midfielder_state(MidfielderState::Standing);
-
-        state_change
-            .events
-            .add_player_event(PlayerEvent::Shoot(ShootingEventModel::build()
+        Some(StateChangeResult::with_midfielder_state_and_event(MidfielderState::Standing, Event::PlayerEvent(PlayerEvent::Shoot(
+            ShootingEventModel::build()
                 .with_player_id(ctx.player.id)
                 .with_target(ctx.player().opponent_goal_position())
                 .with_force(ctx.player().shoot_goal_power())
-                .build()));
-
-        // Transition to the next appropriate state (e.g., Standing)
-        Some(state_change)
+                .build()
+        ))))
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

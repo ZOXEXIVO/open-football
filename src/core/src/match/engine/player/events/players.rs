@@ -23,7 +23,6 @@ pub enum PlayerEvent {
     CommunicateMessage(u32, &'static str),
     OfferSupport(u32),
     ClaimBall(u32),
-    UnClaimBall(u32),
     GainBall(u32),
     CaughtBall(u32),
     CommitFoul,
@@ -75,9 +74,6 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::Shoot(shoot_event_model) => {
                 Self::handle_shoot_event(shoot_event_model, field);
-            }
-            PlayerEvent::UnClaimBall(player_id) => {
-                Self::handle_unclaim_ball_event(player_id, field);
             }
             PlayerEvent::CaughtBall(player_id) => {
                 Self::handle_caught_ball_event(player_id, field);
@@ -141,8 +137,8 @@ impl PlayerEventDispatcher {
     fn handle_pass_to_event(event_model: PassingEventModel, field: &mut MatchField) {
         let ball_pass_vector = event_model.pass_target - field.ball.position;
         let direction = ball_pass_vector.normalize();
-        let pass_force = event_model.pass_force as f32;
-        let pass_force_multiplier = 1.5;
+        let pass_force = event_model.pass_force;
+        let pass_force_multiplier = 4.0;
 
         let velocity = direction * (pass_force * pass_force_multiplier);
 
@@ -185,12 +181,6 @@ impl PlayerEventDispatcher {
         field.ball.velocity = initial_velocity;
 
         field.ball.flags.in_passing_state_time = 100;
-    }
-
-    fn handle_unclaim_ball_event(player_id: u32, field: &mut MatchField) {
-        let player = field.get_player_mut(player_id).unwrap();
-
-        player.state = PlayerState::Injured;
     }
 
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {

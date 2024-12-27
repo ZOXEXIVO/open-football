@@ -4,9 +4,11 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use std::sync::LazyLock;
+use crate::r#match::forwarders::states::ForwardState;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
+const SHOOTING_DISTANCE_THRESHOLD: f32 = 300.0;
 
 static DEFENDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
@@ -22,6 +24,12 @@ impl StateProcessingHandler for DefenderRunningState {
             if self.is_in_shooting_range(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Shooting,
+                ));
+            }
+
+            if self.has_clear_shot(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
                 ));
             }
 
@@ -51,7 +59,7 @@ impl StateProcessingHandler for DefenderRunningState {
                     ));
                 }
 
-                if ctx.ball().distance() < 200.0 {
+                if ctx.ball().distance() < 100.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
@@ -142,6 +150,15 @@ impl DefenderRunningState {
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        distance_to_goal <= MAX_SHOOTING_DISTANCE && distance_to_goal >= MIN_SHOOTING_DISTANCE
+
+        distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
+    }
+
+    fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().distance_to_opponent_goal() < SHOOTING_DISTANCE_THRESHOLD {
+            return ctx.player().has_clear_shot();
+        }
+
+        false
     }
 }

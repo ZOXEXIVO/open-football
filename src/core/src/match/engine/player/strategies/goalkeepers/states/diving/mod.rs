@@ -98,14 +98,11 @@ impl GoalkeeperDivingState {
     }
 
     fn calculate_dive_distance(&self, ctx: &StateProcessingContext) -> f32 {
-        // Base the dive distance on the goalkeeper's jumping skill
-        ctx.player.skills.physical.jumping * 0.1 // Adjust this multiplier as needed
+        ctx.player.skills.physical.jumping * 0.3 // Adjust this multiplier as needed
     }
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
-        // Base the dive speed on the goalkeeper's reflexes and agility
-        (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.05
-        // Adjust this multiplier as needed
+        (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.2
     }
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {

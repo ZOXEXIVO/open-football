@@ -3,9 +3,7 @@ use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use rand::Rng;
 use std::sync::LazyLock;
@@ -68,44 +66,13 @@ impl StateProcessingHandler for ForwardInterceptingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.in_state_time % 3 == 0 {
-            // Calculate the interception point
-            let interception_point = self.calculate_interception_point(ctx);
-
-            // Direction towards the interception point
-            let to_interception = interception_point - ctx.player.position;
-            let direction = if to_interception.magnitude() > f32::EPSILON {
-                to_interception.normalize()
-            } else {
-                // If the player is very close to the interception point, use their current direction
-                // or a default direction if the velocity is near zero
-                if ctx.player.velocity.magnitude() > f32::EPSILON {
-                    ctx.player.velocity.normalize()
-                } else {
-                    Vector3::new(1.0, 0.0, 0.0) // Default direction, e.g., positive x-axis
-                }
-            };
-
-            // Retrieve player's current speed magnitude
-            let current_speed = ctx.player.velocity.magnitude();
-
-            // Player's physical attributes (scaled appropriately)
-            let acceleration = ctx.player.skills.physical.acceleration / 10.0; // Scale down as needed
-            let max_speed = ctx.player.skills.physical.pace / 10.0; // Scale down as needed
-
-            // Ensure delta_time is available; if not, define it based on your simulation tick rate
-            let delta_time = 1.0 / 60.0; // ctx.delta_time; // Time elapsed since last update in seconds
-
-            // Calculate new speed, incrementing by acceleration, capped at max_speed
-            let new_speed = (current_speed + acceleration * delta_time).min(max_speed);
-
-            // Calculate new velocity vector
-            let new_velocity = direction * new_speed;
-
-            Some(new_velocity)
-        } else {
-            None
-        }
+        Some(
+            SteeringBehavior::Pursuit {
+                target: ctx.tick_context.positions.ball.position,
+            }
+                .calculate(ctx.player)
+                .velocity,
+        )
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
