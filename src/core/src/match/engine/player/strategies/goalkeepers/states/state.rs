@@ -1,12 +1,4 @@
-use crate::r#match::goalkeepers::states::{
-    GoalkeeperCatchingState, GoalkeeperComingOutState, GoalkeeperDistributingState,
-    GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState,
-    GoalkeeperPassingState, GoalkeeperPenaltyState, GoalkeeperPickingUpState,
-    GoalkeeperPreparingForSaveState, GoalkeeperPressureState, GoalkeeperPunchingState,
-    GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperShootingState,
-    GoalkeeperStandingState, GoalkeeperSweepingState, GoalkeeperTacklingState,
-    GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState,
-};
+use crate::r#match::goalkeepers::states::{GoalkeeperAttentiveState, GoalkeeperCatchingState, GoalkeeperComingOutState, GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPenaltyState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPressureState, GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperSweepingState, GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -33,7 +25,8 @@ pub enum GoalkeeperState {
     PreparingForSave, // Preparing to make a save
     PenaltySave,      // Saving a penalty,
     Walking,          // Walking
-    TakeBall,         // Take the ball
+    TakeBall,         // Take the ball,
+    Attentive,        // Attentive
 }
 
 pub struct GoalkeeperStrategies {}
@@ -97,6 +90,9 @@ impl GoalkeeperStrategies {
             GoalkeeperState::Passing => state_processor.process(GoalkeeperPassingState::default()),
             GoalkeeperState::TakeBall => {
                 state_processor.process(GoalkeeperTakeBallState::default())
+            },
+            GoalkeeperState::Attentive => {
+                state_processor.process(GoalkeeperAttentiveState::default())
             }
         }
     }
@@ -127,6 +123,7 @@ impl Display for GoalkeeperState {
             GoalkeeperState::Walking => write!(f, "Walking"),
             GoalkeeperState::Passing => write!(f, "Passing"),
             GoalkeeperState::TakeBall => write!(f, "Take Ball"),
+            GoalkeeperState::Attentive => write!(f, "Attentive"),
         }
     }
 }

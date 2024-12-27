@@ -33,6 +33,12 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             }
         }
 
+        if ctx.ball().on_own_side() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Attentive,
+            ));
+        }
+
         match ctx.player().position_to_distance() {
             PlayerDistanceFromStartPosition::Small => {
                 if ctx.ball().is_towards_player_with_angle(0.8) {

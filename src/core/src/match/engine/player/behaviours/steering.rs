@@ -57,9 +57,9 @@ impl SteeringBehavior {
                 let distance = to_target.norm();
 
                 // Normalize skill values to a range of 0.5 to 1.5
-                let acceleration_normalized = 0.5 + (player.skills.physical.acceleration - 1.0) / 19.0;
-                let pace_normalized = 0.5 + (player.skills.physical.pace - 1.0) / 19.0;
-                let agility_normalized = 0.5 + (player.skills.physical.agility - 1.0) / 19.0;
+                let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
+                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
                 let desired_velocity = if distance > 0.0 {
                     let speed_factor = acceleration_normalized * pace_normalized;
@@ -98,26 +98,15 @@ impl SteeringBehavior {
             }
             SteeringBehavior::Pursuit { target} => {
                 let to_target = *target - player.position;
-                let distance = to_target.norm();
 
                 // Normalize skill values to a range of 0.5 to 1.5
-                let acceleration_normalized = 0.5 + (player.skills.physical.acceleration - 1.0) / 19.0;
-                let pace_normalized = 0.5 + (player.skills.physical.pace - 1.0) / 19.0;
-                let agility_normalized = 0.5 + (player.skills.physical.agility - 1.0) / 19.0;
+                let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
+                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                let slowing_radius = 5.0;
+                let target_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
 
-                let target_speed = if distance > slowing_radius {
-                    player.skills.max_speed() * pace_normalized * acceleration_normalized
-                } else {
-                    player.skills.max_speed() * pace_normalized * acceleration_normalized * (distance / slowing_radius)
-                };
-
-                let desired_velocity = if distance > 0.0 {
-                    to_target.normalize() * target_speed
-                } else {
-                    Vector3::zeros()
-                };
+                let desired_velocity = to_target.normalize() * target_speed;
 
                 let steering = desired_velocity - player.velocity;
                 let max_acceleration = player.skills.max_speed() * agility_normalized * acceleration_normalized;

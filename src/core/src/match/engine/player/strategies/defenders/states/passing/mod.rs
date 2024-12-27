@@ -110,6 +110,7 @@ impl DefenderPassingState {
 
         let nearest_to_goal = teammates
             .all()
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
@@ -134,6 +135,7 @@ impl DefenderPassingState {
 
         let nearest_teammate = teammates
             .nearby(200.0)
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .min_by(|a, b| {
                 let dist_a = (a.position - ctx.player.position).magnitude();
                 let dist_b = (b.position - ctx.player.position).magnitude();
@@ -152,6 +154,7 @@ impl DefenderPassingState {
 
         let nearest_to_goal = teammates
             .all()
+            .filter(|p| !p.tactical_positions.is_goalkeeper())
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;

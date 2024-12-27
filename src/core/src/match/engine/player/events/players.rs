@@ -137,8 +137,8 @@ impl PlayerEventDispatcher {
     fn handle_pass_to_event(event_model: PassingEventModel, field: &mut MatchField) {
         let ball_pass_vector = event_model.pass_target - field.ball.position;
         let direction = ball_pass_vector.normalize();
-        let pass_force = event_model.pass_force as f32;
-        let pass_force_multiplier = 3.5;
+        let pass_force = event_model.pass_force;
+        let pass_force_multiplier = 4.0;
 
         let velocity = direction * (pass_force * pass_force_multiplier);
 
