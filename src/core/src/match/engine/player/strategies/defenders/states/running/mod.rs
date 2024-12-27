@@ -142,6 +142,7 @@ impl DefenderRunningState {
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        distance_to_goal <= MAX_SHOOTING_DISTANCE && distance_to_goal >= MIN_SHOOTING_DISTANCE
+
+        distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
     }
 }

@@ -12,7 +12,7 @@ use std::sync::LazyLock;
 static MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
 
-const MAX_SHOOTING_DISTANCE: f32 = 250.0; // Maximum distance to attempt a shot
+const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 10.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
 #[derive(Default)]
