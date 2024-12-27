@@ -25,12 +25,6 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
         }
 
         if ctx.ball().on_own_side() {
-            if ctx.ball().distance() < 150.0 {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::PreparingForSave,
-                ));
-            }
-
             if self.should_come_out(ctx) && ctx.ball().distance() < 200.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ComingOut,
