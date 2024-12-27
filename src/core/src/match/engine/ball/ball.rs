@@ -244,13 +244,6 @@ impl Ball {
                 self.current_owner = Some(player.id);
 
                 if is_nearby_already_has_ball {
-                    nearby_players
-                        .iter()
-                        .filter(|p| Some(p.id) != self.current_owner)
-                        .for_each(|player| {
-                            events.add_ball_event(BallEvent::UnClaim(player.id));
-                        });
-
                     return;
                 }
 

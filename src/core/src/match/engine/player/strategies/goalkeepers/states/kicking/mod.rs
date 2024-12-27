@@ -40,7 +40,6 @@ impl StateProcessingHandler for GoalkeeperKickingState {
                     .with_force(ctx.player().kick_teammate_power(teammate.id))
                     .build()
             ));
-            events.add_player_event(PlayerEvent::UnClaimBall(ctx.player.id));
 
             return Some(StateChangeResult::with_events(events));
         }
