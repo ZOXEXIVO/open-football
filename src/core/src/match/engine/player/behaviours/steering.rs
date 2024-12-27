@@ -97,16 +97,20 @@ impl SteeringBehavior {
                 }
             }
             SteeringBehavior::Pursuit { target} => {
-
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
+
+                // Normalize skill values to a range of 0.5 to 1.5
+                let acceleration_normalized = 0.5 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let pace_normalized = 0.5 + (player.skills.physical.pace - 1.0) / 19.0;
+                let agility_normalized = 0.5 + (player.skills.physical.agility - 1.0) / 19.0;
 
                 let slowing_radius = 5.0;
 
                 let target_speed = if distance > slowing_radius {
-                    player.skills.max_speed()
+                    player.skills.max_speed() * pace_normalized * acceleration_normalized
                 } else {
-                    player.skills.max_speed() * (distance / slowing_radius)
+                    player.skills.max_speed() * pace_normalized * acceleration_normalized * (distance / slowing_radius)
                 };
 
                 let desired_velocity = if distance > 0.0 {
@@ -116,16 +120,28 @@ impl SteeringBehavior {
                 };
 
                 let steering = desired_velocity - player.velocity;
+                let max_acceleration = player.skills.max_speed() * agility_normalized * acceleration_normalized;
+                let steering_length = steering.norm();
 
-                let max_force: f32 = 10.0;
-                let steering = if steering.norm() > 0.0 {
-                    steering.normalize() * max_force.min(steering.norm())
+                let limited_steering = if steering_length > 0.0 {
+                    let steering_ratio = max_acceleration / steering_length;
+                    steering * steering_ratio.min(1.0)
                 } else {
                     Vector3::zeros()
                 };
 
+                let move_velocity = player.velocity + limited_steering;
+                let max_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
+                let move_velocity_length = move_velocity.norm();
+
+                let final_move_velocity = if move_velocity_length > max_speed {
+                    move_velocity.normalize() * max_speed
+                } else {
+                    move_velocity
+                };
+
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_move_velocity,
                     rotation: 0.0,
                 }
             }

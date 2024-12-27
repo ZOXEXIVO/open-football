@@ -73,7 +73,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         self.ctx.player.player_attributes.condition_percentage() > 50
     }
 
-    pub fn pass_teammate_power(&self, teammate_id: u32) -> f64 {
+    pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
         let distance = self
             .ctx
             .tick_context
@@ -82,26 +82,22 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let pass_skill = self.ctx.player.skills.technical.passing;
 
-        // Calculate the distance factor relative to the field size
-        let distance_factor = distance / (self.ctx.context.field_size.width as f32);
+        let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.6;
+        let distance_factor = (distance / max_pass_distance).clamp(0.0, 1.0);
 
-        // Calculate the base power based on passing skill and distance factor
-        let base_power = pass_skill / 20.0 * (1.0 - distance_factor);
+        let min_power = 0.5;
+        let max_power = 2.5;
+        let skill_factor = pass_skill / 20.0;
+        let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
-        // Introduce a random component to add variability
         let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 
-        // Calculate the final pass power
         let pass_power = base_power * random_factor;
 
-        // Clamp the pass power between a minimum and maximum value
-        let min_power = 0.1;
-        let max_power = 1.0;
-
-        pass_power.clamp(min_power, max_power) as f64
+        pass_power
     }
 
-    pub fn kick_teammate_power(&self, teammate_id: u32) -> f64 {
+    pub fn kick_teammate_power(&self, teammate_id: u32) -> f32 {
         let distance = self
             .ctx
             .tick_context
@@ -110,7 +106,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let kick_skill = self.ctx.player.skills.technical.free_kicks / 20.0;
 
-        let raw_power = (distance / (kick_skill * 100.0)) as f64;
+        let raw_power = distance / (kick_skill * 100.0);
 
         let min_power = 0.1;
         let max_power = 1.0;
@@ -119,7 +115,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         normalized_power.clamp(0.0, 1.0)
     }
 
-    pub fn throw_teammate_power(&self, teammate_id: u32) -> f64 {
+    pub fn throw_teammate_power(&self, teammate_id: u32) -> f32 {
         let distance = self
             .ctx
             .tick_context
@@ -128,7 +124,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let throw_skill = self.ctx.player.skills.technical.long_throws / 20.0;
 
-        let raw_power = (distance / (throw_skill * 100.0)) as f64;
+        let raw_power = distance / (throw_skill * 100.0);
 
         let min_power = 0.1;
         let max_power = 1.0;

@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 pub struct PassingEventModel {
     pub from_player_id: u32,
     pub pass_target: Vector3<f32>,
-    pub pass_force: f64
+    pub pass_force: f32
 }
 
 impl PassingEventModel {
@@ -16,7 +16,7 @@ impl PassingEventModel {
 pub struct PassingEventBuilder {
     from_player_id: Option<u32>,
     pass_target: Option<Vector3<f32>>,
-    pass_force: Option<f64>
+    pass_force: Option<f32>
 }
 
 impl Default for PassingEventBuilder {
@@ -44,7 +44,7 @@ impl PassingEventBuilder {
         self
     }  
     
-    pub fn with_force(mut self, pass_force: f64) -> Self {
+    pub fn with_force(mut self, pass_force: f32) -> Self {
         self.pass_force = Some(pass_force);
         self
     }    

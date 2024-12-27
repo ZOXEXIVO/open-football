@@ -69,16 +69,38 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
         // Define a threshold distance for smooth deceleration
         let deceleration_threshold = 100.0;
 
-        // Calculate the speed based on the distance to the target position
-        let speed = if distance_to_target <= deceleration_threshold {
+        // Calculate the base speed based on the player's pace attribute
+        let base_speed = ctx.player.skills.physical.pace;
+
+        // Adjust the speed based on player attributes
+        let agility_factor = ctx.player.skills.physical.agility as f32 / 100.0;
+        let acceleration_factor = ctx.player.skills.physical.acceleration as f32 / 100.0;
+        let stamina_factor = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
+
+        let adjusted_speed = base_speed * agility_factor * acceleration_factor * stamina_factor;
+
+        // Calculate the target speed based on the distance to the target position
+        let target_speed = if distance_to_target <= deceleration_threshold {
             // Smoothly decelerate as the player approaches the target position
-            ctx.player.skills.physical.pace * OFFSIDE_TRAP_SPEED_MULTIPLIER * (distance_to_target / deceleration_threshold)
+            adjusted_speed * OFFSIDE_TRAP_SPEED_MULTIPLIER * (distance_to_target / deceleration_threshold)
         } else {
-            // Move at the normal offside trap speed
-            ctx.player.skills.physical.pace * OFFSIDE_TRAP_SPEED_MULTIPLIER
+            // Move at the adjusted offside trap speed
+            adjusted_speed * OFFSIDE_TRAP_SPEED_MULTIPLIER
         };
 
-        Some(direction * speed)
+        // Define an acceleration factor and a blending factor
+        let acceleration_factor = 0.1;
+        let blending_factor = 0.8;
+
+        // Calculate the target velocity
+        let target_velocity = direction * target_speed;
+
+        // Update the player's velocity based on the acceleration factor and blending factor
+        let current_velocity = ctx.player.velocity;
+        let new_velocity = current_velocity + (target_velocity - current_velocity) * acceleration_factor;
+        let blended_velocity = current_velocity * (1.0 - blending_factor) + new_velocity * blending_factor;
+
+        Some(blended_velocity)
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
