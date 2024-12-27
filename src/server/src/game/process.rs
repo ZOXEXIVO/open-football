@@ -20,17 +20,23 @@ pub async fn game_process_action(State(state): State<GameAppData>) -> impl IntoR
 
     let mut simulator_data_guard = data.write_owned().await;
 
+    std::thread::spawn(|| {
+
+    });
+
     let result = tokio::task::spawn_blocking(move || {
         let simulator_data = simulator_data_guard.as_mut().unwrap();
-        FootballSimulator::simulate(simulator_data)
+
+        let result = FootballSimulator::simulate(simulator_data);
+        if result.has_match_results() {
+            tokio::task::spawn(async  {
+                write_match_results(result).await
+            });
+        }
     })
     .await;
 
     if let Ok(res) = result {
-        if res.has_match_results() {
-            write_match_results(res).await;
-        }
-
         (StatusCode::OK, Json(()))
     } else {
         (StatusCode::BAD_REQUEST, Json(()))
