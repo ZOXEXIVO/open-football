@@ -20,5 +20,5 @@ cp -r dist ../publish
 cd ..
 cargo build --release
 
-cp target/release/open_football.exe publish/open_football.exe
+cp target/release/open_football publish/open_football
 cp target/release/open_football publish/open_football
