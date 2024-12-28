@@ -44,6 +44,11 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
                     DefenderState::TrackingBack,
                 ))
             }
+        } else {
+            // Conditions for setting up an offside trap are not met
+            Some(StateChangeResult::with_defender_state(
+                DefenderState::HoldingLine,
+            ))
         }
     }
 

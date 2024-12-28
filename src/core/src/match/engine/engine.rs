@@ -4,11 +4,10 @@ use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::squad::TeamSquad;
-use crate::r#match::{
-    GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, Score, StateManager
-};
+use crate::r#match::{FieldSquad, GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, Score, StateManager};
 use nalgebra::Vector3;
 use std::collections::HashMap;
+use crate::Tactics;
 
 pub struct FootballEngine<const W: usize, const H: usize> {}
 
@@ -26,7 +25,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut field = MatchField::new(W, H, left_squad, right_squad);
 
-        let mut context = MatchContext::new(&field.size, players, score);
+        let mut context = MatchContext::new(&field, players, score);
 
         let mut state_manager = StateManager::new();
 
@@ -143,17 +142,20 @@ pub struct MatchContext {
     pub field_size: MatchFieldSize,
     pub players: MatchPlayerCollection,
     pub goal_positions: GoalPosition,
+
+    pub tactics: TeamsTactics,
 }
 
 impl MatchContext {
-    pub fn new(field_size: &MatchFieldSize, players: MatchPlayerCollection, score: Score) -> Self {
+    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score) -> Self {
         MatchContext {
             state: GameState::new(),
             time: MatchTime::new(),
             score,
-            field_size: MatchFieldSize::clone(&field_size),
+            field_size: MatchFieldSize::clone(&field.size),
             players,
-            goal_positions: GoalPosition::from(field_size),
+            goal_positions: GoalPosition::from(&field.size),
+            tactics: TeamsTactics::from_field(&field)
         }
     }
 
@@ -242,6 +244,21 @@ impl From<BallSide> for u8 {
         match side {
             BallSide::Left => 0,
             BallSide::Right => 1,
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct TeamsTactics {
+    pub left: Tactics,
+    pub right: Tactics
+}
+
+impl TeamsTactics {
+    pub fn from_field(field: &MatchField) -> Self {
+        TeamsTactics {
+            left: field.left_team_tactics.clone(),
+            right: field.right_team_tactics.clone()
         }
     }
 }

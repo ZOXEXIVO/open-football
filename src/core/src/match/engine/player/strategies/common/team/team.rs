@@ -1,4 +1,5 @@
-use crate::r#match::StateProcessingContext;
+use std::fmt::Pointer;
+use crate::r#match::{PlayerSide, StateProcessingContext};
 use crate::Tactics;
 
 pub struct TeamOperationsImpl<'b> {
@@ -12,8 +13,18 @@ impl<'b> TeamOperationsImpl<'b> {
 }
 
 impl<'b> TeamOperationsImpl<'b> {
-    pub fn tactics(&self) -> Option<Tactics> {
-        None
+    pub fn tactics(&self) -> &Tactics {
+        match self.ctx.player.side  {
+            Some(PlayerSide::Left) => {
+                &self.ctx.context.tactics.left
+            },
+            Some(PlayerSide::Right) => {
+                &self.ctx.context.tactics.right
+            }
+            None => {
+                panic!("unknown player side")
+            }
+        }
     }
 
     pub fn is_control_ball(&self) -> bool {

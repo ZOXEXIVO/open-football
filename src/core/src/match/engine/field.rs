@@ -3,6 +3,7 @@ use crate::r#match::{
     FieldSquad, MatchFieldSize, MatchPlayer, PlayerSide, PositionType, TeamSquad,
     POSITION_POSITIONING,
 };
+use crate::Tactics;
 use nalgebra::Vector3;
 
 pub struct MatchField {
@@ -12,7 +13,10 @@ pub struct MatchField {
     pub substitutes: Vec<MatchPlayer>,
 
     pub left_side_players: Option<FieldSquad>,
+    pub left_team_tactics: Tactics,
+
     pub right_side_players: Option<FieldSquad>,
+    pub right_team_tactics: Tactics,
 }
 
 impl MatchField {
@@ -25,6 +29,9 @@ impl MatchField {
         let left_squad = FieldSquad::from_team(&left_team_squad);
         let away_squad = FieldSquad::from_team(&right_team_squad);
 
+        let left_tactics = left_team_squad.tactics.clone();
+        let right_tactics = right_team_squad.tactics.clone();
+
         let (players_on_field, substitutes) =
             setup_player_on_field(left_team_squad, right_team_squad);
 
@@ -34,7 +41,9 @@ impl MatchField {
             players: players_on_field,
             substitutes,
             left_side_players: Some(left_squad),
+            left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),
+            right_team_tactics: right_tactics,
         }
     }
 

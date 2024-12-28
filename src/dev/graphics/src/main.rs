@@ -65,7 +65,7 @@ async fn main() {
 
     let score = Score::new(1, 2);
 
-    let mut context = MatchContext::new(&field_size, players, score);
+    let mut context = MatchContext::new(&field, players, score);
 
     let mut current_frame = 0u64;
 
