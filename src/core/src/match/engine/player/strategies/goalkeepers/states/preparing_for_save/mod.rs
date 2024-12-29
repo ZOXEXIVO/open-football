@@ -17,24 +17,24 @@ pub struct GoalkeeperPreparingForSaveState {}
 
 impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Attentive
-            ));
-        }
-
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Passing,
             ));
         } else {
             // Transition to Walking if the ball is far away
-            if ctx.ball().distance() < 30.0 {
+            if ctx.ball().distance() < 50.0 {
                 if self.is_ball_catchable(ctx) {
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::Catching,
                     ));
                 }
+            }
+
+            if ctx.team().is_control_ball() {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Attentive
+                ));
             }
 
             if ctx.ball().distance() > 250.0 {
