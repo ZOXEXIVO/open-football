@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -31,7 +31,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         if let Some(teammate) = nearest_teammates.next() {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
-                Event::PlayerEvent(PlayerEvent::PassTo(PassingEventModel::build()
+                Event::PlayerEvent(PlayerEvent::PassTo(PassingEventContext::build()
                     .with_player_id(ctx.player.id)
                     .with_target(teammate.position)
                     .with_force(ctx.player().pass_teammate_power(teammate.id))

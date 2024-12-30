@@ -29,7 +29,7 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ComingOut,
                 ));
-            } else if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < 250.0
+            } else if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0
             {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,

@@ -1,7 +1,7 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::player::events::{PlayerEvent, ShootingEventBuilder, ShootingEventModel};
+use crate::r#match::player::events::{PlayerEvent, ShootingEventBuilder, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -41,7 +41,7 @@ impl StateProcessingHandler for DefenderHeadingState {
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
             Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventModel::build()
+                ShootingEventContext::build()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().opponent_goal_position())
                     .with_force(ctx.player().shoot_goal_power())

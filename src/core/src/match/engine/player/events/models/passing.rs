@@ -1,13 +1,13 @@
 use nalgebra::Vector3;
 
 #[derive(Debug)]
-pub struct PassingEventModel {
+pub struct PassingEventContext {
     pub from_player_id: u32,
     pub pass_target: Vector3<f32>,
     pub pass_force: f32
 }
 
-impl PassingEventModel {
+impl PassingEventContext {
     pub fn build() -> PassingEventBuilder{
         PassingEventBuilder::new()
     }
@@ -49,8 +49,8 @@ impl PassingEventBuilder {
         self
     }    
 
-    pub fn build(self) -> PassingEventModel {
-        PassingEventModel {
+    pub fn build(self) -> PassingEventContext {
+        PassingEventContext {
             from_player_id: self.from_player_id.unwrap(),
             pass_target: self.pass_target.unwrap(),
             pass_force: self.pass_force.unwrap(),

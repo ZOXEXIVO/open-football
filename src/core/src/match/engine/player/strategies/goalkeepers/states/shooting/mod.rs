@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
+use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -30,7 +30,7 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         // 4. Shoot the ball towards the opponent's goal
         let mut events = EventCollection::new();
 
-        events.add_player_event(PlayerEvent::Shoot(ShootingEventModel::build()
+        events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::build()
             .with_player_id(ctx.player.id)
             .with_target(ctx.player().opponent_goal_position())
             .with_force(ctx.player().shoot_goal_power())

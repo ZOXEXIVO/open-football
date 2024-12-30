@@ -43,14 +43,8 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            if ctx.players().opponents().exists(50.0) {
+            if ctx.players().opponents().exists(70.0) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-            }
-
-            if distance_to_goal < SHOOTING_DISTANCE_THRESHOLD {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
             }
 
             if distance_to_goal > PASSING_DISTANCE_THRESHOLD {

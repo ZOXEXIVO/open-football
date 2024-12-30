@@ -37,11 +37,11 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 ));
             }
 
-            if ctx.ball().distance() > 250.0 {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Attentive,
-                ));
-            }
+            // if ctx.ball().distance() > 250.0 {
+            //     return Some(StateChangeResult::with_goalkeeper_state(
+            //         GoalkeeperState::Attentive,
+            //     ));
+            // }
 
             // Transition to Diving if the ball is close and moving fast towards goal
             if self.should_dive(ctx) {

@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     ConditionContext, MatchPlayer, MatchPlayerLite, PlayerSide, StateChangeResult,
@@ -31,7 +31,7 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state_and_event(
                 ForwardState::Running,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventModel::build()
+                    PassingEventContext::build()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.tick_context.positions.players.position(teammate.id))
                         .with_force(ctx.player().pass_teammate_power(teammate.id))

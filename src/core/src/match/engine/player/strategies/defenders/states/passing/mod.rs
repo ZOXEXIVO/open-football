@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::{Event, EventCollection};
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
@@ -27,36 +27,13 @@ impl StateProcessingHandler for DefenderPassingState {
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventModel::build()
+                    PassingEventContext::build()
                         .with_player_id(ctx.player.id)
                         .with_target(teammate.position)
                         .with_force(ctx.player().pass_teammate_power(teammate.id))
                         .build()
                 )),
             ));
-        }
-        
-        let mut best_player_id = None;
-        let mut highest_score = 0.0;
-
-        for (player_id, teammate_distance) in ctx.players().teammates().nearby_ids(200.0) {
-            let score = 1.0 / (teammate_distance + 1.0);
-            if score > highest_score {
-                highest_score = score;
-                best_player_id = Some(player_id);
-            }
-        }
-
-        if let Some(teammate_id) = best_player_id {
-            let events = EventCollection::with_event(Event::PlayerEvent(PlayerEvent::PassTo(
-                PassingEventModel::build()
-                    .with_player_id(ctx.player.id)
-                    .with_target(ctx.tick_context.positions.players.position(teammate_id))
-                    .with_force(ctx.player().pass_teammate_power(teammate_id))
-                    .build(),
-            )));
-
-            return Some(StateChangeResult::with_events(events));
         }
 
         None

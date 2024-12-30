@@ -2,7 +2,7 @@ use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -29,7 +29,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventModel::build()
+                    PassingEventContext::build()
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.tick_context.positions.players.position(teammate_id))
                         .with_force(ctx.player().pass_teammate_power(teammate_id))
