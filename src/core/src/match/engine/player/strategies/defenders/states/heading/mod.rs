@@ -73,8 +73,8 @@ impl StateProcessingHandler for DefenderHeadingState {
 impl DefenderHeadingState {
     /// Determines if the defender successfully heads the ball based on skills and random chance.
     fn attempt_heading(&self, ctx: &StateProcessingContext) -> bool {
-        let heading_skill = ctx.player.skills.technical.heading as f32 / 100.0; // Normalize skill to [0,1]
-        let jumping_skill = ctx.player.skills.physical.jumping as f32 / 100.0;
+        let heading_skill = ctx.player.skills.technical.heading  / 20.0; // Normalize skill to [0,1]
+        let jumping_skill = ctx.player.skills.physical.jumping  / 20.0;
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
         // Simulate chance of success

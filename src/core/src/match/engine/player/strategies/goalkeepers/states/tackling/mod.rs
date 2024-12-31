@@ -123,9 +123,9 @@ impl GoalkeeperTacklingState {
         let mut rng = rand::thread_rng();
 
         // Get goalkeeper's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 100.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression as f32 / 100.0;
-        let composure = ctx.player.skills.mental.composure as f32 / 100.0;
+        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0; // Normalize to [0,1]
+        let aggression = ctx.player.skills.mental.aggression as f32 / 20.0;
+        let composure = ctx.player.skills.mental.composure as f32 / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 

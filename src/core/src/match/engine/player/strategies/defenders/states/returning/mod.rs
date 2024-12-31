@@ -35,7 +35,7 @@ impl StateProcessingHandler for DefenderReturningState {
         }
 
         // Stay in returning state until very close to start position
-        if ctx.player().distance_from_start_position() < 2.0 {
+        if ctx.player().distance_from_start_position() < 5.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));

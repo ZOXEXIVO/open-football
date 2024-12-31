@@ -31,30 +31,31 @@ impl StateProcessingHandler for MidfielderStandingState {
                 ))
             };
         }
-
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
         else {
-            if ctx.ball().distance() < 150.0 {
+            if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Tackling,
+                    MidfielderState::Running,
                 ));
             }
+            else {
+                if !ctx.team().is_control_ball() && ctx.ball().distance() < 150.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Tackling,
+                    ));
+                }
 
-            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
+                if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Intercepting,
+                    ));
+                }
 
-            if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-                // Transition to Tackling state to try and win the ball
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
+                if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
+                    // Transition to Tackling state to try and win the ball
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
             }
         }
 

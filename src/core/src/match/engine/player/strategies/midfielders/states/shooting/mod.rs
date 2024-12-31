@@ -57,7 +57,7 @@ impl MidfielderShootingState {
     /// Calculates the shot power based on player attributes and distance to goal.
     fn calculate_shot_power(&self, ctx: &StateProcessingContext) -> f32 {
         // Get player's shooting power attribute
-        let shooting_power = ctx.player.skills.technical.tackling as f32 / 100.0;
+        let shooting_power = ctx.player.skills.technical.tackling  / 20.0;
 
         // Adjust power based on distance to goal
         let distance_to_goal =

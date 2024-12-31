@@ -14,7 +14,7 @@ static MIDFIELDER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a tackle (in meters)
-const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.5; // Base chance of successful tackle
+const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.3; // Base chance of successful tackle
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
 const STAMINA_THRESHOLD: f32 = 30.0; // Minimum stamina to attempt a tackle
 
@@ -120,9 +120,9 @@ impl MidfielderTacklingState {
         let mut rng = rand::thread_rng();
 
         // Get midfielder's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 100.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression as f32 / 100.0;
-        let composure = ctx.player.skills.mental.composure as f32 / 100.0;
+        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0;
+        let aggression = ctx.player.skills.mental.aggression as f32 / 20.0;
+        let composure = ctx.player.skills.mental.composure as f32 / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 

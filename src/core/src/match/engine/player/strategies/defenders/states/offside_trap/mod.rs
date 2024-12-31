@@ -73,8 +73,8 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
         let base_speed = ctx.player.skills.physical.pace;
 
         // Adjust the speed based on player attributes
-        let agility_factor = ctx.player.skills.physical.agility as f32 / 100.0;
-        let acceleration_factor = ctx.player.skills.physical.acceleration as f32 / 100.0;
+        let agility_factor = ctx.player.skills.physical.agility  / 20.0;
+        let acceleration_factor = ctx.player.skills.physical.acceleration  / 20.0;
         let stamina_factor = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
 
         let adjusted_speed = base_speed * agility_factor * acceleration_factor * stamina_factor;

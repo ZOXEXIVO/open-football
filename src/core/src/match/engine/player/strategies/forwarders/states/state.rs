@@ -1,4 +1,10 @@
-use crate::r#match::forwarders::states::{ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState, ForwardDribblingState, ForwardFinishingState, ForwardHeadingState, ForwardHeadingUpPlayState, ForwardInterceptingState, ForwardOffsideTrapBreakingState, ForwardPassingState, ForwardPressingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState, ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState};
+use crate::r#match::forwarders::states::{
+    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState,
+    ForwardDribblingState, ForwardFinishingState, ForwardHeadingState, ForwardHeadingUpPlayState,
+    ForwardInterceptingState, ForwardOffsideTrapBreakingState, ForwardPassingState,
+    ForwardPressingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState,
+    ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
+};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -55,7 +61,9 @@ impl ForwardStrategies {
             ForwardState::Assisting => state_processor.process(ForwardAssistingState::default()),
             ForwardState::Running => state_processor.process(ForwardRunningState::default()),
             ForwardState::TakeBall => state_processor.process(ForwardTakeBallState::default()),
-            ForwardState::Intercepting => state_processor.process(ForwardInterceptingState::default()),
+            ForwardState::Intercepting => {
+                state_processor.process(ForwardInterceptingState::default())
+            }
             ForwardState::Returning => state_processor.process(ForwardReturningState::default()),
         }
     }
