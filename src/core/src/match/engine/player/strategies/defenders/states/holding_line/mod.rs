@@ -4,7 +4,7 @@ use nalgebra::Vector3;
 use std::sync::LazyLock;
 
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
 static DEFENDER_HOLDING_LINE_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_holding_line_data.json")));
@@ -100,7 +100,7 @@ impl DefenderHoldingLineState {
         let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
 
         // Calculate the average y-position of defenders to determine the defensive line
-        let sum_y_positions: f32 = defenders.iter().map(|p| p.position.y).sum();
+        let sum_y_positions: f32 = defenders.iter().map(|p| p.position.x).sum();
         sum_y_positions / defenders.len() as f32
     }
 
@@ -118,12 +118,11 @@ impl DefenderHoldingLineState {
             .players()
             .opponents()
             .all()
-            .into_iter()
             .filter(|opponent| {
-                if ctx.player().on_own_side() {
-                    opponent.position.y < defensive_line_position
+                if ctx.player.side == Some(PlayerSide::Left) {
+                    opponent.position.x < defensive_line_position
                 } else {
-                    opponent.position.y > defensive_line_position
+                    opponent.position.x > defensive_line_position
                 }
             })
             .count();

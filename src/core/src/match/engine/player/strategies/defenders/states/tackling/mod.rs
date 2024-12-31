@@ -77,7 +77,7 @@ impl StateProcessingHandler for DefenderTacklingState {
                     .events
                     .add(Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)));
 
-                Some(state_change)
+                return Some(state_change);
             } else if committed_foul {
                 // Tackle resulted in a foul
                 let mut state_change =
@@ -88,17 +88,15 @@ impl StateProcessingHandler for DefenderTacklingState {
                     .events
                     .add_player_event(PlayerEvent::CommitFoul);
 
-                Some(state_change)
+                return Some(state_change);
             } else {
-                Some(StateChangeResult::with_defender_state(
+                return Some(StateChangeResult::with_defender_state(
                     DefenderState::Standing,
-                ))
+                ));
             }
-        } else {
-            Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
-            ))
         }
+        
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
