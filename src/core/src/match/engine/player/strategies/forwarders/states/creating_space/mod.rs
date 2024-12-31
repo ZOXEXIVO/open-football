@@ -11,7 +11,7 @@ use std::sync::LazyLock;
 static FORWARD_CREATING_SPACE_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_creating_space_data.json")));
 
-const CREATING_SPACE_THRESHOLD: f32 = 50.0;
+const CREATING_SPACE_THRESHOLD: f32 = 150.0;
 const OPPONENT_DISTANCE_THRESHOLD: f32 = 20.0;
 
 #[derive(Default)]
@@ -32,7 +32,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
 
         // Check if the player is too close to an opponent
-        if self.is_too_close_to_opponent(ctx) {
+        if self.should_dribble(ctx) {
             // If too close to an opponent, try to dribble away
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
@@ -60,8 +60,8 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 target: direction,
                 slowing_distance: 50.0,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         );
     }
 
@@ -75,10 +75,11 @@ impl ForwardCreatingSpaceState {
         !ctx.players().opponents().exists(CREATING_SPACE_THRESHOLD)
     }
 
-    fn is_too_close_to_opponent(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players()
-            .opponents()
-            .exists(OPPONENT_DISTANCE_THRESHOLD)
+    fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
+        ctx.player.has_ball(ctx) && ctx
+                .players()
+                .opponents()
+                .exists(OPPONENT_DISTANCE_THRESHOLD)
     }
 
     fn has_space_between_opponents(&self, ctx: &StateProcessingContext) -> bool {

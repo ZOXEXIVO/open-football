@@ -65,7 +65,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
+            if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() && ctx.ball().is_towards_player_with_angle(0.85) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Intercepting,
                 ));
@@ -257,6 +257,6 @@ impl ForwardRunningState {
     }
 
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(50.0)
+        ctx.team().is_control_ball() && ctx.players().opponents().exists(50.0)
     }
 }

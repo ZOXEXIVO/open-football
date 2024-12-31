@@ -213,6 +213,10 @@ impl ForwardPassingState {
     }
 
     fn space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
+        if !ctx.player.has_ball(ctx) {
+            return false;
+        }
+        
         let dribble_distance = 10.0; // Adjust based on your game's scale
         let players = ctx.players();
         let opponents = players.opponents();
