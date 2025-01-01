@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static MIDFIELDER_RESTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_RESTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_resting_data.json")));
 
 const STAMINA_RECOVERY_THRESHOLD: f32 = 90.0;

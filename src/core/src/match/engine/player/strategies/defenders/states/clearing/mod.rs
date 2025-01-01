@@ -9,7 +9,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static DEFENDER_CLEARING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_CLEARING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_clearing_data.json")));
 
 #[derive(Default)]

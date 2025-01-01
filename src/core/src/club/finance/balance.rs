@@ -70,6 +70,7 @@ impl ClubFinances {
 }
 
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct ClubFinancialBalance {
     pub balance: i32,
     pub income: i32,

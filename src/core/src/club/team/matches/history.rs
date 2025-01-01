@@ -21,6 +21,7 @@ impl MatchHistory {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 pub struct MatchHistoryItem {
     date: NaiveDateTime,
     rival_team_id: u32,

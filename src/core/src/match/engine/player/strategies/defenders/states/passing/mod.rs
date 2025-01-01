@@ -1,15 +1,13 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::events::{Event, EventCollection};
+use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
 use std::sync::LazyLock;
-use crate::r#match::midfielders::states::MidfielderState;
 
-static DEFENDER_PASSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_PASSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_passing_data.json")));
 
 #[derive(Default)]

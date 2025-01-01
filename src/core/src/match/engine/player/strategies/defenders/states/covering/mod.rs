@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static DEFENDER_COVERING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_COVERING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_covering_data.json")));
 
 const MARKING_DISTANCE: f32 = 15.0;

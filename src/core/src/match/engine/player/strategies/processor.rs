@@ -10,7 +10,7 @@ use crate::r#match::{
     PlayerOperationsImpl, PlayersOperationsImpl, TeamOperationsImpl,
 };
 use crate::PlayerFieldPositionGroup;
-use log::{debug, info};
+use log::{debug};
 use nalgebra::Vector3;
 
 pub trait StateProcessingHandler {

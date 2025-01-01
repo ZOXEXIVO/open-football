@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 #[derive(Default)]

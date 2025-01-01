@@ -5,13 +5,11 @@ use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::Rng;
 use std::sync::LazyLock;
 
-static MIDFIELDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
-const PASSING_DISTANCE_THRESHOLD: f32 = 30.0; // Adjust as needed
 const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Adjust as needed
 
 #[derive(Default)]
@@ -98,27 +96,11 @@ impl MidfielderStandingState {
         !self.has_passing_options(ctx)
     }
 
-    fn calculate_movement_probability(
-        &self,
-        rng: &mut impl Rng,
-        ctx: &StateProcessingContext,
-    ) -> bool {
-        let positioning_probability = (ctx.player.skills.mental.positioning as f64) / 20.0;
-        let concentration_probability = (ctx.player.skills.mental.concentration as f64) / 20.0;
-
-        let positioning_roll = rng.gen_range(0.0..1.0);
-        let concentration_roll = rng.gen_range(0.0..1.0);
-
-        positioning_roll < positioning_probability && concentration_roll < concentration_probability
-    }
-
     /// Determines if the midfielder has passing options.
     fn has_passing_options(&self, ctx: &StateProcessingContext) -> bool {
         const PASSING_DISTANCE_THRESHOLD: f32 = 30.0;
         ctx.players().teammates().exists(PASSING_DISTANCE_THRESHOLD)
     }
-
-    const PRESSING_DISTANCE_THRESHOLD: f32 = 10.0;
 
     /// Checks if an opponent player is nearby within the pressing threshold.
     fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {

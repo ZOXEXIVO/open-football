@@ -7,7 +7,7 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static DEFENDER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
 
 const INTERCEPTION_DISTANCE: f32 = 250.0;

@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 use std::sync::LazyLock;
 use crate::r#match::events::Event;
 
-static FORWARD_CROSS_RECEIVING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _FORWARD_CROSS_RECEIVING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_cross_receiving_data.json"))
 });
 
@@ -24,7 +24,7 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        if ball_ops.distance() <= self.receiving_range() {
+        if ball_ops.distance() <= 10.0 {
             return Some(StateChangeResult::with_event(Event::PlayerEvent(PlayerEvent::RequestBallReceive(ctx.player.id))));
         }
 
@@ -40,23 +40,4 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
-}
-
-impl ForwardCrossReceivingState {
-    fn calculate_target_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let goal_position = ctx.ball().direction_to_opponent_goal();
-
-        // Calculate the target position within the crossing zone
-        let crossing_zone_width = 30.0; // Adjust based on your game's scale
-        let crossing_zone_length = 20.0; // Adjust based on your game's scale
-        let target_x = ball_position.x + (rand::random::<f32>() - 0.5) * crossing_zone_width;
-        let target_y = goal_position.y - crossing_zone_length / 2.0;
-
-        Vector3::new(target_x, target_y, 0.0)
-    }
-
-    fn receiving_range(&self) -> f32 {
-        2.0 // Adjust based on your game's scale
-    }
 }

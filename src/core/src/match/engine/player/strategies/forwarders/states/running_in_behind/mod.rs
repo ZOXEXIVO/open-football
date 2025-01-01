@@ -5,7 +5,7 @@ use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_RUNNING_IN_BEHIND_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _FORWARD_RUNNING_IN_BEHIND_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_running_in_behind_data.json"))
 });
 

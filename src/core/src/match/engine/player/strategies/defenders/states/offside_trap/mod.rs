@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 use std::sync::LazyLock;
 use rand::Rng;
 
-static DEFENDER_OFFSIDE_TRAP_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_OFFSIDE_TRAP_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_offside_trap_data.json")));
 
 const OFFSIDE_TRAP_DISTANCE: f32 = 5.0; // Distance to move forward to set the trap
@@ -109,23 +109,9 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
 }
 
 impl DefenderOffsideTrapState {
-    fn is_opponent_style_suitable(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the opponent's playing style is suitable for an offside trap
-        let opponent_team_id = if ctx.player.team_id == ctx.context.score.home_team.team_id {
-            ctx.context.score.away_team.team_id
-        } else {
-            ctx.context.score.home_team.team_id
-        };
-
-        false
-
+    fn is_opponent_style_suitable(&self, _ctx: &StateProcessingContext) -> bool {
         // TODO
-        // // Retrieve the opponent team's tactics (assuming you have a method to get the tactics by team ID)
-        // let opponent_tactics = ctx.get_team_tactics(opponent_team_id);
-        //
-        // // Check if the opponent's tactics involve playing long balls or fast forwards
-        // // Adjust the conditions based on your specific game mechanics and tactics representation
-        // opponent_tactics.involves_long_balls() || opponent_tactics.has_fast_forwards()
+        false
     }
 
     fn evaluate_defensive_line_cohesion(&self, ctx: &StateProcessingContext) -> bool {
@@ -209,33 +195,6 @@ impl DefenderOffsideTrapState {
         } else {
             avg_x - adjustment
         }
-    }
-
-    fn calculate_offside_trap_direction(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let team_direction = if ctx.player.side.unwrap() == PlayerSide::Left {
-            Vector3::new(1.0, 0.0, 0.0) // Left team moves forward in positive x-direction
-        } else {
-            Vector3::new(-1.0, 0.0, 0.0) // Right team moves forward in negative x-direction
-        };
-
-        // Calculate the defensive line position
-        let defensive_line_position = self.calculate_defensive_line_position(ctx);
-
-        // Calculate the target position for the offside trap
-        let target_position = if ctx.player.side.unwrap() == PlayerSide::Left {
-            Vector3::new(defensive_line_position + OFFSIDE_TRAP_DISTANCE, player_position.y, 0.0)
-        } else {
-            Vector3::new(defensive_line_position - OFFSIDE_TRAP_DISTANCE, player_position.y, 0.0)
-        };
-
-        // Calculate the direction from the player's current position to the target position
-        let direction = (target_position - player_position).normalize();
-
-        // Blend the team direction with the calculated direction
-        let blended_direction = (team_direction + direction).normalize();
-
-        blended_direction
     }
 
     fn calculate_offside_trap_target_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {

@@ -1,22 +1,18 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
-use itertools::Itertools;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
-static FORWARD_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
-
-const CREATING_SPACE_THRESHOLD: f32 = 100.0; // Adjust based on your game's scale
 
 #[derive(Default)]
 pub struct ForwardRunningState {}
@@ -224,22 +220,6 @@ impl ForwardRunningState {
             // No other forwards, so the current player is the leading forward
             true
         }
-    }
-
-    fn has_space_between_opponents(&self, ctx: &StateProcessingContext) -> bool {
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        let mut nearest_opponents = opponents.nearby(150.0);
-
-        if let Some(first) = nearest_opponents.next() {
-            if let Some(second) = nearest_opponents.next() {
-                return ctx.tick_context.distances.get(first.id, second.id)
-                    > CREATING_SPACE_THRESHOLD;
-            }
-        }
-
-        false
     }
 
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {

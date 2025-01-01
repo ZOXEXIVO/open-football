@@ -9,7 +9,7 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
@@ -143,22 +143,6 @@ impl MidfielderRunningState {
         }
 
         false
-    }
-
-    fn find_open_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<u32> {
-        let open_teammates = ctx
-            .players()
-            .opponents()
-            .all()
-            .min_by(|a, b| {
-                // Prefer teammates closer to the opponent's goal
-                let a_distance = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let b_distance = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                a_distance.partial_cmp(&b_distance).unwrap()
-            })
-            .map(|p| p.id);
-
-        open_teammates
     }
 
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {

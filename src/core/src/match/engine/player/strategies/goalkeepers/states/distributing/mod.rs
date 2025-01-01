@@ -10,7 +10,7 @@ use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
 use std::sync::LazyLock;
 
-static GOALKEEPER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_distributing_data.json")));
 
 #[derive(Default)]
@@ -53,26 +53,6 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 }
 
 impl GoalkeeperDistributingState {
-    fn find_best_teammate_to_distribute(&self, ctx: &StateProcessingContext) -> Option<u32> {
-        let players = ctx.players();
-
-        if let Some((teammate_id, _)) = players
-            .teammates()
-            .nearby_ids(150.0)
-            .choose(&mut rand::thread_rng())
-        {
-            return Some(teammate_id);
-        }
-
-        None
-    }
-
-    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, player_id: u32) -> bool {
-        // TODO
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        distance_to_goal < 20.0 // Adjust based on your game's scale
-    }
-
     fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<u32> {
         let players = ctx.players();
 

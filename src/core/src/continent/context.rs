@@ -1,10 +1,10 @@
 #[derive(Clone)]
 pub struct ContinentContext {
-    id: u32,
+    _id: u32,
 }
 
 impl ContinentContext {
     pub fn new(id: u32) -> Self {
-        ContinentContext { id }
+        ContinentContext { _id: id }
     }
 }

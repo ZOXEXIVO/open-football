@@ -131,12 +131,3 @@ fn get_player_position(player: &MatchPlayer, side: PlayerSide) -> Option<Vector3
         })
         .map(|(x, y)| Vector3::new(x, y, 0.0))
 }
-
-impl PlayerSide {
-    fn opposite(&self) -> Self {
-        match self {
-            PlayerSide::Left => PlayerSide::Right,
-            PlayerSide::Right => PlayerSide::Left,
-        }
-    }
-}

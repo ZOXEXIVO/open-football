@@ -5,7 +5,7 @@ use crate::r#match::{ConditionContext, StateProcessingContext, StateProcessingHa
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static COMMON_DEFENDER_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _COMMON_DEFENDER_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_common_defender_data.json")));
 
 #[derive(Default)]

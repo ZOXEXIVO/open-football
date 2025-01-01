@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_SWEEPING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_SWEEPING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_sweeping_data.json")));
 
 const SWEEPING_DISTANCE_THRESHOLD: f32 = 20.0; // Distance from goal to consider sweeping

@@ -1,5 +1,3 @@
-use nalgebra::Vector3;
-
 #[derive(Debug, Copy, Clone, Default)]
 pub struct PlayerSkills {
     pub technical: Technical,
@@ -22,11 +20,6 @@ impl PlayerSkills {
                 + 0.1 * balance_factor);
 
         max_speed
-    }
-
-    pub fn running_speed(&self) -> Vector3<f32> {
-        let running_speed = (self.physical.acceleration + self.physical.stamina) / 2.0 * 0.15;
-        Vector3::new(running_speed, running_speed, 0.0).normalize()
     }
 }
 

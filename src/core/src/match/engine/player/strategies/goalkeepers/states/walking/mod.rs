@@ -10,7 +10,7 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
 
 #[derive(Default)]
@@ -169,12 +169,5 @@ impl GoalkeeperWalkingState {
             .clamp(goal_position.z, goal_position.z + penalty_area_depth);
 
         limited_position
-    }
-
-    fn simple_hash(&self, mut x: u64) -> u32 {
-        x = ((x >> 16) ^ x) * 0x45d9f3b;
-        x = ((x >> 16) ^ x) * 0x45d9f3b;
-        x = (x >> 16) ^ x;
-        x as u32
     }
 }

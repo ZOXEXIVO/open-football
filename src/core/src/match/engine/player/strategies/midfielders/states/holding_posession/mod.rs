@@ -5,7 +5,7 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, State
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static MIDFIELDER_HOLDING_POSSESSION_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _MIDFIELDER_HOLDING_POSSESSION_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_holding_possession_data.json"))
 });
 

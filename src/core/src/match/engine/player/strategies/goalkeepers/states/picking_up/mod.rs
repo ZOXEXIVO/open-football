@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_PICKING_UP_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_PICKING_UP_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_picking_up_data.json")));
 
 const PICKUP_DISTANCE_THRESHOLD: f32 = 1.0; // Maximum distance to pick up the ball

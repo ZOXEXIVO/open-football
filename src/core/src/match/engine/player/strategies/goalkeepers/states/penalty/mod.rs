@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_PENALTY_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_PENALTY_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_penalty_data.json")));
 
 const PENALTY_SAVE_PROBABILITY: f32 = 0.3; // Probability of saving a penalty

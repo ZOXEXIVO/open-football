@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_PUNCHING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_PUNCHING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_punching_data.json")));
 
 const PUNCHING_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt punching

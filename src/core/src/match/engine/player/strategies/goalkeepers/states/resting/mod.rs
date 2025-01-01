@@ -7,11 +7,10 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_RESTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_RESTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_resting_data.json")));
 
 const RESTING_STAMINA_THRESHOLD: u32 = 60; // Minimum stamina to transition out of resting state
-const RESTING_STAMINA_RECOVERY_RATE: f32 = 0.5; // Amount of stamina recovered per second while resting
 
 #[derive(Default)]
 pub struct GoalkeeperRestingState {}

@@ -6,7 +6,7 @@ use std::sync::LazyLock;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
-static DEFENDER_HOLDING_LINE_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_HOLDING_LINE_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_holding_line_data.json")));
 
 const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 100.0;

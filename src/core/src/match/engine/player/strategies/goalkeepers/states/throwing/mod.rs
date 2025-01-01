@@ -9,11 +9,10 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_THROWING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_THROWING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_throwing_data.json")));
 
 const THROW_DISTANCE_THRESHOLD: f32 = 30.0; // Minimum distance to consider for throwing
-const THROW_POWER_MULTIPLIER: f32 = 10.0; // Multiplier for throw power calculation
 
 #[derive(Default)]
 pub struct GoalkeeperThrowingState {}

@@ -1,15 +1,14 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
-    ConditionContext, MatchPlayer, PlayerSide, StateChangeResult, StateProcessingContext,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_DRIBBLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_DRIBBLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_dribbling_data.json")));
 
 #[derive(Default)]
@@ -75,43 +74,6 @@ impl ForwardDribblingState {
         let players = ctx.players();
 
         !players.opponents().exists(dribble_distance)
-    }
-
-    fn is_open_for_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayer) -> bool {
-        let max_distance = 20.0; // Adjust based on your game's scale
-
-        // Check if the teammate is within a reasonable distance
-        let distance = ctx.tick_context.distances.get(ctx.player.id, teammate.id);
-
-        if distance > max_distance {
-            return false;
-        }
-
-        let players = ctx.players();
-
-        !players.opponents().exists(5.0)
-    }
-
-    fn in_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayer) -> bool {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let player_to_ball = (ball_position - ctx.player.position).normalize();
-        let player_to_teammate = (teammate.position - ctx.player.position).normalize();
-
-        // Check if the teammate is in the passing lane
-        player_to_ball.dot(&player_to_teammate) > 0.8
-    }
-
-    fn scoring_chance(&self, ctx: &StateProcessingContext, teammate: &MatchPlayer) -> f32 {
-        let goal_position = match teammate.side {
-            Some(PlayerSide::Left) => ctx.context.goal_positions.right,
-            Some(PlayerSide::Right) => ctx.context.goal_positions.left,
-            _ => Vector3::new(0.0, 0.0, 0.0),
-        };
-
-        let distance_to_goal = teammate.position.distance_to(&goal_position);
-
-        // Calculate the scoring chance based on distance to the goal
-        1.0 - distance_to_goal / ctx.context.field_size.width as f32
     }
 
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {

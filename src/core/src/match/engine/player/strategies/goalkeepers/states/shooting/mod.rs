@@ -9,11 +9,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_shooting_data.json")));
-
-const SHOOTING_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to consider shooting
-const SHOT_POWER_MULTIPLIER: f32 = 1.5; // Multiplier for shot power calculation
 
 #[derive(Default)]
 pub struct GoalkeeperShootingState {}

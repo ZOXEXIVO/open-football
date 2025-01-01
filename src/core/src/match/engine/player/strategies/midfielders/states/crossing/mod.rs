@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 use std::sync::LazyLock;
 use crate::r#match::midfielders::states::MidfielderState;
 
-static MIDFIELDER_CROSSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_CROSSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_crossing_data.json")));
 
 #[derive(Default)]

@@ -4,20 +4,19 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
+    ConditionContext, MatchPlayerLite, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use rand::Rng;
 use std::sync::LazyLock;
 
-static DEFENDER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a sliding tackle (in meters)
 const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.6; // Base chance of successful tackle
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
-const STAMINA_THRESHOLD: f32 = 25.0; // Minimum stamina to attempt a sliding tackle
 
 #[derive(Default)]
 pub struct DefenderTacklingState {}

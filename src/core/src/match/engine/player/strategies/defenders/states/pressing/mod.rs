@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static DEFENDER_PRESSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_PRESSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_pressing_data.json")));
 
 const TACKLING_DISTANCE_THRESHOLD: f32 = 2.0; // Distance within which the defender can tackle

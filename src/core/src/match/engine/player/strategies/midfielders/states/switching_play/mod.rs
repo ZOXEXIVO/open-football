@@ -10,11 +10,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static MIDFIELDER_SWITCHING_PLAY_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_SWITCHING_PLAY_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_switching_play_data.json")));
-
-const SWITCHING_PLAY_DISTANCE_THRESHOLD: f32 = 30.0; // Minimum distance to consider switching play
-const SWITCHING_PLAY_ANGLE_THRESHOLD: f32 = std::f32::consts::PI / 4.0; // 45 degrees
 
 #[derive(Default)]
 pub struct MidfielderSwitchingPlayState {}

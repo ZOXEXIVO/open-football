@@ -7,20 +7,18 @@ use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, VectorExtensions,
+    StateProcessingHandler
 };
 
-static DEFENDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _DEFENDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
 const INTERCEPTION_DISTANCE: f32 = 200.0;
 const CLEARING_DISTANCE: f32 = 50.0;
-const TIRED_THRESHOLD: f32 = 30.0;
 const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
 const MARKING_DISTANCE: f32 = 15.0;
-const PRESSING_DISTANCE: f32 = 150.0;
-const FIELD_THIRD_THRESHOLD: f32 = 0.33; // One-third of the field width
+const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
 #[derive(Default)]
 pub struct DefenderStandingState {}

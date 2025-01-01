@@ -6,7 +6,7 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeR
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_HEADING_UP_PLAY_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _FORWARD_HEADING_UP_PLAY_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_heading_up_play_data.json"))
 });
 

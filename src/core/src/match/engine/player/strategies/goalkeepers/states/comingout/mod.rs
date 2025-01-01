@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_COMINGOUT_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_COMINGOUT_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_comingout_data.json")));
 
 const COMING_OUT_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance from the goal to consider coming out

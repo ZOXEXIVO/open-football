@@ -7,7 +7,7 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 
-static MIDFIELDER_DISTANCE_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _MIDFIELDER_DISTANCE_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_distance_shooting_data.json"))
 });
 
@@ -85,21 +85,6 @@ impl MidfielderDistanceShootingState {
         distance_to_goal <= distance_threshold && angle_to_goal <= angle_threshold && has_clear_shot
     }
 
-    fn calculate_shot(&self, ctx: &StateProcessingContext) -> (Vector3<f32>, f32) {
-        // Calculate the shot direction and power based on the game state
-        let player_position = ctx.player.position;
-        let goal_position = self.get_opponent_goal_position(ctx);
-        let shot_direction = (goal_position - player_position).normalize();
-
-        // Adjust the shot power based on player attributes and distance to goal
-        let base_shot_power = 10.0;
-        let shooting_skill = ctx.player.skills.technical.finishing as f32 / 20.0;
-        let distance_factor = ctx.player().goal_distance() / 30.0;
-        let shot_power = base_shot_power * shooting_skill * distance_factor;
-
-        (shot_direction, shot_power)
-    }
-
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
         // Determine if the player should pass based on the game state
 
@@ -121,18 +106,6 @@ impl MidfielderDistanceShootingState {
         let under_pressure = self.is_under_pressure(ctx);
 
         has_space && !under_pressure
-    }
-
-    fn calculate_desired_shooting_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Calculate the desired shooting position based on the game state
-        let player_position = ctx.player.position;
-        let goal_position = self.get_opponent_goal_position(ctx);
-
-        // Adjust the desired position based on factors like shot angle, distance, etc.
-        let offset_direction = (goal_position - player_position).normalize();
-        let offset_distance = 5.0; // Adjust this value based on your game's scale
-
-        player_position + offset_direction * offset_distance
     }
 
     // Additional helper functions

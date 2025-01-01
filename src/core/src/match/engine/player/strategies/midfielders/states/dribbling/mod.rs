@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
 use std::sync::LazyLock;
 
-static MIDFIELDER_DRIBBLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_DRIBBLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_dribbling_data.json")));
 
 #[derive(Default)]
@@ -110,30 +110,11 @@ impl MidfielderDribblingState {
         distance_from_start > 20.0 && !team_in_possession
     }
 
-    fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if there is open space ahead of the player
-        let space_threshold = 10.0;
-        let player_direction = ctx.player.velocity.normalize();
-        let space_ahead = ctx.tick_context.space.cast_ray(
-            ctx.player.position,
-            player_direction,
-            space_threshold,
-            true,
-        );
-
-        space_ahead.is_none()
-    }
-
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player should press the opponent with the ball
         let ball_distance = ctx.ball().distance();
         let pressing_distance = 150.0; // Adjust the threshold as needed
 
         !ctx.team().is_control_ball() && ball_distance < pressing_distance
-    }
-
-    fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        let pressure_distance = 10.0;
-        ctx.players().teammates().exists(pressure_distance)
     }
 }

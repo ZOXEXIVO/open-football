@@ -9,7 +9,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_KICKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_KICKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_kicking_data.json")));
 
 const KICK_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to consider for kicking

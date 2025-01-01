@@ -4,10 +4,12 @@ use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::squad::TeamSquad;
-use crate::r#match::{FieldSquad, GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, Score, StateManager};
+use crate::r#match::{
+    GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, Score, StateManager,
+};
+use crate::Tactics;
 use nalgebra::Vector3;
 use std::collections::HashMap;
-use crate::Tactics;
 
 pub struct FootballEngine<const W: usize, const H: usize> {}
 
@@ -155,7 +157,7 @@ impl MatchContext {
             field_size: MatchFieldSize::clone(&field.size),
             players,
             goal_positions: GoalPosition::from(&field.size),
-            tactics: TeamsTactics::from_field(&field)
+            tactics: TeamsTactics::from_field(&field),
         }
     }
 
@@ -251,14 +253,14 @@ impl From<BallSide> for u8 {
 #[derive(Clone)]
 pub struct TeamsTactics {
     pub left: Tactics,
-    pub right: Tactics
+    pub right: Tactics,
 }
 
 impl TeamsTactics {
     pub fn from_field(field: &MatchField) -> Self {
         TeamsTactics {
             left: field.left_team_tactics.clone(),
-            right: field.right_team_tactics.clone()
+            right: field.right_team_tactics.clone(),
         }
     }
 }
@@ -317,7 +319,7 @@ pub struct MatchFieldSize {
     pub width: usize,
     pub height: usize,
 
-    pub half_width: usize
+    pub half_width: usize,
 }
 
 impl MatchFieldSize {
@@ -325,7 +327,7 @@ impl MatchFieldSize {
         MatchFieldSize {
             width,
             height,
-            half_width: width / 2
+            half_width: width / 2,
         }
     }
 }

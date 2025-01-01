@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{MatchContext, MatchField};
-use log::{debug, info};
+use log::{debug};
 
 #[derive(Copy, Clone, Debug)]
 pub enum BallEvent {

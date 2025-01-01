@@ -1,5 +1,5 @@
 use crate::utils::TimeEstimation;
-use log::{debug, info, warn};
+use log::{debug, warn};
 
 const MAX_DURATION_THRESHOLD_MS: u32 = 100;
 

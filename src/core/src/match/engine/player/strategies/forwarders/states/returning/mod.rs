@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_returning_data.json")));
 
 #[derive(Default)]

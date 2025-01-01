@@ -8,11 +8,9 @@ use crate::r#match::{
     StateProcessingHandler, VectorExtensions,
 };
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
-use std::env::temp_dir;
 use std::sync::LazyLock;
 
-static MIDFIELDER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_distributing_data.json")));
 
 #[derive(Default)]

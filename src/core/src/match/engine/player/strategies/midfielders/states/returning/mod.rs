@@ -8,9 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-const STAMINA_THRESHOLD: u32 = 20; // Minimum stamina percentage before resting
-
-static MIDFIELDER_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _MIDFIELDER_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_returning_data.json")));
 
 #[derive(Default)]

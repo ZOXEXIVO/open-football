@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 use rand::Rng;
 use std::sync::LazyLock;
 
-static FORWARD_INTERCEPTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_INTERCEPTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_intercepting_data.json")));
 
 #[derive(Default)]

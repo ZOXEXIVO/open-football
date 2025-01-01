@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_OFFSIDE_TRAP_BREAKING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
+static _FORWARD_OFFSIDE_TRAP_BREAKING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_offside_trap_breaking_data.json"))
 });
 

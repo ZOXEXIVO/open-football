@@ -7,7 +7,7 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, State
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_PASSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_PASSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_passing_data.json")));
 
 #[derive(Default)]
@@ -49,6 +49,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
 }
 
 impl GoalkeeperPassingState {
+    // TODO
     fn find_best_pass_option(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let players = ctx.players();
         let teammates = players.teammates();

@@ -9,7 +9,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static GOALKEEPER_DIVING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _GOALKEEPER_DIVING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_diving_data.json")));
 
 const DIVE_DURATION: f32 = 1.0; // Duration of dive in seconds

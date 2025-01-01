@@ -10,7 +10,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
-static FORWARD_HEADING_STATE_NETWORK: LazyLock<NeuralNetwork> =
+static _FORWARD_HEADING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_heading_data.json")));
 
 #[derive(Default)]
