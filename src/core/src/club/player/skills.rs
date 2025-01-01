@@ -14,7 +14,7 @@ impl PlayerSkills {
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
         let balance_factor = (self.physical.balance as f32 - 1.0) / 19.0;
 
-        let base_speed = 2.0;
+        let base_speed = 1.0;
         let max_speed = base_speed
             * (0.6 * pace_factor
                 + 0.2 * acceleration_factor

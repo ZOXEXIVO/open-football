@@ -7,6 +7,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use std::sync::LazyLock;
+use crate::r#match::events::Event;
 
 static FORWARD_CROSS_RECEIVING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
     DefaultNeuralNetworkLoader::load(include_str!("nn_cross_receiving_data.json"))
@@ -17,38 +18,17 @@ pub struct ForwardCrossReceivingState {}
 
 impl StateProcessingHandler for ForwardCrossReceivingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let mut result = StateChangeResult::new();
         let ball_ops = ctx.ball();
 
-        // Check if the ball is in the air
-        // if !ball_ops.is_in_air() {
-        //     // Transition to Running state if the ball is not in the air
-        //     return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        // }
-
-        // Check if the ball is heading towards the player
-        if !ball_ops.is_towards_player() {
-            // Transition to Running state if the ball is not heading towards the player
+        if !ball_ops.is_towards_player_with_angle(0.8) || ctx.ball().distance() > 100.0 {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // Check if the player is in a good position to receive the cross
-        if !self.is_in_good_position(ctx) {
-            // Move towards a better position to receive the cross
-            let target_position = self.calculate_target_position(ctx);
-            let direction = (target_position - ctx.player.position).normalize();
-            result.velocity = Some(direction * ctx.player.skills.physical.acceleration);
-        }
-
-        // Check if the ball is within receiving range
         if ball_ops.distance() <= self.receiving_range() {
-            // Attempt to receive the cross
-            result
-                .events
-                .add_player_event(PlayerEvent::RequestBallReceive(ctx.player.id));
+            return Some(StateChangeResult::with_event(Event::PlayerEvent(PlayerEvent::RequestBallReceive(ctx.player.id))));
         }
 
-        Some(result)
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -63,26 +43,6 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
 }
 
 impl ForwardCrossReceivingState {
-    fn is_in_good_position(&self, ctx: &StateProcessingContext) -> bool {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let goal_position = ctx.ball().direction_to_opponent_goal();
-
-        // Check if the player is within the crossing zone
-        let crossing_zone_width = 30.0; // Adjust based on your game's scale
-        let crossing_zone_length = 20.0; // Adjust based on your game's scale
-        let is_in_crossing_zone = ctx.player.position.x
-            >= ball_position.x - crossing_zone_width / 2.0
-            && ctx.player.position.x <= ball_position.x + crossing_zone_width / 2.0
-            && ctx.player.position.y >= goal_position.y - crossing_zone_length;
-
-        // Check if the player is not too close to opponents
-        let min_distance_from_opponents = 3.0; // Adjust based on your game's scale
-
-        let is_away_from_opponents = ctx.players().opponents().exists(min_distance_from_opponents);
-
-        is_in_crossing_zone && is_away_from_opponents
-    }
-
     fn calculate_target_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let goal_position = ctx.ball().direction_to_opponent_goal();

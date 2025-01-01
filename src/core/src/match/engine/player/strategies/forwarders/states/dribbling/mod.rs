@@ -17,9 +17,6 @@ pub struct ForwardDribblingState {}
 
 impl StateProcessingHandler for ForwardDribblingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let mut result = StateChangeResult::new();
-        let players_ops = ctx.players();
-        
         if !ctx.player.has_ball(ctx) {
             // Transition to Running state if the player doesn't have the ball
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
@@ -30,7 +27,7 @@ impl StateProcessingHandler for ForwardDribblingState {
         }
 
         // Check if the player is under pressure
-        if players_ops.opponents().nearby_raw(50.0).count() >= 2 {
+        if ctx.players().opponents().nearby_raw(50.0).count() >= 2 {
             // Transition to Passing state if under pressure
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
@@ -51,12 +48,7 @@ impl StateProcessingHandler for ForwardDribblingState {
             ));
         }
 
-        // Dribble towards the opponent's goal
-        let direction = ctx.ball().direction_to_opponent_goal();
-
-        result.velocity = Some(direction * ctx.player.skills.physical.acceleration);
-
-        Some(result)
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

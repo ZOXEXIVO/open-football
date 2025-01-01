@@ -272,6 +272,14 @@ impl StateChangeResult {
         }
     }
 
+    pub fn with_event(event: Event) -> Self {
+        StateChangeResult {
+            state: None,
+            velocity: None,
+            events: EventCollection::with_event(event),
+        }
+    }
+
     pub fn with_events(events: EventCollection) -> Self {
         StateChangeResult {
             state: None,
