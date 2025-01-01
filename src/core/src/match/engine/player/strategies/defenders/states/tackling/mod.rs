@@ -30,31 +30,6 @@ impl StateProcessingHandler for DefenderTacklingState {
                     DefenderState::Running,
                 ));
             }
-
-            let is_far_from_start_position = match ctx.player().position_to_distance() {
-                PlayerDistanceFromStartPosition::Big => Some(
-                    StateChangeResult::with_defender_state(DefenderState::Returning),
-                ), // Continue tracking back
-                PlayerDistanceFromStartPosition::Medium => Some(
-                    StateChangeResult::with_defender_state(DefenderState::Returning),
-                ),
-                PlayerDistanceFromStartPosition::Small => None,
-            };
-
-            if let Some(_is_far_from_start_position) = is_far_from_start_position {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Running,
-                ));
-            }
-        }
-
-        // 1. Check defender's stamina
-        let stamina = ctx.player.player_attributes.condition_percentage() as f32;
-        if stamina < STAMINA_THRESHOLD {
-            // Transition to Resting state if stamina is too low
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Resting,
-            ));
         }
 
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
@@ -67,35 +42,23 @@ impl StateProcessingHandler for DefenderTacklingState {
             // 4. Attempt the sliding tackle
             let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
 
-            if tackle_success {
-                // Tackle is successful
-                let mut state_change =
-                    StateChangeResult::with_defender_state(DefenderState::Standing);
-
-                // Gain possession of the ball
-                state_change
-                    .events
-                    .add(Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)));
-
-                return Some(state_change);
-            } else if committed_foul {
-                // Tackle resulted in a foul
-                let mut state_change =
-                    StateChangeResult::with_defender_state(DefenderState::Standing);
-
-                // Generate a foul event
-                state_change
-                    .events
-                    .add_player_event(PlayerEvent::CommitFoul);
-
-                return Some(state_change);
-            } else {
-                return Some(StateChangeResult::with_defender_state(
+            return if tackle_success {
+                return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
                 ));
-            }
+            } else if committed_foul {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::CommitFoul),
+                ));
+            } else {
+                Some(StateChangeResult::with_defender_state(
+                    DefenderState::Standing,
+                ))
+            };
         }
-        
+
         None
     }
 
@@ -108,10 +71,10 @@ impl StateProcessingHandler for DefenderTacklingState {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 10.0,
+                slowing_distance: 0.0,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
@@ -130,9 +93,9 @@ impl DefenderTacklingState {
         let mut rng = rand::thread_rng();
 
         // Get defender's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling  / 20.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression  / 20.0;
-        let composure = ctx.player.skills.mental.composure  / 20.0;
+        let tackling_skill = ctx.player.skills.technical.tackling / 20.0; // Normalize to [0,1]
+        let aggression = ctx.player.skills.mental.aggression / 20.0;
+        let composure = ctx.player.skills.mental.composure / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 

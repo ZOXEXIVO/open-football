@@ -46,24 +46,16 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
         } else {
-            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+            if ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 200.0 {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Returning,
+                    DefenderState::Intercepting,
                 ));
             }
 
-            if !ctx.team().is_control_ball() {
-                if ctx.ball().is_towards_player_with_angle(0.9) && distance_to_ball < 250.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Intercepting,
-                    ));
-                }
-
-                if ctx.ball().distance() < 100.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
+            if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0{
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
             }
         }
 
@@ -77,7 +69,7 @@ impl StateProcessingHandler for DefenderRunningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal(),
+                target: ctx.ball().direction_to_opponent_goal() + ctx.player().separation_velocity(),
                 slowing_distance: if ctx.player.has_ball(ctx) { 150.0 } else { 100.0 },
             }
                 .calculate(ctx.player)

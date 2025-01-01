@@ -7,6 +7,9 @@ use crate::PlayerSkills;
 use nalgebra::Vector3;
 use rand::Rng;
 
+const SEPARATION_RADIUS: f32 = 30.0;
+const SEPARATION_STRENGTH: f32 = 5.0;
+
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
@@ -232,6 +235,26 @@ impl<'p> PlayerOperationsImpl<'p> {
             // Calculate the total maximum shooting distance
             base_distance + long_shots_distance + technique_distance + strength_distance
         }
+    }
+
+    pub fn separation_velocity(&self) -> Vector3<f32> {
+        let players = self.ctx.players();
+        let teammates = players.teammates();
+
+        let mut separation = Vector3::zeros();
+
+        for other_player in teammates.nearby(SEPARATION_RADIUS) {
+            let to_other = other_player.position - self.ctx.player.position;
+            let distance = to_other.magnitude();
+
+            if distance > 0.0 && distance < SEPARATION_RADIUS {
+                let direction = to_other.normalize();
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
+                separation -= direction * strength;
+            }
+        }
+
+        separation
     }
 }
 

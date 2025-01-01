@@ -94,7 +94,7 @@ impl StateProcessingHandler for ForwardRunningState {
             let goal_direction = ctx.ball().direction_to_opponent_goal();
 
             let player_goal_velocity = SteeringBehavior::Arrive {
-                target: goal_direction,
+                target: goal_direction + ctx.player().separation_velocity(),
                 slowing_distance: 100.0,
             }
             .calculate(ctx.player)
@@ -108,7 +108,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
                 if let Some(goalkeeper) = opponents.goalkeeper().next() {
                     let result = SteeringBehavior::Evade {
-                        target: goalkeeper.position,
+                        target: goalkeeper.position + ctx.player().separation_velocity(),
                     }
                     .calculate(ctx.player)
                     .velocity;
