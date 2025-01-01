@@ -23,6 +23,10 @@ pub struct MidfielderTacklingState {}
 
 impl StateProcessingHandler for MidfielderTacklingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+
+        }
+
         let players = ctx.players();
         let opponents = players.opponents();
         let mut opponents_with_ball = opponents.with_ball();

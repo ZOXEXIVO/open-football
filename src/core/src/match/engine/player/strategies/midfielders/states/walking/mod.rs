@@ -35,10 +35,6 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     MidfielderState::Intercepting,
                 ));
             }
-            
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
         } else {
             if ctx.ball().distance() < 100.0 {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -74,11 +70,6 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     // If the ball is moderately close, transition to Pressing state
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Pressing,
-                    ));
-                } else {
-                    // If the ball is far, transition to Running state to get closer to the action
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Running,
                     ));
                 }
             }

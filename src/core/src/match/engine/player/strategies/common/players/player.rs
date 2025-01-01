@@ -1,4 +1,3 @@
-use log::debug;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -42,12 +41,8 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn on_own_side(&self) -> bool {
         let field_half_width = self.ctx.context.field_size.width / 2;
 
-        if let Some(side) = self.ctx.player.side {
-            return side == PlayerSide::Left
-                && self.ctx.player.position.x < field_half_width as f32;
-        }
-
-        false
+        self.ctx.player.side == Some(PlayerSide::Left)
+            && self.ctx.player.position.x < field_half_width as f32
     }
 
     pub fn opponent_goal_position(&self) -> Vector3<f32> {
@@ -80,15 +75,15 @@ impl<'p> PlayerOperationsImpl<'p> {
             .distances
             .get(self.ctx.player.id, teammate_id);
 
-        let pass_skill = self.ctx.player.skills.technical.passing;
+        let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
 
         let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.6;
         let distance_factor = (distance / max_pass_distance).clamp(0.0, 1.0);
 
         let min_power = 0.5;
         let max_power = 2.5;
-        let skill_factor = pass_skill / 20.0;
-        let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
+
+        let base_power = min_power + (max_power - min_power) * pass_skill * distance_factor;
 
         let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 

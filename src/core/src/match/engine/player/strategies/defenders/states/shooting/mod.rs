@@ -17,6 +17,7 @@ pub struct DefenderShootingState {}
 
 impl StateProcessingHandler for DefenderShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        let test = ctx.player().opponent_goal_position();
         Some(StateChangeResult::with_defender_state_and_event(
             DefenderState::Standing,
             Event::PlayerEvent(PlayerEvent::Shoot(
