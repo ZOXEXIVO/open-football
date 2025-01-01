@@ -86,12 +86,10 @@ impl StateProcessingHandler for MidfielderRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let separation_velocity = ctx.player().separation_velocity();
-
         if let Some(target_position) = self.find_space_between_opponents(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: target_position + separation_velocity,
+                    target: target_position + ctx.player().separation_velocity(),
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
@@ -100,7 +98,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal() + separation_velocity,
+                    target: ctx.ball().direction_to_opponent_goal() + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -109,7 +107,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.team().is_control_ball() {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal() + separation_velocity,
+                    target: ctx.ball().direction_to_opponent_goal() + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -118,7 +116,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else {
             Some(
                 SteeringBehavior::Wander {
-                    target: ctx.player.start_position + separation_velocity,
+                    target: ctx.player.start_position + ctx.player().separation_velocity(),
                     radius: IntegerUtils::random(5, 150) as f32,
                     jitter: IntegerUtils::random(0, 2) as f32,
                     distance: IntegerUtils::random(10, 150) as f32,
