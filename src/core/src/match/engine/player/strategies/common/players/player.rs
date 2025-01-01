@@ -249,7 +249,8 @@ impl<'p> PlayerOperationsImpl<'p> {
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
                 let direction = to_other.normalize();
-                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
+                let relative_velocity = other_player.velocity(self.ctx) - self.ctx.player.velocity;
+                let strength = SEPARATION_STRENGTH * relative_velocity.dot(&direction);
                 separation -= direction * strength;
             }
         }

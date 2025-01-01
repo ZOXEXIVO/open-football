@@ -44,7 +44,7 @@ impl StateProcessingHandler for MidfielderPressingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Pursuit {
-                target: ctx.tick_context.positions.ball.position,
+                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
             }
             .calculate(ctx.player)
             .velocity,

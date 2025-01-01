@@ -113,7 +113,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     .calculate(ctx.player)
                     .velocity;
 
-                   return  Some(result);
+                   return Some(result  + ctx.player().separation_velocity());
                 }
 
                 None
@@ -126,7 +126,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     }
                 };
                 let result = SteeringBehavior::Arrive {
-                    target: ctx.tick_context.positions.ball.position,
+                    target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
                     slowing_distance,
                 }
                 .calculate(ctx.player)

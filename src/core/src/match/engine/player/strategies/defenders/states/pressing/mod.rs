@@ -76,12 +76,11 @@ impl StateProcessingHandler for DefenderPressingState {
             let direction = (opponent.position - ctx.player.position).normalize();
             // Set speed based on player's acceleration and pace
             let speed = ctx.player.skills.physical.pace; // Use pace attribute
-            Some(direction * speed)
-        } else {
-            // No opponent with the ball found
-            // Remain stationary or move back to position
-            Some(Vector3::new(0.0, 0.0, 0.0))
-        }
+            
+            return Some(direction * speed + ctx.player().separation_velocity());
+        } 
+        
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
