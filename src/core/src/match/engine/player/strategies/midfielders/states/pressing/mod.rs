@@ -28,12 +28,6 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::AttackSupporting,
-            ));
-        }
-
         None
     }
 

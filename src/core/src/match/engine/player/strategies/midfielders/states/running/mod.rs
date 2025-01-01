@@ -1,13 +1,11 @@
 use crate::common::loader::DefaultNeuralNetworkLoader;
 use crate::common::NeuralNetwork;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
-};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
+use crate::r#match::defenders::states::DefenderState;
 
 static _MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
@@ -34,6 +32,12 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            if self.should_pass(ctx) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Passing,
+                ));
+            }
+
             if self.should_dribble(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Dribbling,
@@ -52,7 +56,6 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // If the player doesn't have the ball, check if they should press, support attack, or return
             if self.should_press(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
@@ -98,7 +101,8 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal() + ctx.player().separation_velocity(),
+                    target: ctx.ball().direction_to_opponent_goal()
+                        + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -107,7 +111,8 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.team().is_control_ball() {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal() + ctx.player().separation_velocity(),
+                    target: ctx.ball().direction_to_opponent_goal()
+                        + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -153,6 +158,64 @@ impl MidfielderRunningState {
             && ctx.ball().is_towards_player_with_angle(0.8)
     }
 
+    pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.players().opponents().exists(80.0) {
+            return true;
+        }
+
+        let game_vision_threshold = 14.0;
+
+        if ctx.player.skills.mental.vision >= game_vision_threshold {
+            return self.find_open_teammate_on_opposite_side(ctx).is_some();
+        }
+
+        false
+    }
+
+    fn find_open_teammate_on_opposite_side(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<MatchPlayerLite> {
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let opposite_side_x = match ctx.player.side {
+            Some(PlayerSide::Left) => field_width * 0.75,
+            Some(PlayerSide::Right) => field_width * 0.25,
+            None => return None,
+        };
+
+        let mut open_teammates: Vec<MatchPlayerLite> = ctx
+            .players()
+            .teammates()
+            .nearby(200.0)
+            .filter(|teammate| {
+                let is_on_opposite_side = match ctx.player.side {
+                    Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
+                    Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
+                    None => false,
+                };
+                let is_open = !ctx
+                    .players()
+                    .opponents()
+                    .nearby(20.0)
+                    .any(|opponent| opponent.id == teammate.id);
+
+                is_on_opposite_side && is_open
+            })
+            .collect();
+
+        if open_teammates.is_empty() {
+            None
+        } else {
+            open_teammates.sort_by(|a, b| {
+                let dist_a = (a.position - player_position).magnitude();
+                let dist_b = (b.position - player_position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            });
+            Some(open_teammates[0])
+        }
+    }
+
     fn find_space_between_opponents(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let players = ctx.players();
         let opponents = players.opponents();
@@ -181,11 +244,7 @@ impl MidfielderRunningState {
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if there is space to dribble and no immediate pressure from opponents
-        let space_ahead = self.space_ahead(ctx);
-        let under_pressure = self.is_under_pressure(ctx);
-
-        space_ahead && !under_pressure
+        !self.is_under_pressure(ctx)
     }
 
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {
@@ -202,20 +261,6 @@ impl MidfielderRunningState {
         let team_in_possession = ctx.team().is_control_ball();
 
         distance_from_start > 20.0 && !team_in_possession
-    }
-
-    fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if there is open space ahead of the player
-        let space_threshold = 10.0;
-        let player_direction = ctx.player.velocity.normalize();
-        let space_ahead = ctx.tick_context.space.cast_ray(
-            ctx.player.position,
-            player_direction,
-            space_threshold,
-            true,
-        );
-
-        space_ahead.is_none()
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {

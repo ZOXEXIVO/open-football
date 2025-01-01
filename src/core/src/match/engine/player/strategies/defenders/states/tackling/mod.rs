@@ -83,32 +83,36 @@ impl StateProcessingHandler for DefenderTacklingState {
 }
 
 impl DefenderTacklingState {
-    /// Attempts a sliding tackle and returns whether it was successful and if a foul was committed.
     fn attempt_sliding_tackle(
         &self,
         ctx: &StateProcessingContext,
-        _opponent: &MatchPlayerLite,
+        opponent: &MatchPlayerLite,
     ) -> (bool, bool) {
         let mut rng = rand::thread_rng();
 
-        // Get defender's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling / 20.0; // Normalize to [0,1]
+        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let aggression = ctx.player.skills.mental.aggression / 20.0;
         let composure = ctx.player.skills.mental.composure / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 
-        // Calculate success chance
-        let success_chance = overall_skill * TACKLE_SUCCESS_BASE_CHANCE;
+        let opponent_dribbling = ctx.player().skills(opponent.id).technical.dribbling / 20.0;
+        let opponent_agility = ctx.player().skills(opponent.id).physical.agility / 20.0;
 
-        // Simulate tackle success
-        let tackle_success = rng.gen::<f32>() < success_chance;
+        let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        // Calculate foul chance
-        let foul_chance = (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.1;
+        let success_chance = 0.5 + skill_difference * 0.3;
+        let clamped_success_chance = success_chance.clamp(0.1, 0.9);
 
-        // Simulate foul
-        let committed_foul = !tackle_success && rng.gen::<f32>() < foul_chance;
+        let tackle_success = rng.gen::<f32>() < clamped_success_chance;
+
+        let foul_chance = if tackle_success {
+            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
+        } else {
+            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
+        };
+
+        let committed_foul = rng.gen::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

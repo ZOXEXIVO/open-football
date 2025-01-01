@@ -17,6 +17,18 @@ pub struct MidfielderAttackSupportingState {}
 
 impl StateProcessingHandler for MidfielderAttackSupportingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
+        if ctx.ball().distance() < 15.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Tackling,
+            ));
+        }
+
         if !ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -26,14 +38,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         if ctx.ball().distance() > 200.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
-            ));
-        }
-
-        // 1. Check if the midfielder has received the ball
-        if ctx.player.has_ball(ctx) {
-            // Decide next action (e.g., Distributing, HoldingPossession)
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Distributing,
             ));
         }
 
@@ -52,7 +56,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        // 4. Continue supporting the attack
         None
     }
 
@@ -77,10 +80,8 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 }
 
 impl MidfielderAttackSupportingState {
-    /// Determines if the attack has broken down.
     fn attack_broken_down(&self, ctx: &StateProcessingContext) -> bool {
-        // For simplicity, assume attack has broken down if the opponent has the ball
-        ctx.players().opponents().with_ball().next().is_some()
+        !ctx.team().is_control_ball()
     }
 
     /// Checks if the midfielder is in a good position to attempt a shot.
