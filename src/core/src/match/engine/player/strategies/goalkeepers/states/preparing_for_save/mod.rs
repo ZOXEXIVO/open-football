@@ -22,7 +22,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 GoalkeeperState::Passing,
             ));
         } else {
-            // Transition to Walking if the ball is far away
             if ctx.ball().distance() < 50.0 {
                 if self.is_ball_catchable(ctx) {
                     return Some(StateChangeResult::with_goalkeeper_state(
@@ -37,13 +36,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 ));
             }
 
-            // if ctx.ball().distance() > 250.0 {
-            //     return Some(StateChangeResult::with_goalkeeper_state(
-            //         GoalkeeperState::Attentive,
-            //     ));
-            // }
-
-            // Transition to Diving if the ball is close and moving fast towards goal
             if self.should_dive(ctx) {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Diving,

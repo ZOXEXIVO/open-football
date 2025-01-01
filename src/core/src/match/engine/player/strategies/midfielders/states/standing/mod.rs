@@ -38,7 +38,15 @@ impl StateProcessingHandler for MidfielderStandingState {
                 ));
             }
             else {
-                if !ctx.team().is_control_ball() && ctx.ball().distance() < 150.0 {
+
+                if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
+                    // Transition to Tackling state to try and win the ball
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
+
+                if ctx.ball().distance() < 100.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));
@@ -49,17 +57,9 @@ impl StateProcessingHandler for MidfielderStandingState {
                         MidfielderState::Intercepting,
                     ));
                 }
-
-                if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-                    // Transition to Tackling state to try and win the ball
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
-                    ));
-                }
             }
         }
 
-        // 3. Check if an opponent is nearby and pressing is needed
         if self.is_opponent_nearby(ctx) {
             // Transition to Pressing state to apply pressure
             return Some(StateChangeResult::with_midfielder_state(
