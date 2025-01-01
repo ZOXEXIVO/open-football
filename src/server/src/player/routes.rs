@@ -5,7 +5,7 @@ use axum::Router;
 
 pub fn player_routes() -> Router<GameAppData> {
     Router::new().route(
-        "/api/teams/:team_slug/players/:player_id",
+        "/api/teams/{team_slug}/players/{player_id}",
         get(player_get_action),
     )
 }

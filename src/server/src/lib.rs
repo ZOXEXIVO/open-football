@@ -5,7 +5,6 @@ mod leagues;
 mod r#match;
 mod player;
 mod routes;
-pub mod stores;
 mod teams;
 
 use crate::routes::ServerRoutes;

@@ -113,7 +113,7 @@ impl DefenderPassingState {
         let nearest_teammate = teammates
             .nearby(200.0)
             .filter(|p| !p.tactical_positions.is_goalkeeper())
-            .min_by(|a, b| {
+            .max_by(|a, b| {
                 let dist_a = (a.position - ctx.player.position).magnitude();
                 let dist_b = (b.position - ctx.player.position).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()

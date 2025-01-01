@@ -11,9 +11,6 @@ use std::sync::LazyLock;
 static MIDFIELDER_PRESSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_pressing_data.json")));
 
-const PRESSING_DISTANCE_THRESHOLD: f32 = 10.0; // Max distance to consider pressing
-const STAMINA_THRESHOLD: f32 = 50.0; // Minimum stamina to continue pressing
-
 #[derive(Default)]
 pub struct MidfielderPressingState {}
 

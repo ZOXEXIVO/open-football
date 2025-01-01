@@ -19,6 +19,12 @@ pub struct GoalkeeperPressureState {}
 
 impl StateProcessingHandler for GoalkeeperPressureState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Distributing
+            ));
+        }
+
         if ctx.player().distance_from_start_position() > PRESSURE_DISTANCE_THRESHOLD {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
