@@ -172,29 +172,6 @@ impl ForwardPassingState {
     }
 
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {
-        let shot_distance = 250.0; // Adjust based on your game's scale
-
-        // Check if the player is within shooting distance and has a clear shot
-        ctx.ball().distance_to_opponent_goal() < shot_distance && self.has_clear_shot(ctx)
-    }
-
-    fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
-        let opponent_goal_position = match ctx.player.side {
-            // swap for opponents
-            Some(PlayerSide::Left) => ctx.context.goal_positions.left,
-            Some(PlayerSide::Right) => ctx.context.goal_positions.right,
-            _ => Vector3::new(0.0, 0.0, 0.0),
-        };
-
-        let players = ctx.players();
-        let opponents = players.opponents();
-        let mut opponents_all = opponents.all();
-
-        // Check if there are no opponents blocking the shot
-        opponents_all.all(|opponent| {
-            let opponent_to_goal = (opponent_goal_position - opponent.position).normalize();
-            let player_to_goal = (opponent_goal_position - ctx.player.position).normalize();
-            opponent_to_goal.dot(&player_to_goal) < 0.9
-        })
+        ctx.ball().distance_to_opponent_goal() < 250.0 && ctx.player().has_clear_shot()
     }
 }
