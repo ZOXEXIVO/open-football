@@ -199,7 +199,7 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        const BALL_DISTANCE_THRESHOLD: f32 = 3.0;
+        const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
 
         if let Some(previous_owner_id) = self.previous_owner {
             let owner = context.players.by_id(previous_owner_id).unwrap();
@@ -209,7 +209,6 @@ impl Ball {
         } else {
             let nearby_players: Vec<&MatchPlayer> = players
                 .iter()
-                //.filter(|p| p.state != PlayerState::Injured)
                 .filter(|player_position| {
                     let dx = player_position.position.x - self.position.x;
                     let dy = player_position.position.y - self.position.y;

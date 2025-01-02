@@ -4,8 +4,8 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
 };
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
@@ -137,7 +137,7 @@ impl ForwardPassingState {
         let teammates = players.teammates();
 
         teammates
-            .nearby(200.0)
+            .nearby(300.0)
             .filter(|p| !p.tactical_positions.is_forward() && !p.tactical_positions.is_goalkeeper())
             .choose(&mut rand::thread_rng())
     }
@@ -149,7 +149,7 @@ impl ForwardPassingState {
         let players = ctx.players();
         let teammates = players.teammates();
 
-        let nearest_teammate = teammates.nearby(300.0).min_by(|a, b| {
+        let nearest_teammate = teammates.nearby(300.0).max_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
             dist_a.partial_cmp(&dist_b).unwrap()
@@ -162,7 +162,7 @@ impl ForwardPassingState {
         if !ctx.player.has_ball(ctx) {
             return false;
         }
-        
+
         let dribble_distance = 10.0; // Adjust based on your game's scale
         let players = ctx.players();
         let opponents = players.opponents();
@@ -171,7 +171,7 @@ impl ForwardPassingState {
     }
 
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {
-        let shot_distance = 25.0; // Adjust based on your game's scale
+        let shot_distance = 250.0; // Adjust based on your game's scale
 
         // Check if the player is within shooting distance and has a clear shot
         ctx.ball().distance_to_opponent_goal() < shot_distance && self.has_clear_shot(ctx)

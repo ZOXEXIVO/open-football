@@ -7,7 +7,7 @@ use crate::PlayerSkills;
 use nalgebra::Vector3;
 use rand::Rng;
 
-const SEPARATION_RADIUS: f32 = 50.0;
+const SEPARATION_RADIUS: f32 = 10.0;
 const SEPARATION_STRENGTH: f32 = 10.0;
 
 pub struct PlayerOperationsImpl<'p> {
@@ -220,10 +220,10 @@ impl<'p> PlayerOperationsImpl<'p> {
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
                 let direction = to_other.normalize();
-                let relative_velocity = other_player.velocity(self.ctx) - self.ctx.player.velocity;
-                let strength = SEPARATION_STRENGTH * relative_velocity.dot(&direction);
+                let perpendicular_velocity = Vector3::new(-direction.y, direction.x, 0.0);
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
 
-                separation -= direction * strength;
+                separation += perpendicular_velocity * strength;
             }
         }
 

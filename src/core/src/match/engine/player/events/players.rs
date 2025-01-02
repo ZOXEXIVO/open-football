@@ -166,6 +166,8 @@ impl PlayerEventDispatcher {
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+
+        field.ball.flags.in_passing_state_time = 30;
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {

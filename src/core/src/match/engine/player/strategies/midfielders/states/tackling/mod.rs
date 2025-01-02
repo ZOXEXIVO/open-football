@@ -28,7 +28,7 @@ impl StateProcessingHandler for MidfielderTacklingState {
             ));
         }
 
-        if ctx.ball().distance() > 50.0 {
+        if ctx.ball().distance() > 50.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
             return if ctx.team().is_control_ball() {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::AttackSupporting,
@@ -45,23 +45,26 @@ impl StateProcessingHandler for MidfielderTacklingState {
         let mut opponents_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponents_with_ball.next() {
-            let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
+            let opponent_distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
+            if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
+                let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
 
-            if tackle_success {
-                return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::HoldingPossession,
-                    Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
-                ));
-            } else if committed_foul {
-                return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::CommitFoul),
-                ));
+                if tackle_success {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::HoldingPossession,
+                        Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                    ));
+                } else if committed_foul {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::CommitFoul),
+                    ));
+                }
             }
         } else if self.can_intercept_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::HoldingPossession,
-                Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
+                MidfielderState::Running,
+                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
             ));
         }
 
@@ -76,7 +79,7 @@ impl StateProcessingHandler for MidfielderTacklingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Pursuit {
-                target: ctx.tick_context.positions.ball.position,
+                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
             }
             .calculate(ctx.player)
             .velocity,
