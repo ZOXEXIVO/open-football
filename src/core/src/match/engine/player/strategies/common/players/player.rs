@@ -220,7 +220,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
                 let direction = to_other.normalize();
-                let perpendicular_velocity = Vector3::new(-direction.y, direction.x, 0.0);
+                let perpendicular_velocity = Vector3::new(-direction.y, -direction.x, 0.0);
                 let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
 
                 separation += perpendicular_velocity * strength;

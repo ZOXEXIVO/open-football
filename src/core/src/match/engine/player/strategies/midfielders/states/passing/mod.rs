@@ -43,12 +43,6 @@ impl StateProcessingHandler for MidfielderPassingState {
                 MidfielderState::Shooting,
             ))
         }
-        
-        if ctx.in_state_time > 10 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Distributing,
-            ))
-        }
 
         None
     }
@@ -58,17 +52,15 @@ impl StateProcessingHandler for MidfielderPassingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.in_state_time % 10 == 0 {
-            if let Some(nearest_teammate) = ctx.players().teammates().nearby_to_opponent_goal() {
-                return Some(
-                    SteeringBehavior::Arrive {
-                        target: nearest_teammate.position,
-                        slowing_distance: 30.0,
-                    }
+        if let Some(nearest_teammate) = ctx.players().teammates().nearby_to_opponent_goal() {
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: nearest_teammate.position,
+                    slowing_distance: 30.0,
+                }
                     .calculate(ctx.player)
                     .velocity,
-                );
-            }
+            );
         }
 
         None
@@ -82,92 +74,8 @@ impl MidfielderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
+        // TODO
 
-        let attacking_third_start = if ctx.player.side == Some(PlayerSide::Left) {
-            field_width * (2.0 / 3.0)
-        } else {
-            field_width / 3.0
-        };
-
-        if player_position.x >= attacking_third_start {
-            // Player is in the attacking third, prioritize teammates near the opponent's goal
-            self.find_best_pass_option_attacking_third(ctx)
-        } else if player_position.x >= field_width / 3.0
-            && player_position.x <= field_width * (2.0 / 3.0)
-        {
-            // Player is in the middle third, prioritize teammates in advanced positions
-            self.find_best_pass_option_middle_third(ctx)
-        } else {
-            // Player is in the defensive third, prioritize safe passes to nearby teammates
-            self.find_best_pass_option_defensive_third(ctx)
-        }
-    }
-
-    fn find_best_pass_option_attacking_third(
-        &self,
-        ctx: &StateProcessingContext<'_>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let nearest_to_goal = teammates
-            .all()
-            .filter(|teammate| {
-                // Check if the teammate is in a dangerous position near the opponent's goal
-                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
-                    < goal_distance_threshold
-            })
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_to_goal
-    }
-
-    fn find_best_pass_option_defensive_third<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let nearest_teammate = teammates
-            .nearby(200.0)
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.player.position).magnitude();
-                let dist_b = (b.position - ctx.player.position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_teammate
-    }
-
-    fn find_best_pass_option_middle_third(
-        &self,
-        ctx: &StateProcessingContext<'_>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let nearest_to_goal = teammates
-            .nearby(250.0)
-            .filter(|teammate| {
-                // Check if the teammate is in a dangerous position near the opponent's goal
-                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
-                    < goal_distance_threshold
-            })
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_to_goal
+        None
     }
 }
