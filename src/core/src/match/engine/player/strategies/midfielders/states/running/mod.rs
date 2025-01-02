@@ -5,7 +5,6 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeR
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 use std::sync::LazyLock;
-use crate::r#match::defenders::states::DefenderState;
 
 static _MIDFIELDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));

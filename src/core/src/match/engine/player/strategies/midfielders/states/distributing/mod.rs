@@ -4,12 +4,10 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, VectorExtensions,
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
-use rand::thread_rng;
 use std::sync::LazyLock;
 
 static _MIDFIELDER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =

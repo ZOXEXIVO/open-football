@@ -119,7 +119,7 @@ impl MidfielderPassingState {
                 (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
                     < goal_distance_threshold
             })
-            .min_by(|a, b| {
+            .max_by(|a, b| {
                 let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
                 let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()
@@ -137,7 +137,7 @@ impl MidfielderPassingState {
 
         let nearest_teammate = teammates
             .nearby(200.0)
-            .min_by(|a, b| {
+            .max_by(|a, b| {
                 let dist_a = (a.position - ctx.player.position).magnitude();
                 let dist_b = (b.position - ctx.player.position).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()
@@ -161,7 +161,7 @@ impl MidfielderPassingState {
                 (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
                     < goal_distance_threshold
             })
-            .min_by(|a, b| {
+            .max_by(|a, b| {
                 let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
                 let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()

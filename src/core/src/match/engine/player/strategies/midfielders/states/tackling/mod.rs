@@ -15,7 +15,6 @@ static _MIDFIELDER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
     LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 5.0; // Maximum distance to attempt a tackle (in meters)
-const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.3; // Base chance of successful tackle
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
 
 #[derive(Default)]

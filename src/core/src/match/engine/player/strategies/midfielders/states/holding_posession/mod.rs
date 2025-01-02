@@ -96,14 +96,6 @@ impl MidfielderHoldingPossessionState {
         ctx.players().opponents().exists(10.0)
     }
 
-    fn is_in_attacking_position(&self, ctx: &StateProcessingContext) -> bool {
-        // Define the attacking position threshold
-        let attacking_position_threshold = ctx.context.field_size.width as f32 * 0.75; // Adjust this value based on your game's field dimensions
-
-        // Check if the player's position is beyond the attacking position threshold
-        ctx.player.position.x >= attacking_position_threshold
-    }
-
     fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         // Check if there is a clear passing lane to a teammate without any obstructing opponents
         let player_position = ctx.player.position;

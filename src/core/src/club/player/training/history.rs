@@ -38,9 +38,3 @@ pub struct TrainingRecord {
     date: NaiveDateTime,
     _skills: PlayerSkills,
 }
-
-impl TrainingRecord {
-    fn new(date: NaiveDateTime, skills: PlayerSkills) -> Self {
-        TrainingRecord { date, _skills: skills }
-    }
-}
