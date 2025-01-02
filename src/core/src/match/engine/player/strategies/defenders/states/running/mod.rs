@@ -30,8 +30,14 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             if self.has_clear_shot(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Shooting,
+                ));
+            }
+
+            if self.should_pass(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Passing,
                 ));
             }
 
