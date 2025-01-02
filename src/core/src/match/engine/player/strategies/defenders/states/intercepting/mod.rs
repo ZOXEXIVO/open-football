@@ -3,10 +3,7 @@ use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
-};
+use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use rand::Rng;
 use std::sync::LazyLock;
@@ -24,6 +21,13 @@ impl StateProcessingHandler for DefenderInterceptingState {
                 DefenderState::Running,
             ));
         }
+
+        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
+        }
+
 
         if ctx.ball().distance() < 15.0 {
             if ctx.tick_context.ball.is_owned {

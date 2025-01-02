@@ -29,7 +29,8 @@ impl StateProcessingHandler for MidfielderPassingState {
                 MidfielderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::build()
-                        .with_player_id(ctx.player.id)
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(target_teammate.id)
                         .with_target(target_teammate.position)
                         .with_force(ctx.player().pass_teammate_power(target_teammate.id))
                         .build()
@@ -154,7 +155,7 @@ impl MidfielderPassingState {
         let teammates = players.teammates();
 
         let nearest_to_goal = teammates
-            .all()
+            .nearby(250.0)
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;

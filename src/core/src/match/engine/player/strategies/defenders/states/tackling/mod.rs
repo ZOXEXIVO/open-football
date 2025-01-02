@@ -4,7 +4,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, StateChangeResult,
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -55,6 +55,12 @@ impl StateProcessingHandler for DefenderTacklingState {
                     DefenderState::Standing,
                 ))
             };
+        }
+
+        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
         }
 
         None

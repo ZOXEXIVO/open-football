@@ -47,7 +47,7 @@ impl StateProcessingHandler for DefenderRunningState {
             }
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
+        if ctx.ball().distance() < 100.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));

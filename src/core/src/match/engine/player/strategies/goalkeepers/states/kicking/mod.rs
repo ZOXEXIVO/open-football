@@ -35,7 +35,8 @@ impl StateProcessingHandler for GoalkeeperKickingState {
 
             events.add_player_event(PlayerEvent::PassTo(
                 PassingEventContext::build()
-                    .with_player_id(ctx.player.id)
+                    .with_from_player_id(ctx.player.id)
+                    .with_to_player_id(teammate.id)
                     .with_target(teammate.position)
                     .with_force(ctx.player().kick_teammate_power(teammate.id))
                     .build()
