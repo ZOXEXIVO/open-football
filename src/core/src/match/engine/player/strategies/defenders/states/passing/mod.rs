@@ -3,7 +3,7 @@ use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use std::sync::LazyLock;
 
