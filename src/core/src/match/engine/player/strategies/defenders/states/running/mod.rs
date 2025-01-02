@@ -47,13 +47,13 @@ impl StateProcessingHandler for DefenderRunningState {
             }
         }
 
-        if ctx.ball().distance() < 100.0 {
+        if ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));
         }
 
-        if ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 150.0 {
+        if !ctx.ball().is_owned() && ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 150.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,
             ));

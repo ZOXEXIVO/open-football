@@ -54,103 +54,49 @@ impl DefenderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
+        let vision_range = ctx.player.skills.mental.vision * 10.0;
+        let open_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
+            .nearby(vision_range)
+            .filter(|t| !t.tactical_positions.is_goalkeeper())
+            .filter(|t| self.is_teammate_open(ctx, t))
+            .collect();
 
-        let attacking_third_start = if ctx.player.side == Some(PlayerSide::Left) {
-            field_width * (2.0 / 3.0)
+        if !open_teammates.is_empty() {
+            open_teammates.iter()
+                .min_by(|a, b| {
+                    let risk_a = self.estimate_interception_risk(ctx, a);
+                    let risk_b = self.estimate_interception_risk(ctx, b);
+                    risk_a.partial_cmp(&risk_b).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
         } else {
-            field_width / 3.0
-        };
-
-        if player_position.x >= attacking_third_start {
-            // Player is in the attacking third, prioritize teammates near the opponent's goal
-            self.find_best_pass_option_attacking_third(ctx)
-        } else if player_position.x >= field_width / 3.0
-            && player_position.x <= field_width * (2.0 / 3.0)
-        {
-            // Player is in the middle third, prioritize teammates in advanced positions
-            self.find_best_pass_option_middle_third(ctx)
-        } else {
-            // Player is in the defensive third, prioritize safe passes to nearby teammates
-            self.find_best_pass_option_defensive_third(ctx)
+            None
         }
     }
 
-    fn find_best_pass_option_attacking_third(
-        &self,
-        ctx: &StateProcessingContext<'_>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let nearest_to_goal = teammates
-            .all()
-            .filter(|p| !p.tactical_positions.is_goalkeeper())
-            .filter(|teammate| {
-                // Check if the teammate is in a dangerous position near the opponent's goal
-                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
-                    < goal_distance_threshold
-            })
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_to_goal
+    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let opponent_distance_threshold = 5.0;
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
+            .count() == 0
     }
 
-    fn find_best_pass_option_defensive_third<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
+    fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
+        let max_interception_distance = 10.0;
+        let player_position = ctx.player.position;
+        let pass_direction = (teammate.position - player_position).normalize();
 
-        let nearest_teammate = teammates
-            .nearby(200.0)
-            .filter(|p| !p.tactical_positions.is_goalkeeper())
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.player.position).magnitude();
-                let dist_b = (b.position - ctx.player.position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_teammate
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - player_position).dot(&pass_direction) > 0.0)
+            .map(|o| (o.position - player_position).magnitude())
+            .filter(|d| *d <= max_interception_distance)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(max_interception_distance)
     }
 
-    fn find_best_pass_option_middle_third(
-        &self,
-        ctx: &StateProcessingContext<'_>,
-    ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let nearest_to_goal = teammates
-            .all()
-            .filter(|p| !p.tactical_positions.is_goalkeeper())
-            .filter(|teammate| {
-                // Check if the teammate is in a dangerous position near the opponent's goal
-                let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
-                    < goal_distance_threshold
-            })
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-
-        nearest_to_goal
-    }
-
-    pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {
+    pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f32 {
         let distance = ctx.tick_context.distances.get(ctx.player.id, teammate_id);
-
-        let pass_skill = ctx.player.skills.technical.passing;
-
-        (distance / pass_skill as f32 * 10.0) as f64
+        let pass_skill = ctx.player.skills.technical.passing as f32 / 20.0;
+        (distance / pass_skill).clamp(0.1, 1.0)
     }
 }

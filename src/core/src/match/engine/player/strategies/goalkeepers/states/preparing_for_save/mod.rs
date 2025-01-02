@@ -22,7 +22,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 GoalkeeperState::Passing,
             ));
         } else {
-            if ctx.player().distance_from_start_position() > 100.0 {
+            if ctx.player().distance_from_start_position() > 150.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Attentive
                 ));
