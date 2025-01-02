@@ -43,7 +43,7 @@ impl StateProcessingHandler for MidfielderPassingState {
             ))
         }
         
-        if ctx.in_state_time > 100 {
+        if ctx.in_state_time > 10 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Distributing,
             ))

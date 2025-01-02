@@ -8,6 +8,8 @@ use crate::r#match::{
     StateProcessingHandler, VectorExtensions,
 };
 use nalgebra::Vector3;
+use rand::prelude::IteratorRandom;
+use rand::thread_rng;
 use std::sync::LazyLock;
 
 static _MIDFIELDER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
@@ -21,7 +23,7 @@ impl StateProcessingHandler for MidfielderDistributingState {
         // Find the best passing option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Returning,
+                MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::build()
                         .with_player_id(ctx.player.id)
@@ -55,35 +57,9 @@ impl MidfielderDistributingState {
 
         let teammates = players.teammates();
 
-        let nearby_teammates = teammates.nearby(300.0);
-
-        let mut nearest_to_goal: Option<MatchPlayerLite> = None;
-        let mut min_to_goal_distance = f32::MAX;
-
-        for teammate in nearby_teammates {
-            let player = ctx
-                .context
-                .players
-                .by_id(teammate.id)
-                .expect(&format!("can't find player with id = {}", teammate.id));
-
-            if player.tactical_position.current_position.is_goalkeeper() {
-                continue;
-            }
-
-            let opponent_goal_position = match ctx.player.side {
-                Some(PlayerSide::Left) => ctx.context.goal_positions.right,
-                Some(PlayerSide::Right) => ctx.context.goal_positions.left,
-                _ => Vector3::new(0.0, 0.0, 0.0),
-            }
-            .distance_to(&player.position);
-
-            if opponent_goal_position < min_to_goal_distance {
-                min_to_goal_distance = opponent_goal_position;
-                nearest_to_goal = Some(teammate);
-            }
-        }
-
-        nearest_to_goal
+        teammates
+            .nearby(300.0)
+            .filter(|t| !t.tactical_positions.is_goalkeeper())
+            .choose(&mut rand::thread_rng())
     }
 }
