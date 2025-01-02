@@ -97,39 +97,37 @@ impl StateProcessingHandler for ForwardRunningState {
             .velocity;
 
             Some(player_goal_velocity)
-        } else {
-            if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
-                let players =  ctx.players();
-                let opponents = players.opponents();
+        } else if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
+            let players =  ctx.players();
+            let opponents = players.opponents();
 
-                if let Some(goalkeeper) = opponents.goalkeeper().next() {
-                    let result = SteeringBehavior::Evade {
-                        target: goalkeeper.position + ctx.player().separation_velocity(),
-                    }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                   return Some(result  + ctx.player().separation_velocity());
-                }
-
-                None
-            } else {
-                let slowing_distance: f32 = {
-                    if ctx.player().goal_distance() < 200.0 {
-                        100.0
-                    } else {
-                        10.0
-                    }
-                };
-                let result = SteeringBehavior::Arrive {
-                    target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
-                    slowing_distance,
+            if let Some(goalkeeper) = opponents.goalkeeper().next() {
+                let result = SteeringBehavior::Evade {
+                    target: goalkeeper.position + ctx.player().separation_velocity(),
                 }
                 .calculate(ctx.player)
                 .velocity;
 
-                Some(result)
+               return Some(result  + ctx.player().separation_velocity());
             }
+
+            None
+        } else {
+            let slowing_distance: f32 = {
+                if ctx.player().goal_distance() < 200.0 {
+                    100.0
+                } else {
+                    10.0
+                }
+            };
+            let result = SteeringBehavior::Arrive {
+                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
+                slowing_distance,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            Some(result)
         }
     }
 
