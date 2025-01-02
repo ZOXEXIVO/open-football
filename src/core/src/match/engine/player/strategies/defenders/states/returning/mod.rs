@@ -21,19 +21,17 @@ impl StateProcessingHandler for DefenderReturningState {
                 DefenderState::Passing,
             ));
         }
-        
-        if !ctx.team().is_control_ball() {
-            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting
-                ));
-            }
-    
-            if ctx.ball().distance() < 100.0 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
+
+        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Intercepting
+            ));
+        }
+
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0{
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Tackling,
+            ));
         }
 
         // Stay in returning state until very close to start position
