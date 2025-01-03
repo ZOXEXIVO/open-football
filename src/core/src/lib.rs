@@ -16,5 +16,5 @@ pub mod utils;
 pub use club::*;
 pub use country::*;
 pub use nalgebra::*;
-pub use neural::*;
 pub use utils::*;
+pub use common::*;

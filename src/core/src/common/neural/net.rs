@@ -3,20 +3,17 @@ use std::ops::{Index, IndexMut};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct NeuralNetwork {
-    layers: Vec<Layer>,
-    activation_func: ActivationFunction,
+    pub layers: Vec<Layer>,
 }
 
 impl NeuralNetwork {
-    pub fn new(layers_configurations: &[u32], activation_func: ActivationFunction) -> Self {
+    pub fn new(layers_configurations: &[LayerConfiguration]) -> Self {
         let layers_len = layers_configurations.len();
 
         let mut layers = Vec::with_capacity(layers_len);
 
-        // enumerate by neurons per layers count
-        // current layer imputs is equal to previous layer neurons count
         for idx in 0..layers_len {
-            let current_neurons = layers_configurations[idx];
+            let current_layer_config = layers_configurations[idx];
             let current_inputs = layers_configurations[{
                 // case for first layer (no previous)
                 match idx {
@@ -25,13 +22,13 @@ impl NeuralNetwork {
                 }
             }];
 
-            layers.push(Layer::new(current_neurons, current_inputs));
+            layers.push(Layer::new(
+                current_layer_config,
+                current_inputs.neurons_count,
+            ));
         }
 
-        NeuralNetwork {
-            layers,
-            activation_func,
-        }
+        NeuralNetwork { layers }
     }
 
     pub fn load_json(json: &str) -> NeuralNetwork {
@@ -46,7 +43,7 @@ impl NeuralNetwork {
         results.pop().unwrap()
     }
 
-    fn run_internal(&self, inputs: &[f64]) -> Vec<Vec<f64>> {
+    pub fn run_internal(&self, inputs: &[f64]) -> Vec<Vec<f64>> {
         let mut results = Vec::with_capacity(self.layers.len());
 
         // Fill first layer
@@ -65,8 +62,23 @@ impl NeuralNetwork {
                     total += weight * value;
                 }
 
-                // write activated result
-                layer_results.push(self.activate(total));
+                layer_results.push(total);
+            }
+
+            match layer.activation_fn {
+                ActivationFunction::Sigmoid => {
+                    layer_results.iter_mut().for_each(|x| *x = sigmoid(*x));
+                }
+                ActivationFunction::Relu => {
+                    layer_results.iter_mut().for_each(|x| *x = relu(*x));
+                }
+                ActivationFunction::Softmax => {
+                    let softmax_results = softmax(&layer_results);
+                    layer_results = softmax_results;
+                }
+                ActivationFunction::Tanh => {
+                    layer_results.iter_mut().for_each(|x| *x = tanh(*x));
+                }
             }
 
             results.push(layer_results);
@@ -76,23 +88,53 @@ impl NeuralNetwork {
     }
 
     #[inline]
-    fn activate(&self, x: f64) -> f64 {
-        match self.activation_func {
+    fn activate(&self, x: f64, activation_func: ActivationFunction) -> f64 {
+        match activation_func {
             ActivationFunction::Sigmoid => sigmoid(x),
             ActivationFunction::Relu => relu(x),
+            ActivationFunction::Softmax => x,
+            ActivationFunction::Tanh => tanh(x)
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct LayerConfiguration {
+    pub neurons_count: u32,
+    pub activation_fn: ActivationFunction,
+}
+
+impl LayerConfiguration {
+    pub fn new(neurons_count: u32, activation_fn: ActivationFunction) -> LayerConfiguration {
+        LayerConfiguration {
+            neurons_count,
+            activation_fn,
+        }
+    }
+}
+
+impl From<u32> for LayerConfiguration {
+    fn from(x: u32) -> Self {
+        LayerConfiguration {
+            neurons_count: x,
+            activation_fn: ActivationFunction::Relu,
         }
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Layer {
-    neurons: Vec<Neuron>,
+pub struct Layer {
+    pub neurons: Vec<Neuron>,
+    pub activation_fn: ActivationFunction,
 }
 
 impl Layer {
-    pub fn new(neurons: u32, inputs: u32) -> Layer {
+    pub fn new(configuration: LayerConfiguration, inputs: u32) -> Layer {
         Layer {
-            neurons: (0..neurons).map(|_| Neuron::new(inputs)).collect(),
+            neurons: (0..configuration.neurons_count)
+                .map(|_| Neuron::new(inputs))
+                .collect(),
+            activation_fn: configuration.activation_fn,
         }
     }
 }
@@ -112,7 +154,7 @@ impl IndexMut<u32> for Layer {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Neuron {
+pub struct Neuron {
     pub weights: Vec<f64>,
 }
 
@@ -133,6 +175,8 @@ fn random_f64() -> f64 {
 pub enum ActivationFunction {
     Sigmoid,
     Relu,
+    Softmax,
+    Tanh
 }
 
 #[inline]
@@ -143,4 +187,18 @@ pub fn sigmoid(x: f64) -> f64 {
 #[inline]
 pub fn relu(x: f64) -> f64 {
     f64::max(0.0, x)
+}
+
+#[inline]
+pub fn softmax(values: &[f64]) -> Vec<f64> {
+    let max_val = values.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    let exps: Vec<f64> = values.iter().map(|&v| (v - max_val).exp()).collect();
+    let sum_exps: f64 = exps.iter().sum();
+
+    exps.iter().map(|&v| v / sum_exps).collect()
+}
+
+#[inline]
+pub fn tanh(x: f64) -> f64 {
+    x.tanh()
 }
