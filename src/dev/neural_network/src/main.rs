@@ -22,25 +22,32 @@ fn train(
 
 fn main() {
     let training_data =[
-        (DVector::from(vec![0f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![0f64, 1f64]), DVector::from(vec![1f64])),
-        (DVector::from(vec![1f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![1f64, 1f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 0f64, 0f64]), DVector::from(vec![0f64])),
+
+        (DVector::from(vec![1f64, 0f64, 0f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 1f64, 0f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 0f64, 1f64]), DVector::from(vec![0f64])),
+
+        (DVector::from(vec![1f64, 1f64, 0f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 1f64, 1f64]), DVector::from(vec![1f64])),
+        (DVector::from(vec![1f64, 0f64, 1f64]), DVector::from(vec![0f64])),
+
+        (DVector::from(vec![1f64, 1f64, 1f64]), DVector::from(vec![1f64])),
     ];
 
     let mut configurations = Vec::new();
 
-    let max_length = 5u32;
+    let max_length = 10u32;
 
-    for momentum in &[0.1, 0.15f64, 0.2f64, 0.25f64, 0.3f64, 0.35f64, 0.4f64, 0.5f64] {
-        for rate in &[0.1, 0.01, 0.05, 0.005] {
-            for epochs in &[10000, 100000] {
+    for momentum in &[0.1, 0.15f64, 0.2f64] {
+        for rate in &[0.2, 0.1, 0.05, 0.01] {
+            for epochs in &[1000] {
                 for first in 0..max_length {
                     for second in 0..max_length {
                         for third in 0..max_length {
                             for fourth in 0..max_length {
                                 let mut layer_configuration = vec![
-                                    LayerConfiguration::new(2, ActivationFunction::Relu)
+                                    LayerConfiguration::new(3, ActivationFunction::Relu)
                                 ];
 
                                 if first > 0 {
