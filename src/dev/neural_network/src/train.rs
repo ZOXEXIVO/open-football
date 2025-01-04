@@ -1,143 +1,172 @@
-﻿use core::ActivationFunction;
-use core::NeuralNetwork;
+﻿use core::relu;
+use core::sigmoid;
+use core::ActivationFunction;
 use core::Layer;
+use core::NeuralNetwork;
+use nalgebra::{DMatrix, DVector, RowDVector};
 use std::iter::{Enumerate, Zip};
-use std::ops::{IndexMut};
 use std::slice;
 
 pub trait Trainer {
-    fn train(&mut self, training_data: &[(Vec<f64>, Vec<f64>)], learning_rate: f64, momentum: f64, epochs: u32) -> f64;
-    fn error(&self, run_results: &[Vec<f64>], required_values: &Vec<f64>) -> f64;
-    fn weight_updates(&self, results: &[Vec<f64>], targets: &[f64]) -> Vec<Vec<Vec<f64>>>;
-    fn updates_weights(&mut self, weight_updates: Vec<Vec<Vec<f64>>>, deltas: &mut Vec<Vec<Vec<f64>>>, learning_rate: f64, momentum: f64);
-    fn initial_deltas(&self) -> Vec<Vec<Vec<f64>>>;
+    fn train(
+        &mut self,
+        training_data: &[(DVector<f64>, DVector<f64>)],
+        learning_rate: f64,
+        momentum: f64,
+        epochs: u32,
+    ) -> f64;
+    fn error(&self, run_result: &DVector<f64>, required_values: &DVector<f64>) -> f64;
+    fn weight_updates(&self, results: &[DVector<f64>], targets: &DVector<f64>)
+        -> Vec<DMatrix<f64>>;
+    fn update_weights(
+        &mut self,
+        weight_updates: &[DMatrix<f64>],
+        deltas: &mut [DMatrix<f64>],
+        learning_rate: f64,
+        momentum: f64,
+    );
+    fn initial_deltas(&self) -> Vec<DMatrix<f64>>;
 }
 
 impl Trainer for NeuralNetwork {
-    fn train(&mut self, training_data: &[(Vec<f64>, Vec<f64>)], learning_rate: f64, momentum: f64, epochs: u32) -> f64 {
+    fn train(
+        &mut self,
+        training_data: &[(DVector<f64>, DVector<f64>)],
+        learning_rate: f64,
+        momentum: f64,
+        epochs: u32,
+    ) -> f64 {
         let mut deltas = self.initial_deltas();
         let mut error_rate = 0f64;
 
-        for epoch in 0..epochs {
+        for _ in 0..epochs {
             error_rate = 0f64;
 
             for (input, target) in training_data.iter() {
-
-                let run_results = self.run_internal(input);
-
-                error_rate += self.error(&run_results, target);
-
-                self.updates_weights(
-                    self.weight_updates(&run_results, target),
-                    &mut deltas,
-                    learning_rate,
-                    momentum,
-                );
+                let run_result = self.run(input);
+                error_rate += self.error(&run_result, target);
+                let weight_updates = self.weight_updates(&[input.clone(), run_result], target);
+                self.update_weights(&weight_updates, &mut deltas, learning_rate, momentum);
             }
         }
-        
+
         error_rate
     }
 
-    fn error(&self, run_results: &[Vec<f64>], required_values: &Vec<f64>) -> f64 {
-        let mut error = 0f64;
-        let output_layer_result = run_results.last().unwrap();
+    fn error(&self, run_result: &DVector<f64>, required_values: &DVector<f64>) -> f64 {
         let output_layer = self.layers.last().unwrap();
-
-        for (&result, &target_output) in output_layer_result.iter().zip(required_values) {
-            let activated_result = activate(result, output_layer.activation_fn);
-            error += (target_output - activated_result).powi(2);
-        }
-
-        error
+        let activated_result = run_result.map(|x| self.activate(x, output_layer.activation_fn));
+        (activated_result - required_values)
+            .map(|x| x.powi(2))
+            .sum()
     }
 
-    fn weight_updates(&self, results: &[Vec<f64>], targets: &[f64]) -> Vec<Vec<Vec<f64>>> {
-        let mut network_errors: Vec<Vec<f64>> = Vec::new();
-        let mut network_weight_updates = Vec::new();
+    fn weight_updates(
+        &self,
+        results: &[DVector<f64>],
+        targets: &DVector<f64>,
+    ) -> Vec<DMatrix<f64>> {
+        let mut weight_updates = Vec::new();
+        let mut deltas = Vec::new();
 
-        let layers = &self.layers;
-        let network_results = &results[1..];
+        // Calculate error for output layer first
+        let output_layer_result = results.last().unwrap();
+        let output_error = output_layer_result.component_mul(
+            &(DVector::from_element(output_layer_result.len(), 1.0) - output_layer_result)
+        ).component_mul(
+            &(targets - output_layer_result)
+        );
+        deltas.push(output_error);
 
-        let mut next_layer_nodes: Option<&Layer> = None;
+        // Backpropagate through hidden layers
+        for layer_idx in (0..self.layers.len() - 1).rev() {
+            let next_layer = &self.layers[layer_idx + 1];
+            let current_layer = &self.layers[layer_idx];
+            let layer_output = &results[1];
 
-        for (layer_index, (layer_nodes, layer_results)) in iter_zip_enum(layers, network_results).rev() {
-            let prev_layer_results = &results[layer_index];
-            let mut layer_errors = Vec::with_capacity(layer_nodes.neurons.len());
-            let mut layer_weight_updates = Vec::with_capacity(layer_nodes.neurons.len());
+            let prev_delta = deltas.last().unwrap();
 
-            for (node_index, (neuron, &result)) in layer_nodes.neurons.iter().zip(layer_results).enumerate() {
-                let mut node_weight_updates = Vec::with_capacity(neuron.weights.len());
-                let node_error: f64;
+            // Get weights without bias
+            let weights_without_bias = next_layer.weights.columns(1, next_layer.weights.ncols() - 1);
 
-                if layer_index == layers.len() - 1 {
-                    let activated_result = activate(result, layer_nodes.activation_fn);
-                    node_error = activated_result * (1f64 - activated_result) * (targets[node_index] - activated_result);
-                } else {
-                    let mut sum = 0f64;
-                    let next_layer_errors = &network_errors[network_errors.len() - 1];
-                    for (next_node, &next_node_error_data) in next_layer_nodes.unwrap().neurons.iter().zip((next_layer_errors).iter()) {
-                        sum += next_node.weights[node_index + 1] * next_node_error_data;
+            // Create delta vector with dimensions matching current layer
+            let mut delta = DVector::zeros(current_layer.weights.nrows());
+
+            // Calculate weighted error for each neuron in the current layer
+            for i in 0..current_layer.weights.nrows() {
+                let mut weighted_sum = 0.0;
+                for j in 0..weights_without_bias.nrows() {
+                    if j < prev_delta.len() && i < weights_without_bias.ncols() {
+                        weighted_sum += weights_without_bias[(j, i)] * prev_delta[j];
                     }
-                    let activated_result = activate(result, layer_nodes.activation_fn);
-                    node_error = activated_result * (1f64 - activated_result) * sum;
                 }
 
-                for weight_index in 0..neuron.weights.len() {
-                    let prev_layer_result = if weight_index == 0 {
-                        1f64
-                    } else {
-                        prev_layer_results[weight_index - 1]
-                    };
-                    let weight_update = node_error * prev_layer_result;
-                    node_weight_updates.push(weight_update);
-                }
+                // Calculate sigmoid derivative for this neuron
+                let output_value = if i < layer_output.len() { layer_output[i] } else { 0.0 };
+                let sigmoid_derivative = output_value * (1.0 - output_value);
 
-                layer_errors.push(node_error);
-                layer_weight_updates.push(node_weight_updates);
+                delta[i] = weighted_sum * sigmoid_derivative;
             }
 
-            network_errors.push(layer_errors);
-            network_weight_updates.push(layer_weight_updates);
-            next_layer_nodes = Some(&layer_nodes);
+            deltas.push(delta);
         }
 
-        network_weight_updates.reverse();
-        network_weight_updates
+        deltas.reverse();
+
+        // Calculate weight updates for each layer
+        for layer_idx in 0..self.layers.len() {
+            let layer = &self.layers[layer_idx];
+            let delta = &deltas[layer_idx];
+
+            let layer_input = if layer_idx == 0 {
+                &results[0]
+            } else {
+                &results[1]
+            };
+
+            // Create input vector with bias, ensuring correct dimensions
+            let mut input_with_bias = DVector::zeros(layer.weights.ncols());  // Match weight matrix columns
+            input_with_bias[0] = 1.0;  // Bias term
+
+            // Copy input values after bias, ensuring we don't exceed vector length
+            let copy_len = (layer.weights.ncols() - 1).min(layer_input.len());
+            input_with_bias.rows_mut(1, copy_len).copy_from(&layer_input.rows(0, copy_len));
+
+            // Calculate weight updates
+            let update = delta * input_with_bias.transpose();
+
+            assert_eq!(update.nrows(), layer.weights.nrows(),
+                       "Layer {}: Update rows {} != weights rows {}", layer_idx, update.nrows(), layer.weights.nrows());
+            assert_eq!(update.ncols(), layer.weights.ncols(),
+                       "Layer {}: Update cols {} != weights cols {}", layer_idx, update.ncols(), layer.weights.ncols());
+
+            weight_updates.push(update);
+        }
+
+        weight_updates
     }
 
-    fn updates_weights(
+    fn update_weights(
         &mut self,
-        weight_updates: Vec<Vec<Vec<f64>>>,
-        deltas: &mut Vec<Vec<Vec<f64>>>,
+        weight_updates: &[DMatrix<f64>],
+        deltas: &mut [DMatrix<f64>],
         learning_rate: f64,
         momentum: f64,
     ) {
-        for layer_index in 0..self.layers.len() {
-            let layer = &mut self.layers[layer_index];
-            let layer_weight_updates = &weight_updates[layer_index];
-
-            for neuron_index in 0..layer.neurons.len() {
-                let neuron = &mut layer.index_mut(neuron_index as u32);
-                let neuron_weight_updates = &layer_weight_updates[neuron_index];
-
-                for weight_index in 0..neuron.weights.len() {
-                    let weight_update = neuron_weight_updates[weight_index];
-                    let prev_delta = deltas[layer_index][neuron_index][weight_index];
-                    let delta = (learning_rate * weight_update) + (momentum * prev_delta);
-                    neuron.weights[weight_index] += delta;
-                    deltas[layer_index][neuron_index][weight_index] = delta;
-                }
-            }
+        for ((layer, layer_weight_updates), layer_deltas) in
+            self.layers.iter_mut().zip(weight_updates).zip(deltas)
+        {
+            let delta =
+                learning_rate * layer_weight_updates + momentum * layer_deltas.clone_owned();
+            layer.weights += &delta;
+            *layer_deltas = delta.clone();
         }
     }
 
-    fn initial_deltas(&self) -> Vec<Vec<Vec<f64>>> {
+    fn initial_deltas(&self) -> Vec<DMatrix<f64>> {
         self.layers
             .iter()
-            .map(|layer| {
-                vec![vec![0f64; layer.neurons[0].weights.len()]; layer.neurons.len()]
-            })
+            .map(|layer| DMatrix::zeros(layer.weights.nrows(), layer.weights.ncols()))
             .collect()
     }
 }
@@ -147,28 +176,4 @@ fn iter_zip_enum<'s, 't, S: 's, T: 't>(
     t: &'t [T],
 ) -> Enumerate<Zip<slice::Iter<'s, S>, slice::Iter<'t, T>>> {
     s.iter().zip(t.iter()).enumerate()
-}
-
-fn activate(x: f64, activation_func: ActivationFunction) -> f64 {
-    match activation_func {
-        ActivationFunction::Sigmoid => sigmoid(x),
-        ActivationFunction::Relu => relu(x),
-        ActivationFunction::Tanh => tanh(x),
-        ActivationFunction::Softmax => panic!("Softmax should be applied to the entire layer, not individual neurons"),
-    }
-}
-
-#[inline]
-pub fn sigmoid(x: f64) -> f64 {
-    1f64 / (1f64 + (-x).exp())
-}
-
-#[inline]
-pub fn relu(x: f64) -> f64 {
-    f64::max(0.0, x)
-}
-
-#[inline]
-pub fn tanh(x: f64) -> f64 {
-    x.tanh()
 }

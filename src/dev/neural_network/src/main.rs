@@ -1,18 +1,17 @@
 use std::fs;
-use std::fs::File;
 use std::sync::Mutex;
 use core::ActivationFunction;
 use crate::train::Trainer;
 use core::LayerConfiguration;
 use core::NeuralNetwork;
+use nalgebra::DVector;
 use rayon::prelude::*;
-use serde::{Serialize};
 
 mod train;
 
 fn train(
     training_set: &TrainingSet,
-    training_data: &[(Vec<f64>, Vec<f64>)]
+    training_data: &[(DVector<f64>, DVector<f64>)]
 ) -> (NeuralNetwork, f64) {
     let mut net = NeuralNetwork::new(&training_set.configuration);
 
@@ -23,19 +22,19 @@ fn train(
 
 fn main() {
     let training_data =[
-        (vec![0f64, 0f64], vec![0f64]),
-        (vec![0f64, 1f64], vec![1f64]),
-        (vec![1f64, 0f64], vec![0f64]),
-        (vec![1f64, 1f64], vec![0f64]),
+        (DVector::from(vec![0f64, 0f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 1f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![1f64, 0f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![1f64, 1f64]), DVector::from(vec![1f64])),
     ];
 
     let mut configurations = Vec::new();
 
     let max_length = 5u32;
 
-    for momentum in &[0.1, 0.15f64] {
-        for rate in &[0.1, 0.01] {
-            for epochs in &[1000, 10000] {
+    for momentum in &[0.1, 0.15f64, 0.2f64, 0.25f64, 0.3f64, 0.35f64, 0.4f64, 0.5f64] {
+        for rate in &[0.3, 0.2, 0.1, 0.01, 0.05, 0.005] {
+            for epochs in &[1000, 10000, 100000] {
                 for first in 0..max_length {
                     for second in 0..max_length {
                         for third in 0..max_length {
@@ -45,19 +44,19 @@ fn main() {
                                 ];
 
                                 if first > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(first, ActivationFunction::Relu));
+                                    layer_configuration.push(LayerConfiguration::new(first as usize, ActivationFunction::Relu));
                                 }
 
                                 if second > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(second, ActivationFunction::Relu));
+                                    layer_configuration.push(LayerConfiguration::new(second as usize, ActivationFunction::Relu));
                                 }
 
                                 if third > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(third, ActivationFunction::Relu));
+                                    layer_configuration.push(LayerConfiguration::new(third as usize, ActivationFunction::Relu));
                                 }
 
                                 if fourth > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(fourth, ActivationFunction::Relu));
+                                    layer_configuration.push(LayerConfiguration::new(fourth as usize, ActivationFunction::Relu));
                                 }
 
                                 layer_configuration.push(LayerConfiguration::new(1, ActivationFunction::Relu));
@@ -101,7 +100,7 @@ fn main() {
 
     for (training_item, training_result) in &training_data {
         let best_nn_res = best_nn.run(training_item);
-        println!("DATA: {:?}, RESULT: {:?}, EXPECTED: {:?} ERROR = {}", training_item, best_nn_res, training_result, error);
+        println!("DATA: {:?}, RESULT: {:?}, EXPECTED: {:?} ERROR = {}", training_item.as_slice(), best_nn_res.as_slice(), training_result.as_slice(), error);
     }
 
     let nn_json = best_nn.save_json();
