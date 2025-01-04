@@ -8,7 +8,7 @@ use std::slice;
 pub trait Trainer {
     fn train(&mut self, training_data: &[(Vec<f64>, Vec<f64>)], learning_rate: f64, momentum: f64, epochs: u32) -> f64;
     fn error(&self, run_results: &[Vec<f64>], required_values: &Vec<f64>) -> f64;
-    fn weight_updates(&self, results: &[Vec<f64>], targets: &Vec<f64>) -> Vec<Vec<Vec<f64>>>;
+    fn weight_updates(&self, results: &[Vec<f64>], targets: &[f64]) -> Vec<Vec<Vec<f64>>>;
     fn updates_weights(&mut self, weight_updates: Vec<Vec<Vec<f64>>>, deltas: &mut Vec<Vec<Vec<f64>>>, learning_rate: f64, momentum: f64);
     fn initial_deltas(&self) -> Vec<Vec<Vec<f64>>>;
 }
@@ -19,8 +19,6 @@ impl Trainer for NeuralNetwork {
         let mut error_rate = 0f64;
 
         for epoch in 0..epochs {
-            // println!("epoch = {}", epoch);
-            
             error_rate = 0f64;
 
             for (input, target) in training_data.iter() {
@@ -29,8 +27,6 @@ impl Trainer for NeuralNetwork {
 
                 error_rate += self.error(&run_results, target);
 
-                println!("error_rate = {}", error_rate);
-                
                 self.updates_weights(
                     self.weight_updates(&run_results, target),
                     &mut deltas,
@@ -39,7 +35,7 @@ impl Trainer for NeuralNetwork {
                 );
             }
         }
-
+        
         error_rate
     }
 
@@ -56,7 +52,7 @@ impl Trainer for NeuralNetwork {
         error
     }
 
-    fn weight_updates(&self, results: &[Vec<f64>], targets: &Vec<f64>) -> Vec<Vec<Vec<f64>>> {
+    fn weight_updates(&self, results: &[Vec<f64>], targets: &[f64]) -> Vec<Vec<Vec<f64>>> {
         let mut network_errors: Vec<Vec<f64>> = Vec::new();
         let mut network_weight_updates = Vec::new();
 

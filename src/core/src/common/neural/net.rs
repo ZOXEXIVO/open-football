@@ -31,6 +31,10 @@ impl NeuralNetwork {
         NeuralNetwork { layers }
     }
 
+    pub fn save_json(&self) -> String {
+        serde_json::to_string(&self).unwrap()
+    }
+
     pub fn load_json(json: &str) -> NeuralNetwork {
         serde_json::from_str(json).unwrap()
     }
