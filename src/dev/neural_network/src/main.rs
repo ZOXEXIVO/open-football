@@ -90,8 +90,6 @@ fn main() {
 
     let ratings: Mutex<Vec<(TrainingSet, f64, NeuralNetwork)>> = Mutex::new(Vec::new());
 
-    rayon::ThreadPoolBuilder::new().num_threads(14).build_global().unwrap();
-    
     configurations.par_iter().for_each(|training_set| {
         let (nn, error) = train(training_set, &training_data);
 
