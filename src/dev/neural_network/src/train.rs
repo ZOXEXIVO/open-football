@@ -134,12 +134,7 @@ impl Trainer for NeuralNetwork {
 
             // Calculate weight updates
             let update = delta * input_with_bias.transpose();
-
-            assert_eq!(update.nrows(), layer.weights.nrows(),
-                       "Layer {}: Update rows {} != weights rows {}", layer_idx, update.nrows(), layer.weights.nrows());
-            assert_eq!(update.ncols(), layer.weights.ncols(),
-                       "Layer {}: Update cols {} != weights cols {}", layer_idx, update.ncols(), layer.weights.ncols());
-
+            
             weight_updates.push(update);
         }
 

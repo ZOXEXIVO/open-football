@@ -23,9 +23,9 @@ fn train(
 fn main() {
     let training_data =[
         (DVector::from(vec![0f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![0f64, 1f64]), DVector::from(vec![0f64])),
+        (DVector::from(vec![0f64, 1f64]), DVector::from(vec![1f64])),
         (DVector::from(vec![1f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![1f64, 1f64]), DVector::from(vec![1f64])),
+        (DVector::from(vec![1f64, 1f64]), DVector::from(vec![0f64])),
     ];
 
     let mut configurations = Vec::new();
@@ -33,8 +33,8 @@ fn main() {
     let max_length = 5u32;
 
     for momentum in &[0.1, 0.15f64, 0.2f64, 0.25f64, 0.3f64, 0.35f64, 0.4f64, 0.5f64] {
-        for rate in &[0.3, 0.2, 0.1, 0.01, 0.05, 0.005] {
-            for epochs in &[1000, 10000, 100000] {
+        for rate in &[0.1, 0.01, 0.05, 0.005] {
+            for epochs in &[10000, 100000] {
                 for first in 0..max_length {
                     for second in 0..max_length {
                         for third in 0..max_length {
@@ -96,11 +96,11 @@ fn main() {
 
     let (_, error, best_nn) = ratings_lock.first().unwrap();
 
-    println!("Results on best Neural Network:");
+    println!("Results on best Neural Network (ERROR = {}):", error);
 
     for (training_item, training_result) in &training_data {
         let best_nn_res = best_nn.run(training_item);
-        println!("DATA: {:?}, RESULT: {:?}, EXPECTED: {:?} ERROR = {}", training_item.as_slice(), best_nn_res.as_slice(), training_result.as_slice(), error);
+        println!("DATA: {:?}, RESULT: {:?}, EXPECTED: {:?}", training_item.as_slice(), best_nn_res.as_slice(), training_result.as_slice());
     }
 
     let nn_json = best_nn.save_json();
