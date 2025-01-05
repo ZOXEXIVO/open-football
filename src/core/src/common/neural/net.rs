@@ -94,6 +94,7 @@ impl Layer {
         }
     }
 
+    #[inline]
     pub fn run(&self, inputs: &DVector<f64>) -> DVector<f64> {
         (&self.weights * inputs + &self.bias).map(|x| self.activate(x))
     }

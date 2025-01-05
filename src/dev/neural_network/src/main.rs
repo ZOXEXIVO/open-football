@@ -37,49 +37,43 @@ fn main() {
 
     let mut configurations = Vec::new();
 
-    let max_length = 10u32;
+    let max_length = 15u32;
 
-    for momentum in &[0.1, 0.15f64, 0.2f64] {
-        for rate in &[0.3, 0.2, 0.1, 0.05, 0.01] {
-            for epochs in &[100000] {
+    for momentum in &[0.1f64, 0.15f64] {
+        for rate in &[0.05] {
+            for epochs in &[10000] {
                 for first in 0..max_length {
                     for second in 0..max_length {
                         for third in 0..max_length {
                             for fourth in 0..max_length {
-                                for fifth in 0..max_length {
-                                    let mut layer_configuration = vec![
-                                        LayerConfiguration::new(3, ActivationFunction::Relu)
-                                    ];
+                                let mut layer_configuration = vec![
+                                    LayerConfiguration::new(3, ActivationFunction::Relu)
+                                ];
 
-                                    if first > 0 {
-                                        layer_configuration.push(LayerConfiguration::new(first as usize, ActivationFunction::Relu));
-                                    }
-
-                                    if second > 0 {
-                                        layer_configuration.push(LayerConfiguration::new(second as usize, ActivationFunction::Relu));
-                                    }
-
-                                    if third > 0 {
-                                        layer_configuration.push(LayerConfiguration::new(third as usize, ActivationFunction::Relu));
-                                    }
-
-                                    if fourth > 0 {
-                                        layer_configuration.push(LayerConfiguration::new(fourth as usize, ActivationFunction::Relu));
-                                    }
-
-                                    if fifth > 0 {
-                                        layer_configuration.push(LayerConfiguration::new(fifth as usize, ActivationFunction::Relu));
-                                    }
-                                    
-                                    layer_configuration.push(LayerConfiguration::new(1, ActivationFunction::Relu));
-
-                                    configurations.push(TrainingSet {
-                                        learning_rate: *rate,
-                                        momentum: *momentum,
-                                        epochs: *epochs,
-                                        configuration: layer_configuration
-                                    });
+                                if first > 0 {
+                                    layer_configuration.push(LayerConfiguration::new(first as usize, ActivationFunction::Relu));
                                 }
+
+                                if second > 0 {
+                                    layer_configuration.push(LayerConfiguration::new(second as usize, ActivationFunction::Relu));
+                                }
+
+                                if third > 0 {
+                                    layer_configuration.push(LayerConfiguration::new(third as usize, ActivationFunction::Relu));
+                                }
+
+                                if fourth > 0 {
+                                    layer_configuration.push(LayerConfiguration::new(fourth as usize, ActivationFunction::Relu));
+                                }
+
+                                layer_configuration.push(LayerConfiguration::new(1, ActivationFunction::Relu));
+
+                                configurations.push(TrainingSet {
+                                    learning_rate: *rate,
+                                    momentum: *momentum,
+                                    epochs: *epochs,
+                                    configuration: layer_configuration
+                                });
                             }
                         }
                     }
@@ -90,6 +84,8 @@ fn main() {
 
     let ratings: Mutex<Vec<(TrainingSet, f64, NeuralNetwork)>> = Mutex::new(Vec::new());
 
+    rayon::ThreadPoolBuilder::new().num_threads(28).build_global().unwrap();
+    
     configurations.par_iter().for_each(|training_set| {
         let (nn, error) = train(training_set, &training_data);
 
