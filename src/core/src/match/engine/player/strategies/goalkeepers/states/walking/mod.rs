@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::strategies::processor::StateChangeResult;
 use crate::r#match::{
@@ -8,10 +6,6 @@ use crate::r#match::{
 };
 use crate::IntegerUtils;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _GOALKEEPER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
 
 #[derive(Default)]
 pub struct GoalkeeperWalkingState {}

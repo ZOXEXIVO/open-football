@@ -1,17 +1,10 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
 
-// Constants used in ForwardStandingState
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 16.5; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
-
-static _FORWARD_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
 #[derive(Default)]
 pub struct ForwardStandingState {}

@@ -1,12 +1,6 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::strategies::processor::StateChangeResult;
 use crate::r#match::{ConditionContext, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _COMMON_INJURED_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_common_injured_data.json")));
 
 #[derive(Default)]
 pub struct CommonInjuredState {}

@@ -1,16 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _GOALKEEPER_PREPARE_TO_SAVE_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
-    DefaultNeuralNetworkLoader::load(include_str!("nn_preparing_for_save_data.json"))
-});
 
 #[derive(Default)]
 pub struct GoalkeeperPreparingForSaveState {}

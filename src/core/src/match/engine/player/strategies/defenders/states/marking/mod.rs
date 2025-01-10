@@ -1,14 +1,8 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _DEFENDER_MARKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_marking_data.json")));
 
 const MARKING_DISTANCE_THRESHOLD: f32 = 2.0; // Desired distance to maintain from the opponent
 const TACKLING_DISTANCE_THRESHOLD: f32 = 1.0; // Distance within which the defender can tackle

@@ -1,13 +1,7 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
-
-static _DEFENDER_HOLDING_LINE_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_holding_line_data.json")));
 
 const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 100.0;
 const BALL_PROXIMITY_THRESHOLD: f32 = 100.0;

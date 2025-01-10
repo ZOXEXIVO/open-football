@@ -1,17 +1,10 @@
-use std::sync::LazyLock;
-
 use nalgebra::Vector3;
 
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler
+    StateProcessingHandler,
 };
-
-static _DEFENDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
 const INTERCEPTION_DISTANCE: f32 = 200.0;
 const CLEARING_DISTANCE: f32 = 50.0;
@@ -32,10 +25,11 @@ impl StateProcessingHandler for DefenderStandingState {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
-        }
-        else {
+        } else {
             if ctx.ball().on_own_side() {
-                if ball_ops.is_towards_player_with_angle(0.8) && ball_ops.distance() < INTERCEPTION_DISTANCE {
+                if ball_ops.is_towards_player_with_angle(0.8)
+                    && ball_ops.distance() < INTERCEPTION_DISTANCE
+                {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Intercepting,
                     ));
@@ -46,8 +40,7 @@ impl StateProcessingHandler for DefenderStandingState {
                         DefenderState::Pressing,
                     ));
                 }
-            }
-            else {
+            } else {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Returning,
                 ));

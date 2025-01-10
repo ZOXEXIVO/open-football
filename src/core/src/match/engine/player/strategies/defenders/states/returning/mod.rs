@@ -1,15 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior, MATCH_HALF_TIME_MS,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _DEFENDER_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_returning_data.json")));
 
 #[derive(Default)]
 pub struct DefenderReturningState {}

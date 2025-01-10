@@ -1,15 +1,11 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
-use nalgebra::Vector3;
-use std::sync::LazyLock;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-
-static _MIDFIELDER_DISTANCE_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
-    DefaultNeuralNetworkLoader::load(include_str!("nn_distance_shooting_data.json"))
-});
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
+};
+use nalgebra::Vector3;
 
 #[derive(Default)]
 pub struct MidfielderDistanceShootingState {}
@@ -42,11 +38,13 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             // Transition to shooting state
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
-                Event::PlayerEvent(PlayerEvent::Shoot(ShootingEventContext::build()
-                    .with_player_id(ctx.player.id)
-                    .with_target(ctx.player().opponent_goal_position())
-                    .with_force(ctx.player().shoot_goal_power())
-                    .build())),
+                Event::PlayerEvent(PlayerEvent::Shoot(
+                    ShootingEventContext::build()
+                        .with_player_id(ctx.player.id)
+                        .with_target(ctx.player().opponent_goal_position())
+                        .with_force(ctx.player().shoot_goal_power())
+                        .build(),
+                )),
             ));
         }
 
@@ -63,8 +61,8 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
                 target: ctx.ball().direction_to_opponent_goal(),
                 slowing_distance: 150.0,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
@@ -91,7 +89,8 @@ impl MidfielderDistanceShootingState {
         let players = ctx.players();
         let teammates = players.teammates();
 
-        let mut open_teammates = teammates.all()
+        let mut open_teammates = teammates
+            .all()
             .filter(|teammate| self.is_teammate_open(ctx, teammate));
 
         let has_open_teammate = open_teammates.next().is_some();
@@ -146,7 +145,11 @@ impl MidfielderDistanceShootingState {
         is_in_passing_range && has_clear_passing_lane
     }
 
-    fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn has_clear_passing_lane(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         // Check if there is a clear passing lane to a teammate without any obstructing opponents
         let player_position = ctx.player.position;
         let teammate_position = teammate.position;

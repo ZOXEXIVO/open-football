@@ -1,125 +1,52 @@
-use std::fs;
-use std::sync::Mutex;
-use core::ActivationFunction;
-use crate::train::Trainer;
-use core::LayerConfiguration;
-use core::NeuralNetwork;
-use nalgebra::DVector;
-use rayon::prelude::*;
+use crate::model::MyBinaryNet;
+use crate::training::{train, TrainingConfig};
+use burn::backend::ndarray::NdArrayDevice;
+use burn::backend::{Autodiff, NdArray};
+use burn::prelude::Tensor;
 
-mod train;
-
-fn train(
-    training_set: &TrainingSet,
-    training_data: &[(DVector<f64>, DVector<f64>)]
-) -> (NeuralNetwork, f64) {
-    let mut net = NeuralNetwork::new(&training_set.configuration);
-
-    let error_rate = net.train(training_data, training_set.learning_rate, training_set.momentum, training_set.epochs);
-
-    (net, error_rate)
-}
+mod model;
+mod training;
 
 fn main() {
-    let training_data =[
-        (DVector::from(vec![0f64, 0f64, 0f64]), DVector::from(vec![0f64])),
+    type MyBackend = NdArray;
+    type MyAutodiffBackend = Autodiff<MyBackend>;
 
-        (DVector::from(vec![1f64, 0f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![0f64, 1f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![0f64, 0f64, 1f64]), DVector::from(vec![0f64])),
+    let device = NdArrayDevice::default();
 
-        (DVector::from(vec![1f64, 1f64, 0f64]), DVector::from(vec![0f64])),
-        (DVector::from(vec![0f64, 1f64, 1f64]), DVector::from(vec![1f64])),
-        (DVector::from(vec![1f64, 0f64, 1f64]), DVector::from(vec![0f64])),
-
-        (DVector::from(vec![1f64, 1f64, 1f64]), DVector::from(vec![1f64])),
+    let training_data = vec![
+        (0f64, 0f64, 1f64),
+        (1f64, 0f64, 0f64),
+        (0f64, 1f64, 0f64),
+        (1f64, 1f64, 0f64),
     ];
 
-    let mut configurations = Vec::new();
+    let model: MyBinaryNet<MyAutodiffBackend> = train(
+        "artifacts",
+        TrainingConfig {
+            num_epochs: 3000,
+            learning_rate: 1e-2,
+            momentum: 1e-2,
+            seed: 43,
+            batch_size: 1,
+        },
+        training_data.clone(),
+        device,
+    );
 
-    let max_length = 15u32;
+    for item in training_data {
+        let tensor = Tensor::from_data([[item.0, item.1]], &device);
+        let result = model.forward(tensor);
 
-    for momentum in &[0.1f64, 0.15f64] {
-        for rate in &[0.05] {
-            for epochs in &[10000] {
-                for first in 0..max_length {
-                    for second in 0..max_length {
-                        for third in 0..max_length {
-                            for fourth in 0..max_length {
-                                let mut layer_configuration = vec![
-                                    LayerConfiguration::new(3, ActivationFunction::Relu)
-                                ];
+        let tensor_data_string = result
+            .to_data()
+            .iter()
+            .map(|x: f32| format!("{:.4}", x))
+            .collect::<Vec<String>>()
+            .join(", ");
 
-                                if first > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(first as usize, ActivationFunction::Relu));
-                                }
-
-                                if second > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(second as usize, ActivationFunction::Relu));
-                                }
-
-                                if third > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(third as usize, ActivationFunction::Relu));
-                                }
-
-                                if fourth > 0 {
-                                    layer_configuration.push(LayerConfiguration::new(fourth as usize, ActivationFunction::Relu));
-                                }
-
-                                layer_configuration.push(LayerConfiguration::new(1, ActivationFunction::Relu));
-
-                                configurations.push(TrainingSet {
-                                    learning_rate: *rate,
-                                    momentum: *momentum,
-                                    epochs: *epochs,
-                                    configuration: layer_configuration
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        println!(
+            "INPUT: {},{}, RESULT: {:.32}",
+            item.0, item.1, tensor_data_string
+        );
     }
-
-    let ratings: Mutex<Vec<(TrainingSet, f64, NeuralNetwork)>> = Mutex::new(Vec::new());
-
-    rayon::ThreadPoolBuilder::new().num_threads(28).build_global().unwrap();
-    
-    configurations.par_iter().for_each(|training_set| {
-        let (nn, error) = train(training_set, &training_data);
-
-        ratings.lock().unwrap().push((training_set.clone(), error, nn));
-    });
-
-    let mut ratings_lock = ratings.lock().unwrap();
-
-    ratings_lock.sort_by(|(_, error, _), (_, next_error, _)| { error.partial_cmp(next_error).unwrap() });
-
-    for (index, (training_set, error, _nn)) in ratings_lock.iter().take(10).enumerate() {
-        let neurons: Vec<String> = training_set.configuration.iter().map(|t| t.neurons_count.to_string()).collect();
-        let joined_str = format!("[{}]", neurons.join(","));
-
-        println!("{}) {:?} - {} (epochs: {}, learning_rate: {}, momentum: {})", index + 1, joined_str, error, training_set.epochs, training_set.learning_rate, training_set.momentum);
-    }
-
-    let (_, error, best_nn) = ratings_lock.first().unwrap();
-
-    println!("Results on best Neural Network (ERROR = {}):", error);
-
-    for (training_item, training_result) in &training_data {
-        let best_nn_res = best_nn.run(training_item);
-        println!("DATA: {:?}, RESULT: {:?}, EXPECTED: {:?}", training_item.as_slice(), best_nn_res.as_slice(), training_result.as_slice());
-    }
-
-    let nn_json = best_nn.save_json();
-    fs::write("best_nn.json", &nn_json).expect("Unable to write nn file");
-}
-
-#[derive(Clone, Debug)]
-pub struct TrainingSet{
-    learning_rate: f64,
-    momentum: f64,
-    epochs: u32,
-    configuration: Vec<LayerConfiguration>
 }

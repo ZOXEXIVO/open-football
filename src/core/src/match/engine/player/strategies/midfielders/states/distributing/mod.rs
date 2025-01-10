@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
@@ -8,10 +6,6 @@ use crate::r#match::{
     StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static _MIDFIELDER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_distributing_data.json")));
 
 #[derive(Default)]
 pub struct MidfielderDistributingState {}
@@ -69,7 +63,9 @@ impl MidfielderDistributingState {
                 .max_by(|a, b| {
                     let space_a = self.calculate_space_around_player(ctx, a);
                     let space_b = self.calculate_space_around_player(ctx, b);
-                    space_a.partial_cmp(&space_b).unwrap_or(std::cmp::Ordering::Equal)
+                    space_a
+                        .partial_cmp(&space_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .cloned();
 

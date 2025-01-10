@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
@@ -9,10 +7,6 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::Rng;
-use std::sync::LazyLock;
-
-static _DEFENDER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a sliding tackle (in meters)
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
