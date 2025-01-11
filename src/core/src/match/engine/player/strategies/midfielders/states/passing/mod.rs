@@ -11,26 +11,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-use crate::shared::{DEFAULT_NEURAL_BACKEND, DEFAULT_NEURAL_DEVICE};
-use burn::backend::NdArray;
-use burn::module::Module;
+use crate::shared::{DEFAULT_NEURAL_DEVICE};
 use burn::prelude::Tensor;
-use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
-use std::sync::LazyLock;
-
-// static MODEL_BYTES: &[u8] = include_bytes!("neural/model.bin");
-// static MIDFIELDER_PASSING_NEURAL_NETWORK: LazyLock<
-//     MidfielderPassingNeural<DEFAULT_NEURAL_BACKEND>,
-// > = LazyLock::new(|| {
-//     let record = BinBytesRecorder::<FullPrecisionSettings>::default()
-//         .load(MODEL_BYTES.to_vec(), &DEFAULT_NEURAL_DEVICE)
-//         .expect("Should be able to load model the model weights from bytes");
-//
-//     let model: MidfielderPassingNeural<NdArray> =
-//         MidfielderPassingNeuralConfig::init(&DEFAULT_NEURAL_DEVICE);
-//
-//     return model.load_record(record);
-// });
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
@@ -45,17 +27,17 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        // let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);
-        // let result = MIDFIELDER_PASSING_NEURAL_NETWORK.forward(tensor);
-        //
-        // let tensor_data_string = result
-        //     .to_data()
-        //     .iter()
-        //     .map(|x: f32| format!("{:.4}", x))
-        //     .collect::<Vec<String>>()
-        //     .join(", ");
-        //
-        // println!("### {}", tensor_data_string);
+        let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);
+        let result = MIDFIELDER_PASSING_NEURAL_NETWORK.forward(tensor);
+
+        let tensor_data_string = result
+            .to_data()
+            .iter()
+            .map(|x: f32| format!("{:.4}", x))
+            .collect::<Vec<String>>()
+            .join(", ");
+
+        println!("### {}", tensor_data_string);
 
         // Determine the best teammate to pass to
         if let Some(target_teammate) = self.find_best_pass_option(ctx) {

@@ -2,7 +2,6 @@
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use core::person::Person;
 use core::player::Player;
 use core::player::PlayerStatusType;
 use core::utils::FormattingUtils;

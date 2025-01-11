@@ -1,8 +1,24 @@
+use burn::config::Config;
 use burn::nn::Initializer;
 use burn::nn::{Linear, LinearConfig, Relu};
-use burn::prelude::*;
+use std::sync::{LazyLock};
 
-use burn::prelude::Module;
+use crate::shared::{DefaultNeuralBackend, DEFAULT_NEURAL_DEVICE};
+use burn::prelude::{Backend, Module};
+use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
+use burn::tensor::Tensor;
+
+static MODEL_BYTES: &[u8] = include_bytes!("model.bin");
+
+pub static MIDFIELDER_PASSING_NEURAL_NETWORK: LazyLock<
+    MidfielderPassingNeural<DefaultNeuralBackend>,
+> = LazyLock::new(|| {
+    let record = BinBytesRecorder::<FullPrecisionSettings>::default()
+        .load(MODEL_BYTES.to_vec(), &DEFAULT_NEURAL_DEVICE)
+        .expect("Should be able to load model the model weights from bytes");
+
+    MidfielderPassingNeuralConfig::init(&DEFAULT_NEURAL_DEVICE).load_record(record)
+});
 
 #[derive(Module, Debug)]
 pub struct MidfielderPassingNeural<B: Backend> {
@@ -52,7 +68,7 @@ impl MidfielderPassingNeuralConfig {
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            activation: Relu::new().to_owned()
+            activation: Relu::new().to_owned(),
         }
     }
 }
