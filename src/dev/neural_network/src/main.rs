@@ -1,4 +1,3 @@
-use core::r#match::midfielders::states::MidfielderPassingNeural;
 use std::path::PathBuf;
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
@@ -14,7 +13,7 @@ use burn::record::{BinFileRecorder, CompactRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use burn::train::metric::LossMetric;
-use core::r#match::midfielders::states::MidfielderPassingNeuralConfig;
+use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 
 type NeuralNetworkDevice = NdArrayDevice;
 type NeuralNetworkBackend = NdArray;

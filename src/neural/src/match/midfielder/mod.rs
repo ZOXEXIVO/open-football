@@ -1,9 +1,9 @@
 use burn::config::Config;
 use burn::nn::Initializer;
 use burn::nn::{Linear, LinearConfig, Relu};
-use std::sync::{LazyLock};
+use std::sync::LazyLock;
 
-use crate::shared::{DefaultNeuralBackend, DEFAULT_NEURAL_DEVICE};
+use crate::{DefaultNeuralBackend, DEFAULT_NEURAL_DEVICE};
 use burn::prelude::{Backend, Module};
 use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
 use burn::tensor::Tensor;
@@ -29,6 +29,8 @@ pub struct MidfielderPassingNeural<B: Backend> {
 
     activation: Relu,
 }
+
+unsafe impl<B> Sync for MidfielderPassingNeural<B> where B: Backend {}
 
 impl<B: Backend> MidfielderPassingNeural<B> {
     pub fn forward(&self, input: Tensor<B, 2>) -> Tensor<B, 2> {

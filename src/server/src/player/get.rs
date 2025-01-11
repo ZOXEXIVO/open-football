@@ -9,6 +9,7 @@ use core::SimulatorData;
 use core::Team;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use core::Person;
 
 #[derive(Deserialize)]
 pub struct PlayerGetRequest {

@@ -972,11 +972,11 @@ checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 name = "core"
 version = "1.0.0"
 dependencies = [
- "burn",
  "chrono",
  "itertools 0.14.0",
  "log",
  "nalgebra",
+ "neural",
  "rand",
  "rayon",
  "serde",
@@ -2971,6 +2971,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c196769dd60fd4f363e11d948139556a344e79d451aeb2fa2fd040738ef7691"
 dependencies = [
  "jni-sys",
+]
+
+[[package]]
+name = "neural"
+version = "0.1.0"
+dependencies = [
+ "burn",
 ]
 
 [[package]]

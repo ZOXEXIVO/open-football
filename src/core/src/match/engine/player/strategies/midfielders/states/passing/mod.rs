@@ -1,7 +1,3 @@
-pub mod neural;
-
-pub use neural::*;
-
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
@@ -10,9 +6,7 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-
-use crate::shared::{DEFAULT_NEURAL_DEVICE};
-use burn::prelude::Tensor;
+use neural::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
