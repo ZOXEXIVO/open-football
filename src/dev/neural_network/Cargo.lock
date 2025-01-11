@@ -857,6 +857,7 @@ dependencies = [
  "itertools 0.14.0",
  "log",
  "nalgebra",
+ "once_cell",
  "rand",
  "rayon",
  "serde",
