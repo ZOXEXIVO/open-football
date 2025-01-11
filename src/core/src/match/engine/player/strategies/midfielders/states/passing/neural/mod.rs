@@ -26,14 +26,14 @@ impl<B: Backend> MidfielderPassingNeural<B> {
 }
 
 #[derive(Debug, Config)]
-pub struct MyBinaryNetConfig {
+pub struct MidfielderPassingNeuralConfig {
     linear_a: LinearConfig,
     linear_b: LinearConfig,
     linear_c: LinearConfig,
     linear_d: LinearConfig,
 }
 
-impl MyBinaryNetConfig {
+impl MidfielderPassingNeuralConfig {
     pub fn init<B: Backend>(device: &B::Device) -> MidfielderPassingNeural<B> {
         MidfielderPassingNeural {
             linear_a: LinearConfig::new(2, 4)

@@ -70,7 +70,7 @@ impl StateProcessingHandler for MidfielderPassingState {
 impl MidfielderPassingState {
     fn find_best_pass_option<'a>(
         &self,
-        ctx: &StateProcessingContext<'a>,
+        _ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
         // TODO
 
