@@ -91,14 +91,14 @@ pub struct TrainingConfig {
 }
 
 #[derive(Debug, Clone)]
-struct BinaryDataBatcher {
-    device: NeuralNetworkDevice,
+struct BinaryDataBatcher<B: Backend> {
+    device: B::Device,
 }
 
-impl BinaryDataBatcher {
-    pub fn new(device: NeuralNetworkDevice) -> Self {
+impl<B: Backend> BinaryDataBatcher<B> {
+    pub fn new(device: B::Device) -> Self {
         BinaryDataBatcher {
-            device: device.clone(),
+            device: device.clone()
         }
     }
 }
@@ -111,9 +111,9 @@ pub struct TrainingBatch<B: Backend> {
 
 type BatcherItem = (f64, f64, f64);
 
-impl Batcher<BatcherItem, TrainingBatch<NeuralNetworkBackend>> for BinaryDataBatcher {
-    fn batch(&self, items: Vec<BatcherItem>) -> TrainingBatch<NeuralNetworkBackend> {
-        let mut inputs: Vec<Tensor<NeuralNetworkBackend, 2>> = Vec::new();
+impl<B: Backend> Batcher<BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
+    fn batch(&self, items: Vec<BatcherItem>) -> TrainingBatch<B> {
+        let mut inputs: Vec<Tensor<B, 2>> = Vec::new();
 
         for item in items.iter() {
             inputs.push(Tensor::from_floats([[item.0, item.1]], &self.device))
@@ -123,7 +123,7 @@ impl Batcher<BatcherItem, TrainingBatch<NeuralNetworkBackend>> for BinaryDataBat
 
         let targets = items
             .iter()
-            .map(|item| Tensor::<NeuralNetworkBackend, 1>::from_floats([item.2], &self.device))
+            .map(|item| Tensor::<B, 1>::from_floats([item.2], &self.device))
             .collect();
 
         let targets = Tensor::cat(targets, 0);
@@ -155,7 +155,7 @@ pub fn train<B: AutodiffBackend>(
     config: TrainingConfig,
     training_data: Vec<(f64, f64, f64)>,
     device: B::Device
-) -> NeuralNetworkAutoDiff {
+) -> NeuralNetwork<B> {
     create_artifact_dir(artifact_dir);
 
     config
