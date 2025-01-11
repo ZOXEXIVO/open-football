@@ -1,26 +1,17 @@
-use std::sync::LazyLock;
-
 use nalgebra::Vector3;
 
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, VectorExtensions,
+    StateProcessingHandler,
 };
 
-static DEFENDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
-
-const INTERCEPTION_DISTANCE: f32 = 100.0;
+const INTERCEPTION_DISTANCE: f32 = 200.0;
 const CLEARING_DISTANCE: f32 = 50.0;
-const TIRED_THRESHOLD: f32 = 30.0;
 const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
 const MARKING_DISTANCE: f32 = 15.0;
-const PRESSING_DISTANCE: f32 = 150.0;
-const FIELD_THIRD_THRESHOLD: f32 = 0.33; // One-third of the field width
+const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
 #[derive(Default)]
 pub struct DefenderStandingState {}
@@ -29,89 +20,62 @@ impl StateProcessingHandler for DefenderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
         let team_ops = ctx.team();
-        let player_ops = ctx.player();
 
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
+        } else {
+            if ctx.ball().on_own_side() {
+                if ball_ops.is_towards_player_with_angle(0.8)
+                    && ball_ops.distance() < INTERCEPTION_DISTANCE
+                {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Intercepting,
+                    ));
+                }
+
+                if !team_ops.is_control_ball() && ball_ops.distance() < 150.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+            } else {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
+        }
         if ball_ops.distance() < 200.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));
         }
 
-        if !team_ops.is_control_ball() {
-            if ball_ops.is_towards_player_with_angle(0.8) && ball_ops.distance() < 250.0 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting,
-                ));
-            }
+        if self.should_push_up(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::PushingUp,
+            ));
         }
 
-        if ball_ops.on_own_side() {
-            // Ball is on the defender's side
-            if ball_ops.is_towards_player() && !ctx.team().is_control_ball() {
-                if ball_ops.distance() < INTERCEPTION_DISTANCE {
-                    // Move to intercept only if ball is moving slowly or player is close
-                    if ball_ops.speed() < 20.0 || player_ops.distance_from_start_position() < 10.0 {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Intercepting,
-                        ));
-                    }
-                }
-
-                // Track back if far from position and ball moving fast
-                if player_ops.distance_from_start_position() > 20.0 && ball_ops.speed() > 20.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::TrackingBack,
-                    ));
-                }
-            } else {
-                // Ball is not towards the player
-                if let Some(opponent) = ctx.players().opponents().nearby(PRESSING_DISTANCE).next() {
-                    if opponent.has_ball(ctx)
-                        && opponent.position.distance_to(&ctx.player.position) < PRESSING_DISTANCE
-                    {
-                        // Only press if opponent has ball and is very close
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Pressing,
-                        ));
-                    } else if opponent.position.distance_to(&ctx.player.position) < MARKING_DISTANCE
-                    {
-                        // Mark nearby opponents
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Marking,
-                        ));
-                    }
-                }
-            }
-        }
-        // Ball is on the attacking side
-        else {
-            // Implement more sophisticated behavior when the ball is on the attacking side
-            if self.should_push_up(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::PushingUp,
-                ));
-            }
-
-            if self.should_hold_defensive_line(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
-            }
-
-            if self.should_cover_space(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Covering,
-                ));
-            }
-
-            // Walk or hold line more readily on attacking side
-            if self.should_transition_to_walking(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Walking,
-                ));
-            }
+        if self.should_hold_defensive_line(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::HoldingLine,
+            ));
         }
 
+        if self.should_cover_space(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Covering,
+            ));
+        }
+
+        // Walk or hold line more readily on attacking side
+        if self.should_transition_to_walking(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Walking,
+            ));
+        }
         if ctx.in_state_time > 100 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Walking,

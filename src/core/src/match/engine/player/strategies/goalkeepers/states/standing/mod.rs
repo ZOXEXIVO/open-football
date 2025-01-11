@@ -1,18 +1,11 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
 const DANGER_ZONE_RADIUS: f32 = 30.0;
-const REACTION_TIME_THRESHOLD: u64 = 1000; // in milliseconds
 const OPTIMAL_DISTANCE_FROM_GOAL: f32 = 200.0; //
 
 #[derive(Default)]

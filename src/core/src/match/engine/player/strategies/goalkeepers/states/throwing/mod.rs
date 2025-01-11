@@ -1,19 +1,12 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_THROWING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_throwing_data.json")));
 
 const THROW_DISTANCE_THRESHOLD: f32 = 30.0; // Minimum distance to consider for throwing
-const THROW_POWER_MULTIPLIER: f32 = 10.0; // Multiplier for throw power calculation
 
 #[derive(Default)]
 pub struct GoalkeeperThrowingState {}
@@ -49,8 +42,9 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
             let mut events = EventCollection::new();
 
             events.add_player_event(PlayerEvent::PassTo(
-                PassingEventModel::build()
-                    .with_player_id(ctx.player.id)
+                PassingEventContext::build()
+                    .with_from_player_id(ctx.player.id)
+                    .with_to_player_id(teammate.id)
                     .with_target(teammate.position)
                     .with_force(ctx.player().throw_teammate_power(teammate.id))
                     .build()

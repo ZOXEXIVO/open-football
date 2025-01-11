@@ -1,14 +1,8 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static MIDFIELDER_RESTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_resting_data.json")));
 
 const STAMINA_RECOVERY_THRESHOLD: f32 = 90.0;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;

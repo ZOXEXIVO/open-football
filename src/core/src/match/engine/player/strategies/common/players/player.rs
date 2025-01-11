@@ -1,4 +1,3 @@
-use log::debug;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -7,6 +6,9 @@ use crate::r#match::{
 use crate::PlayerSkills;
 use nalgebra::Vector3;
 use rand::Rng;
+
+const SEPARATION_RADIUS: f32 = 10.0;
+const SEPARATION_STRENGTH: f32 = 10.0;
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -42,12 +44,8 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn on_own_side(&self) -> bool {
         let field_half_width = self.ctx.context.field_size.width / 2;
 
-        if let Some(side) = self.ctx.player.side {
-            return side == PlayerSide::Left
-                && self.ctx.player.position.x < field_half_width as f32;
-        }
-
-        false
+        self.ctx.player.side == Some(PlayerSide::Left)
+            && self.ctx.player.position.x < field_half_width as f32
     }
 
     pub fn opponent_goal_position(&self) -> Vector3<f32> {
@@ -80,15 +78,15 @@ impl<'p> PlayerOperationsImpl<'p> {
             .distances
             .get(self.ctx.player.id, teammate_id);
 
-        let pass_skill = self.ctx.player.skills.technical.passing;
+        let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
 
         let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.6;
         let distance_factor = (distance / max_pass_distance).clamp(0.0, 1.0);
 
         let min_power = 0.5;
         let max_power = 2.5;
-        let skill_factor = pass_skill / 20.0;
-        let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
+
+        let base_power = min_power + (max_power - min_power) * pass_skill * distance_factor;
 
         let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 
@@ -197,12 +195,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let direction_to_goal = (goal_position - player_position).normalize();
 
         // Check if the distance to the goal is within the player's shooting range
-        let distance_to_goal = (goal_position - player_position).magnitude();
-        let max_shooting_distance = calculate_max_shooting_distance(self.ctx.player);
-
-        if distance_to_goal > max_shooting_distance {
-            return false;
-        }
+        let distance_to_goal = self.ctx.player().goal_distance();
 
         // Check if there are any opponents obstructing the shot
         let ray_cast_result = self.ctx.tick_context.space.cast_ray(
@@ -212,31 +205,29 @@ impl<'p> PlayerOperationsImpl<'p> {
             false,
         );
 
-        return ray_cast_result.is_none();
+        ray_cast_result.is_none()
+    }
 
-        fn calculate_max_shooting_distance(player: &MatchPlayer) -> f32 {
-            let long_shots_skill = player.skills.technical.long_shots;
-            let technique_skill = player.skills.technical.technique;
-            let strength_skill = player.skills.physical.strength;
+    pub fn separation_velocity(&self) -> Vector3<f32> {
+        let players = self.ctx.players();
+        let teammates = players.teammates();
 
-            // Calculate the base maximum shooting distance
-            let base_distance = 350.0;
+        let mut separation = Vector3::zeros();
 
-            // Calculate the additional distance based on long shots skill
-            let long_shots_factor = long_shots_skill / 20.0;
-            let long_shots_distance = base_distance * long_shots_factor * 0.5;
+        for other_player in teammates.nearby(SEPARATION_RADIUS) {
+            let to_other = other_player.position - self.ctx.player.position;
+            let distance = to_other.magnitude();
 
-            // Calculate the additional distance based on technique skill
-            let technique_factor = technique_skill / 20.0;
-            let technique_distance = base_distance * technique_factor * 0.3;
+            if distance > 0.0 && distance < SEPARATION_RADIUS {
+                let direction = to_other.normalize();
+                let perpendicular_velocity = Vector3::new(-direction.y, -direction.x, 0.0);
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
 
-            // Calculate the additional distance based on strength skill
-            let strength_factor = strength_skill / 20.0;
-            let strength_distance = base_distance * strength_factor * 0.2;
-
-            // Calculate the total maximum shooting distance
-            base_distance + long_shots_distance + technique_distance + strength_distance
+                separation += perpendicular_velocity * strength;
+            }
         }
+
+        separation
     }
 }
 

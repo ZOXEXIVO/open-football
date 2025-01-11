@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::strategies::processor::StateChangeResult;
 use crate::r#match::{
@@ -8,10 +6,6 @@ use crate::r#match::{
 };
 use crate::IntegerUtils;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
 
 #[derive(Default)]
 pub struct GoalkeeperWalkingState {}
@@ -24,17 +18,13 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
+        if ctx.ball().on_own_side() {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Attentive,
             ));
         }
 
-        if ctx.ball().distance() < 150.0 {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::PreparingForSave,
-            ));
-        } else if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < 250.0 {
+        if ctx.ball().is_towards_player_with_angle(0.9) && ctx.ball().distance() < 250.0 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::PreparingForSave,
             ));
@@ -46,7 +36,6 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ));
         }
 
-        // Check if the goalkeeper is out of position
         if self.is_out_of_position(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
@@ -113,22 +102,6 @@ impl GoalkeeperWalkingState {
             && goalkeeper_skills.physical.acceleration > 10.0
     }
 
-    fn calculate_target_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let optimal_position = self.calculate_optimal_position(ctx);
-
-        // Use in_state_time to determine wandering behavior
-        let wander_period = 3000; // 3 seconds
-        let wander_phase = (ctx.in_state_time % wander_period) as f32 / wander_period as f32;
-
-        if wander_phase < 0.8 {
-            // 80% of the time, move towards optimal position
-            optimal_position
-        } else {
-            // 20% of the time, apply a small random offset for wandering
-            self.apply_wander_offset(optimal_position, ctx)
-        }
-    }
-
     fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let goal_position = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -190,37 +163,5 @@ impl GoalkeeperWalkingState {
             .clamp(goal_position.z, goal_position.z + penalty_area_depth);
 
         limited_position
-    }
-
-    fn apply_wander_offset(
-        &self,
-        position: Vector3<f32>,
-        ctx: &StateProcessingContext,
-    ) -> Vector3<f32> {
-        let (offset_x, offset_z) = self.generate_pseudo_random_offset(ctx.in_state_time);
-
-        Vector3::new(
-            position.x + offset_x,
-            position.y, // Keep y-coordinate unchanged
-            position.z + offset_z,
-        )
-    }
-
-    fn generate_pseudo_random_offset(&self, time: u64) -> (f32, f32) {
-        // Simple hash function to generate deterministic pseudo-random values
-        let hash = self.simple_hash(time);
-
-        // Generate two pseudo-random floats between -2.0 and 2.0
-        let x = (hash as f32 / u32::MAX as f32) * 4.0 - 2.0;
-        let z = ((hash >> 16) as f32 / u16::MAX as f32) * 4.0 - 2.0;
-
-        (x, z)
-    }
-
-    fn simple_hash(&self, mut x: u64) -> u32 {
-        x = ((x >> 16) ^ x) * 0x45d9f3b;
-        x = ((x >> 16) ^ x) * 0x45d9f3b;
-        x = (x >> 16) ^ x;
-        x as u32
     }
 }

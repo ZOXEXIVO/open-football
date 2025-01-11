@@ -1,89 +1,211 @@
-use std::io::Write;
-use std::sync::Mutex;
-use crate::net::{ActivationFunction, NeuralNetwork};
-use crate::train::Trainer;
-use rayon::prelude::*;
+use std::path::PathBuf;
+use burn::backend::ndarray::NdArrayDevice;
+use burn::backend::{Autodiff, NdArray};
+use burn::config::Config;
+use burn::data::dataloader::batcher::Batcher;
+use burn::data::dataloader::DataLoaderBuilder;
+use burn::data::dataset::InMemDataset;
+use burn::nn::loss::MseLoss;
+use burn::nn::loss::Reduction::Mean;
+use burn::optim::AdamConfig;
+use burn::prelude::{Backend, Module, Tensor};
+use burn::record::{BinFileRecorder, CompactRecorder, FullPrecisionSettings};
+use burn::tensor::backend::AutodiffBackend;
+use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
+use burn::train::metric::LossMetric;
+use nn::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 
-mod net;
-mod train;
+type NeuralNetworkDevice = NdArrayDevice;
+type NeuralNetworkBackend = NdArray;
+type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
-fn train(configuration: &[u32], epochs: u32, learning_rate: f64, momentum: f64) -> f64 {
-    let training_data = [
-        (vec![211f64, 12f64, 12f64], vec![0f64, 0f64, 0f64, 0f64, 1f64,0f64]),
-        (vec![12f64, 12f64, 12f64, 12f64], vec![0f64, 0f64, 0f64, 0f64, 0f64,0f64]),
-        (vec![2f64, 1211f64, 12f64, 12f64], vec![0f64, 0f64, 0f64, 1f64, 0f64,0f64]),
-        (vec![1f64, 1f64, 12f64, 12f64], vec![1f64, 0f64, 0f64, 0f64, 0f64,0f64]),
-        (vec![212f64, 11f64, 12f64, 12f64], vec![0f64, 0f64, 0f64, 1f64, 0f64,0f64]),
-        (vec![1f64, 1f64, 12f64, 12f64], vec![0f64, 2f64, 0f64, 0f64, 0f64,0f64]),
-        (vec![11f64, 1211f64, 12f64, 12f64], vec![0f64, 0f64, 0f64, 1f64, 0f64,0f64]),
-        (vec![13f64, 1f64, 154f64, 122f64], vec![1f64, 0f64, 0f64, 0f64, 0f64,0f64]),
-        (vec![212f64, 211f64, 124f64, 122f64], vec![0f64, 0f64, 0f64, 0f64, 1f64,0f64]),
-        (vec![1f64, 12f64, 122f64, 112f64], vec![0f64, 0f64, 0f64, 0f64, 0f64,1f64])
-    ];
-
-    let mut net = NeuralNetwork::new(&configuration, ActivationFunction::Relu);
-
-    net.train(&training_data, learning_rate, momentum, epochs)
-}
+type NeuralNetwork<B> = MidfielderPassingNeural<B>;
+type NeuralNetworkConfig = MidfielderPassingNeuralConfig;
+type NeuralNetworkAutoDiff = MidfielderPassingNeural<NeuralNetworkAutodiffBackend>;
 
 fn main() {
-    let mut net_configurations = Vec::new();
+    let device = NeuralNetworkDevice::default();
 
-    let max_length = 2u32;
+    let training_data = vec![
+        (0f64, 0f64, 1f64),
+        (1f64, 0f64, 0f64),
+        (0f64, 1f64, 0f64),
+        (1f64, 1f64, 0f64),
+    ];
+    
+    let model: NeuralNetworkAutoDiff = train::<NeuralNetworkAutodiffBackend>(
+        "artifacts",
+        TrainingConfig {
+            num_epochs: 3000,
+            learning_rate: 1e-2,
+            momentum: 1e-2,
+            seed: 43,
+            batch_size: 1,
+        },
+        training_data.clone(),
+        device,
+    );
 
-    for momentum in &[0.1f64, 0.15f64, 0.2f64] {
-        for rate in &[0.01] {
-            for epochs in &[100000] {
-                for first in 0..max_length {
-                    for second in 0..max_length {
-                        for third in 0..max_length {
-                            for fourth in 0..max_length {
-                                let mut configuration = Vec::with_capacity(5);
+    for item in training_data {
+        let tensor = Tensor::from_data([[item.0, item.1]], &device);
+        let result = model.forward(tensor);
 
-                                if first > 0 {
-                                    configuration.push(first);
-                                }
+        let tensor_data_string = result
+            .to_data()
+            .iter()
+            .map(|x: f32| format!("{:.4}", x))
+            .collect::<Vec<String>>()
+            .join(", ");
 
-                                if second > 0 {
-                                    configuration.push(second);
-                                }
+        println!(
+            "INPUT: {},{}, RESULT: {:.32}",
+            item.0, item.1, tensor_data_string
+        );
+    }
+    
+    let path = PathBuf::from_iter(["artifacts", "model.bin"]);
 
-                                if third > 0 {
-                                    configuration.push(third);
-                                }
+    let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
+    model
+        .save_file(PathBuf::from_iter(&path), &recorder)
+        .expect("Should be able to save the model");
+}
 
-                                if fourth > 0 {
-                                    configuration.push(fourth);
-                                }
+#[derive(Config)]
+pub struct TrainingConfig {
+    #[config(default = 1000)]
+    pub num_epochs: usize,
 
-                                net_configurations.push((configuration, epochs, rate, momentum));
-                            }
-                        }
-                    }
-                }
-            }
+    #[config(default = 1e-2)]
+    pub learning_rate: f64,
+
+    #[config(default = 1e-2)]
+    pub momentum: f64,
+
+    #[config(default = 42)]
+    pub seed: u64,
+
+    #[config(default = 2)]
+    pub batch_size: usize,
+}
+
+#[derive(Debug, Clone)]
+struct BinaryDataBatcher<B: Backend> {
+    device: B::Device,
+}
+
+impl<B: Backend> BinaryDataBatcher<B> {
+    pub fn new(device: B::Device) -> Self {
+        BinaryDataBatcher {
+            device: device.clone()
         }
     }
+}
 
-    let mut ratings: Mutex<Vec<(f64, Vec<u32>, (u32, f64, f64))>> = Mutex::new(Vec::new());
+#[derive(Debug, Clone)]
+pub struct TrainingBatch<B: Backend> {
+    pub inputs: Tensor<B, 2>,
+    pub targets: Tensor<B, 1>,
+}
 
-    net_configurations.par_iter().for_each(|(configuration, &epochs, &rate, &momentum)| {
-        let mut full_configuration = Vec::with_capacity(2 * configuration.len());
+type BatcherItem = (f64, f64, f64);
 
-        full_configuration.push(2);
-        full_configuration.extend(configuration);
-        full_configuration.push(1);
+impl<B: Backend> Batcher<BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
+    fn batch(&self, items: Vec<BatcherItem>) -> TrainingBatch<B> {
+        let mut inputs: Vec<Tensor<B, 2>> = Vec::new();
 
-        let error = train(&full_configuration, epochs, rate, momentum);
+        for item in items.iter() {
+            inputs.push(Tensor::from_floats([[item.0, item.1]], &self.device))
+        }
 
-        ratings.lock().unwrap().push((error, full_configuration, (epochs, rate, momentum)));
-    });
+        let inputs = Tensor::cat(inputs, 0);
 
-    let mut ratings_lock = ratings.lock().unwrap();
+        let targets = items
+            .iter()
+            .map(|item| Tensor::<B, 1>::from_floats([item.2], &self.device))
+            .collect();
 
-    ratings_lock.sort_by(|(error, _, _), (next_error, _, _)| { error.partial_cmp(next_error).unwrap() });
+        let targets = Tensor::cat(targets, 0);
 
-    for (index, (error, data, (epochs, rate, momentum))) in ratings_lock.iter().take(10).enumerate() {
-        println!("{}) {:?} - {} (epochs: {}, rate: {}, momentum: {})", index + 1, data, error, *epochs, *rate, *momentum);
+        TrainingBatch { inputs, targets }
+    }
+}
+
+fn create_artifact_dir(artifact_dir: &str) {
+    std::fs::remove_dir_all(artifact_dir).ok();
+    std::fs::create_dir_all(artifact_dir).ok();
+}
+
+impl<B: AutodiffBackend> TrainStep<TrainingBatch<B>, RegressionOutput<B>> for NeuralNetwork<B> {
+    fn step(&self, item: TrainingBatch<B>) -> TrainOutput<RegressionOutput<B>> {
+        let output = self.forward_step(item);
+
+        TrainOutput::new(self, output.loss.backward(), output)
+    }
+}
+
+impl<B: Backend> ValidStep<TrainingBatch<B>, RegressionOutput<B>> for NeuralNetwork<B> {
+    fn step(&self, item: TrainingBatch<B>) -> RegressionOutput<B> {
+        self.forward_step(item)
+    }
+}
+pub fn train<B: AutodiffBackend>(
+    artifact_dir: &str,
+    config: TrainingConfig,
+    training_data: Vec<(f64, f64, f64)>,
+    device: B::Device
+) -> NeuralNetwork<B> {
+    create_artifact_dir(artifact_dir);
+
+    config
+        .save(format!("{artifact_dir}/config.json"))
+        .expect("Config should be saved successfully");
+
+    B::seed(config.seed);
+
+    let model: NeuralNetwork<B> = NeuralNetworkConfig::init(&device);
+
+    let optimizer = AdamConfig::new().init();
+
+    let train_dataset = InMemDataset::new(training_data.clone());
+
+    let train_data = DataLoaderBuilder::new(BinaryDataBatcher::new(device.clone()))
+        .batch_size(1)
+        .build(train_dataset);
+
+    let valid_dataset = InMemDataset::new(training_data);
+
+    let valid_data = DataLoaderBuilder::new(BinaryDataBatcher::new(device.clone()))
+        .batch_size(1)
+        .build(valid_dataset);
+
+    let learner = LearnerBuilder::new(artifact_dir)
+        .metric_train_numeric(LossMetric::new())
+        .metric_valid_numeric(LossMetric::new())
+        .with_file_checkpointer(CompactRecorder::new())
+        .devices(vec![device.clone()])
+        .num_epochs(config.num_epochs)
+        .summary()
+        .build(model, optimizer, config.learning_rate);
+
+    learner.fit(train_data, valid_data)
+}
+
+trait NeuralTrait<B: Backend> {
+    fn forward_step(&self, item: TrainingBatch<B>) -> RegressionOutput<B>;
+}
+
+impl<B: Backend> NeuralTrait<B> for NeuralNetwork<B> {
+    fn forward_step(&self, item: TrainingBatch<B>) -> RegressionOutput<B> {
+        let targets: Tensor<B, 2> = item.targets.unsqueeze_dim(1);
+        let output: Tensor<B, 2> = self.forward(item.inputs);
+
+        let loss = MseLoss::new().forward(output.clone(), targets.clone(), Mean);
+
+        RegressionOutput {
+            loss,
+            output,
+            targets,
+        }
     }
 }

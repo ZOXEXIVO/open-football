@@ -70,9 +70,9 @@ impl Space {
                     closest_distance = distance;
                     closest_hit = Some(RaycastHit {
                         collider: collider.clone(),
-                        point: intersection,
-                        normal: collider.normal(intersection),
-                        distance,
+                        _point: intersection,
+                        _normal: collider.normal(intersection),
+                        _distance: distance,
                     });
                 }
             }
@@ -84,9 +84,9 @@ impl Space {
 
 pub struct RaycastHit<T: Collider> {
     pub collider: T,
-    point: Vector3<f32>,
-    normal: Vector3<f32>,
-    distance: f32,
+    _point: Vector3<f32>,
+    _normal: Vector3<f32>,
+    _distance: f32,
 }
 
 pub trait Collider: Clone {

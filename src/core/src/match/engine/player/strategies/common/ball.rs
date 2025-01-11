@@ -101,53 +101,7 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     pub fn direction_to_opponent_goal(&self) -> Vector3<f32> {
-        let player_position = self.ctx.player.position;
-        let ball_position = self.ctx.tick_context.positions.ball.position;
-        let opponent_goal_position = self.ctx.player().opponent_goal_position();
-
-        return opponent_goal_position;
-
-        let players = self.ctx.players();
-        let opponents = players.opponents();
-        let mut goalkeepers = opponents.goalkeeper();
-        let goalkeeper = goalkeepers.next().unwrap();
-        let goalkeeper_position = goalkeeper.position;
-
-        // Calculate the direction from the ball to the opponent's goal
-        let ball_to_goal = opponent_goal_position - ball_position;
-
-        // Calculate the direction from the ball to the goalkeeper
-        let ball_to_goalkeeper = goalkeeper_position - ball_position;
-
-        // Calculate the perpendicular direction to the goalkeeper
-        let perpendicular_direction =
-            Vector3::new(-ball_to_goalkeeper.y, ball_to_goalkeeper.x, 0.0);
-
-        // Normalize the perpendicular direction
-        let perpendicular_direction = perpendicular_direction.normalize();
-
-        // Calculate the target position by offsetting from the goal center
-        let goal_width = self.ctx.context.field_size.width as f32;
-        let offset_distance = goal_width * 0.2; // Adjust the offset distance as needed
-        let target_position = if player_position.x < ball_position.x {
-            opponent_goal_position + perpendicular_direction * offset_distance
-        } else {
-            opponent_goal_position - perpendicular_direction * offset_distance
-        };
-
-        // Calculate the direction from the ball to the target position
-        let ball_to_target = target_position - ball_position;
-
-        // Normalize the direction vector
-        let direction = ball_to_target.normalize();
-
-        // Add some randomness to the direction based on the player's finishing skill
-        let finishing_skill = self.ctx.player.skills.technical.finishing;
-        let random_angle = (rand::random::<f32>() - 0.5) * finishing_skill.to_radians();
-        let rotation_matrix = nalgebra::Rotation2::new(random_angle);
-        let randomized_direction = rotation_matrix * direction.xy();
-
-        Vector3::new(randomized_direction.x, randomized_direction.y, 0.0)
+        self.ctx.player().opponent_goal_position()
     }
 
     pub fn distance_to_opponent_goal(&self) -> f32 {

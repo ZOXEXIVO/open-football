@@ -1,17 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::Rng;
-use std::sync::LazyLock;
 
-static MIDFIELDER_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
-
-const PASSING_DISTANCE_THRESHOLD: f32 = 30.0; // Adjust as needed
 const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Adjust as needed
 
 #[derive(Default)]
@@ -31,34 +23,35 @@ impl StateProcessingHandler for MidfielderStandingState {
                 ))
             };
         }
-
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
         else {
-            if ctx.ball().distance() < 150.0 {
+            if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Tackling,
+                    MidfielderState::Running,
                 ));
             }
+            else {
 
-            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
+                if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
+                    // Transition to Tackling state to try and win the ball
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
 
-            if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-                // Transition to Tackling state to try and win the ball
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
+                if ctx.ball().distance() < 100.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Tackling,
+                    ));
+                }
+
+                if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Intercepting,
+                    ));
+                }
             }
         }
 
-        // 3. Check if an opponent is nearby and pressing is needed
         if self.is_opponent_nearby(ctx) {
             // Transition to Pressing state to apply pressure
             return Some(StateChangeResult::with_midfielder_state(
@@ -97,27 +90,11 @@ impl MidfielderStandingState {
         !self.has_passing_options(ctx)
     }
 
-    fn calculate_movement_probability(
-        &self,
-        rng: &mut impl Rng,
-        ctx: &StateProcessingContext,
-    ) -> bool {
-        let positioning_probability = (ctx.player.skills.mental.positioning as f64) / 20.0;
-        let concentration_probability = (ctx.player.skills.mental.concentration as f64) / 20.0;
-
-        let positioning_roll = rng.gen_range(0.0..1.0);
-        let concentration_roll = rng.gen_range(0.0..1.0);
-
-        positioning_roll < positioning_probability && concentration_roll < concentration_probability
-    }
-
     /// Determines if the midfielder has passing options.
     fn has_passing_options(&self, ctx: &StateProcessingContext) -> bool {
         const PASSING_DISTANCE_THRESHOLD: f32 = 30.0;
         ctx.players().teammates().exists(PASSING_DISTANCE_THRESHOLD)
     }
-
-    const PRESSING_DISTANCE_THRESHOLD: f32 = 10.0;
 
     /// Checks if an opponent player is nearby within the pressing threshold.
     fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {

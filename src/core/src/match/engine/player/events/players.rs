@@ -1,9 +1,8 @@
 use crate::r#match::events::Event;
-use crate::r#match::player::events::{PassingEventModel, ShootingEventModel};
-use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField};
-use log::{debug, info};
+use log::{debug};
 use nalgebra::Vector3;
 
 #[derive(Debug)]
@@ -13,10 +12,10 @@ pub enum PlayerEvent {
     BallCollision(u32),
     TacklingBall(u32),
     BallOwnerChange(u32),
-    PassTo(PassingEventModel),
+    PassTo(PassingEventContext),
     ClearBall(Vector3<f32>),
     RushOut(u32),
-    Shoot(ShootingEventModel),
+    Shoot(ShootingEventContext),
     MovePlayer(u32, Vector3<f32>),
     StayInGoal(u32),
     MoveBall(u32, Vector3<f32>),
@@ -134,7 +133,7 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = Some(player_id);
     }
 
-    fn handle_pass_to_event(event_model: PassingEventModel, field: &mut MatchField) {
+    fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
         let ball_pass_vector = event_model.pass_target - field.ball.position;
         let direction = ball_pass_vector.normalize();
         let pass_force = event_model.pass_force;
@@ -167,9 +166,11 @@ impl PlayerEventDispatcher {
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+
+        field.ball.flags.in_passing_state_time = 30;
     }
 
-    fn handle_shoot_event(shoot_event_model: ShootingEventModel, field: &mut MatchField) {
+    fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
         let ball_pass_vector = shoot_event_model.target - field.ball.position;
         let direction = ball_pass_vector.normalize();
 
@@ -186,6 +187,7 @@ impl PlayerEventDispatcher {
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {

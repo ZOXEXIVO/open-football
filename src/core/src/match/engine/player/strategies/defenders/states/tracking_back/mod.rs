@@ -1,20 +1,12 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, MATCH_HALF_TIME_MS,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static DEFENDER_TRACKING_BACK_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tracking_back_data.json")));
 
 const CLOSE_TO_START_DISTANCE: f32 = 10.0;
 const BALL_INTERCEPTION_DISTANCE: f32 = 30.0;
-const MARKING_DISTANCE: f32 = 20.0;
-const CRITICAL_TIME_REMAINING: f32 = 300.0; // 5 minutes
 
 #[derive(Default)]
 pub struct DefenderTrackingBackState {}

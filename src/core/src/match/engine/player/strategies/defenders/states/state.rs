@@ -39,11 +39,11 @@ pub struct DefenderStrategies {}
 impl DefenderStrategies {
     pub fn process(state: DefenderState, state_processor: StateProcessor) -> StateProcessingResult {
         // let common_state = state_processor.process(DefenderCommonState::default());
-        // 
+        //
         // if common_state.state.is_some() {
         //     return common_state;
         // }
-        
+
         match state {
             DefenderState::Standing => state_processor.process(DefenderStandingState::default()),
             DefenderState::Resting => state_processor.process(DefenderRestingState::default()),

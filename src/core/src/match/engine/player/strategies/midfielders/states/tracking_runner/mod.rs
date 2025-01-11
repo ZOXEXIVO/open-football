@@ -1,16 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static MIDFIELDER_TRACKING_RUNNER_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
-    DefaultNeuralNetworkLoader::load(include_str!("nn_tracking_runner_data.json"))
-});
 
 const TRACKING_DISTANCE_THRESHOLD: f32 = 10.0; // Maximum distance to track the runner
 const STAMINA_THRESHOLD: f32 = 50.0; // Minimum stamina required to continue tracking

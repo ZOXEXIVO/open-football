@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -9,15 +7,10 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::Rng;
-use std::sync::LazyLock;
-
-static GOALKEEPER_TACKLING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_tackling_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a tackle (in meters)
 const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.7; // Base chance of successful tackle for goalkeeper
 const FOUL_CHANCE_BASE: f32 = 0.1; // Base chance of committing a foul for goalkeeper
-const STAMINA_THRESHOLD: f32 = 30.0; // Minimum stamina to attempt a tackle
 
 #[derive(Default)]
 pub struct GoalkeeperTacklingState {}
@@ -123,9 +116,9 @@ impl GoalkeeperTacklingState {
         let mut rng = rand::thread_rng();
 
         // Get goalkeeper's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 100.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression as f32 / 100.0;
-        let composure = ctx.player.skills.mental.composure as f32 / 100.0;
+        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0; // Normalize to [0,1]
+        let aggression = ctx.player.skills.mental.aggression as f32 / 20.0;
+        let composure = ctx.player.skills.mental.composure as f32 / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 

@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Dev:Neural" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="buildProfileId" value="release" />
+    <option name="buildProfileId" value="dev" />
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$/src/dev/neural_network" />
     <envs />
@@ -10,7 +10,7 @@
     <option name="allFeatures" value="false" />
     <option name="withSudo" value="false" />
     <option name="buildTarget" value="REMOTE" />
-    <option name="backtrace" value="SHORT" />
+    <option name="backtrace" value="FULL" />
     <option name="isRedirectInput" value="false" />
     <option name="redirectInputPath" value="" />
     <method v="2">

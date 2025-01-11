@@ -1,18 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
-};
+use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 use rand::Rng;
-use std::sync::LazyLock;
-
-static DEFENDER_INTERCEPTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_intercepting_data.json")));
 
 #[derive(Default)]
 pub struct DefenderInterceptingState {}
@@ -25,16 +16,14 @@ impl StateProcessingHandler for DefenderInterceptingState {
             ));
         }
 
-        if ctx.team().is_control_ball() {
+        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,
             ));
         }
 
-        let ball_ops = ctx.ball();
 
-        let ball_distance = ball_ops.distance();
-        if ball_distance < 15.0 {
+        if ctx.ball().distance() < 15.0 {
             if ctx.tick_context.ball.is_owned {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
@@ -47,13 +36,30 @@ impl StateProcessingHandler for DefenderInterceptingState {
             }
         }
 
-        if ball_distance > 150.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
+        if ctx.team().is_control_ball() {
+            return if ctx.ball().on_own_side() {
+                Some(StateChangeResult::with_defender_state(
+                    DefenderState::Running,
+                ))
+            } else {
+                Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ))
+            }
+        } else {
+            if ctx.ball().on_own_side() {
+                if ctx.ball().distance() < 150.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+            } else {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
         }
 
-        // 2. Check if the defender can reach the interception point before any opponent
         if !self.can_reach_before_opponent(ctx) {
             // If not, transition to Pressing or HoldingLine state
             return Some(StateChangeResult::with_defender_state(
@@ -74,8 +80,8 @@ impl StateProcessingHandler for DefenderInterceptingState {
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 

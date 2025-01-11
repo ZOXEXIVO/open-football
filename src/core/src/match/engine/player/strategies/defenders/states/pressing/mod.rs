@@ -1,14 +1,8 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static DEFENDER_PRESSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_pressing_data.json")));
 
 const TACKLING_DISTANCE_THRESHOLD: f32 = 2.0; // Distance within which the defender can tackle
 const PRESSING_DISTANCE_THRESHOLD: f32 = 20.0; // Max distance to consider pressing
@@ -76,12 +70,11 @@ impl StateProcessingHandler for DefenderPressingState {
             let direction = (opponent.position - ctx.player.position).normalize();
             // Set speed based on player's acceleration and pace
             let speed = ctx.player.skills.physical.pace; // Use pace attribute
-            Some(direction * speed)
-        } else {
-            // No opponent with the ball found
-            // Remain stationary or move back to position
-            Some(Vector3::new(0.0, 0.0, 0.0))
-        }
+            
+            return Some(direction * speed + ctx.player().separation_velocity());
+        } 
+        
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {

@@ -1,14 +1,6 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-const KICK_POWER_MULTIPLIER: f32 = 1.5; // Multiplier for kick power calculation
-
-static FORWARD_ASSISTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_assisting_data.json")));
 
 #[derive(Default)]
 pub struct ForwardAssistingState {}
@@ -111,12 +103,7 @@ impl ForwardAssistingState {
             .map(|(id, _)| id)
     }
 
-    fn is_good_assisting_position(&self, ctx: &StateProcessingContext, teammate_id: u32) -> bool {
-        let pass_distance = ctx.player().distance_to_player(teammate_id);
-        pass_distance > 5.0 && pass_distance < 30.0
-    }
-
-    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, player_id: u32) -> bool {
+    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, _player_id: u32) -> bool {
         // TODO
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
         distance_to_goal < 20.0

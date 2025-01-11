@@ -1,22 +1,12 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
-use itertools::Itertools;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
-
-static FORWARD_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
-
-const CREATING_SPACE_THRESHOLD: f32 = 100.0; // Adjust based on your game's scale
 
 #[derive(Default)]
 pub struct ForwardRunningState {}
@@ -43,14 +33,8 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            if ctx.players().opponents().exists(50.0) {
+            if ctx.players().opponents().exists(70.0) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-            }
-
-            if distance_to_goal < SHOOTING_DISTANCE_THRESHOLD {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
             }
 
             if distance_to_goal > PASSING_DISTANCE_THRESHOLD {
@@ -71,7 +55,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.9) {
+            if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() && ctx.ball().is_towards_player_with_angle(0.85) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Intercepting,
                 ));
@@ -100,46 +84,44 @@ impl StateProcessingHandler for ForwardRunningState {
             let goal_direction = ctx.ball().direction_to_opponent_goal();
 
             let player_goal_velocity = SteeringBehavior::Arrive {
-                target: goal_direction,
+                target: goal_direction + ctx.player().separation_velocity(),
                 slowing_distance: 100.0,
             }
             .calculate(ctx.player)
             .velocity;
 
             Some(player_goal_velocity)
-        } else {
-            if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
-                let players =  ctx.players();
-                let opponents = players.opponents();
+        } else if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
+            let players =  ctx.players();
+            let opponents = players.opponents();
 
-                if let Some(goalkeeper) = opponents.goalkeeper().next() {
-                    let result = SteeringBehavior::Evade {
-                        target: goalkeeper.position,
-                    }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                   return  Some(result);
-                }
-
-                None
-            } else {
-                let slowing_distance: f32 = {
-                    if ctx.player().goal_distance() < 200.0 {
-                        100.0
-                    } else {
-                        10.0
-                    }
-                };
-                let result = SteeringBehavior::Arrive {
-                    target: ctx.tick_context.positions.ball.position,
-                    slowing_distance,
+            if let Some(goalkeeper) = opponents.goalkeeper().next() {
+                let result = SteeringBehavior::Evade {
+                    target: goalkeeper.position + ctx.player().separation_velocity(),
                 }
                 .calculate(ctx.player)
                 .velocity;
 
-                Some(result)
+               return Some(result  + ctx.player().separation_velocity());
             }
+
+            None
+        } else {
+            let slowing_distance: f32 = {
+                if ctx.player().goal_distance() < 200.0 {
+                    100.0
+                } else {
+                    10.0
+                }
+            };
+            let result = SteeringBehavior::Arrive {
+                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
+                slowing_distance,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            Some(result)
         }
     }
 
@@ -232,22 +214,6 @@ impl ForwardRunningState {
         }
     }
 
-    fn has_space_between_opponents(&self, ctx: &StateProcessingContext) -> bool {
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        let mut nearest_opponents = opponents.nearby(150.0);
-
-        if let Some(first) = nearest_opponents.next() {
-            if let Some(second) = nearest_opponents.next() {
-                return ctx.tick_context.distances.get(first.id, second.id)
-                    > CREATING_SPACE_THRESHOLD;
-            }
-        }
-
-        false
-    }
-
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {
         let player_position = ctx.player.position;
         let goal_position = ctx.ball().direction_to_opponent_goal();
@@ -263,6 +229,6 @@ impl ForwardRunningState {
     }
 
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(50.0)
+        ctx.team().is_control_ball() && ctx.players().opponents().exists(50.0)
     }
 }

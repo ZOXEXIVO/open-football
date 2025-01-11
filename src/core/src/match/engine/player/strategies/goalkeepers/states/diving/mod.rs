@@ -1,5 +1,3 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
@@ -7,10 +5,6 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_DIVING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_diving_data.json")));
 
 const DIVE_DURATION: f32 = 1.0; // Duration of dive in seconds
 const RECOVERY_TIME: f32 = 1.5; // Time to recover after dive

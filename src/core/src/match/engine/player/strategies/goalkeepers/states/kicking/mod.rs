@@ -1,16 +1,10 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_KICKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_kicking_data.json")));
 
 const KICK_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to consider for kicking
 
@@ -34,8 +28,9 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             let mut events = EventCollection::new();
 
             events.add_player_event(PlayerEvent::PassTo(
-                PassingEventModel::build()
-                    .with_player_id(ctx.player.id)
+                PassingEventContext::build()
+                    .with_from_player_id(ctx.player.id)
+                    .with_to_player_id(teammate.id)
                     .with_target(teammate.position)
                     .with_force(ctx.player().kick_teammate_power(teammate.id))
                     .build()

@@ -1,15 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior, MATCH_HALF_TIME_MS,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static DEFENDER_RETURNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_returning_data.json")));
 
 #[derive(Default)]
 pub struct DefenderReturningState {}
@@ -22,29 +16,22 @@ impl StateProcessingHandler for DefenderReturningState {
             ));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 200.0 {
+        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
+                DefenderState::Intercepting
             ));
         }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0{
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));
         }
 
         // Stay in returning state until very close to start position
-        if ctx.player().distance_from_start_position() < 2.0 {
+        if ctx.player().distance_from_start_position() < 5.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
-            ));
-        }
-
-        // Intercept if ball coming towards player and is closer than before
-        if !ctx.team().is_control_ball() && ctx.ball().is_towards_player_with_angle(0.8) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting
             ));
         }
 

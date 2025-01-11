@@ -1,15 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_CATCHING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_catching_data.json")));
 
 #[derive(Default)]
 pub struct GoalkeeperCatchingState {}
@@ -70,14 +64,5 @@ impl GoalkeeperCatchingState {
         let random_factor = rand::random::<f32>();
 
         clamped_catch_probability > random_factor
-    }
-
-    fn calculate_catch_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-
-        // Predict ball position slightly ahead of time
-        let prediction_time = 0.1; // 100ms prediction
-        ball_position + ball_velocity * prediction_time
     }
 }

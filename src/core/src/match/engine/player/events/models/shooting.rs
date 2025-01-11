@@ -1,13 +1,13 @@
 use nalgebra::Vector3;
 
 #[derive(Debug)]
-pub struct ShootingEventModel {
+pub struct ShootingEventContext {
     pub from_player_id: u32,
     pub target: Vector3<f32>,
     pub force: f64
 }
 
-impl ShootingEventModel {
+impl ShootingEventContext {
     pub fn build() -> ShootingEventBuilder{
         ShootingEventBuilder::new()
     }
@@ -49,8 +49,8 @@ impl ShootingEventBuilder {
         self
     }    
 
-    pub fn build(self) -> ShootingEventModel {
-        ShootingEventModel {
+    pub fn build(self) -> ShootingEventContext {
+        ShootingEventContext {
             from_player_id: self.from_player_id.unwrap(),
             target: self.target.unwrap(),
             force: self.force.unwrap(),

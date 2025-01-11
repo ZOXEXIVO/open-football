@@ -1,13 +1,6 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static MIDFIELDER_HOLDING_POSSESSION_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
-    DefaultNeuralNetworkLoader::load(include_str!("nn_holding_possession_data.json"))
-});
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
@@ -30,6 +23,21 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
             ));
         }
 
+        // Check if the midfielder is being pressured by opponents
+        if self.is_under_pressure(ctx) {
+            // If under pressure, decide whether to dribble or pass based on the situation
+            return if self.has_space_to_dribble(ctx) {
+                // If there is space to dribble, transition to the dribbling state
+                Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Dribbling,
+                ))
+            } else {
+                Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Passing
+                ))
+            }
+        }
+
         let players= ctx.players();
         let teammates = players.teammates();
 
@@ -40,66 +48,6 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Passing
             ));
-        }
-
-        // Check if the midfielder is being pressured by opponents
-        if self.is_under_pressure(ctx) {
-            // If under pressure, decide whether to dribble or pass based on the situation
-            if self.has_space_to_dribble(ctx) {
-                // If there is space to dribble, transition to the dribbling state
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Dribbling,
-                ));
-            } else {
-                // If there is no space to dribble, look for a quick pass
-                if ctx.players().teammates().exists(150.0) {
-                    // If there is a nearby teammate, transition to the passing state
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Passing
-                    ));
-                }
-            }
-        }
-
-        // Check if the midfielder has held possession for too long
-        if ctx.in_state_time > 200 {
-            // If holding possession for too long, decide the next action based on the situation
-            return if self.is_in_attacking_position(ctx) {
-                // If in an attacking position, transition to the shooting state
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ))
-            } else {
-                let players = ctx.players();
-                let teammates = players.teammates();
-                let forwards = teammates.forwards();
-
-                let forward_position_threshold = ctx.context.field_size.width as f32 * 0.75; // Adjust this value based on your game's field dimensions
-
-                let nearest_forward = forwards
-                    .filter(|teammate| {
-                        // Check if the teammate's position is beyond the forward position threshold
-                        teammate.position.x >= forward_position_threshold
-                    })
-                    .max_by(|a, b| {
-                        // Prioritize teammates closer to the opponent's goal
-                        let dist_a = ctx.context.field_size.width as f32 - a.position.x;
-                        let dist_b = ctx.context.field_size.width as f32 - b.position.x;
-                        dist_a.partial_cmp(&dist_b).unwrap()
-                    });
-
-                if let Some(_) = nearest_forward {
-                    // If there is a forward teammate, transition to the passing state
-                    Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Passing
-                    ))
-                } else {
-                    // If no forward teammate is available, transition to the dribbling state
-                    Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Dribbling,
-                    ))
-                }
-            }
         }
 
         // If none of the above conditions are met, continue holding possession
@@ -126,7 +74,7 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
 
 impl MidfielderHoldingPossessionState {
     pub fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().nearby_raw(30.0).count() >= 1
+        ctx.players().opponents().exists(50.0)
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
@@ -139,14 +87,6 @@ impl MidfielderHoldingPossessionState {
 
     fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players().opponents().exists(10.0)
-    }
-
-    fn is_in_attacking_position(&self, ctx: &StateProcessingContext) -> bool {
-        // Define the attacking position threshold
-        let attacking_position_threshold = ctx.context.field_size.width as f32 * 0.75; // Adjust this value based on your game's field dimensions
-
-        // Check if the player's position is beyond the attacking position threshold
-        ctx.player.position.x >= attacking_position_threshold
     }
 
     fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {

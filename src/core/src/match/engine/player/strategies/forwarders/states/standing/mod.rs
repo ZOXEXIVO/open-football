@@ -1,17 +1,10 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
 
-// Constants used in ForwardStandingState
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 16.5; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
-
-static FORWARD_STANDING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_standing_data.json")));
 
 #[derive(Default)]
 pub struct ForwardStandingState {}
@@ -103,11 +96,6 @@ impl ForwardStandingState {
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
         ctx.ball().distance() < PRESS_DISTANCE && ctx.player.has_ball(ctx)
-    }
-
-    /// Calculates the optimal attacking position for the forward.
-    fn calculate_optimal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        ctx.player().goal_position()
     }
 
     /// Calculates the distance from the forward to the opponent's goal.

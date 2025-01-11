@@ -3,7 +3,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
-use crate::stores::MatchStore;
+use crate::r#match::stores::MatchStore;
 
 #[derive(Deserialize)]
 pub struct MatchDataRequest {

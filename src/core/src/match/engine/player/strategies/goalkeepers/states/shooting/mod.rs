@@ -1,19 +1,10 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PlayerEvent, ShootingEventModel};
+use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_SHOOTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_shooting_data.json")));
-
-const SHOOTING_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to consider shooting
-const SHOT_POWER_MULTIPLIER: f32 = 1.5; // Multiplier for shot power calculation
 
 #[derive(Default)]
 pub struct GoalkeeperShootingState {}
@@ -30,7 +21,7 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         // 4. Shoot the ball towards the opponent's goal
         let mut events = EventCollection::new();
 
-        events.add_player_event(PlayerEvent::Shoot(ShootingEventModel::build()
+        events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::build()
             .with_player_id(ctx.player.id)
             .with_target(ctx.player().opponent_goal_position())
             .with_force(ctx.player().shoot_goal_power())

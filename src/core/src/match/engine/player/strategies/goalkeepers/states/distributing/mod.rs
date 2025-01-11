@@ -1,17 +1,11 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
-use std::sync::LazyLock;
-
-static GOALKEEPER_DISTRIBUTING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_distributing_data.json")));
 
 #[derive(Default)]
 pub struct GoalkeeperDistributingState {}
@@ -29,8 +23,9 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventModel::build()
-                        .with_player_id(ctx.player.id)
+                    PassingEventContext::build()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(teammate_id)
                         .with_target(ctx.tick_context.positions.players.position(teammate_id))
                         .with_force(ctx.player().pass_teammate_power(teammate_id))
                         .build()
@@ -53,26 +48,6 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 }
 
 impl GoalkeeperDistributingState {
-    fn find_best_teammate_to_distribute(&self, ctx: &StateProcessingContext) -> Option<u32> {
-        let players = ctx.players();
-
-        if let Some((teammate_id, _)) = players
-            .teammates()
-            .nearby_ids(150.0)
-            .choose(&mut rand::thread_rng())
-        {
-            return Some(teammate_id);
-        }
-
-        None
-    }
-
-    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, player_id: u32) -> bool {
-        // TODO
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        distance_to_goal < 20.0 // Adjust based on your game's scale
-    }
-
     fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<u32> {
         let players = ctx.players();
 

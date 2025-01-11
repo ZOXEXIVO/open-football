@@ -68,8 +68,6 @@ impl ResultMatchPositionData {
     }
 }
 
-const MAX_NORMALIZED_VALUE: f32 = 0.5f32;
-
 pub trait VectorExtensions {
     fn length(&self) -> f32;
     fn distance_to(&self, other: &Vector3<f32>) -> f32;

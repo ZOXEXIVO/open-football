@@ -2,7 +2,6 @@
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use core::person::Person;
 use core::player::Player;
 use core::player::PlayerStatusType;
 use core::utils::FormattingUtils;
@@ -10,6 +9,7 @@ use core::SimulatorData;
 use core::Team;
 use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use core::Person;
 
 #[derive(Deserialize)]
 pub struct PlayerGetRequest {

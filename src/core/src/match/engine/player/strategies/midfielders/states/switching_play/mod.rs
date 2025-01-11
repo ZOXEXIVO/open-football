@@ -1,20 +1,11 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::player::events::{PassingEventModel, PlayerEvent};
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static MIDFIELDER_SWITCHING_PLAY_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_switching_play_data.json")));
-
-const SWITCHING_PLAY_DISTANCE_THRESHOLD: f32 = 30.0; // Minimum distance to consider switching play
-const SWITCHING_PLAY_ANGLE_THRESHOLD: f32 = std::f32::consts::PI / 4.0; // 45 degrees
 
 #[derive(Default)]
 pub struct MidfielderSwitchingPlayState {}
@@ -33,8 +24,9 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Passing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventModel::build()
-                        .with_player_id(ctx.player.id)
+                    PassingEventContext::build()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(teammate_id)
                         .with_target(teammate_position)
                         .with_force(ctx.player().pass_teammate_power(teammate_id))
                         .build()

@@ -19,7 +19,7 @@ impl PlayerUtils {
         let ability_factor = (potential_ability - current_ability) / 20.0;
 
         let condition = player.player_attributes.condition as f32 / 100.0;
-        let fitness = player.player_attributes.fitness as f32 / 100.0;
+        let fitness = player.player_attributes.fitness as f32 / 20.0;
         let jadedness = player.player_attributes.jadedness as f32 / 100.0;
         let physical_factor = (condition + fitness - jadedness) / 3.0;
 

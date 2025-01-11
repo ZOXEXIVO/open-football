@@ -1,24 +1,15 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static FORWARD_RUNNING_IN_BEHIND_STATE_NETWORK: LazyLock<NeuralNetwork> = LazyLock::new(|| {
-    DefaultNeuralNetworkLoader::load(include_str!("nn_running_in_behind_data.json"))
-});
 
 #[derive(Default)]
 pub struct ForwardRunningInBehindState {}
 
 impl StateProcessingHandler for ForwardRunningInBehindState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let result = StateChangeResult::new();
         let ball_ops = ctx.ball();
         let player_ops = ctx.player();
 
-        // Check if the player has received the ball
         if ctx.player.has_ball(ctx) {
             // Transition to Dribbling or Shooting based on position
             return if ball_ops.distance_to_opponent_goal() < 25.0 {
@@ -55,8 +46,7 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
             ));
         }
 
-        // Continue the run
-        Some(result)
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

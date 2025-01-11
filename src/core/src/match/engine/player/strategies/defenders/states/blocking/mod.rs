@@ -1,20 +1,10 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::f32::consts::PI;
-use std::sync::LazyLock;
-
-static DEFENDER_BLOCKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_blocking_data.json")));
 
 const BLOCK_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a block (in meters)
-const BLOCK_ANGLE_THRESHOLD: f32 = PI / 6.0; // Maximum angle (30 degrees) between defender and shot/pass direction
-const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to attempt a block
-const BLOCK_SUCCESS_BASE_CHANCE: f32 = 0.5; // Base chance of successful block
 
 #[derive(Default)]
 pub struct DefenderBlockingState {}

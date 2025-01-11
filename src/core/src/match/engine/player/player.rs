@@ -121,11 +121,6 @@ impl MatchPlayer {
         }
     }
 
-    fn change_state(&mut self, state: PlayerState) {
-        self.in_state_time = 0;
-        self.state = state;
-    }
-
     fn move_to(&mut self) {
         if !self.velocity.x.is_nan() {
             self.position.x += self.velocity.x;

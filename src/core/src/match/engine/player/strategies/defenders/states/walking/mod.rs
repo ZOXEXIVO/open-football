@@ -1,14 +1,8 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions};
 use crate::IntegerUtils;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static DEFENDER_WALKING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_walking_data.json")));
 
 const INTERCEPTION_DISTANCE: f32 = 250.0;
 const MARKING_DISTANCE: f32 = 50.0;
@@ -119,7 +113,10 @@ impl StateProcessingHandler for DefenderWalkingState {
         // Fallback to moving towards optimal position
         let optimal_position = self.calculate_optimal_position(ctx);
         let direction = (optimal_position - ctx.player.position).normalize();
-        let speed = ctx.player.skills.walking_speed().norm();
+
+        let walking_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.stamina) / 2.0 * 0.1;
+
+        let speed = Vector3::new(walking_speed, walking_speed, 0.0).normalize().norm();
         Some(direction * speed)
     }
 

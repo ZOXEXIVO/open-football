@@ -1,14 +1,8 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static GOALKEEPER_SWEEPING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_sweeping_data.json")));
 
 const SWEEPING_DISTANCE_THRESHOLD: f32 = 20.0; // Distance from goal to consider sweeping
 const SWEEPING_SPEED_MULTIPLIER: f32 = 1.2; // Multiplier for sweeping speed

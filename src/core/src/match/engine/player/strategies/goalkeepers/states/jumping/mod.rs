@@ -1,20 +1,12 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use crate::r#match::player::events::PlayerEvent;
 use nalgebra::Vector3;
-use std::sync::LazyLock;
 
-static GOALKEEPER_JUMPING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_jumping_data.json")));
-
-// Jump parameters
 const JUMP_DURATION: u64 = 30; // Duration of jump animation in ticks
 const JUMP_HEIGHT: f32 = 2.5; // Maximum jump height
 const MIN_DIVING_DISTANCE: f32 = 1.0; // Minimum distance to dive
 const MAX_DIVING_DISTANCE: f32 = 5.0; // Maximum distance to dive
-const REACTION_TIME_THRESHOLD: u64 = 10; // Ticks to react to ball
 
 #[derive(Default)]
 pub struct GoalkeeperJumpingState {}
@@ -49,14 +41,11 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         None
     }
 
-    fn process_slow(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         None
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let keeper_pos = ctx.player.position;
-
         // Calculate base jump vector
         let jump_vector = self.calculate_jump_vector(ctx);
 
@@ -80,7 +69,7 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         Some(combined_velocity * attribute_scaling)
     }
 
-    fn process_conditions(&self, ctx: ConditionContext) {
+    fn process_conditions(&self, _ctx: ConditionContext) {
 
     }
 }

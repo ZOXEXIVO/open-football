@@ -61,17 +61,15 @@ async fn main() {
         away_squad,
     );
 
-    let field_size = field.size.clone();
-
     let score = Score::new(1, 2);
 
-    let mut context = MatchContext::new(&field_size, players, score);
+    let mut context = MatchContext::new(&field, players, score);
 
     let mut current_frame = 0u64;
 
     let mut match_data = ResultMatchPositionData::new();
 
-    let mut left_mouse_pressed = false;
+    let mut left_mouse_pressed;
 
     loop {
         current_frame += 1;

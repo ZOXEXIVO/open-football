@@ -1,15 +1,9 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use rand::Rng;
-use std::sync::LazyLock;
-
-static DEFENDER_SLIDING_TACKLE_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_sliding_tackle_data.json")));
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a sliding tackle (in meters)
 const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.6; // Base chance of successful tackle
@@ -132,9 +126,9 @@ impl DefenderSlidingTackleState {
         let mut rng = rand::thread_rng();
 
         // Get defender's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 100.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression as f32 / 100.0;
-        let composure = ctx.player.skills.mental.composure as f32 / 100.0;
+        let tackling_skill = ctx.player.skills.technical.tackling  / 20.0; // Normalize to [0,1]
+        let aggression = ctx.player.skills.mental.aggression  / 20.0;
+        let composure = ctx.player.skills.mental.composure  / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 

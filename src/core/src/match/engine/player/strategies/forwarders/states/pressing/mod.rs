@@ -1,23 +1,15 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-
-static FORWARD_PRESSING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_pressing_data.json")));
 
 #[derive(Default)]
 pub struct ForwardPressingState {}
 
 impl StateProcessingHandler for ForwardPressingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let mut result = StateChangeResult::new();
-
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
@@ -30,38 +22,13 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
-        let ball_ops = ctx.ball();
-
-        // Check if the ball is on the opponent's side
-        if ball_ops.on_own_side() {
-            // Transition to Standing state if the ball is on own side
+        if ctx.ball().on_own_side() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Standing,
             ));
         }
 
-        if let Some(opponent) = ctx.players().opponents().nearby(100.0).next()
-        {
-            // Check if the opponent has the ball
-            if opponent.has_ball(ctx) {
-                // Move towards the opponent with the ball
-                let direction = (opponent.position - ctx.player.position).normalize();
-                result.velocity = Some(direction * ctx.player.skills.physical.acceleration);
-            } else {
-                // Move towards the ball if the opponent is far
-                let direction = (ctx.tick_context.positions.ball.position
-                    - ctx.player.position)
-                    .normalize();
-                result.velocity = Some(direction * ctx.player.skills.physical.acceleration);
-            }
-        } else {
-            // Move towards the ball if no close opponents
-            let direction =
-                (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
-            result.velocity = Some(direction * ctx.player.skills.physical.acceleration);
-        }
-
-        Some(result)
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -71,7 +38,7 @@ impl StateProcessingHandler for ForwardPressingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
+                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)

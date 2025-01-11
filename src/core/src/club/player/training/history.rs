@@ -36,11 +36,5 @@ impl PlayerTrainingHistory {
 #[derive(Debug)]
 pub struct TrainingRecord {
     date: NaiveDateTime,
-    skills: PlayerSkills,
-}
-
-impl TrainingRecord {
-    fn new(date: NaiveDateTime, skills: PlayerSkills) -> Self {
-        TrainingRecord { date, skills }
-    }
+    _skills: PlayerSkills,
 }

@@ -1,17 +1,12 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-use crate::r#match::forwarders::states::ForwardState;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
-const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 const SHOOTING_DISTANCE_THRESHOLD: f32 = 300.0;
-
-static DEFENDER_RUNNING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_running_data.json")));
 
 #[derive(Default)]
 pub struct DefenderRunningState {}
@@ -28,14 +23,8 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             if self.has_clear_shot(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
-            }
-
-            if self.should_clear(ctx) {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Clearing,
+                    DefenderState::Shooting,
                 ));
             }
 
@@ -45,26 +34,23 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-        } else {
-            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+            if self.should_clear(ctx) {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Returning,
+                    DefenderState::Clearing,
                 ));
             }
+        }
 
-            if !ctx.team().is_control_ball() {
-                if ctx.ball().is_towards_player_with_angle(0.9) && distance_to_ball < 250.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Intercepting,
-                    ));
-                }
+        if ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Tackling,
+            ));
+        }
 
-                if ctx.ball().distance() < 100.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Tackling,
-                    ));
-                }
-            }
+        if !ctx.ball().is_owned() && ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 150.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Intercepting,
+            ));
         }
 
         None
@@ -77,17 +63,20 @@ impl StateProcessingHandler for DefenderRunningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal(),
-                slowing_distance: if ctx.player.has_ball(ctx) { 150.0 } else { 100.0 },
+                target: ctx.ball().direction_to_opponent_goal()
+                    + ctx.player().separation_velocity(),
+                slowing_distance: if ctx.player.has_ball(ctx) {
+                    150.0
+                } else {
+                    100.0
+                },
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-
-    }
+    fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl DefenderRunningState {
@@ -112,7 +101,10 @@ impl DefenderRunningState {
         false
     }
 
-    fn find_open_teammate_on_opposite_side(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+    fn find_open_teammate_on_opposite_side(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<MatchPlayerLite> {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
         let opposite_side_x = match ctx.player.side {
@@ -131,7 +123,11 @@ impl DefenderRunningState {
                     Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
                     None => false,
                 };
-                let is_open = !ctx.players().opponents().nearby(20.0).any(|opponent| opponent.id == teammate.id);
+                let is_open = !ctx
+                    .players()
+                    .opponents()
+                    .nearby(20.0)
+                    .any(|opponent| opponent.id == teammate.id);
                 is_on_opposite_side && is_open
             })
             .collect();

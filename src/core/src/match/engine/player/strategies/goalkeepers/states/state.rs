@@ -1,4 +1,13 @@
-use crate::r#match::goalkeepers::states::{GoalkeeperAttentiveState, GoalkeeperCatchingState, GoalkeeperComingOutState, GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPenaltyState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPressureState, GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperSweepingState, GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState};
+use crate::r#match::goalkeepers::states::{
+    GoalkeeperAttentiveState, GoalkeeperCatchingState, GoalkeeperComingOutState,
+    GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState,
+    GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPenaltyState,
+    GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPressureState,
+    GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState,
+    GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperSweepingState,
+    GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState,
+    GoalkeeperWalkingState,
+};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -90,7 +99,7 @@ impl GoalkeeperStrategies {
             GoalkeeperState::Passing => state_processor.process(GoalkeeperPassingState::default()),
             GoalkeeperState::TakeBall => {
                 state_processor.process(GoalkeeperTakeBallState::default())
-            },
+            }
             GoalkeeperState::Attentive => {
                 state_processor.process(GoalkeeperAttentiveState::default())
             }

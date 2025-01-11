@@ -1,16 +1,11 @@
-use crate::common::loader::DefaultNeuralNetworkLoader;
-use crate::common::NeuralNetwork;
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::player::events::{PlayerEvent, ShootingEventBuilder, ShootingEventModel};
+use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use std::sync::LazyLock;
-use crate::r#match::events::Event;
 
-static DEFENDER_HEADING_STATE_NETWORK: LazyLock<NeuralNetwork> =
-    LazyLock::new(|| DefaultNeuralNetworkLoader::load(include_str!("nn_heading_data.json")));
+use crate::r#match::events::Event;
 
 const HEADING_HEIGHT_THRESHOLD: f32 = 1.5; // Minimum height to consider heading (meters)
 const HEADING_DISTANCE_THRESHOLD: f32 = 1.5; // Maximum distance to the ball for heading (meters)
@@ -41,7 +36,7 @@ impl StateProcessingHandler for DefenderHeadingState {
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
             Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventModel::build()
+                ShootingEventContext::build()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().opponent_goal_position())
                     .with_force(ctx.player().shoot_goal_power())
@@ -73,8 +68,8 @@ impl StateProcessingHandler for DefenderHeadingState {
 impl DefenderHeadingState {
     /// Determines if the defender successfully heads the ball based on skills and random chance.
     fn attempt_heading(&self, ctx: &StateProcessingContext) -> bool {
-        let heading_skill = ctx.player.skills.technical.heading as f32 / 100.0; // Normalize skill to [0,1]
-        let jumping_skill = ctx.player.skills.physical.jumping as f32 / 100.0;
+        let heading_skill = ctx.player.skills.technical.heading  / 20.0; // Normalize skill to [0,1]
+        let jumping_skill = ctx.player.skills.physical.jumping  / 20.0;
         let overall_skill = (heading_skill + jumping_skill) / 2.0;
 
         // Simulate chance of success

@@ -9,12 +9,10 @@ pub mod league;
 pub mod r#match;
 pub mod transfers;
 
-pub mod common;
 pub mod shared;
 pub mod utils;
 
 pub use club::*;
 pub use country::*;
 pub use nalgebra::*;
-pub use neural::*;
 pub use utils::*;

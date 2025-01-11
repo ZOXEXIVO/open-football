@@ -10,7 +10,7 @@ use crate::r#match::{
     PlayerOperationsImpl, PlayersOperationsImpl, TeamOperationsImpl,
 };
 use crate::PlayerFieldPositionGroup;
-use log::{debug, info};
+use log::{debug};
 use nalgebra::Vector3;
 
 pub trait StateProcessingHandler {
@@ -267,6 +267,14 @@ impl StateChangeResult {
     pub fn with_forward_state_and_event(state: ForwardState, event: Event) -> Self {
         StateChangeResult {
             state: Some(Forward(state)),
+            velocity: None,
+            events: EventCollection::with_event(event),
+        }
+    }
+
+    pub fn with_event(event: Event) -> Self {
+        StateChangeResult {
+            state: None,
             velocity: None,
             events: EventCollection::with_event(event),
         }
