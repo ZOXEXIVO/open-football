@@ -13,7 +13,7 @@ use burn::record::{BinFileRecorder, CompactRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use burn::train::metric::LossMetric;
-use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
+use nn::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 
 type NeuralNetworkDevice = NdArrayDevice;
 type NeuralNetworkBackend = NdArray;

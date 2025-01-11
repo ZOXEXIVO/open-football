@@ -1,11 +1,11 @@
 [package]
 name = "core"
-version = "1.0.0"
+version = "0.1.0"
 authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
 edition = "2021"
 
 [dependencies]
-neural = { path = "../neural" }
+nn = { path = "../nn" }
 chrono = "0.4.39"
 rand = "0.8.5"
 rayon = "1.10.0"

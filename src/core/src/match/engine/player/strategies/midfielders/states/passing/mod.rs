@@ -6,7 +6,7 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use neural::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
+use nn::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
