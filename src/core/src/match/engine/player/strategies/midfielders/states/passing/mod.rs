@@ -11,33 +11,32 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-use burn::backend::ndarray::NdArrayDevice;
+use crate::shared::{DEFAULT_NEURAL_BACKEND, DEFAULT_NEURAL_DEVICE};
 use burn::backend::NdArray;
 use burn::module::Module;
-use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
-use std::sync::{Arc, OnceLock};
 use burn::prelude::Tensor;
+use burn::record::{BinBytesRecorder, FullPrecisionSettings, Recorder};
+use std::sync::LazyLock;
 
-static MODEL_BYTES: &[u8] = include_bytes!("neural/model.bin");
-static MIDFIELDER_PASSING_NEURAL_NETWORK: Arc<OnceLock<MidfielderPassingNeural<NdArray>>> = Arc::new();
+// static MODEL_BYTES: &[u8] = include_bytes!("neural/model.bin");
+// static MIDFIELDER_PASSING_NEURAL_NETWORK: LazyLock<
+//     MidfielderPassingNeural<DEFAULT_NEURAL_BACKEND>,
+// > = LazyLock::new(|| {
+//     let record = BinBytesRecorder::<FullPrecisionSettings>::default()
+//         .load(MODEL_BYTES.to_vec(), &DEFAULT_NEURAL_DEVICE)
+//         .expect("Should be able to load model the model weights from bytes");
+//
+//     let model: MidfielderPassingNeural<NdArray> =
+//         MidfielderPassingNeuralConfig::init(&DEFAULT_NEURAL_DEVICE);
+//
+//     return model.load_record(record);
+// });
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
 
 impl StateProcessingHandler for MidfielderPassingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let next = MIDFIELDER_PASSING_NEURAL_NETWORK.get_or_init(|| {
-            let device = NdArrayDevice::default();
-
-            let record = BinBytesRecorder::<FullPrecisionSettings>::default()
-                .load(MODEL_BYTES.to_vec(), &device)
-                .expect("Should be able to load model the model weights from bytes");
-
-            let model: MidfielderPassingNeural<NdArray> = MidfielderPassingNeuralConfig::init(&device);
-
-            return Arc::new(model.load_record(record));
-        });
-
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Pressing
@@ -46,19 +45,17 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        let device = NdArrayDevice::default();
-
-        let tensor = Tensor::from_data([[1, 1]], &device);
-        let result = next.forward(tensor);
-
-        let tensor_data_string = result
-            .to_data()
-            .iter()
-            .map(|x: f32| format!("{:.4}", x))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        println!("### {}", tensor_data_string);
+        // let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);
+        // let result = MIDFIELDER_PASSING_NEURAL_NETWORK.forward(tensor);
+        //
+        // let tensor_data_string = result
+        //     .to_data()
+        //     .iter()
+        //     .map(|x: f32| format!("{:.4}", x))
+        //     .collect::<Vec<String>>()
+        //     .join(", ");
+        //
+        // println!("### {}", tensor_data_string);
 
         // Determine the best teammate to pass to
         if let Some(target_teammate) = self.find_best_pass_option(ctx) {
