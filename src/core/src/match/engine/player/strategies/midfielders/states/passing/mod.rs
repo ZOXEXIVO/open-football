@@ -1,3 +1,7 @@
+pub mod neural;
+
+pub use neural::*;
+
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};

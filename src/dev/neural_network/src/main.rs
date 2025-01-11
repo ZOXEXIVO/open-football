@@ -1,8 +1,10 @@
+use std::path::PathBuf;
 use crate::model::MyBinaryNet;
 use crate::training::{train, TrainingConfig};
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
-use burn::prelude::Tensor;
+use burn::prelude::{Module, Tensor};
+use burn::record::{BinBytesRecorder, BinFileRecorder, FullPrecisionSettings, Recorder};
 
 mod model;
 mod training;
@@ -19,8 +21,8 @@ fn main() {
         (0f64, 1f64, 0f64),
         (1f64, 1f64, 0f64),
     ];
-
-    let model: MyBinaryNet<MyAutodiffBackend> = train(
+    
+    let model: MidfielderPassingNeural<MyAutodiffBackend> = train(
         "artifacts",
         TrainingConfig {
             num_epochs: 3000,
@@ -49,4 +51,25 @@ fn main() {
             item.0, item.1, tensor_data_string
         );
     }
+    
+    let path = PathBuf::from_iter(["artifacts", "model.bin"]);
+
+    let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
+    model
+        .save_file(PathBuf::from_iter(&path), &recorder)
+        .expect("Should be able to save the model");
+
+
+    // // Include the model file as a reference to a byte array
+    // static MODEL_BYTES: &[u8] = include_bytes!("../artifacts/model.bin");
+    // 
+    // // Load model binary record in full precision
+    // let record = BinBytesRecorder::<FullPrecisionSettings>::default()
+    //     .load(MODEL_BYTES.to_vec(), &device)
+    //     .expect("Should be able to load model the model weights from bytes");
+    // 
+    // // Load that record with the model
+    // let new_model = model.load_record(record);
+
+    println!("RESTORED");
 }
