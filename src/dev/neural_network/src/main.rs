@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use burn::backend::ndarray::NdArrayDevice;
 use burn::backend::{Autodiff, NdArray};
 use burn::config::Config;
@@ -11,9 +10,10 @@ use burn::optim::AdamConfig;
 use burn::prelude::{Backend, Module, Tensor};
 use burn::record::{BinFileRecorder, CompactRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
-use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use burn::train::metric::LossMetric;
+use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use nn::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
+use std::path::PathBuf;
 
 type NeuralNetworkDevice = NdArrayDevice;
 type NeuralNetworkBackend = NdArray;
@@ -27,16 +27,22 @@ fn main() {
     let device = NeuralNetworkDevice::default();
 
     let training_data = vec![
-        (0f64, 0f64, 1f64),
-        (1f64, 0f64, 0f64),
-        (0f64, 1f64, 0f64),
-        (1f64, 1f64, 0f64),
+        (0f64, 0f64, 0f64),
+        (1f64, 0f64, 1f64),
+        (0f64, 1f64, 1f64),
+        (0f64, 3f64, 3f64),
+        (2f64, 3f64, 5f64),
     ];
-    
+
+    let training_additional_data = vec![
+        (4f64, 4f64, 0f64),
+        (3f64, 3f64, 0f64),
+    ];
+
     let model: NeuralNetworkAutoDiff = train::<NeuralNetworkAutodiffBackend>(
         "artifacts",
         TrainingConfig {
-            num_epochs: 3000,
+            num_epochs: 5000,
             learning_rate: 1e-2,
             momentum: 1e-2,
             seed: 43,
@@ -46,7 +52,7 @@ fn main() {
         device,
     );
 
-    for item in training_data {
+    for item in training_data.iter().chain(&training_additional_data) {
         let tensor = Tensor::from_data([[item.0, item.1]], &device);
         let result = model.forward(tensor);
 
@@ -62,7 +68,7 @@ fn main() {
             item.0, item.1, tensor_data_string
         );
     }
-    
+
     let path = PathBuf::from_iter(["artifacts", "model.bin"]);
 
     let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
@@ -97,7 +103,7 @@ struct BinaryDataBatcher<B: Backend> {
 impl<B: Backend> BinaryDataBatcher<B> {
     pub fn new(device: B::Device) -> Self {
         BinaryDataBatcher {
-            device: device.clone()
+            device: device.clone(),
         }
     }
 }
@@ -153,7 +159,7 @@ pub fn train<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
     training_data: Vec<(f64, f64, f64)>,
-    device: B::Device
+    device: B::Device,
 ) -> NeuralNetwork<B> {
     create_artifact_dir(artifact_dir);
 
@@ -182,10 +188,11 @@ pub fn train<B: AutodiffBackend>(
     let learner = LearnerBuilder::new(artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
-        .with_file_checkpointer(CompactRecorder::new())
+        
+        //.with_file_checkpointer(CompactRecorder::new())
         .devices(vec![device.clone()])
         .num_epochs(config.num_epochs)
-        .summary()
+        //.summary()
         .build(model, optimizer, config.learning_rate);
 
     learner.fit(train_data, valid_data)

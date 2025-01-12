@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 nn = { path = "../../nn" }
 rayon = "1.10.0"
+itertools = "0.14.0"
 burn = { version = "0.15", features = ["train", "ndarray", "vision"] }

@@ -58,15 +58,15 @@ impl MidfielderPassingNeuralConfig {
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_b: LinearConfig::new(4, 8)
+            linear_b: LinearConfig::new(4, 4)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_c: LinearConfig::new(8, 8)
+            linear_c: LinearConfig::new(4, 4)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_d: LinearConfig::new(8, 1)
+            linear_d: LinearConfig::new(4, 1)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),

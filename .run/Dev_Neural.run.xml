@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="Dev:Neural" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="buildProfileId" value="dev" />
+    <option name="buildProfileId" value="release" />
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$/src/dev/neural_network" />
     <envs />
