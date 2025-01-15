@@ -12,7 +12,7 @@ use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::metric::LossMetric;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
-use nn::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
+use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
 
 type NeuralNetworkDevice = NdArrayDevice;
@@ -27,20 +27,21 @@ fn main() {
     let device = NeuralNetworkDevice::default();
 
     let training_data = vec![
+        (70f64, 0f64, 88.0f64),
         (70f64, 0f64, 137.0f64),
         (32f64, 4f64, 137.0f64),
         (22f64, 8f64, 137.0f64),
         (77f64, 3f64, 555.0f64),
         (30f64, 1f64, 137.0f64),
-        (87f64, 6f64, 137.0f64)
+        (87f64, 6f64, 111.0f64)
     ];
 
     let training_additional_data = vec![
-        (4f64, 4f64, 0f64),
-        (20f64, 8f64, 0f64),
-        (44f64, 4f64, 0f64),
-        (19f64, 4f64, 0f64),
-        (90f64, 2f64, 0f64),
+        // (4f64, 4f64, 0f64),
+        // (20f64, 8f64, 0f64),
+        // (44f64, 4f64, 0f64),
+        // (19f64, 4f64, 0f64),
+        // (90f64, 2f64, 0f64),
     ];
 
     let model: NeuralNetworkAutoDiff = train::<NeuralNetworkAutodiffBackend>(
@@ -53,7 +54,7 @@ fn main() {
             batch_size: 1,
         },
         training_data.clone(),
-        device,
+        device.clone(),
     );
 
     for item in training_data.iter().chain(&training_additional_data) {

@@ -54,19 +54,19 @@ pub struct MidfielderPassingNeuralConfig {
 impl MidfielderPassingNeuralConfig {
     pub fn init<B: Backend>(device: &B::Device) -> MidfielderPassingNeural<B> {
         MidfielderPassingNeural {
-            linear_a: LinearConfig::new(2, 2)
+            linear_a: LinearConfig::new(2, 32)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_b: LinearConfig::new(2, 6)
+            linear_b: LinearConfig::new(32, 32)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_c: LinearConfig::new(6, 4)
+            linear_c: LinearConfig::new(32,16)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_d: LinearConfig::new(4, 1)
+            linear_d: LinearConfig::new(16, 1)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),

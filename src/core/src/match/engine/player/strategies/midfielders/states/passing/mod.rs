@@ -7,7 +7,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
-use nn::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
+use neural::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
@@ -75,7 +75,7 @@ impl MidfielderPassingState {
     ) -> Option<MatchPlayerLite> {
         let players = ctx.players();
         let teammates = players.teammates();
-        let vision_range = ctx.player.skills.mental.vision * 20.0;
+        let vision_range = ctx.player.skills.mental.vision * 15.0;
 
         teammates
             .nearby(vision_range)

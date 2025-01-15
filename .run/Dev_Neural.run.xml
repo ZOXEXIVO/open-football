@@ -2,7 +2,7 @@
   <configuration default="false" name="Dev:Neural" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="release" />
     <option name="command" value="run" />
-    <option name="workingDirectory" value="file://$PROJECT_DIR$/src/dev/neural_network" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$/src/dev/neural" />
     <envs />
     <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />

@@ -5,7 +5,7 @@ authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
 edition = "2021"
 
 [dependencies]
-nn = { path = "../nn" }
+neural = { path = "../neural" }
 chrono = "0.4.39"
 rand = "0.8.5"
 rayon = "1.10.0"

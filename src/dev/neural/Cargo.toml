@@ -1,0 +1,8 @@
+[package]
+name = "dev_neural"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+neural = { path = "../../neural" }
+burn = { version = "0.16.0", features = ["train", "ndarray", "vision", "wgpu"] }
