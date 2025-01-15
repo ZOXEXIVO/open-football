@@ -8,7 +8,7 @@ use burn::nn::loss::MseLoss;
 use burn::nn::loss::Reduction::Mean;
 use burn::optim::AdamConfig;
 use burn::prelude::{Backend, Module, Tensor};
-use burn::record::{BinFileRecorder, CompactRecorder, FullPrecisionSettings};
+use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::metric::LossMetric;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
@@ -27,22 +27,26 @@ fn main() {
     let device = NeuralNetworkDevice::default();
 
     let training_data = vec![
-        (0f64, 0f64, 0f64),
-        (1f64, 0f64, 1f64),
-        (0f64, 1f64, 1f64),
-        (0f64, 3f64, 3f64),
-        (2f64, 3f64, 5f64),
+        (70f64, 0f64, 137.0f64),
+        (32f64, 4f64, 137.0f64),
+        (22f64, 8f64, 137.0f64),
+        (77f64, 3f64, 555.0f64),
+        (30f64, 1f64, 137.0f64),
+        (87f64, 6f64, 137.0f64)
     ];
 
     let training_additional_data = vec![
         (4f64, 4f64, 0f64),
-        (3f64, 3f64, 0f64),
+        (20f64, 8f64, 0f64),
+        (44f64, 4f64, 0f64),
+        (19f64, 4f64, 0f64),
+        (90f64, 2f64, 0f64),
     ];
 
     let model: NeuralNetworkAutoDiff = train::<NeuralNetworkAutodiffBackend>(
         "artifacts",
         TrainingConfig {
-            num_epochs: 5000,
+            num_epochs: 15000,
             learning_rate: 1e-2,
             momentum: 1e-2,
             seed: 43,
@@ -188,11 +192,10 @@ pub fn train<B: AutodiffBackend>(
     let learner = LearnerBuilder::new(artifact_dir)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
-        
         //.with_file_checkpointer(CompactRecorder::new())
         .devices(vec![device.clone()])
         .num_epochs(config.num_epochs)
-        //.summary()
+        .summary()
         .build(model, optimizer, config.learning_rate);
 
     learner.fit(train_data, valid_data)

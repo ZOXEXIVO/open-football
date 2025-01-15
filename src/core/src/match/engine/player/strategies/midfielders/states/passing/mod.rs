@@ -6,6 +6,7 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
+use rand::prelude::IteratorRandom;
 use nn::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
 
 #[derive(Default)]
@@ -20,18 +21,6 @@ impl StateProcessingHandler for MidfielderPassingState {
                 MidfielderState::Pressing,
             ));
         }
-
-        let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);
-        let result = MIDFIELDER_PASSING_NEURAL_NETWORK.forward(tensor);
-
-        let tensor_data_string = result
-            .to_data()
-            .iter()
-            .map(|x: f32| format!("{:.4}", x))
-            .collect::<Vec<String>>()
-            .join(", ");
-
-        println!("### {}", tensor_data_string);
 
         // Determine the best teammate to pass to
         if let Some(target_teammate) = self.find_best_pass_option(ctx) {
@@ -82,10 +71,37 @@ impl StateProcessingHandler for MidfielderPassingState {
 impl MidfielderPassingState {
     fn find_best_pass_option<'a>(
         &self,
-        _ctx: &StateProcessingContext<'a>,
+        ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        // TODO
+        let players = ctx.players();
+        let teammates = players.teammates();
+        let vision_range = ctx.player.skills.mental.vision * 20.0;
 
-        None
+        teammates
+            .nearby(vision_range)
+            .filter(|t| self.is_teammate_open(ctx, t))
+            .choose(&mut rand::thread_rng())
+
+
+        // let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);
+        // let result = MIDFIELDER_PASSING_NEURAL_NETWORK.forward(tensor);
+        //
+        // let tensor_data_string = result
+        //     .to_data()
+        //     .iter()
+        //     .map(|x: f32| format!("{:.4}", x))
+        //     .collect::<Vec<String>>()
+        //     .join(", ");
+        //
+        // println!("### {}", tensor_data_string);
+        //
+        // None
+    }
+
+    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let opponent_distance_threshold = 5.0;
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
+            .count() == 0
     }
 }

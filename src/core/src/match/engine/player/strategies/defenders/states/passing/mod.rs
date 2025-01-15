@@ -48,7 +48,7 @@ impl DefenderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 10.0;
+        let vision_range = ctx.player.skills.mental.vision * 15.0;
         let open_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
             .nearby(vision_range)
             .filter(|t| !t.tactical_positions.is_goalkeeper())

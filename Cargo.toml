@@ -8,7 +8,7 @@ edition = "2018"
 core = { path = "src/core" }
 server = { path = "src/server" }
 database = { path = "src/database" }
-log = { version = "0.4.24", features = ["release_max_level_info"] }
+log = { version = "0.4.25", features = ["release_max_level_info"] }
 env_logger = "0.11.6"
 color-eyre = "0.6.3"
 tokio = { version = "1.43.0", features = ["full"] }
