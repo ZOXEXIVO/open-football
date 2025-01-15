@@ -1,7 +1,9 @@
 use crate::r#match::{MatchField, MatchPlayer, VectorExtensions};
-use log::debug;
+use log::{debug, error};
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
+
+const MAX_DISTANCE: f32 = 999.0;
 
 #[derive(Debug)]
 pub struct PlayerDistanceClosure {
@@ -63,8 +65,10 @@ impl PlayerDistanceClosure {
                     || (distance.player_from_id == player_to_id && distance.player_to_id == player_from_id)
             })
             .map(|dist| dist.distance)
-            .unwrap_or_else(|| panic!("no distance between {} and {}",
-                player_from_id, player_to_id))
+            .unwrap_or_else(|| {
+                error!("no distance between {} and {}",player_from_id, player_to_id);
+                MAX_DISTANCE
+            })
     }
 
     pub fn get_collisions(&self, max_distance: f32) -> Vec<&PlayerDistanceItem> {
