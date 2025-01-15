@@ -75,7 +75,7 @@ impl MidfielderPassingState {
     ) -> Option<MatchPlayerLite> {
         let players = ctx.players();
         let teammates = players.teammates();
-        let vision_range = ctx.player.skills.mental.vision * 15.0;
+        let vision_range = ctx.player.skills.mental.vision * 20.0;
 
         teammates
             .nearby(vision_range)

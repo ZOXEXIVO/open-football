@@ -63,10 +63,8 @@ impl PlayerDistanceClosure {
                     || (distance.player_from_id == player_to_id && distance.player_to_id == player_from_id)
             })
             .map(|dist| dist.distance)
-            .expect(&format!(
-                "no distance between {} and {}",
-                player_from_id, player_to_id
-            ))
+            .unwrap_or_else(|| panic!("no distance between {} and {}",
+                player_from_id, player_to_id))
     }
 
     pub fn get_collisions(&self, max_distance: f32) -> Vec<&PlayerDistanceItem> {
