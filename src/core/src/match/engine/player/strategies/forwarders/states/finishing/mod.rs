@@ -57,7 +57,7 @@ impl ForwardFinishingState {
     }
 
     fn calculate_shooting_parameters(&self, ctx: &StateProcessingContext) -> (Vector3<f32>, f32) {
-        let goal_position = ctx.ball().direction_to_opponent_goal();
+        let goal_position = ctx.player().opponent_goal_position();
         let shooting_direction = (goal_position - ctx.player.position).normalize();
         let shooting_power = 1.0; // Adjust based on your game's mechanics
 

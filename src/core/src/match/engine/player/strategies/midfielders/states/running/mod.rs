@@ -94,7 +94,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal()
+                    target: ctx.player().opponent_goal_position()
                         + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
@@ -104,7 +104,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.team().is_control_ball() {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.ball().direction_to_opponent_goal()
+                    target: ctx.player().opponent_goal_position()
                         + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }

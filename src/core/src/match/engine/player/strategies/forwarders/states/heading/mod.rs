@@ -53,7 +53,7 @@ impl ForwardHeadingState {
     }
 
     fn calculate_heading_direction(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let goal_position = ctx.ball().direction_to_opponent_goal();
+        let goal_position = ctx.player().opponent_goal_position();
         let ball_position = ctx.tick_context.positions.ball.position;
 
         (goal_position - ball_position).normalize()

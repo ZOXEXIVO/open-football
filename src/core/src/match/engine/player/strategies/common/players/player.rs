@@ -48,6 +48,30 @@ impl<'p> PlayerOperationsImpl<'p> {
             && self.ctx.player.position.x < field_half_width as f32
     }
 
+    pub fn shooting_direction(&self) -> Vector3<f32> {
+        let goal_position = self.opponent_goal_position();
+        let goal_width = self.ctx.context.field_size.width as f32;
+
+        let mut shooting_direction = goal_position - self.ctx.player.position;
+
+        let shooting_technique = self.skills(self.ctx.player.id).technical.technique;
+        let shooting_accuracy = self.skills(self.ctx.player.id).technical.finishing;
+
+        let technique_factor = (shooting_technique - 1.0) / 19.0;
+        let accuracy_factor = (shooting_accuracy - 1.0) / 19.0;
+
+        let max_deviation = goal_width / 2.0 * (1.0 - technique_factor * accuracy_factor);
+
+        let mut rng = rand::thread_rng();
+        let x_offset = rng.gen_range(-max_deviation..max_deviation);
+        let y_offset = rng.gen_range(-max_deviation..max_deviation);
+
+        shooting_direction.x += x_offset;
+        shooting_direction.y += y_offset;
+
+        shooting_direction.normalize()
+    }
+
     pub fn opponent_goal_position(&self) -> Vector3<f32> {
         match self.ctx.player.side {
             Some(PlayerSide::Left) => self.ctx.context.goal_positions.right,
@@ -191,7 +215,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     pub fn has_clear_shot(&self) -> bool {
         let player_position = self.ctx.player.position;
-        let goal_position = self.ctx.ball().direction_to_opponent_goal();
+        let goal_position = self.ctx.player().opponent_goal_position();
         let direction_to_goal = (goal_position - player_position).normalize();
 
         // Check if the distance to the goal is within the player's shooting range

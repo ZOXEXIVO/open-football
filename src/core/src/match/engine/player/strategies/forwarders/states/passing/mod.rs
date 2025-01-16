@@ -111,12 +111,12 @@ impl ForwardPassingState {
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                (teammate.position - ctx.player().opponent_goal_position()).magnitude()
                     < goal_distance_threshold
             })
             .min_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_a = (a.position - ctx.player().opponent_goal_position()).magnitude();
+                let dist_b = (b.position - ctx.player().opponent_goal_position()).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()
             });
 

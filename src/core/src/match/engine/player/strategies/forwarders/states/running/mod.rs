@@ -81,7 +81,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.has_ball(ctx) {
-            let goal_direction = ctx.ball().direction_to_opponent_goal();
+            let goal_direction = ctx.player().opponent_goal_position();
 
             let player_goal_velocity = SteeringBehavior::Arrive {
                 target: goal_direction + ctx.player().separation_velocity(),
@@ -216,7 +216,7 @@ impl ForwardRunningState {
 
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {
         let player_position = ctx.player.position;
-        let goal_position = ctx.ball().direction_to_opponent_goal();
+        let goal_position = ctx.player().opponent_goal_position();
         let distance_to_goal = (player_position - goal_position).magnitude();
 
         // Check if the player is in the attacking half of the field

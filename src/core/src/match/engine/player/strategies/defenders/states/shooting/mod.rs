@@ -16,7 +16,7 @@ impl StateProcessingHandler for DefenderShootingState {
             Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::build()
                     .with_player_id(ctx.player.id)
-                    .with_target(ctx.player().opponent_goal_position())
+                    .with_target(ctx.player().shooting_direction())
                     .with_force(ctx.player().shoot_goal_power())
                     .build()
             )),

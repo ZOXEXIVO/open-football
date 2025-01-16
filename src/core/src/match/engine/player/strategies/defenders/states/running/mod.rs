@@ -5,8 +5,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
-const SHOOTING_DISTANCE_THRESHOLD: f32 = 300.0;
+const MAX_SHOOTING_DISTANCE: f32 = 450.0;
 
 #[derive(Default)]
 pub struct DefenderRunningState {}
@@ -71,7 +70,7 @@ impl StateProcessingHandler for DefenderRunningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal()
+                target: ctx.player().opponent_goal_position()
                     + ctx.player().separation_velocity(),
                 slowing_distance: if ctx.player.has_ball(ctx) {
                     150.0
@@ -159,7 +158,7 @@ impl DefenderRunningState {
     }
 
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.ball().distance_to_opponent_goal() < SHOOTING_DISTANCE_THRESHOLD {
+        if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
             return ctx.player().has_clear_shot();
         }
 

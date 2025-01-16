@@ -41,7 +41,7 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
                 Event::PlayerEvent(PlayerEvent::Shoot(
                     ShootingEventContext::build()
                         .with_player_id(ctx.player.id)
-                        .with_target(ctx.player().opponent_goal_position())
+                        .with_target(ctx.player().shooting_direction())
                         .with_force(ctx.player().shoot_goal_power())
                         .build(),
                 )),
@@ -58,7 +58,7 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal(),
+                target: ctx.player().opponent_goal_position(),
                 slowing_distance: 150.0,
             }
             .calculate(ctx.player)
