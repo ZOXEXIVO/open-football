@@ -113,7 +113,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, max_distance, MIN_DISTANCE)
+            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
     }
 
     pub fn exists(&self, max_distance: f32) -> bool {

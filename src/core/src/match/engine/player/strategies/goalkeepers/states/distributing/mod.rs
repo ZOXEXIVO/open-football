@@ -12,7 +12,6 @@ pub struct GoalkeeperDistributingState {}
 
 impl StateProcessingHandler for GoalkeeperDistributingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Check if the goalkeeper has the ball
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,

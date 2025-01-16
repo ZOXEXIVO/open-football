@@ -22,6 +22,8 @@ impl GameTickContext {
 
 pub struct BallMetadata {
     pub is_owned: bool,
+    pub is_in_flight_state: usize,
+
     pub current_owner: Option<u32>,
     pub last_owner: Option<u32>,
 }
@@ -30,6 +32,7 @@ impl From<&MatchField> for BallMetadata {
     fn from(field: &MatchField) -> Self {
         BallMetadata {
             is_owned: field.ball.current_owner.is_some(),
+            is_in_flight_state: field.ball.flags.in_flight_state,
             current_owner: field.ball.current_owner,
             last_owner: field.ball.previous_owner,
         }

@@ -17,6 +17,12 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting,
+            ));
+        }
+
         // Check if the player has created enough space
         if self.has_created_space(ctx) {
             // If space is created, transition to the assisting state

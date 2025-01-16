@@ -146,14 +146,14 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
 
-        field.ball.flags.in_passing_state_time = 100;
+        field.ball.flags.in_flight_state = 100;
     }
 
     fn handle_claim_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
 
-        field.ball.flags.in_passing_state_time = 30;
+        field.ball.flags.in_flight_state = 30;
     }
 
     fn handle_move_ball_event(player_id: u32, ball_velocity: Vector3<f32>, field: &mut MatchField) {
@@ -167,7 +167,7 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
 
-        field.ball.flags.in_passing_state_time = 100;
+        field.ball.flags.in_flight_state = 100;
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
@@ -181,7 +181,7 @@ impl PlayerEventDispatcher {
         field.ball.current_owner = None;
         field.ball.velocity = initial_velocity;
 
-        field.ball.flags.in_passing_state_time = 100;
+        field.ball.flags.in_flight_state = 100;
     }
 
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {

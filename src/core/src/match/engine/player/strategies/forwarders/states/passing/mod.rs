@@ -19,6 +19,13 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        if self.can_shoot(ctx) {
+            // Transition to Shooting state if there's an opportunity to shoot
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Shooting,
+            ));
+        }
+
         // Find the best passing option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_forward_state_and_event(
@@ -39,14 +46,6 @@ impl StateProcessingHandler for ForwardPassingState {
             // Transition to Dribbling state if there's space to dribble
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
-            ));
-        }
-
-        // Check if there's an opportunity to shoot
-        if self.can_shoot(ctx) {
-            // Transition to Shooting state if there's an opportunity to shoot
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
             ));
         }
 

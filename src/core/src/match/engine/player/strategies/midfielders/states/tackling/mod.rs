@@ -129,6 +129,10 @@ impl MidfielderTacklingState {
     }
 
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().is_in_flight() {
+            return false;
+        }
+
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let player_position = ctx.player.position;

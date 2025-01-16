@@ -43,7 +43,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
         } else {
-            if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            if self.should_intercept(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));
@@ -138,6 +138,19 @@ impl MidfielderRunningState {
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
         if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
             return ctx.player().has_clear_shot();
+        }
+
+        false
+    }
+
+    fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            return true;
+
+        }
+
+        if ctx.ball().distance() < 100.0 {
+           return true;
         }
 
         false

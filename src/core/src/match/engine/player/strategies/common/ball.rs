@@ -40,6 +40,11 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     #[inline]
+    pub fn is_in_flight(&self) -> bool {
+        self.ctx.tick_context.ball.is_in_flight_state > 0
+    }
+
+    #[inline]
     pub fn owner_id(&self) -> Option<u32> {
         self.ctx.tick_context.ball.current_owner
     }

@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -39,18 +39,26 @@ impl StateProcessingHandler for DefenderRunningState {
                     DefenderState::Clearing,
                 ));
             }
-        }
+        } else {
+            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
 
-        if ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Tackling,
-            ));
-        }
-
-        if !ctx.ball().is_owned() && ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 150.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
-            ));
+            if ctx.ball().is_owned() {
+                if ctx.ball().distance() < 100.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+            } else {
+                if ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 200.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Intercepting,
+                    ));
+                }
+            }
         }
 
         None
