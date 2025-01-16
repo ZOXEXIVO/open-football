@@ -80,7 +80,7 @@ impl MidfielderPassingState {
         teammates
             .nearby(vision_range)
             .filter(|t| self.is_teammate_open(ctx, t))
-            .choose(&mut rand::thread_rng())
+            .max_by(|a, b| a.position.x.total_cmp(&b.position.x))
 
 
         // let tensor = Tensor::from_data([[0, 0]], &DEFAULT_NEURAL_DEVICE);

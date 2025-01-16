@@ -75,11 +75,13 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
             })
     }
 
-    pub fn nearby(&'b self, distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+    pub fn nearby(&'b self, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
+        const MIN_DISTANCE: f32 = 50.0;
+
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, distance)
+            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
             .map(|(pid, _)| MatchPlayerLite {
                 id: pid,
                 position: self.ctx.tick_context.positions.players.position(pid),
@@ -105,18 +107,22 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         }
     }
 
-    pub fn nearby_ids(&self, distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {
+    pub fn nearby_ids(&self, max_distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {
+        const MIN_DISTANCE: f32 = 50.0;
+
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, distance)
+            .teammates(self.ctx.player, max_distance, MIN_DISTANCE)
     }
 
-    pub fn exists(&self, distance: f32) -> bool {
+    pub fn exists(&self, max_distance: f32) -> bool {
+        const MIN_DISTANCE: f32 = 0.0;
+
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, distance)
+            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
             .any(|_| true)
     }
 }

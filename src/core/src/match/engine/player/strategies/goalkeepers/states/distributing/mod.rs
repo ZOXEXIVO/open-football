@@ -53,7 +53,7 @@ impl GoalkeeperDistributingState {
 
         if let Some((teammate_id, _)) = players
             .teammates()
-            .nearby_ids(300.0)
+            .nearby_ids(500.0)
             .choose(&mut rand::thread_rng())
         {
             return Some(teammate_id);

@@ -1,9 +1,6 @@
-use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
-use rand::Rng;
 
 #[derive(Default)]
 pub struct ForwardInterceptingState {}
@@ -20,27 +17,20 @@ impl StateProcessingHandler for ForwardInterceptingState {
             ));
         }
 
-        let ball_ops = ctx.ball();
-
-        // 3. If the defender has intercepted the ball, transition to appropriate state
-        let ball_distance = ball_ops.distance();
-        if ball_distance < 30.0 {
-            if ctx.tick_context.ball.is_owned {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Pressing,
-                ));
-            } else if self.calculate_tackling_success(ctx) {
-                return Some(StateChangeResult::with_forward_state_and_event(
-                    ForwardState::Running,
-                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                ));
-            }
-        }
+        let ball_distance = ctx.ball().distance();
 
         if ball_distance > 150.0 {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Returning,
             ));
+        }
+
+        if ball_distance < 30.0 {
+            if ctx.tick_context.ball.is_owned {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Tackling,
+                ));
+            }
         }
 
         // 2. Check if the defender can reach the interception point before any opponent
@@ -75,29 +65,6 @@ impl StateProcessingHandler for ForwardInterceptingState {
 }
 
 impl ForwardInterceptingState {
-    fn calculate_tackling_success(&self, ctx: &StateProcessingContext) -> bool {
-        let player_skills = &ctx.player.skills;
-
-        // Factors affecting tackling success
-        let tackling = player_skills.technical.tackling;
-        let aggression = player_skills.mental.aggression;
-        let anticipation = player_skills.mental.anticipation;
-
-        // Combine skills to create a tackling score
-        let tackling_score = (tackling * 0.5) + (aggression * 0.3) + (anticipation * 0.2);
-
-        // Normalize the score to a value between 0 and 1
-        let normalized_score = tackling_score / 20.0;
-
-        // Generate a random value to determine if the tackle is successful
-        let mut rng = rand::thread_rng();
-        let random_value: f32 = rng.gen_range(0.0..1.0);
-
-        // Tackle is successful if the normalized score is higher than the random value
-        normalized_score > random_value
-    }
-
-    /// Determines if the defender can reach the interception point before any opponent
     fn can_reach_before_opponent(&self, ctx: &StateProcessingContext) -> bool {
         // Calculate time for defender to reach interception point
         let interception_point = self.calculate_interception_point(ctx);
