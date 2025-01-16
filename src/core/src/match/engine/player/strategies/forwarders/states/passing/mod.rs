@@ -19,6 +19,13 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        if self.can_shoot(ctx) {
+            // Transition to Shooting state if there's an opportunity to shoot
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Shooting,
+            ));
+        }
+
         // Find the best passing option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_forward_state_and_event(
@@ -39,14 +46,6 @@ impl StateProcessingHandler for ForwardPassingState {
             // Transition to Dribbling state if there's space to dribble
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
-            ));
-        }
-
-        // Check if there's an opportunity to shoot
-        if self.can_shoot(ctx) {
-            // Transition to Shooting state if there's an opportunity to shoot
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
             ));
         }
 
@@ -112,12 +111,12 @@ impl ForwardPassingState {
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
-                (teammate.position - ctx.ball().direction_to_opponent_goal()).magnitude()
+                (teammate.position - ctx.player().opponent_goal_position()).magnitude()
                     < goal_distance_threshold
             })
             .min_by(|a, b| {
-                let dist_a = (a.position - ctx.ball().direction_to_opponent_goal()).magnitude();
-                let dist_b = (b.position - ctx.ball().direction_to_opponent_goal()).magnitude();
+                let dist_a = (a.position - ctx.player().opponent_goal_position()).magnitude();
+                let dist_b = (b.position - ctx.player().opponent_goal_position()).magnitude();
                 dist_a.partial_cmp(&dist_b).unwrap()
             });
 

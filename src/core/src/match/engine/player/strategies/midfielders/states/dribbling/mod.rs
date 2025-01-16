@@ -81,7 +81,7 @@ impl MidfielderDribblingState {
     fn is_in_shooting_position(&self, ctx: &StateProcessingContext) -> bool {
         let shooting_range = 25.0; // Distance from goal to consider shooting
         let player_position = ctx.player.position;
-        let goal_position = ctx.ball().direction_to_opponent_goal();
+        let goal_position = ctx.player().opponent_goal_position();
 
         let distance_to_goal = (player_position - goal_position).magnitude();
 

@@ -69,7 +69,7 @@ impl StateProcessingHandler for ForwardAssistingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal(),
+                target: ctx.player().opponent_goal_position(),
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)

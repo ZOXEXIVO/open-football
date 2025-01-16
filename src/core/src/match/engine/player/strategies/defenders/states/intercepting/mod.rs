@@ -28,11 +28,6 @@ impl StateProcessingHandler for DefenderInterceptingState {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));
-            } else if self.calculate_tackling_success(ctx) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Running,
-                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                ));
             }
         }
 
@@ -91,29 +86,6 @@ impl StateProcessingHandler for DefenderInterceptingState {
 }
 
 impl DefenderInterceptingState {
-    fn calculate_tackling_success(&self, ctx: &StateProcessingContext) -> bool {
-        let player_skills = &ctx.player.skills;
-
-        // Factors affecting tackling success
-        let tackling = player_skills.technical.tackling;
-        let aggression = player_skills.mental.aggression;
-        let anticipation = player_skills.mental.anticipation;
-
-        // Combine skills to create a tackling score
-        let tackling_score = (tackling * 0.5) + (aggression * 0.3) + (anticipation * 0.2);
-
-        // Normalize the score to a value between 0 and 1
-        let normalized_score = tackling_score / 20.0;
-
-        // Generate a random value to determine if the tackle is successful
-        let mut rng = rand::thread_rng();
-        let random_value: f32 = rng.gen_range(0.0..1.0);
-
-        // Tackle is successful if the normalized score is higher than the random value
-        normalized_score > random_value
-    }
-
-    /// Determines if the defender can reach the interception point before any opponent
     fn can_reach_before_opponent(&self, ctx: &StateProcessingContext) -> bool {
         // Calculate time for defender to reach interception point
         let interception_point = self.calculate_interception_point(ctx);

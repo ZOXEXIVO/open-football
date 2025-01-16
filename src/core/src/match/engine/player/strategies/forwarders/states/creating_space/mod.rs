@@ -17,6 +17,12 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting,
+            ));
+        }
+
         // Check if the player has created enough space
         if self.has_created_space(ctx) {
             // If space is created, transition to the assisting state
@@ -46,17 +52,17 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             //     return Some(empty_zone);
             // }
 
-            ctx.ball().direction_to_opponent_goal()
+            ctx.player().opponent_goal_position()
         };
 
-        return Some(
+        Some(
             SteeringBehavior::Arrive {
                 target: direction,
                 slowing_distance: 50.0,
             }
             .calculate(ctx.player)
             .velocity,
-        );
+        )
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {

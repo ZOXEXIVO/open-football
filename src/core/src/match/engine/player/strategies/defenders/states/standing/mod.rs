@@ -76,7 +76,7 @@ impl StateProcessingHandler for DefenderStandingState {
                 DefenderState::Walking,
             ));
         }
-        if ctx.in_state_time > 100 {
+        if ctx.in_state_time > 30 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Walking,
             ));

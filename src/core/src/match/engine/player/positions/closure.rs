@@ -81,11 +81,12 @@ impl PlayerDistanceClosure {
     pub fn teammates<'t>(
         &'t self,
         player: &'t MatchPlayer,
-        distance: f32,
+        min_distance: f32,
+        max_distance: f32,
     ) -> impl Iterator<Item = (u32, f32)> + 't {
         self.distances
             .iter()
-            .filter(move |p| p.distance <= distance)
+            .filter(move |p| p.distance >= min_distance && p.distance <= max_distance)
             .filter_map(|item| {
                 if item.player_from_id == item.player_to_id
                 {

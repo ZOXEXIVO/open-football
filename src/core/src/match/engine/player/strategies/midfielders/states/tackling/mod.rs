@@ -42,7 +42,6 @@ impl StateProcessingHandler for MidfielderTacklingState {
             let opponent_distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
-
                 if tackle_success {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::HoldingPossession,
@@ -130,6 +129,10 @@ impl MidfielderTacklingState {
     }
 
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().is_in_flight() {
+            return false;
+        }
+
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let player_position = ctx.player.position;

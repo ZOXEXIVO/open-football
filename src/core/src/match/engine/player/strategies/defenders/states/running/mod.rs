@@ -1,12 +1,11 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
-const SHOOTING_DISTANCE_THRESHOLD: f32 = 300.0;
+const MAX_SHOOTING_DISTANCE: f32 = 450.0;
 
 #[derive(Default)]
 pub struct DefenderRunningState {}
@@ -39,18 +38,26 @@ impl StateProcessingHandler for DefenderRunningState {
                     DefenderState::Clearing,
                 ));
             }
-        }
+        } else {
+            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
 
-        if ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Tackling,
-            ));
-        }
-
-        if !ctx.ball().is_owned() && ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 150.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
-            ));
+            if ctx.ball().is_owned() {
+                if ctx.ball().distance() < 100.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+            } else {
+                if ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 200.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Intercepting,
+                    ));
+                }
+            }
         }
 
         None
@@ -63,7 +70,7 @@ impl StateProcessingHandler for DefenderRunningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.ball().direction_to_opponent_goal()
+                target: ctx.player().opponent_goal_position()
                     + ctx.player().separation_velocity(),
                 slowing_distance: if ctx.player.has_ball(ctx) {
                     150.0
@@ -151,7 +158,7 @@ impl DefenderRunningState {
     }
 
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.ball().distance_to_opponent_goal() < SHOOTING_DISTANCE_THRESHOLD {
+        if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
             return ctx.player().has_clear_shot();
         }
 

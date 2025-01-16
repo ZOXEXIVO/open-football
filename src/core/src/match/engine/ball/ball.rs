@@ -22,13 +22,13 @@ pub struct Ball {
 
 #[derive(Default)]
 pub struct BallFlags {
-    pub in_passing_state_time: usize,
+    pub in_flight_state: usize,
     pub running_for_ball: bool,
 }
 
 impl BallFlags {
     pub fn reset(&mut self) {
-        self.in_passing_state_time = 0;
+        self.in_flight_state = 0;
         self.running_for_ball = false;
     }
 }
@@ -78,8 +78,8 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         // prevent pass tackling
-        if self.flags.in_passing_state_time > 0 {
-            self.flags.in_passing_state_time -= 1;
+        if self.flags.in_flight_state > 0 {
+            self.flags.in_flight_state -= 1;
         } else {
             self.check_ball_ownership(context, players, events);
         }
