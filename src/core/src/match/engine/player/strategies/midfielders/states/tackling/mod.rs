@@ -22,7 +22,15 @@ impl StateProcessingHandler for MidfielderTacklingState {
             ));
         }
 
-        if ctx.ball().distance() > 50.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
+        let ball_distance = ctx.ball().distance();
+
+        if ball_distance > 100.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Returning,
+            ));
+        }
+
+        if ball_distance > 50.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
             return if ctx.team().is_control_ball() {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::AttackSupporting,

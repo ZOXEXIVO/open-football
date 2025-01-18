@@ -2,14 +2,14 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult,
+    ConditionContext, MatchPlayerLite, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use rand::Rng;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a sliding tackle (in meters)
-const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
+const TACKLE_DISTANCE_THRESHOLD: f32 = 3.0;
+const FOUL_CHANCE_BASE: f32 = 0.2;
 
 #[derive(Default)]
 pub struct DefenderTacklingState {}
@@ -24,12 +24,6 @@ impl StateProcessingHandler for DefenderTacklingState {
             }
         }
 
-        if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
-            ));
-        }
-
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             if opponent.distance(ctx) > TACKLE_DISTANCE_THRESHOLD {
                 return Some(StateChangeResult::with_defender_state(
@@ -37,7 +31,6 @@ impl StateProcessingHandler for DefenderTacklingState {
                 ));
             }
 
-            // 4. Attempt the sliding tackle
             let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
@@ -55,11 +48,10 @@ impl StateProcessingHandler for DefenderTacklingState {
                     DefenderState::Standing,
                 ))
             };
-        }
-
-        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
+        } else if self.can_intercept_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderState::Running,
+                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
             ));
         }
 
@@ -120,5 +112,24 @@ impl DefenderTacklingState {
         let committed_foul = rng.gen::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
+    }
+
+    fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let player_position = ctx.player.position;
+        let player_speed = ctx.player.skills.physical.pace;
+
+        if !ctx.tick_context.ball.is_owned && ball_velocity.magnitude() > 0.1 {
+            let time_to_ball = (ball_position - player_position).magnitude() / player_speed;
+            let ball_travel_distance = ball_velocity.magnitude() * time_to_ball;
+            let ball_intercept_position =
+                ball_position + ball_velocity.normalize() * ball_travel_distance;
+            let player_intercept_distance = (ball_intercept_position - player_position).magnitude();
+
+            player_intercept_distance <= TACKLE_DISTANCE_THRESHOLD
+        } else {
+            false
+        }
     }
 }

@@ -6,6 +6,9 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 10.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
+const MAX_LONG_SHOOTING_DISTANCE: f32 = 500.0; // Maximum distance to attempt a shot
+const MIN_LONG_SHOOTING_DISTANCE: f32 = 300.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
+
 #[derive(Default)]
 pub struct MidfielderRunningState {}
 
@@ -18,10 +21,15 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // If the player has the ball, consider shooting, passing, or dribbling
-            if self.in_shooting_range(ctx) {
+            if self.in_long_distance_shooting_range(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
+                ));
+            }
+
+            if self.in_shooting_range(ctx) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
                 ));
             }
 
@@ -130,6 +138,11 @@ impl StateProcessingHandler for MidfielderRunningState {
 }
 
 impl MidfielderRunningState {
+    fn in_long_distance_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
+        (MIN_SHOOTING_DISTANCE..=MAX_SHOOTING_DISTANCE)
+            .contains(&ctx.ball().distance_to_opponent_goal())
+    }
+
     fn in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         (MIN_SHOOTING_DISTANCE..=MAX_SHOOTING_DISTANCE)
             .contains(&ctx.ball().distance_to_opponent_goal())

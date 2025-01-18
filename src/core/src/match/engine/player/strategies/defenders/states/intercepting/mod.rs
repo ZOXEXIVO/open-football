@@ -1,9 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
-use rand::Rng;
 
 #[derive(Default)]
 pub struct DefenderInterceptingState {}
@@ -16,43 +13,18 @@ impl StateProcessingHandler for DefenderInterceptingState {
             ));
         }
 
-        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+        let ball_distance = ctx.ball().distance();
+
+        if ball_distance < 20.0 {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
+                DefenderState::Tackling,
             ));
         }
 
-
-        if ctx.ball().distance() < 15.0 {
-            if ctx.tick_context.ball.is_owned {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
-            }
-        }
-
-        if ctx.team().is_control_ball() {
-            return if ctx.ball().on_own_side() {
-                Some(StateChangeResult::with_defender_state(
-                    DefenderState::Running,
-                ))
-            } else {
-                Some(StateChangeResult::with_defender_state(
-                    DefenderState::Returning,
-                ))
-            }
-        } else {
-            if ctx.ball().on_own_side() {
-                if ctx.ball().distance() < 150.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-            } else {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Returning,
-                ));
-            }
+        if !ctx.ball().is_towards_player_with_angle(0.8) || ball_distance > 100.0  {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
         }
 
         if !self.can_reach_before_opponent(ctx) {
@@ -66,7 +38,6 @@ impl StateProcessingHandler for DefenderInterceptingState {
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
         None
     }
 
