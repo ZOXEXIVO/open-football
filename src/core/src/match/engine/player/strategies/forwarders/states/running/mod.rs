@@ -109,7 +109,7 @@ impl StateProcessingHandler for ForwardRunningState {
         } else {
             let slowing_distance: f32 = {
                 if ctx.player().goal_distance() < 200.0 {
-                    100.0
+                    200.0
                 } else {
                     10.0
                 }

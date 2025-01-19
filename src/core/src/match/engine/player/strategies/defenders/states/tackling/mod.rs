@@ -114,7 +114,17 @@ impl DefenderTacklingState {
         (tackle_success, committed_foul)
     }
 
+    fn exists_nearby(&self, ctx: &StateProcessingContext) -> bool {
+        const DISTANCE: f32 = 30.0;
+
+        ctx.players().opponents().exists(DISTANCE) || ctx.players().teammates().exists(DISTANCE)
+    }
+
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
+        if self.exists_nearby(ctx){
+            return false;
+        }
+
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let player_position = ctx.player.position;
