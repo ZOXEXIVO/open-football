@@ -22,6 +22,7 @@ pub mod takeball;
 pub mod throwing;
 pub mod walking;
 pub mod attentive;
+pub mod running;
 
 pub use catching::*;
 pub use comingout::*;
@@ -46,3 +47,4 @@ pub use takeball::*;
 pub use throwing::*;
 pub use walking::*;
 pub use attentive::*;
+pub use running::*;

@@ -50,26 +50,27 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     pub fn shooting_direction(&self) -> Vector3<f32> {
         let goal_position = self.opponent_goal_position();
-        let goal_width = self.ctx.context.field_size.width as f32;
 
-        let mut shooting_direction = goal_position - self.ctx.player.position;
+        let goal_height = self.ctx.context.field_size.height as f32;
 
         let shooting_technique = self.skills(self.ctx.player.id).technical.technique;
         let shooting_accuracy = self.skills(self.ctx.player.id).technical.finishing;
 
-        let technique_factor = (shooting_technique - 1.0) / 19.0;
-        let accuracy_factor = (shooting_accuracy - 1.0) / 19.0;
+        // Normalize the skill values to a range between 0 and 1
+        let technique_factor = (shooting_technique as f32 - 1.0) / 19.0;
+        let accuracy_factor = (shooting_accuracy as f32 - 1.0) / 19.0;
 
-        let max_deviation = goal_width / 2.0 * (1.0 - technique_factor * accuracy_factor);
+        // Calculate the maximum deviation in the y-direction based on the goal height and player skills
+        let max_y_deviation = goal_height * 0.15 * (1.0 - technique_factor * accuracy_factor);
 
         let mut rng = rand::thread_rng();
-        let x_offset = rng.gen_range(-max_deviation..max_deviation);
-        let y_offset = rng.gen_range(-max_deviation..max_deviation);
+        let y_offset = rng.gen_range(-max_y_deviation..max_y_deviation);
 
-        shooting_direction.x += x_offset;
-        shooting_direction.y += y_offset;
+        let mut shooting_target = goal_position;
+        
+        shooting_target.y += y_offset;
 
-        shooting_direction.normalize()
+        shooting_target
     }
 
     pub fn opponent_goal_position(&self) -> Vector3<f32> {

@@ -13,6 +13,8 @@ impl StateProcessingHandler for ForwardTakeBallState {
         if ctx.ball().is_owned() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
+        
+        
 
         None
     }
@@ -25,7 +27,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 1.0,
+                slowing_distance: 0.0,
             }
             .calculate(ctx.player)
             .velocity,

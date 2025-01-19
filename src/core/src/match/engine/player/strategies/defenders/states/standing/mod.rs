@@ -40,10 +40,6 @@ impl StateProcessingHandler for DefenderStandingState {
                         DefenderState::Pressing,
                     ));
                 }
-            } else {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Returning,
-                ));
             }
         }
         if ball_ops.distance() < 200.0 {

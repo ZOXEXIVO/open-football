@@ -32,6 +32,12 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             ));
         }
 
+        if ctx.in_state_time > 10 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Running,
+            ));
+        }
+
         None
     }
 

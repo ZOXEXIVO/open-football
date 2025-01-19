@@ -157,6 +157,10 @@ impl MidfielderRunningState {
     }
 
     fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {
+        if ctx.ball().is_owned(){
+            return false;
+        }
+        
         if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return true;
 
@@ -178,7 +182,7 @@ impl MidfielderRunningState {
     }
 
     pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.players().opponents().exists(80.0) {
+        if ctx.players().opponents().exists(15.0) {
             return true;
         }
 
@@ -263,7 +267,7 @@ impl MidfielderRunningState {
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        !self.is_under_pressure(ctx)
+        self.is_under_pressure(ctx)
     }
 
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {

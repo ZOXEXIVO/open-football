@@ -160,21 +160,21 @@ async fn main() {
     }
 }
 
-const TRACKING_PLAYER_ID: u32 = 0;
+const TRACKING_PLAYER_ID: u32 = 107;
 
 pub fn get_home_squad() -> TeamSquad {
     let players = [
         get_player(101, PlayerPositionType::Goalkeeper),
-        get_player(102, PlayerPositionType::DefenderLeft),
-        get_player(103, PlayerPositionType::DefenderCenterLeft),
-        get_player(104, PlayerPositionType::DefenderCenterRight),
-        get_player(105, PlayerPositionType::DefenderRight),
-        get_player(106, PlayerPositionType::MidfielderLeft),
-        get_player(107, PlayerPositionType::MidfielderCenterLeft),
-        get_player(108, PlayerPositionType::MidfielderCenterRight),
-        get_player(109, PlayerPositionType::MidfielderRight),
-        get_player(110, PlayerPositionType::ForwardLeft),
-        get_player(111, PlayerPositionType::ForwardRight),
+        // get_player(102, PlayerPositionType::DefenderLeft),
+        // get_player(103, PlayerPositionType::DefenderCenterLeft),
+        // get_player(104, PlayerPositionType::DefenderCenterRight),
+        // get_player(105, PlayerPositionType::DefenderRight),
+        // get_player(106, PlayerPositionType::MidfielderLeft),
+         get_player(107, PlayerPositionType::MidfielderCenterLeft),
+        // get_player(108, PlayerPositionType::MidfielderCenterRight),
+        // get_player(109, PlayerPositionType::MidfielderRight),
+        // get_player(110, PlayerPositionType::ForwardLeft),
+         get_player(111, PlayerPositionType::ForwardRight),
     ];
 
     let match_players: Vec<MatchPlayer> = players
@@ -203,16 +203,16 @@ pub fn get_home_squad() -> TeamSquad {
 pub fn get_away_squad() -> TeamSquad {
     let players = [
         get_player(113, PlayerPositionType::Goalkeeper),
-        get_player(114, PlayerPositionType::DefenderLeft),
-        get_player(115, PlayerPositionType::DefenderCenterLeft),
-        get_player(116, PlayerPositionType::DefenderCenterRight),
-        get_player(117, PlayerPositionType::DefenderRight),
-        get_player(118, PlayerPositionType::MidfielderLeft),
-        get_player(119, PlayerPositionType::MidfielderCenterLeft),
-        get_player(120, PlayerPositionType::MidfielderCenterRight),
-        get_player(121, PlayerPositionType::MidfielderRight),
-        get_player(122, PlayerPositionType::ForwardLeft),
-        get_player(123, PlayerPositionType::ForwardRight),
+        // get_player(114, PlayerPositionType::DefenderLeft),
+        // get_player(115, PlayerPositionType::DefenderCenterLeft),
+        // get_player(116, PlayerPositionType::DefenderCenterRight),
+        // get_player(117, PlayerPositionType::DefenderRight),
+        // get_player(118, PlayerPositionType::MidfielderLeft),
+        // get_player(119, PlayerPositionType::MidfielderCenterLeft),
+        // get_player(120, PlayerPositionType::MidfielderCenterRight),
+        // get_player(121, PlayerPositionType::MidfielderRight),
+        // get_player(122, PlayerPositionType::ForwardLeft),
+        // get_player(123, PlayerPositionType::ForwardRight),
     ];
 
     let match_players: Vec<MatchPlayer> = players

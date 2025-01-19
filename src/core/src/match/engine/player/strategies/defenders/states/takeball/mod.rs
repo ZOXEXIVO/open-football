@@ -27,7 +27,7 @@ impl StateProcessingHandler for DefenderTakeBallState {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 1.0,
+                slowing_distance: 0.0,
             }
             .calculate(ctx.player)
             .velocity,

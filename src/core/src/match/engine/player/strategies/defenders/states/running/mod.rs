@@ -92,7 +92,7 @@ impl DefenderRunningState {
     }
 
     pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.players().opponents().exists(50.0) {
+        if ctx.players().opponents().exists(20.0) {
             return true;
         }
 
@@ -125,6 +125,10 @@ impl DefenderRunningState {
             .teammates()
             .nearby(200.0)
             .filter(|teammate| {
+                if teammate.tactical_positions.is_goalkeeper() {
+                    return false;
+                }
+                
                 let is_on_opposite_side = match ctx.player.side {
                     Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
                     Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
