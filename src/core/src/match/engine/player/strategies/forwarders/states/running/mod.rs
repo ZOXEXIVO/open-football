@@ -55,7 +55,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() && ctx.ball().is_towards_player_with_angle(0.85) {
+            if ctx.ball().distance() < 200.0
+                && !ctx.team().is_control_ball()
+                && ctx.ball().is_towards_player_with_angle(0.85)
+            {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Intercepting,
                 ));
@@ -91,37 +94,38 @@ impl StateProcessingHandler for ForwardRunningState {
             .velocity;
 
             Some(player_goal_velocity)
-        } else if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
-            let players =  ctx.players();
-            let opponents = players.opponents();
+        } else {
+            if ctx.ball().is_owned() {
+                let players = ctx.players();
+                let opponents = players.opponents();
 
-            if let Some(goalkeeper) = opponents.goalkeeper().next() {
-                let result = SteeringBehavior::Evade {
-                    target: goalkeeper.position + ctx.player().separation_velocity(),
-                }
-                .calculate(ctx.player)
-                .velocity;
+                if let Some(goalkeeper) = opponents.goalkeeper().next() {
+                    let result = SteeringBehavior::Arrive {
+                        target: goalkeeper.position + ctx.player().separation_velocity(),
+                        slowing_distance: 200.0
+                    }
+                        .calculate(ctx.player)
+                        .velocity;
 
-               return Some(result  + ctx.player().separation_velocity());
-            }
+                    return Some(result + ctx.player().separation_velocity());
+                };
+            } else {
+                let players = ctx.players();
+                let opponents = players.opponents();
+
+                if let Some(goalkeeper) = opponents.goalkeeper().next() {
+                    let result = SteeringBehavior::Arrive {
+                        target: ctx.tick_context.positions.ball.position,
+                        slowing_distance: 0.0
+                    }
+                        .calculate(ctx.player)
+                        .velocity;
+
+                    return Some(result + ctx.player().separation_velocity());
+                };
+            };
 
             None
-        } else {
-            let slowing_distance: f32 = {
-                if ctx.player().goal_distance() < 200.0 {
-                    200.0
-                } else {
-                    10.0
-                }
-            };
-            let result = SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position + ctx.player().separation_velocity(),
-                slowing_distance,
-            }
-            .calculate(ctx.player)
-            .velocity;
-
-            Some(result)
         }
     }
 

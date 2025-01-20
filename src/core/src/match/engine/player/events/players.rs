@@ -146,7 +146,7 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
 
-        field.ball.flags.in_flight_state = 100;
+        field.ball.flags.in_flight_state = 10;
     }
 
     fn handle_claim_ball_event(player_id: u32, field: &mut MatchField) {

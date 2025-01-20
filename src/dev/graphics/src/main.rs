@@ -1,9 +1,9 @@
-use core::r#match::VectorExtensions;
 use core::r#match::ball::Ball;
 use core::r#match::player::MatchPlayer;
 use core::r#match::FootballEngine;
 use core::r#match::MatchContext;
 use core::r#match::MatchField;
+use core::r#match::VectorExtensions;
 use macroquad::prelude::*;
 use std::thread;
 use std::time::Duration;
@@ -165,16 +165,16 @@ const TRACKING_PLAYER_ID: u32 = 107;
 pub fn get_home_squad() -> TeamSquad {
     let players = [
         get_player(101, PlayerPositionType::Goalkeeper),
-        // get_player(102, PlayerPositionType::DefenderLeft),
-        // get_player(103, PlayerPositionType::DefenderCenterLeft),
-        // get_player(104, PlayerPositionType::DefenderCenterRight),
-        // get_player(105, PlayerPositionType::DefenderRight),
-        // get_player(106, PlayerPositionType::MidfielderLeft),
-         get_player(107, PlayerPositionType::MidfielderCenterLeft),
-        // get_player(108, PlayerPositionType::MidfielderCenterRight),
-        // get_player(109, PlayerPositionType::MidfielderRight),
-        // get_player(110, PlayerPositionType::ForwardLeft),
-         get_player(111, PlayerPositionType::ForwardRight),
+        get_player(102, PlayerPositionType::DefenderLeft),
+        get_player(103, PlayerPositionType::DefenderCenterLeft),
+        get_player(104, PlayerPositionType::DefenderCenterRight),
+        get_player(105, PlayerPositionType::DefenderRight),
+        get_player(106, PlayerPositionType::MidfielderLeft),
+        get_player(107, PlayerPositionType::MidfielderCenterLeft),
+        get_player(108, PlayerPositionType::MidfielderCenterRight),
+        get_player(109, PlayerPositionType::MidfielderRight),
+        get_player(110, PlayerPositionType::ForwardLeft),
+        get_player(111, PlayerPositionType::ForwardRight),
     ];
 
     let match_players: Vec<MatchPlayer> = players
@@ -203,16 +203,16 @@ pub fn get_home_squad() -> TeamSquad {
 pub fn get_away_squad() -> TeamSquad {
     let players = [
         get_player(113, PlayerPositionType::Goalkeeper),
-        // get_player(114, PlayerPositionType::DefenderLeft),
-        // get_player(115, PlayerPositionType::DefenderCenterLeft),
-        // get_player(116, PlayerPositionType::DefenderCenterRight),
-        // get_player(117, PlayerPositionType::DefenderRight),
-        // get_player(118, PlayerPositionType::MidfielderLeft),
-        // get_player(119, PlayerPositionType::MidfielderCenterLeft),
-        // get_player(120, PlayerPositionType::MidfielderCenterRight),
-        // get_player(121, PlayerPositionType::MidfielderRight),
-        // get_player(122, PlayerPositionType::ForwardLeft),
-        // get_player(123, PlayerPositionType::ForwardRight),
+        get_player(114, PlayerPositionType::DefenderLeft),
+        get_player(115, PlayerPositionType::DefenderCenterLeft),
+        get_player(116, PlayerPositionType::DefenderCenterRight),
+        get_player(117, PlayerPositionType::DefenderRight),
+        get_player(118, PlayerPositionType::MidfielderLeft),
+        get_player(119, PlayerPositionType::MidfielderCenterLeft),
+        get_player(120, PlayerPositionType::MidfielderCenterRight),
+        get_player(121, PlayerPositionType::MidfielderRight),
+        get_player(122, PlayerPositionType::ForwardLeft),
+        get_player(123, PlayerPositionType::ForwardRight),
     ];
 
     let match_players: Vec<MatchPlayer> = players
@@ -422,24 +422,20 @@ fn draw_players(
         // ID
 
         let left_goal = Vector3::new(0.0, field.size.height as f32 / 2.0, 0.0);
-        let right_goal = Vector3::new(field.size.width as f32, (field.size.height / 2usize) as f32, 0.0);
-        
+        let right_goal = Vector3::new(
+            field.size.width as f32,
+            (field.size.height / 2usize) as f32,
+            0.0,
+        );
+
         let target_goal = match player.side {
-            Some(PlayerSide::Left) => Vector3::new(
-                right_goal.x,
-                right_goal.y,
-                0.0,
-            ),
-            Some(PlayerSide::Right) => Vector3::new(
-                left_goal.x,
-                left_goal.y,
-                0.0,
-            ),
+            Some(PlayerSide::Left) => Vector3::new(right_goal.x, right_goal.y, 0.0),
+            Some(PlayerSide::Right) => Vector3::new(left_goal.x, left_goal.y, 0.0),
             _ => Vector3::new(0.0, 0.0, 0.0),
         };
-        
+
         let goal_distance = field.ball.position.distance_to(&target_goal);
-        
+
         let distance_to_opponent_goal = &format!("g_d = {}", goal_distance);
 
         let distance_to_opponent_goal_font_size = 13.0 * scale;
