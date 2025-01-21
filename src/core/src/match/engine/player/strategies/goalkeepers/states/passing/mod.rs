@@ -58,7 +58,7 @@ impl GoalkeeperPassingState {
 
         let open_teammates: Vec<MatchPlayerLite> = teammates
             .nearby(vision_range)
-            .filter(|t| self.is_teammate_open(ctx, t))
+            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
             .collect();
 
         if !open_teammates.is_empty() {

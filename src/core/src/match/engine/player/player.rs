@@ -1,4 +1,5 @@
 ﻿use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::engine::tactics::TacticalPositions;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
@@ -12,7 +13,6 @@ use crate::{
 };
 use nalgebra::Vector3;
 use std::fmt::*;
-use crate::r#match::engine::tactics::{TacticalPositions};
 
 #[derive(Debug, Clone)]
 pub struct MatchPlayer {
@@ -47,13 +47,13 @@ impl MatchPlayer {
     ) -> Self {
         MatchPlayer {
             id: player.id,
-            position: Vector3::new(0.0, 0.0, 0.0),
-            start_position: Vector3::new(0.0, 0.0, 0.0),
+            position: Vector3::zeros(),
+            start_position: Vector3::zeros(),
             attributes: player.attributes,
             team_id,
             player_attributes: player.player_attributes,
             skills: player.skills,
-            velocity: Vector3::new(0.0, 0.0, 0.0),
+            velocity: Vector3::zeros(),
             tactical_position: TacticalPositions::new(position),
             side: None,
             state: Self::default_state(position),
@@ -144,7 +144,7 @@ impl MatchPlayer {
 pub struct MatchPlayerLite {
     pub id: u32,
     pub position: Vector3<f32>,
-    pub tactical_positions: PlayerPositionType
+    pub tactical_positions: PlayerPositionType,
 }
 
 impl MatchPlayerLite {
@@ -157,8 +157,6 @@ impl MatchPlayerLite {
     }
 
     pub fn distance(&self, ctx: &StateProcessingContext<'_>) -> f32 {
-        ctx.tick_context
-            .distances
-            .get(self.id, ctx.player.id)
+        ctx.tick_context.distances.get(self.id, ctx.player.id)
     }
 }
