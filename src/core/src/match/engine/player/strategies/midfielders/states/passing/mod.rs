@@ -6,8 +6,6 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
-use neural::{Tensor, DEFAULT_NEURAL_DEVICE, MIDFIELDER_PASSING_NEURAL_NETWORK};
 
 #[derive(Default)]
 pub struct MidfielderPassingState {}
@@ -79,7 +77,7 @@ impl MidfielderPassingState {
 
         teammates
             .nearby(vision_range)
-            .filter(|t| self.is_teammate_open(ctx, t))
+            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
             .max_by(|a, b| a.position.x.total_cmp(&b.position.x))
 
 

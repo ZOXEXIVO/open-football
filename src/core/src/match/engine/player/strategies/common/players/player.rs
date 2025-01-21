@@ -214,6 +214,25 @@ impl<'p> PlayerOperationsImpl<'p> {
         }
     }
 
+    pub fn has_clear_pass(&self, player_id: u32) -> bool {
+        let player_position = self.ctx.player.position;
+        let target_player_position = self.ctx.tick_context.positions.players.position(player_id);
+        let direction_to_player = (target_player_position - player_position).normalize();
+
+        // Check if the distance to the target player is within a reasonable pass range
+        let distance_to_player = self.ctx.player().distance_to_player(player_id);
+
+        // Check if there are any opponents obstructing the pass
+        let ray_cast_result = self.ctx.tick_context.space.cast_ray(
+            player_position,
+            direction_to_player,
+            distance_to_player,
+            false,
+        );
+
+        ray_cast_result.is_none()
+    }
+
     pub fn has_clear_shot(&self) -> bool {
         let player_position = self.ctx.player.position;
         let goal_position = self.ctx.player().opponent_goal_position();

@@ -5,7 +5,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 450.0;
+const MAX_SHOOTING_DISTANCE: f32 = 400.0;
 
 #[derive(Default)]
 pub struct DefenderRunningState {}

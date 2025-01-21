@@ -108,6 +108,7 @@ impl ForwardPassingState {
 
         let nearest_to_goal = teammates
             .all()
+            .filter(|p| ctx.player().has_clear_pass(p.id))
             .filter(|teammate| {
                 // Check if the teammate is in a dangerous position near the opponent's goal
                 let goal_distance_threshold = ctx.context.field_size.width as f32 * 0.2;
@@ -143,7 +144,8 @@ impl ForwardPassingState {
         let players = ctx.players();
         let teammates = players.teammates();
 
-        let nearest_teammate = teammates.nearby(300.0).max_by(|a, b| {
+        let nearest_teammate = teammates.nearby(300.0).filter(|p| ctx.player().has_clear_pass(p.id))
+            .max_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
             dist_a.partial_cmp(&dist_b).unwrap()
