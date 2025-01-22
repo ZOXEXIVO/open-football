@@ -47,7 +47,10 @@ pub struct LeagueScheduleItem<'si> {
 #[derive(Serialize)]
 pub struct LeagueScheduleItemResult {
     pub home_goals: u8,
+    pub home_goalscorers: Vec<String>,
+
     pub away_goals: u8,
+    pub away_goalscorers: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -163,6 +166,7 @@ pub async fn league_get_action(
                                     } else {
                                         res.away.get()
                                     },
+                                    home_goalscorers: item.result.as_ref().unwrap().home
                                     away_goals: if item.away_team_id == res.away.team_id {
                                         res.away.get()
                                     } else {

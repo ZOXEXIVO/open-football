@@ -1,7 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::round::RoundSchedule;
 use crate::league::{LeagueMatch, LeagueSettings, ScheduleGenerator, ScheduleResult, Season};
-use crate::r#match::TeamScore;
+use crate::r#match::{Score, TeamScore};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 
@@ -28,13 +28,7 @@ pub struct ScheduleItem {
     pub home_team_id: u32,
     pub away_team_id: u32,
 
-    pub result: Option<ScheduleItemResult>,
-}
-
-#[derive(Debug, Clone)]
-pub struct ScheduleItemResult {
-    pub home: TeamScore,
-    pub away: TeamScore,
+    pub result: Option<Score>,
 }
 
 impl Schedule {
@@ -112,29 +106,24 @@ impl Schedule {
             .flat_map(|t| &t.items)
             .filter(|s| s.home_team_id == team_id || s.away_team_id == team_id)
             .map(|s| {
-                let res = match &s.result {
-                    Some(result) => Some(ScheduleItemResult::new(&result.home, &result.away)),
-                    None => None,
-                };
-
                 ScheduleItem::new(
                     s.league_id,
                     String::from(&s.league_slug),
                     s.home_team_id,
                     s.away_team_id,
                     s.date,
-                    res,
+                    s.result.clone(),
                 )
             })
             .collect()
     }
 
-    pub fn update_match_result(&mut self, id: &str, home_team: &TeamScore, away_team: &TeamScore) {
+    pub fn update_match_result(&mut self, id: &str, score: &Score) {
         let mut _updated = false;
 
         for tour in &mut self.tours.iter_mut().filter(|t| !t.played()) {
             if let Some(item) = tour.items.iter_mut().find(|i| i.id == id) {
-                item.result = Some(ScheduleItemResult::new(home_team, away_team));
+                item.result = Some(score.clone());
                 _updated = true;
             }
         }
@@ -167,7 +156,7 @@ impl ScheduleItem {
         home_team_id: u32,
         away_team_id: u32,
         date: NaiveDateTime,
-        result: Option<ScheduleItemResult>,
+        result: Option<Score>,
     ) -> Self {
         let id = format!("{}_{}_{}", date.date(), home_team_id, away_team_id);
 
@@ -182,15 +171,15 @@ impl ScheduleItem {
         }
     }
 }
-
-impl ScheduleItemResult {
-    pub fn new(home_team: &TeamScore, away_team: &TeamScore) -> Self {
-        ScheduleItemResult {
-            home: TeamScore::from(home_team),
-            away: TeamScore::from(away_team),
-        }
-    }
-}
+//
+// impl Score {
+//     pub fn new(home_team: &TeamScore, away_team: &TeamScore) -> Self {
+//         Score {
+//             home: TeamScore::from(home_team),
+//             away: TeamScore::from(away_team),
+//         }
+//     }
+// }
 
 impl ScheduleTour {
     pub fn new(num: u8, games_count: usize) -> Self {

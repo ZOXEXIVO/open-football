@@ -98,10 +98,7 @@ impl League {
                 let match_result = Logging::estimate_result(|| match_to_play.play(), message);
 
                 // Set match result in schedule
-                scheduled_match.result = Some(LeagueMatchResultResult::new(
-                    &match_result.score.home_team,
-                    &match_result.score.away_team,
-                ));
+                scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
 
                 match_result
             })
