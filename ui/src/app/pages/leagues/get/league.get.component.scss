@@ -80,6 +80,7 @@ table.week-results td {
 .week-results .home-team {
   text-align: right;
   padding-left: 10px;
+  vertical-align: top;
 }
 
 td.score {
@@ -87,11 +88,14 @@ td.score {
   width: 150px;
   text-align: center;
   font-weight: bold;
+
+  vertical-align: top;
 }
 
 .week-results .away-team {
   text-align: left;
   padding-right: 10px;
+  vertical-align: top;
 }
 
 .league-competitions .list-group-item {
@@ -122,3 +126,19 @@ a {
    color: #868A8A;
  }
 
+ul.goalscorers-list {
+  list-style: none;
+
+  max-height: 45px;
+
+  overflow: hidden;
+
+  padding-left: 0;
+
+  li {
+    font-size: 10px;
+    a {
+      color: #8b8b8b;
+    }
+  }
+}

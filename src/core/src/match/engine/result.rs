@@ -99,6 +99,7 @@ impl FieldSquad {
 pub struct Score {
     pub home_team: TeamScore,
     pub away_team: TeamScore,
+
     pub details: Vec<GoalDetail>,
 }
 

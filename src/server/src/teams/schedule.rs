@@ -103,8 +103,8 @@ pub async fn team_schedule_get_action(
                     result: if schedule.result.is_some() {
                         Some(TeamScheduleItemResult {
                             match_id: &schedule.id,
-                            home_goals: schedule.result.as_ref().unwrap().home.get(),
-                            away_goals: schedule.result.as_ref().unwrap().away.get(),
+                            home_goals: schedule.result.as_ref().unwrap().home_team.get(),
+                            away_goals: schedule.result.as_ref().unwrap().away_team.get(),
                         })
                     } else {
                         None

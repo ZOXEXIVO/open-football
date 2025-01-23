@@ -1,7 +1,7 @@
-use crate::r#match::ball::events::BallEvent;
+use crate::r#match::ball::events::{BallEvent, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::result::VectorExtensions;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
 pub struct Ball {
@@ -217,7 +217,9 @@ impl Ball {
                 })
                 .collect();
 
-            let is_nearby_already_has_ball = nearby_players.iter().any(|player| Some(player.id) == self.current_owner);
+            let is_nearby_already_has_ball = nearby_players
+                .iter()
+                .any(|player| Some(player.id) == self.current_owner);
             if is_nearby_already_has_ball {
                 return;
             }
@@ -270,8 +272,20 @@ impl Ball {
     }
 
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
-        if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
-            result.add_ball_event(BallEvent::Goal(goal_side, self.previous_owner));
+        if let Some(_goal_side) = context.goal_positions.is_goal(self.position) {
+            if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
+                let player = context.players.by_id(goalscorer).unwrap();
+
+                if let Some(side) = player.side {
+                    let goal_side = match side {
+                        PlayerSide::Left => GoalSide::Home,
+                        PlayerSide::Right => GoalSide::Away,
+                    };
+
+                    result.add_ball_event(BallEvent::Goal(goal_side, Some(goalscorer)));
+                }
+            }
+
             self.reset();
         }
     }
@@ -287,8 +301,10 @@ impl Ball {
         let velocity_norm = self.velocity.norm();
 
         if velocity_norm > STOPPING_THRESHOLD {
-            let drag_force = -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
-            let rolling_resistance_force = -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
+            let drag_force =
+                -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
+            let rolling_resistance_force =
+                -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
 
             let total_force = drag_force + rolling_resistance_force;
             let acceleration = total_force / BALL_MASS;
