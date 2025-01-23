@@ -272,18 +272,9 @@ impl Ball {
     }
 
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
-        if let Some(_goal_side) = context.goal_positions.is_goal(self.position) {
+        if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
             if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
-                let player = context.players.by_id(goalscorer).unwrap();
-
-                if let Some(side) = player.side {
-                    let goal_side = match side {
-                        PlayerSide::Left => GoalSide::Home,
-                        PlayerSide::Right => GoalSide::Away,
-                    };
-
-                    result.add_ball_event(BallEvent::Goal(goal_side, Some(goalscorer)));
-                }
+                result.add_ball_event(BallEvent::Goal(goal_side, Some(goalscorer)));
             }
 
             self.reset();
