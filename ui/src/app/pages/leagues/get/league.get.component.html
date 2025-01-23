@@ -113,7 +113,7 @@
                                             <ul *ngIf="item.result" class="goalscorers-list"    >
                                                 <li *ngFor="let gs_item of item.result.home_goalscorers">
                                                     <a [routerLink]="['/teams/' + item.home_team_slug + '/players/' + gs_item.id]">
-                                                        {{ gs_item.name }}
+                                                        {{ gs_item.name }} {{ gs_item.time }} <span *ngIf="gs_item.auto_goal">AG</span>
                                                     </a>
                                                 </li>
                                             </ul>
@@ -140,7 +140,7 @@
                                             <ul *ngIf="item.result" class="goalscorers-list">
                                                 <li *ngFor="let gs_item of item.result.away_goalscorers">
                                                     <a [routerLink]="['/teams/' + item.away_team_slug + '/players/' + gs_item.id]">
-                                                        {{ gs_item.name }}
+                                                        {{ gs_item.name }} {{ gs_item.time }} <span *ngIf="gs_item.auto_goal">AG</span>
                                                     </a>
                                                 </li>
                                             </ul>

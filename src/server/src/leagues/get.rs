@@ -66,6 +66,8 @@ impl From<&Score> for LeagueScheduleItemResult {
 pub struct LeagueTableGoalscorer {
     pub id: u32,
     pub name: String,
+    pub time: String,
+    pub auto_goal: bool
 }
 
 #[derive(Serialize)]
@@ -194,6 +196,8 @@ pub async fn league_get_action(
                                             Some(LeagueTableGoalscorer {
                                                 id: detail.player_id,
                                                 name: player.full_name.to_string(),
+                                                time: format!("('{})", Duration::new((detail.time / 1000) as i64, 0).unwrap().num_minutes()),
+                                                auto_goal: detail.is_auto_goal
                                             })
                                         } else {
                                             None
@@ -210,6 +214,8 @@ pub async fn league_get_action(
                                             Some(LeagueTableGoalscorer {
                                                 id: detail.player_id,
                                                 name: player.full_name.to_string(),
+                                                time: format!("('{})", Duration::new((detail.time / 1000) as i64, 0).unwrap().num_minutes()),
+                                                auto_goal: detail.is_auto_goal
                                             })
                                         } else {
                                             None

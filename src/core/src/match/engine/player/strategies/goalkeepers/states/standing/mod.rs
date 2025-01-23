@@ -14,9 +14,16 @@ pub struct GoalkeeperStandingState {}
 impl StateProcessingHandler for GoalkeeperStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
-            ));
+            if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Passing,
+                ));
+            }
+            else {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Running,
+                ));
+            }
         }
         else {
             if ctx.ball().distance() < 150.0 {

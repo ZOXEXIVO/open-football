@@ -162,7 +162,7 @@ impl PartialOrd for TeamScore {
 pub struct GoalDetail {
     pub player_id: u32,
     pub stat_type: MatchStatisticType,
-
+    pub is_auto_goal: bool,
     pub time: u64,
 }
 

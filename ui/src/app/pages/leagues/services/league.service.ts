@@ -65,5 +65,7 @@ export interface LeagueTourScheduleMatchResultDto {
 
 export interface LeagueTableGoalscorerDto {
    id: number,
-   name: number
+   name: number,
+   time: string,
+   auto_goal: boolean
 }

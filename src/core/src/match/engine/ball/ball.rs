@@ -1,4 +1,4 @@
-use crate::r#match::ball::events::{BallEvent, GoalSide};
+use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::result::VectorExtensions;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
@@ -274,7 +274,21 @@ impl Ball {
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
             if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
-                result.add_ball_event(BallEvent::Goal(goal_side, Some(goalscorer)));
+
+                let player = context.players.by_id(goalscorer).unwrap();
+                let is_auto_goal = match player.side {
+                    Some(PlayerSide::Left) => goal_side == GoalSide::Home,
+                    Some(PlayerSide::Right) => goal_side == GoalSide::Away,
+                    _ => false
+                };
+
+                let goal_event_metadata = BallGoalEventMetadata {
+                    side: goal_side,
+                    goalscorer_player_id: goalscorer,
+                    auto_goal: is_auto_goal
+                };
+
+                result.add_ball_event(BallEvent::Goal(goal_event_metadata));
             }
 
             self.reset();

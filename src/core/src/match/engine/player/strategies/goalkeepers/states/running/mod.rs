@@ -1,10 +1,11 @@
-use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
+use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -13,9 +14,17 @@ pub struct GoalkeeperRunningState {}
 impl StateProcessingHandler for GoalkeeperRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            if self.should_pass(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Passing,
+            if let Some(teammate) = self.find_best_pass_option(ctx) {
+                return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                    GoalkeeperState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::build()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(teammate.id)
+                            .with_target(teammate.position)
+                            .with_force(ctx.player().pass_teammate_power(teammate.id))
+                            .build(),
+                    )),
                 ));
             }
         } else {
@@ -33,31 +42,27 @@ impl StateProcessingHandler for GoalkeeperRunningState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.has_ball(ctx) {
-            let goal_direction = ctx.player().opponent_goal_position();
-
-            let player_goal_velocity = SteeringBehavior::Arrive {
-                target: goal_direction + ctx.player().separation_velocity(),
-                slowing_distance: 100.0,
-            }
-            .calculate(ctx.player)
-            .velocity;
-
-            Some(player_goal_velocity)
-        } else if ctx.player().goal_distance() < 150.0 && ctx.players().opponents().exists(50.0) {
-            let players = ctx.players();
-            let opponents = players.opponents();
-
-            if let Some(goalkeeper) = opponents.goalkeeper().next() {
-                let result = SteeringBehavior::Evade {
-                    target: goalkeeper.position + ctx.player().separation_velocity(),
+            if let Some(nearest_opponent) = ctx.players().opponents().nearby(100.0).next() {
+                let player_goal_velocity = SteeringBehavior::Evade {
+                    target: nearest_opponent.position,
                 }
                 .calculate(ctx.player)
                 .velocity;
 
-                return Some(result + ctx.player().separation_velocity());
+                Some(player_goal_velocity)
+            } else {
+                Some(
+                    SteeringBehavior::Wander {
+                        target: ctx.player.start_position + ctx.player().separation_velocity(),
+                        radius: IntegerUtils::random(5, 150) as f32,
+                        jitter: IntegerUtils::random(0, 2) as f32,
+                        distance: IntegerUtils::random(10, 150) as f32,
+                        angle: IntegerUtils::random(0, 360) as f32,
+                    }
+                    .calculate(ctx.player)
+                    .velocity,
+                )
             }
-
-            None
         } else {
             let slowing_distance: f32 = {
                 if ctx.player().goal_distance() < 200.0 {
@@ -82,63 +87,51 @@ impl StateProcessingHandler for GoalkeeperRunningState {
 }
 
 impl GoalkeeperRunningState {
-    pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.players().opponents().exists(50.0) {
-            return true;
-        }
-
-        let game_vision_skill = ctx.player.skills.mental.vision;
-        let game_vision_threshold = 14.0; // Adjust this value based on your game balance
-
-        if game_vision_skill >= game_vision_threshold {
-            if let Some(_) = self.find_open_teammate_on_opposite_side(ctx) {
-                return true;
-            }
-        }
-
-        false
-    }
-
-    fn find_open_teammate_on_opposite_side(
+    fn find_best_pass_option<'a>(
         &self,
-        ctx: &StateProcessingContext,
+        ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let opposite_side_x = match ctx.player.side {
-            Some(PlayerSide::Left) => field_width * 0.75,
-            Some(PlayerSide::Right) => field_width * 0.25,
-            None => return None,
-        };
-
-        let mut open_teammates: Vec<MatchPlayerLite> = ctx
+        let vision_range = ctx.player.skills.mental.vision * 15.0;
+        let open_teammates: Vec<MatchPlayerLite> = ctx
             .players()
             .teammates()
-            .nearby(200.0)
-            .filter(|teammate| {
-                let is_on_opposite_side = match ctx.player.side {
-                    Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
-                    Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,
-                    None => false,
-                };
-                let is_open = !ctx
-                    .players()
-                    .opponents()
-                    .nearby(20.0)
-                    .any(|opponent| opponent.id == teammate.id);
-                is_on_opposite_side && is_open
-            })
+            .nearby(vision_range)
+            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
             .collect();
 
-        if open_teammates.is_empty() {
-            None
+        if !open_teammates.is_empty() {
+            open_teammates
+                .iter()
+                .min_by(|a, b| {
+                    let risk_a = self.estimate_interception_risk(ctx, a);
+                    let risk_b = self.estimate_interception_risk(ctx, b);
+                    risk_a
+                        .partial_cmp(&risk_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
         } else {
-            open_teammates.sort_by(|a, b| {
-                let dist_a = (a.position - player_position).magnitude();
-                let dist_b = (b.position - player_position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap()
-            });
-            Some(open_teammates[0])
+            None
         }
+    }
+
+    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let opponent_distance_threshold = 5.0;
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
+            .count() == 0
+    }
+
+    fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
+        let max_interception_distance = 10.0;
+        let player_position = ctx.player.position;
+        let pass_direction = (teammate.position - player_position).normalize();
+
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - player_position).dot(&pass_direction) > 0.0)
+            .map(|o| (o.position - player_position).magnitude())
+            .filter(|d| *d <= max_interception_distance)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(max_interception_distance)
     }
 }
