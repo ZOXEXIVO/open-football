@@ -26,7 +26,6 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         }
 
         if !self.can_reach_before_opponent(ctx) {
-            // If not, transition to Pressing or HoldingLine state
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Pressing,
             ));
