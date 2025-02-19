@@ -64,7 +64,7 @@ mod tests {
     #[test]
     fn test_add_goal() {
         let mut stats = MatchPlayerStatistics::new();
-        stats.add_goal(30);
+        stats.add_goal(30, false);
 
         assert_eq!(stats.items.len(), 1);
         assert_eq!(stats.items[0].stat_type, MatchStatisticType::Goal);
@@ -89,7 +89,7 @@ mod tests {
         assert!(stats.is_empty());
 
         let mut stats_with_goal = MatchPlayerStatistics::new();
-        stats_with_goal.add_goal(10);
+        stats_with_goal.add_goal(10, false);
         assert!(!stats_with_goal.is_empty());
 
         let mut stats_with_assist = MatchPlayerStatistics::new();

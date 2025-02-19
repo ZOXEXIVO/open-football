@@ -236,9 +236,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let item2 = ScheduleItem {
@@ -251,9 +252,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let mut items_with_results = Vec::new();
@@ -301,9 +303,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let item2 = ScheduleItem {
@@ -316,9 +319,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let schedule_tour = ScheduleTour {
@@ -340,9 +344,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let item2 = ScheduleItem {
@@ -354,9 +359,10 @@ mod tests {
                 .unwrap(),
             home_team_id: 0,
             away_team_id: 0,
-            result: Some(ScheduleItemResult {
-                home: TeamScore::new_with_score(0, 0),
-                away: TeamScore::new_with_score(0, 0),
+            result: Some(Score {
+                home_team: TeamScore::new_with_score(0, 0),
+                away_team: TeamScore::new_with_score(0, 0),
+                details: Vec::new()
             }),
         };
         let schedule_tour = ScheduleTour {
