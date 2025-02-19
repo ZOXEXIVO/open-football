@@ -53,7 +53,7 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
                 // Optionally reduce goalkeeper's stamina
                 // ctx.player.player_attributes.reduce_stamina(tackle_stamina_cost);
 
-                return Some(state_change);
+                Some(state_change)
             } else if committed_foul {
                 // Tackle resulted in a foul
                 let mut state_change =

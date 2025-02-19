@@ -1,5 +1,5 @@
 use crate::league::{LeagueTableResult, ScheduleItem};
-use crate::r#match::{MatchResult, TeamScore};
+use crate::r#match::{GoalDetail, MatchResult, Score, TeamScore};
 use crate::simulator::SimulatorData;
 use crate::{MatchHistoryItem, SimulationResult};
 use chrono::NaiveDateTime;
@@ -48,8 +48,7 @@ impl LeagueResult {
 
         league.schedule.update_match_result(
             &result.id,
-            &result.score.home_team,
-            &result.score.away_team,
+            &result.score
         );
 
         let home_team = data.team_mut(result.score.home_team.team_id).unwrap();
@@ -118,15 +117,18 @@ pub struct LeagueMatch {
 pub struct LeagueMatchResultResult {
     pub home: TeamScore,
     pub away: TeamScore,
+    pub details: Vec<GoalDetail>,
 }
 
 impl LeagueMatchResultResult {
-    pub fn new(home_team: &TeamScore, away_team: &TeamScore) -> Self {
+    pub fn from_score(score: &Score) -> Self {
         LeagueMatchResultResult {
-            home: TeamScore::from(home_team),
-            away: TeamScore::from(away_team),
+            home: TeamScore::from(&score.home_team),
+            away: TeamScore::from(&score.away_team),
+            details: score.detail().to_vec(),
         }
     }
+
 }
 
 impl From<ScheduleItem> for LeagueMatch {
@@ -142,7 +144,7 @@ impl From<ScheduleItem> for LeagueMatch {
         };
 
         if let Some(res) = item.result {
-            result.result = Some(LeagueMatchResultResult::new(&res.home, &res.away));
+            result.result = Some(LeagueMatchResultResult::from_score(&res));
         }
 
         result

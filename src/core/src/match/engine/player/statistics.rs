@@ -14,10 +14,11 @@ impl MatchPlayerStatistics {
         self.items.is_empty()
     }
 
-    pub fn add_goal(&mut self, match_second: u64) {
+    pub fn add_goal(&mut self, match_second: u64, is_auto_goal: bool) {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Goal,
             match_second,
+            is_auto_goal
         })
     }
 
@@ -25,6 +26,7 @@ impl MatchPlayerStatistics {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Assist,
             match_second,
+            is_auto_goal: false
         })
     }
 }
@@ -39,6 +41,7 @@ impl Default for MatchPlayerStatistics {
 pub struct MatchPlayerStatisticsItem {
     pub stat_type: MatchStatisticType,
     pub match_second: u64,
+    pub is_auto_goal: bool,
 }
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq)]

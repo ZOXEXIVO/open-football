@@ -1,7 +1,7 @@
-use crate::r#match::ball::events::BallEvent;
+use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::result::VectorExtensions;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
 pub struct Ball {
@@ -217,7 +217,9 @@ impl Ball {
                 })
                 .collect();
 
-            let is_nearby_already_has_ball = nearby_players.iter().any(|player| Some(player.id) == self.current_owner);
+            let is_nearby_already_has_ball = nearby_players
+                .iter()
+                .any(|player| Some(player.id) == self.current_owner);
             if is_nearby_already_has_ball {
                 return;
             }
@@ -271,7 +273,24 @@ impl Ball {
 
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
-            result.add_ball_event(BallEvent::Goal(goal_side, self.previous_owner));
+            if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
+
+                let player = context.players.by_id(goalscorer).unwrap();
+                let is_auto_goal = match player.side {
+                    Some(PlayerSide::Left) => goal_side == GoalSide::Home,
+                    Some(PlayerSide::Right) => goal_side == GoalSide::Away,
+                    _ => false
+                };
+
+                let goal_event_metadata = BallGoalEventMetadata {
+                    side: goal_side,
+                    goalscorer_player_id: goalscorer,
+                    auto_goal: is_auto_goal
+                };
+
+                result.add_ball_event(BallEvent::Goal(goal_event_metadata));
+            }
+
             self.reset();
         }
     }
@@ -287,8 +306,10 @@ impl Ball {
         let velocity_norm = self.velocity.norm();
 
         if velocity_norm > STOPPING_THRESHOLD {
-            let drag_force = -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
-            let rolling_resistance_force = -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
+            let drag_force =
+                -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
+            let rolling_resistance_force =
+                -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
 
             let total_force = drag_force + rolling_resistance_force;
             let acceleration = total_force / BALL_MASS;

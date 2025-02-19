@@ -6,6 +6,9 @@ use chrono::Duration;
 use core::league::ScheduleTour;
 use itertools::*;
 use serde::{Deserialize, Serialize};
+use core::r#match::Score;
+use core::r#match::statistics::MatchStatisticType;
+use core::r#match::GoalDetail;
 
 #[derive(Deserialize)]
 pub struct LeagueGetRequest {
@@ -47,7 +50,24 @@ pub struct LeagueScheduleItem<'si> {
 #[derive(Serialize)]
 pub struct LeagueScheduleItemResult {
     pub home_goals: u8,
+    pub home_goalscorers: Vec<LeagueTableGoalscorer>,
+
     pub away_goals: u8,
+    pub away_goalscorers: Vec<LeagueTableGoalscorer>,
+}
+
+impl From<&Score> for LeagueScheduleItemResult {
+    fn from(value: &Score) -> Self {
+        todo!()
+    }
+}
+
+#[derive(Serialize)]
+pub struct LeagueTableGoalscorer {
+    pub id: u32,
+    pub name: String,
+    pub time: String,
+    pub auto_goal: bool
 }
 
 #[derive(Serialize)]
@@ -151,23 +171,56 @@ pub async fn league_get_action(
                 matches: group
                     .map(|item| {
                         let home_team_data = simulator_data.team_data(item.home_team_id).unwrap();
+                        let home_team = simulator_data.team(item.home_team_id).unwrap();
+
                         let away_team_data = simulator_data.team_data(item.away_team_id).unwrap();
+                        let away_team = simulator_data.team(item.away_team_id).unwrap();
 
                         LeagueScheduleItem {
                             match_id: &item.id,
 
                             result: item.result.as_ref().map(|res| {
+                                let details: Vec<&GoalDetail> = res.details.iter()
+                                    .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
+                                    .collect();
+
                                 return LeagueScheduleItemResult {
-                                    home_goals: if item.home_team_id == res.home.team_id {
-                                        res.home.get()
+                                    home_goals: if item.home_team_id == res.home_team.team_id {
+                                        res.home_team.get()
                                     } else {
-                                        res.away.get()
+                                        res.away_team.get()
                                     },
-                                    away_goals: if item.away_team_id == res.away.team_id {
-                                        res.away.get()
+                                    home_goalscorers: details.iter().filter_map(|detail| {
+                                        let player = simulator_data.player(detail.player_id).unwrap();
+                                        if home_team.players.contains(player.id) {
+                                            Some(LeagueTableGoalscorer {
+                                                id: detail.player_id,
+                                                name: player.full_name.to_string(),
+                                                time: format!("('{})", Duration::new((detail.time / 1000) as i64, 0).unwrap().num_minutes()),
+                                                auto_goal: detail.is_auto_goal
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    }).collect(),
+                                    away_goals: if item.away_team_id == res.away_team.team_id {
+                                        res.away_team.get()
                                     } else {
-                                        res.home.get()
+                                        res.home_team.get()
                                     },
+                                    away_goalscorers: details.iter().filter_map(|detail| {
+                                        let player = simulator_data.player(detail.player_id).unwrap();
+                                        if away_team.players.contains(player.id) {
+                                            Some(LeagueTableGoalscorer {
+                                                id: detail.player_id,
+                                                name: player.full_name.to_string(),
+                                                time: format!("('{})", Duration::new((detail.time / 1000) as i64, 0).unwrap().num_minutes()),
+                                                auto_goal: detail.is_auto_goal
+                                            })
+                                        } else {
+                                            None
+                                        }
+                                    }).collect(),
                                 }
                             }),
 

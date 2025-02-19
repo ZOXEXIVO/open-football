@@ -105,11 +105,18 @@
                                         {{ tour_schedule.date }}
                                     </td>
                                 </tr>
-
                                 <tr *ngFor="let item of tour_schedule.matches">
                                     <td class="home-team">
                                         <a [routerLink]="['/teams/' + item.home_team_slug]">
                                             {{ item.home_team_name }}
+
+                                            <ul *ngIf="item.result" class="goalscorers-list"    >
+                                                <li *ngFor="let gs_item of item.result.home_goalscorers">
+                                                    <a [routerLink]="['/teams/' + item.home_team_slug + '/players/' + gs_item.id]">
+                                                        {{ gs_item.name }} {{ gs_item.time }} <span *ngIf="gs_item.auto_goal">AG</span>
+                                                    </a>
+                                                </li>
+                                            </ul>
                                         </a>
                                     </td>
                                     <td class="score">
@@ -129,6 +136,14 @@
                                     <td class="away-team">
                                         <a [routerLink]="['/teams/' + item.away_team_slug]">
                                             {{ item.away_team_name }}
+
+                                            <ul *ngIf="item.result" class="goalscorers-list">
+                                                <li *ngFor="let gs_item of item.result.away_goalscorers">
+                                                    <a [routerLink]="['/teams/' + item.away_team_slug + '/players/' + gs_item.id]">
+                                                        {{ gs_item.name }} {{ gs_item.time }} <span *ngIf="gs_item.auto_goal">AG</span>
+                                                    </a>
+                                                </li>
+                                            </ul>
                                         </a>
                                     </td>
                                 </tr>

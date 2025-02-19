@@ -1,9 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-};
+use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
 
@@ -18,15 +16,15 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             ));
         }
 
-        if let Some(teammate_id) = self.find_best_pass_option(ctx) {
+        if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::build()
                         .with_from_player_id(ctx.player.id)
-                        .with_to_player_id(teammate_id)
-                        .with_target(ctx.tick_context.positions.players.position(teammate_id))
-                        .with_force(ctx.player().pass_teammate_power(teammate_id))
+                        .with_to_player_id(teammate.id)
+                        .with_target(teammate.position)
+                        .with_force(ctx.player().pass_teammate_power(teammate.id))
                         .build()
                 )),
             ));
@@ -53,18 +51,27 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 }
 
 impl GoalkeeperDistributingState {
-    fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<u32> {
+    fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
         let players = ctx.players();
 
-        if let Some((teammate_id, _)) = players
+        if let Some(teammate) = players
             .teammates()
-            .nearby_ids(500.0)
+            .all()
+            .filter(|p| self.is_teammate_open(ctx, p) && ctx.player().has_clear_pass(p.id))
             .choose(&mut rand::thread_rng())
         {
-            return Some(teammate_id);
+            return Some(teammate);
         }
 
         None
+    }
+
+    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let opponent_distance_threshold = 100.0;
+
+        ctx.players().opponents().all()
+            .filter(|opponent| (opponent.position - teammate.position).magnitude() <= opponent_distance_threshold)
+            .count() == 0
     }
 
     pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {

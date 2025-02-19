@@ -1,20 +1,27 @@
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{MatchContext, MatchField};
-use log::{debug};
+use log::debug;
 
 #[derive(Copy, Clone, Debug)]
 pub enum BallEvent {
-    Goal(GoalSide, Option<u32>),
+    Goal(BallGoalEventMetadata),
     Claimed(u32),
     Gained(u32),
     TakeMe(u32),
 }
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, PartialOrd, PartialEq)]
 pub enum GoalSide {
     Home,
     Away,
+}
+
+#[derive(Copy, Clone, Debug)]
+pub struct BallGoalEventMetadata {
+    pub side: GoalSide,
+    pub goalscorer_player_id: u32,
+    pub auto_goal: bool,
 }
 
 pub struct BallEventDispatcher;
@@ -30,15 +37,16 @@ impl BallEventDispatcher {
         debug!("Ball event: {:?}", event);
 
         match event {
-            BallEvent::Goal(side, goalscorer_player_id) => {
-                match side {
+            BallEvent::Goal(metadata) => {
+                match metadata.side {
                     GoalSide::Home => context.score.increment_home_goals(),
                     GoalSide::Away => context.score.increment_away_goals(),
                 }
 
-                if let Some(goalscorer_player_id) = goalscorer_player_id {
-                    remaining_events.push(Event::PlayerEvent(PlayerEvent::Goal(goalscorer_player_id)));
-                }
+                remaining_events.push(Event::PlayerEvent(PlayerEvent::Goal(
+                    metadata.goalscorer_player_id,
+                    metadata.auto_goal,
+                )));
 
                 field.reset_players_positions();
             }

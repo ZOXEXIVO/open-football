@@ -272,6 +272,10 @@ impl PlayerCollection {
             None => None,
         }
     }
+
+    pub fn contains(&self, player_id: u32) -> bool {
+        self.players.iter().any(|p| p.id == player_id)
+    }
 }
 
 impl Index<u32> for PlayerCollection {

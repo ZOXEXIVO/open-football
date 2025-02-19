@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 
 #[derive(Debug)]
 pub enum PlayerEvent {
-    Goal(u32),
+    Goal(u32, bool),
     Assist(u32),
     BallCollision(u32),
     TacklingBall(u32),
@@ -44,8 +44,8 @@ impl PlayerEventDispatcher {
         debug!("Player event: {:?}", event);
 
         match event {
-            PlayerEvent::Goal(player_id) => {
-                Self::handle_goal_event(player_id, field, context);
+            PlayerEvent::Goal(player_id, is_auto_goal) => {
+                Self::handle_goal_event(player_id, is_auto_goal, field, context);
             }
             PlayerEvent::Assist(player_id) => {
                 Self::handle_assist_event(player_id, field, context);
@@ -89,13 +89,15 @@ impl PlayerEventDispatcher {
         remaining_events
     }
 
-    fn handle_goal_event(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {
+    fn handle_goal_event(player_id: u32, is_auto_goal: bool, field: &mut MatchField, context: &mut MatchContext) {
         let player = field.get_player_mut(player_id).unwrap();
-        player.statistics.add_goal(context.time.time);
+
+        player.statistics.add_goal(context.time.time, is_auto_goal);
 
         context.score.add_goal_detail(GoalDetail {
             player_id,
             stat_type: MatchStatisticType::Goal,
+            is_auto_goal,
             time: context.time.time,
         });
 
@@ -110,6 +112,7 @@ impl PlayerEventDispatcher {
             player_id,
             stat_type: MatchStatisticType::Assist,
             time: context.time.time,
+            is_auto_goal: false
         });
 
         player.statistics.add_assist(context.time.time);
