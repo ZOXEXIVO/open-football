@@ -119,7 +119,7 @@ impl MidfielderTacklingState {
         let clamped_success_chance = success_chance.clamp(0.1, 0.9);
 
         // Simulate tackle success
-        let tackle_success = rng.gen::<f32>() < clamped_success_chance;
+        let tackle_success = rng.r#gen::<f32>() < clamped_success_chance;
 
         // Calculate foul chance
         let foul_chance = if tackle_success {
@@ -131,7 +131,7 @@ impl MidfielderTacklingState {
         };
 
         // Simulate foul
-        let committed_foul = rng.gen::<f32>() < foul_chance;
+        let committed_foul = rng.r#gen::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

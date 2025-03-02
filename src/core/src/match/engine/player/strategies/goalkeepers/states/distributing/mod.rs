@@ -52,9 +52,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 
 impl GoalkeeperDistributingState {
     fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-
-        if let Some(teammate) = players
+        if let Some(teammate) = ctx.players()
             .teammates()
             .all()
             .filter(|p| self.is_teammate_open(ctx, p) && ctx.player().has_clear_pass(p.id))

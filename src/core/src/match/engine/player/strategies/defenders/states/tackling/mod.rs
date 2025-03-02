@@ -101,7 +101,7 @@ impl DefenderTacklingState {
         let success_chance = 0.5 + skill_difference * 0.3;
         let clamped_success_chance = success_chance.clamp(0.1, 0.9);
 
-        let tackle_success = rng.gen::<f32>() < clamped_success_chance;
+        let tackle_success = rng.r#gen::<f32>() < clamped_success_chance;
 
         let foul_chance = if tackle_success {
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
@@ -109,7 +109,7 @@ impl DefenderTacklingState {
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
         };
 
-        let committed_foul = rng.gen::<f32>() < foul_chance;
+        let committed_foul = rng.r#gen::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

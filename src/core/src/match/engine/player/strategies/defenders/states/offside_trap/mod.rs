@@ -153,7 +153,7 @@ impl DefenderOffsideTrapState {
         let success_probability = (teamwork + concentration) / 2.0;
 
         // Determine the offside trap outcome
-        let offside_trap_successful = rng.gen::<f32>() < success_probability;
+        let offside_trap_successful = rng.r#gen::<f32>() < success_probability;
 
         if offside_trap_successful {
             // Check if any opponent is caught offside

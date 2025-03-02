@@ -13,7 +13,7 @@ RUN npm run publish
 
 # BUILD BACKEND
 
-FROM rust:1.84  as build-backend
+FROM rust:1.85  as build-backend
 WORKDIR /src
 
 COPY ./ ./
@@ -26,7 +26,7 @@ RUN cargo test -p core
 
 RUN cargo build --release
 
-FROM rust:1.84-slim
+FROM rust:1.85-slim
 WORKDIR /app
 
 COPY --from=build-backend /src/target/release/open_football .
