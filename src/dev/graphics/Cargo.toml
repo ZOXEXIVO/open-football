@@ -5,5 +5,5 @@ edition = "2024"
 
 [dependencies]
 core = { path = "../../core" }
-macroquad = "0.4.13"
+macroquad = "0.4.14"
 env_logger = "0.11.7"

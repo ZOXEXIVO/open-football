@@ -10,6 +10,6 @@ chrono = "0.4.40"
 rand = "0.8.5"
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
-log = "0.4.26"
+log = "0.4.27"
 itertools = "0.14.0"
 nalgebra = { version = "0.33.2", features = ["serde-serialize", "rand"] }
