@@ -90,6 +90,23 @@ impl StateProcessingHandler for MidfielderRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        if ctx.player.should_follow_waypoints(ctx) {
+            let waypoints = ctx.player.get_waypoints_as_vectors();
+
+            if !waypoints.is_empty() {
+                // Player has waypoints defined, follow them
+                return Some(
+                    SteeringBehavior::FollowPath {
+                        waypoints,
+                        current_waypoint: ctx.player.current_waypoint_index,
+                        path_offset: 5.0 // Some randomness for natural movement
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                );
+            }
+        }
+        
         if let Some(target_position) = self.find_space_between_opponents(ctx) {
             Some(
                 SteeringBehavior::Arrive {
