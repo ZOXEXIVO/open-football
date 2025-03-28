@@ -48,7 +48,7 @@ fn main() {
         "artifacts",
         TrainingConfig {
             num_epochs: 15000,
-            learning_rate: 1e-2,
+            learning_rate: 1e-3,
             momentum: 1e-2,
             seed: 43,
             batch_size: 1,
@@ -87,7 +87,7 @@ pub struct TrainingConfig {
     #[config(default = 1000)]
     pub num_epochs: usize,
 
-    #[config(default = 1e-2)]
+    #[config(default = 1e-3)]
     pub learning_rate: f64,
 
     #[config(default = 1e-2)]

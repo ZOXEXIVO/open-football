@@ -6,6 +6,7 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
+use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
@@ -30,6 +31,8 @@ pub struct MatchPlayer {
     pub in_state_time: u64,
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
+
+    pub waypoint_manager: WaypointManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,6 +62,7 @@ impl MatchPlayer {
             state: Self::default_state(position),
             in_state_time: 0,
             statistics: MatchPlayerStatistics::new(),
+            waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
         }
     }
@@ -72,6 +76,8 @@ impl MatchPlayer {
         let player_events = PlayerMatchState::process(self, context, tick_context);
 
         events.add_from_collection(player_events);
+
+        self.update_waypoint_index(tick_context);
 
         self.check_boundary_collision(context);
         self.move_to();
@@ -137,6 +143,35 @@ impl MatchPlayer {
 
     pub fn has_ball(&self, ctx: &StateProcessingContext<'_>) -> bool {
         ctx.ball().owner_id() == Some(self.id)
+    }
+
+    pub fn update_waypoint_index(&mut self, tick_context: &GameTickContext) {
+        self.waypoint_manager.update(
+            &tick_context.positions.players.position(self.id),
+            &self.get_waypoints_as_vectors(),
+        );
+    }
+
+    pub fn get_waypoints_as_vectors(&self) -> Vec<Vector3<f32>> {
+        self.tactical_position
+            .tactical_positions
+            .iter()
+            .filter(|tp| tp.position == self.tactical_position.current_position)
+            .flat_map(|tp| &tp.waypoints)
+            .map(|(x, y)| Vector3::new(*x, *y, 0.0))
+            .collect()
+    }
+
+    pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
+        // Return true when player should follow waypoints, for example:
+        // - When not in possession
+        // - When not immediately involved in an action
+        // - When team is in a controlling phase
+        let has_ball = self.has_ball(ctx);
+        let is_ball_close = ctx.ball().distance() < 100.0;
+        let team_in_control = ctx.team().is_control_ball();
+
+        !has_ball && !is_ball_close && team_in_control
     }
 }
 
