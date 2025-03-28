@@ -86,7 +86,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 return Some(
                     SteeringBehavior::FollowPath {
                         waypoints,
-                        current_waypoint: ctx.player.current_waypoint_index,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: 5.0 // Some randomness for natural movement
                     }
                         .calculate(ctx.player)

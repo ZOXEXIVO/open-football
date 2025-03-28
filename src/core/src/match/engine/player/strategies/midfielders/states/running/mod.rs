@@ -96,13 +96,11 @@ impl StateProcessingHandler for MidfielderRunningState {
         if ctx.player.should_follow_waypoints(ctx) {
             let waypoints = ctx.player.get_waypoints_as_vectors();
 
-            println!("{:?}", ctx.player.current_waypoint_index);
-
             if !waypoints.is_empty() {
                 return Some(
                     SteeringBehavior::FollowPath {
                         waypoints,
-                        current_waypoint: ctx.player.current_waypoint_index,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
                     .calculate(ctx.player)

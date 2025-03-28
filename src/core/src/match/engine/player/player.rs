@@ -32,9 +32,6 @@ pub struct MatchPlayer {
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
 
-    pub current_waypoint_index: usize, // Current waypoint the player is moving toward
-    pub waypoint_dwell_timer: u64,     // Time spent at current waypoint
-
     pub waypoint_manager: WaypointManager,
 }
 
@@ -65,8 +62,6 @@ impl MatchPlayer {
             state: Self::default_state(position),
             in_state_time: 0,
             statistics: MatchPlayerStatistics::new(),
-            current_waypoint_index: 0,
-            waypoint_dwell_timer: 0,
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
         }
