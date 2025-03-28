@@ -6,6 +6,7 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
+use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
@@ -31,8 +32,10 @@ pub struct MatchPlayer {
     pub statistics: MatchPlayerStatistics,
     pub use_extended_state_logging: bool,
 
-    pub current_waypoint_index: usize,  // Current waypoint the player is moving toward
-    pub waypoint_dwell_timer: u64,      // Time spent at current waypoint
+    pub current_waypoint_index: usize, // Current waypoint the player is moving toward
+    pub waypoint_dwell_timer: u64,     // Time spent at current waypoint
+
+    pub waypoint_manager: WaypointManager,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -63,7 +66,8 @@ impl MatchPlayer {
             in_state_time: 0,
             statistics: MatchPlayerStatistics::new(),
             current_waypoint_index: 0,
-            waypoint_dwell_timer: 0,   
+            waypoint_dwell_timer: 0,
+            waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
         }
     }
@@ -146,47 +150,16 @@ impl MatchPlayer {
         ctx.ball().owner_id() == Some(self.id)
     }
 
-    // Waypoint update logic - add this method
     pub fn update_waypoint_index(&mut self, tick_context: &GameTickContext) {
-        let waypoints = self.get_waypoints_as_vectors();
-        if waypoints.is_empty() {
-            return;
-        }
-
-        // Make sure index is valid
-        if self.current_waypoint_index >= waypoints.len() {
-            self.current_waypoint_index = 0;
-        }
-
-        // Get current target waypoint
-        let target_waypoint = waypoints[self.current_waypoint_index];
-
-        // Calculate distance to current waypoint
-        let distance_to_waypoint = (target_waypoint - self.position).norm();
-
-        // Proximity threshold to consider a waypoint reached
-        let waypoint_reached_threshold = 15.0;
-
-        if distance_to_waypoint <= waypoint_reached_threshold {
-            // Player has reached the waypoint - increment dwell timer
-            self.waypoint_dwell_timer += 10; // Assuming 10ms per tick
-
-            // After dwelling at waypoint for a period, move to next one
-            let dwell_time = 1500; // 1.5 seconds to wait at waypoint
-            if self.waypoint_dwell_timer >= dwell_time {
-                // Move to next waypoint
-                self.current_waypoint_index = (self.current_waypoint_index + 1) % waypoints.len();
-                self.waypoint_dwell_timer = 0;
-            }
-        } else {
-            // Not at waypoint, reset dwell timer
-            self.waypoint_dwell_timer = 0;
-        }
+        self.waypoint_manager.update(
+            &tick_context.positions.players.position(self.id),
+            &self.get_waypoints_as_vectors(),
+        );
     }
 
-
     pub fn get_waypoints_as_vectors(&self) -> Vec<Vector3<f32>> {
-        self.tactical_position.tactical_positions
+        self.tactical_position
+            .tactical_positions
             .iter()
             .filter(|tp| tp.position == self.tactical_position.current_position)
             .flat_map(|tp| &tp.waypoints)

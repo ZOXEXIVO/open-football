@@ -6,6 +6,7 @@ pub mod statistics;
 pub mod strategies;
 pub mod positions;
 pub mod events;
+mod waypoints;
 
 pub use behaviours::*;
 pub use context::*;

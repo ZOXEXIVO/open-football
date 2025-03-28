@@ -1,6 +1,9 @@
-use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use crate::IntegerUtils;
+use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::{
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
+};
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
@@ -93,20 +96,21 @@ impl StateProcessingHandler for MidfielderRunningState {
         if ctx.player.should_follow_waypoints(ctx) {
             let waypoints = ctx.player.get_waypoints_as_vectors();
 
+            println!("{:?}", ctx.player.current_waypoint_index);
+
             if !waypoints.is_empty() {
-                // Player has waypoints defined, follow them
                 return Some(
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.current_waypoint_index,
-                        path_offset: 5.0 // Some randomness for natural movement
+                        path_offset: IntegerUtils::random(1, 10) as f32,
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 );
             }
         }
-        
+
         if let Some(target_position) = self.find_space_between_opponents(ctx) {
             Some(
                 SteeringBehavior::Arrive {
@@ -174,17 +178,16 @@ impl MidfielderRunningState {
     }
 
     fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.ball().is_owned(){
+        if ctx.ball().is_owned() {
             return false;
         }
-        
+
         if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return true;
-
         }
 
         if ctx.ball().distance() < 100.0 {
-           return true;
+            return true;
         }
 
         false
