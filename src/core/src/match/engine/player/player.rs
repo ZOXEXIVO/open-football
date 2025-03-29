@@ -163,15 +163,25 @@ impl MatchPlayer {
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
-        // Return true when player should follow waypoints, for example:
-        // - When not in possession
-        // - When not immediately involved in an action
-        // - When team is in a controlling phase
         let has_ball = self.has_ball(ctx);
         let is_ball_close = ctx.ball().distance() < 100.0;
         let team_in_control = ctx.team().is_control_ball();
 
-        !has_ball && !is_ball_close && team_in_control
+        // Base condition for all players
+        let base_condition = !has_ball && !is_ball_close && team_in_control;
+
+        // Role-specific adjustments
+        match self.tactical_position.current_position.position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => {
+                // Goalkeepers follow waypoints less often
+                base_condition && ctx.ball().distance() > 200.0
+            },
+            PlayerFieldPositionGroup::Defender => {
+                // Defenders are more positionally disciplined
+                base_condition || (!has_ball && !is_ball_close)
+            },
+            _ => base_condition
+        }
     }
 }
 
@@ -193,5 +203,15 @@ impl MatchPlayerLite {
 
     pub fn distance(&self, ctx: &StateProcessingContext<'_>) -> f32 {
         ctx.tick_context.distances.get(self.id, ctx.player.id)
+    }
+}
+
+impl Into<MatchPlayerLite> for &MatchPlayer{
+    fn into(self) -> MatchPlayerLite {
+        MatchPlayerLite {
+            id: self.id,
+            position: self.position,
+            tactical_positions: self.tactical_position.current_position
+        }
     }
 }

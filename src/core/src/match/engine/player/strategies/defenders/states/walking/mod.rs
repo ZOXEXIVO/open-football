@@ -95,6 +95,24 @@ impl StateProcessingHandler for DefenderWalkingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Check if player should follow waypoints
+        if ctx.player.should_follow_waypoints(ctx) {
+            let waypoints = ctx.player.get_waypoints_as_vectors();
+
+            if !waypoints.is_empty() {
+                // Player has waypoints defined, follow them
+                return Some(
+                    SteeringBehavior::FollowPath {
+                        waypoints,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
+                        path_offset: 5.0 // Some randomness for natural movement
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                );
+            }
+        }
+        
         // 1. If this is the first tick in the state, initialize wander behavior
         if ctx.in_state_time % 100 == 0 {
             return Some(

@@ -22,12 +22,10 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        if !ctx.team().is_control_ball() {
-            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Intercepting,
+            ));
         }
 
         if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Small {

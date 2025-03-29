@@ -258,16 +258,21 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let mut separation = Vector3::zeros();
 
+        // Increased separation radius to prevent clustering
+        const SEPARATION_RADIUS: f32 = 18.0;
+        // Stronger separation force
+        const SEPARATION_STRENGTH: f32 = 15.0;
+
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
             let to_other = other_player.position - self.ctx.player.position;
             let distance = to_other.magnitude();
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
-                let direction = to_other.normalize();
-                let perpendicular_velocity = Vector3::new(-direction.y, -direction.x, 0.0);
-                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
+                // Move away from teammates with higher priority as distance decreases
+                let direction = -to_other.normalize();
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS).powf(2.0);
 
-                separation += perpendicular_velocity * strength;
+                separation += direction * strength;
             }
         }
 

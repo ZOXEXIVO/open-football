@@ -6,7 +6,7 @@ edition = "2024"
 [dependencies]
 core = { path = "../core" }
 database = { path = "../database" }
-axum = "0.8.1"
+axum = "0.8.3"
 log = "0.4.27"
 tokio = { version = "1.44.1", features = ["full"] }
 tower-http = { version = "0.6.2", features = ["fs"] }

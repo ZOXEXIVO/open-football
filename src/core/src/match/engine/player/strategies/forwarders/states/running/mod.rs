@@ -4,6 +4,7 @@ use crate::r#match::{
     SteeringBehavior,
 };
 use nalgebra::Vector3;
+use crate::IntegerUtils;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
@@ -83,6 +84,22 @@ impl StateProcessingHandler for ForwardRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        if ctx.player.should_follow_waypoints(ctx) {
+            let waypoints = ctx.player.get_waypoints_as_vectors();
+
+            if !waypoints.is_empty() {
+                return Some(
+                    SteeringBehavior::FollowPath {
+                        waypoints,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
+                        path_offset: IntegerUtils::random(1, 10) as f32,
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                );
+            }
+        }
+        
         if ctx.player.has_ball(ctx) {
             let goal_direction = ctx.player().opponent_goal_position();
 

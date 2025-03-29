@@ -19,6 +19,12 @@ impl StateProcessingHandler for MidfielderInterceptingState {
             ));
         }
 
+        if ctx.team().is_teammate_chasing_ball() && !ctx.team().is_best_player_to_chase_ball() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Returning,
+            ));
+        }
+
         if ctx.team().is_control_ball() && ctx.ball().distance() > 150.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
