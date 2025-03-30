@@ -1,10 +1,10 @@
+use crate::IntegerUtils;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use crate::IntegerUtils;
 
 const MAX_SHOOTING_DISTANCE: f32 = 400.0;
 
@@ -79,16 +79,16 @@ impl StateProcessingHandler for DefenderRunningState {
                         current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity
+                        + ctx.player().separation_velocity(),
                 );
             }
         }
-        
+
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position()
-                    + ctx.player().separation_velocity(),
+                target: ctx.player().opponent_goal_position() + ctx.player().separation_velocity(),
                 slowing_distance: if ctx.player.has_ball(ctx) {
                     150.0
                 } else {
@@ -96,7 +96,8 @@ impl StateProcessingHandler for DefenderRunningState {
                 },
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity
+                + ctx.player().separation_velocity(),
         )
     }
 
@@ -145,7 +146,7 @@ impl DefenderRunningState {
                 if teammate.tactical_positions.is_goalkeeper() {
                     return false;
                 }
-                
+
                 let is_on_opposite_side = match ctx.player.side {
                     Some(PlayerSide::Left) => teammate.position.x > opposite_side_x,
                     Some(PlayerSide::Right) => teammate.position.x < opposite_side_x,

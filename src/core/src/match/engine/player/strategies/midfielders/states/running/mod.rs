@@ -104,7 +104,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
                     .calculate(ctx.player)
-                    .velocity,
+                    .velocity + ctx.player().separation_velocity(),
                 );
             }
         }
@@ -116,7 +116,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity + ctx.player().separation_velocity(),
             )
         } else if ctx.player.has_ball(ctx) {
             Some(
@@ -126,7 +126,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity + ctx.player().separation_velocity(),
             )
         } else if ctx.team().is_control_ball() {
             Some(
@@ -136,7 +136,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity + ctx.player().separation_velocity(),
             )
         } else {
             Some(
@@ -148,7 +148,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     angle: IntegerUtils::random(0, 360) as f32,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity + ctx.player().separation_velocity(),
             )
         }
     }

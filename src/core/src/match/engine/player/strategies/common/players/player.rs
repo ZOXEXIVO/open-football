@@ -7,8 +7,8 @@ use crate::PlayerSkills;
 use nalgebra::Vector3;
 use rand::Rng;
 
-const SEPARATION_RADIUS: f32 = 10.0;
-const SEPARATION_STRENGTH: f32 = 10.0;
+const SEPARATION_RADIUS: f32 = 20.0;
+const SEPARATION_STRENGTH: f32 = 20.0;
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -255,23 +255,35 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn separation_velocity(&self) -> Vector3<f32> {
         let players = self.ctx.players();
         let teammates = players.teammates();
+        let opponents = players.opponents();
 
         let mut separation = Vector3::zeros();
 
-        // Increased separation radius to prevent clustering
-        const SEPARATION_RADIUS: f32 = 18.0;
-        // Stronger separation force
-        const SEPARATION_STRENGTH: f32 = 15.0;
+        // Increased parameters
+        const SEPARATION_RADIUS: f32 = 25.0;
+        const SEPARATION_STRENGTH: f32 = 20.0;
 
+        // Apply separation from teammates
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
             let to_other = other_player.position - self.ctx.player.position;
             let distance = to_other.magnitude();
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
-                // Move away from teammates with higher priority as distance decreases
+                // Using cubic falloff for stronger close-range separation
                 let direction = -to_other.normalize();
-                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS).powf(2.0);
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS).powf(3.0);
+                separation += direction * strength;
+            }
+        }
 
+        // Apply separation from opponents (slightly weaker effect)
+        for other_player in opponents.nearby(SEPARATION_RADIUS * 0.8) {
+            let to_other = other_player.position - self.ctx.player.position;
+            let distance = to_other.magnitude();
+
+            if distance > 0.0 && distance < SEPARATION_RADIUS * 0.8 {
+                let direction = -to_other.normalize();
+                let strength = SEPARATION_STRENGTH * 0.7 * (1.0 - distance / (SEPARATION_RADIUS * 0.8)).powf(2.0);
                 separation += direction * strength;
             }
         }
