@@ -16,22 +16,12 @@ pub struct PlayerFieldMetadata {
 
 impl PlayerFieldData {
     pub fn position(&self, player_id: u32) -> Vector3<f32> {
-        let pp = self
+        self
             .items
             .iter()
             .find(|p| p.player_id == player_id)
-            .map(|p| p.position);
-
-        if let Some(p) = pp {
-            p
-            //.expect(&format!("no position for player = {}", player_id))
-        } else {
-            let pp: Vec<u32> = self.items.iter().map(|p| p.player_id).collect();
-
-            println!("NOT FOUND: player_id = {}, State={:?}", player_id, pp);
-
-            Vector3::zeros()
-        }
+            .map(|p| p.position)
+            .unwrap_or_else(|| panic!("no position for player = {}", player_id))
     }
 
     pub fn velocity(&self, player_id: u32) -> Vector3<f32> {
@@ -39,7 +29,7 @@ impl PlayerFieldData {
             .iter()
             .find(|p| p.player_id == player_id)
             .map(|p| p.velocity)
-            .expect(&format!("no velocity for player = {}", player_id))
+            .unwrap_or_else(|| panic!("no velocity for player = {}", player_id))
     }
 }
 
@@ -55,7 +45,7 @@ impl From<&MatchField> for PlayerFieldData {
                     player_id: p.id,
                     side: p
                         .side
-                        .expect(&format!("unknown player side, player_id = {}", p.id)),
+                        .unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
                     position: p.position,
                     velocity: p.velocity,
                 })

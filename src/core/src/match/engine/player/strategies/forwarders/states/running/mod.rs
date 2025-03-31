@@ -99,16 +99,16 @@ impl StateProcessingHandler for ForwardRunningState {
                 );
             }
         }
-        
+
         if ctx.player.has_ball(ctx) {
             let goal_direction = ctx.player().opponent_goal_position();
 
             let player_goal_velocity = SteeringBehavior::Arrive {
-                target: goal_direction + ctx.player().separation_velocity(),
+                target: goal_direction,
                 slowing_distance: 100.0,
             }
             .calculate(ctx.player)
-            .velocity;
+            .velocity  + ctx.player().separation_velocity();
 
             Some(player_goal_velocity)
         } else {
@@ -118,7 +118,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
                 if let Some(goalkeeper) = opponents.goalkeeper().next() {
                     let result = SteeringBehavior::Arrive {
-                        target: goalkeeper.position + ctx.player().separation_velocity(),
+                        target: goalkeeper.position,
                         slowing_distance: 200.0
                     }
                         .calculate(ctx.player)

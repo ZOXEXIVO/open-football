@@ -112,7 +112,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         if let Some(target_position) = self.find_space_between_opponents(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: target_position + ctx.player().separation_velocity(),
+                    target: target_position,
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
@@ -121,8 +121,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position()
-                        + ctx.player().separation_velocity(),
+                    target: ctx.player().opponent_goal_position(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -131,8 +130,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else if ctx.team().is_control_ball() {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position()
-                        + ctx.player().separation_velocity(),
+                    target: ctx.player().opponent_goal_position(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
@@ -141,7 +139,7 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else {
             Some(
                 SteeringBehavior::Wander {
-                    target: ctx.player.start_position + ctx.player().separation_velocity(),
+                    target: ctx.player.start_position,
                     radius: IntegerUtils::random(5, 150) as f32,
                     jitter: IntegerUtils::random(0, 2) as f32,
                     distance: IntegerUtils::random(10, 150) as f32,

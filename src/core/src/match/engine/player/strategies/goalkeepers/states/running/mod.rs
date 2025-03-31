@@ -53,7 +53,7 @@ impl StateProcessingHandler for GoalkeeperRunningState {
             } else {
                 Some(
                     SteeringBehavior::Wander {
-                        target: ctx.player.start_position + ctx.player().separation_velocity(),
+                        target: ctx.player.start_position,
                         radius: IntegerUtils::random(5, 150) as f32,
                         jitter: IntegerUtils::random(0, 2) as f32,
                         distance: IntegerUtils::random(10, 150) as f32,
@@ -72,14 +72,13 @@ impl StateProcessingHandler for GoalkeeperRunningState {
                 }
             };
             let result = SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position
-                    + ctx.player().separation_velocity(),
+                target: ctx.tick_context.positions.ball.position,
                 slowing_distance,
             }
             .calculate(ctx.player)
             .velocity;
 
-            Some(result)
+            Some(result + ctx.player().separation_velocity())
         }
     }
 

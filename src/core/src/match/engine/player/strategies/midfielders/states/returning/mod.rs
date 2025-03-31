@@ -44,11 +44,11 @@ impl StateProcessingHandler for MidfielderReturningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position + ctx.player().separation_velocity(),
+                target: ctx.player.start_position,
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity  + ctx.player().separation_velocity(),
         )
     }
 
