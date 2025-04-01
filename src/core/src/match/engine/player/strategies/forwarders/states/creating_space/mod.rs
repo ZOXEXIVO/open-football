@@ -1,7 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -22,14 +22,24 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
+        // If team doesn't have the ball, switch to Running
         if !ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        if ctx.ball().distance() < 200.0 && !ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Intercepting,
-            ));
+        // If the ball is close and within reach
+        if ctx.ball().distance() < 200.0 {
+            if ctx.ball().is_towards_player_with_angle(0.8) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Intercepting,
+                ));
+            }
+        }
+
+        // Add a time limit for staying in this state
+        if ctx.in_state_time > 300 {
+            // Add a reasonable time limit
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Check if the player has created enough space
@@ -56,7 +66,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Get an intelligent position to move to that creates space
         let target_position = self.calculate_space_creating_position(ctx);
 
         Some(
@@ -64,8 +73,9 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 target: target_position,
                 slowing_distance: 50.0,
             }
-                .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity()
+            .calculate(ctx.player)
+            .velocity
+                + ctx.player().separation_velocity(),
         )
     }
 
@@ -76,16 +86,22 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
 
 impl ForwardCreatingSpaceState {
     fn has_created_space(&self, ctx: &StateProcessingContext) -> bool {
-        !ctx.players().opponents().exists(CREATING_SPACE_THRESHOLD)
+        // Check if there are no opponents within CREATING_SPACE_THRESHOLD
+        let space_created = !ctx.players().opponents().exists(CREATING_SPACE_THRESHOLD);
+
+        // Additional check: have we been in this state long enough?
+        let minimum_time_in_state = 100;
+
+        space_created && ctx.in_state_time > minimum_time_in_state
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player.has_ball(ctx) && ctx
-            .players()
-            .opponents()
-            .exists(OPPONENT_DISTANCE_THRESHOLD)
+        // Player should dribble if there's an opponent very close
+        let close_opponent_threshold = 15.0;
+        ctx.players().opponents().exists(close_opponent_threshold)
     }
 
+    /// Calculate a position that intelligently creates space based on the current game state
     /// Calculate a position that intelligently creates space based on the current game state
     fn calculate_space_creating_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let player_position = ctx.player.position;
@@ -93,52 +109,70 @@ impl ForwardCreatingSpaceState {
         let field_height = ctx.context.field_size.height as f32;
         let player_side = ctx.player.side.unwrap_or(PlayerSide::Left);
 
-        // Ensure we're moving in the correct direction based on player's team side
-        let opponent_goal_position = if player_side == PlayerSide::Left {
-            Vector3::new(field_width, field_height / 2.0, 0.0)
-        } else {
-            Vector3::new(0.0, field_height / 2.0, 0.0)
-        };
+        // Get ball position and team possession information
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let team_in_possession = ctx.team().is_control_ball();
 
         // Find current ball holder on same team (if any)
-        let ball_holder = ctx.players().teammates().all()
-            .find(|t| ctx.ball().owner_id() == Some(t.id));
+        let ball_holder = if team_in_possession {
+            ctx.players()
+                .teammates()
+                .all()
+                .find(|t| ctx.ball().owner_id() == Some(t.id))
+        } else {
+            None
+        };
 
+        // If a teammate has the ball, create space away from them
         if let Some(holder) = ball_holder {
             // Create space away from the ball holder but still in attacking position
             let to_holder = holder.position - player_position;
-            let perpendicular_direction = Vector3::new(-to_holder.y, to_holder.x, 0.0).normalize();
+            let direction_to_goal = ctx.player().opponent_goal_position() - player_position;
 
-            // Choose side that's more toward the goal
-            let perpendicular_pos1 = player_position + perpendicular_direction * 80.0;
-            let perpendicular_pos2 = player_position - perpendicular_direction * 80.0;
+            // Calculate a perpendicular direction that tends toward the goal
+            let perpendicular = Vector3::new(-to_holder.y, to_holder.x, 0.0).normalize();
 
-            // Pick the position closer to the goal
-            let dist1 = (perpendicular_pos1 - opponent_goal_position).magnitude();
-            let dist2 = (perpendicular_pos2 - opponent_goal_position).magnitude();
-
-            let target_position = if dist1 < dist2 {
-                perpendicular_pos1
+            // Determine which perpendicular direction is more goal-oriented
+            let dot_product = perpendicular.dot(&direction_to_goal);
+            let goal_oriented_perpendicular = if dot_product >= 0.0 {
+                perpendicular
             } else {
-                perpendicular_pos2
+                -perpendicular
             };
 
+            // Calculate position with a significant offset to create real space
+            let target_position = player_position + goal_oriented_perpendicular * 80.0;
+
+            // Add a slight forward bias toward goal
+            let forward_bias = direction_to_goal.normalize() * 20.0;
+            let biased_position = target_position + forward_bias;
+
             // Ensure we're not moving too far from starting position
-            let distance_from_start = (target_position - ctx.player.start_position).magnitude();
+            let distance_from_start = (biased_position - ctx.player.start_position).magnitude();
             if distance_from_start > MAX_DISTANCE_FROM_START {
                 // Scale back the movement to stay within bounds
-                let direction = (target_position - ctx.player.start_position).normalize();
-                return ctx.player.start_position + direction * MAX_DISTANCE_FROM_START;
+                let direction = (biased_position - ctx.player.start_position).normalize();
+                let adjusted_position = ctx.player.start_position + direction * MAX_DISTANCE_FROM_START;
+
+                // Ensure we stay in bounds
+                return Vector3::new(
+                    adjusted_position.x.clamp(20.0, field_width - 20.0),
+                    adjusted_position.y.clamp(20.0, field_height - 20.0),
+                    0.0,
+                );
             }
 
             // Ensure we stay in bounds
-            let bounded_x = target_position.x.clamp(20.0, field_width - 20.0);
-            let bounded_y = target_position.y.clamp(20.0, field_height - 20.0);
-
-            return Vector3::new(bounded_x, bounded_y, 0.0);
+            return Vector3::new(
+                biased_position.x.clamp(20.0, field_width - 20.0),
+                biased_position.y.clamp(20.0, field_height - 20.0),
+                0.0,
+            );
         }
 
-        // No teammate has the ball - move to an attacking position
+        // No teammate has the ball - move to a strategic attacking position
+
+        // Get attacking third position based on team side
         let attacking_third_x = if player_side == PlayerSide::Left {
             // For left side team, move toward the right (opponent's) side
             field_width * 0.75
@@ -147,31 +181,59 @@ impl ForwardCreatingSpaceState {
             field_width * 0.25
         };
 
-        // Find a position that doesn't have many opponents nearby
-        let potential_positions = [
-            Vector3::new(attacking_third_x, field_height * 0.3, 0.0),
-            Vector3::new(attacking_third_x, field_height * 0.5, 0.0),
-            Vector3::new(attacking_third_x, field_height * 0.7, 0.0),
+        // Define zones where forward might create space
+        let potential_zones = [
+            Vector3::new(attacking_third_x, field_height * 0.3, 0.0),  // Wide left
+            Vector3::new(attacking_third_x, field_height * 0.5, 0.0),  // Center
+            Vector3::new(attacking_third_x, field_height * 0.7, 0.0),  // Wide right
+            Vector3::new(attacking_third_x - 50.0, field_height * 0.4, 0.0),  // Deeper left
+            Vector3::new(attacking_third_x - 50.0, field_height * 0.6, 0.0),  // Deeper right
         ];
 
-        // Choose position with fewest opponents nearby
-        let best_position = potential_positions.iter()
+        // Find position with the fewest opponents nearby (within 30 units)
+        let best_position = potential_zones.iter()
             .min_by_key(|&&pos| {
                 // Count opponents within 30 units
-                ctx.players().opponents().all()
+                let opponent_count = ctx.players().opponents().all()
                     .filter(|o| (o.position - pos).magnitude() < 30.0)
-                    .count()
+                    .count();
+
+                // Add slight preference for positions closer to goal
+                let goal_distance_factor = ((pos - ctx.player().opponent_goal_position()).magnitude() / 100.0) as usize;
+
+                opponent_count + goal_distance_factor
             })
             .copied()
             .unwrap_or(Vector3::new(attacking_third_x, field_height * 0.5, 0.0));
 
+        // Add some randomization to prevent predictability
+        let jitter_x = (rand::random::<f32>() - 0.5) * 15.0;
+        let jitter_y = (rand::random::<f32>() - 0.5) * 15.0;
+        let jittered_position = Vector3::new(
+            best_position.x + jitter_x,
+            best_position.y + jitter_y,
+            0.0
+        );
+
         // Limit movement from starting position if needed
-        let distance_from_start = (best_position - ctx.player.start_position).magnitude();
+        let distance_from_start = (jittered_position - ctx.player.start_position).magnitude();
         if distance_from_start > MAX_DISTANCE_FROM_START {
-            let direction = (best_position - ctx.player.start_position).normalize();
-            return ctx.player.start_position + direction * MAX_DISTANCE_FROM_START;
+            let direction = (jittered_position - ctx.player.start_position).normalize();
+            let bounded_position = ctx.player.start_position + direction * MAX_DISTANCE_FROM_START;
+
+            // Final boundary check
+            return Vector3::new(
+                bounded_position.x.clamp(20.0, field_width - 20.0),
+                bounded_position.y.clamp(20.0, field_height - 20.0),
+                0.0,
+            );
         }
 
-        best_position
+        // Final boundary check
+        Vector3::new(
+            jittered_position.x.clamp(20.0, field_width - 20.0),
+            jittered_position.y.clamp(20.0, field_height - 20.0),
+            0.0,
+        )
     }
 }

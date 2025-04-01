@@ -48,6 +48,38 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
+        // Add a timeout mechanism - if we've been in this state for too long, make a decision
+        if ctx.in_state_time > 60 {  // 60 ticks is a reasonable timeout
+            // If we're under pressure, clear the ball or make a risky pass
+            if self.is_under_heavy_pressure(ctx) {
+                // Just make the safest available pass even if not ideal
+                if let Some(any_teammate) = ctx.players().teammates().nearby(150.0).next() {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::build()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(any_teammate.id)
+                                .with_target(any_teammate.position)
+                                .with_force(ctx.player().pass_teammate_power(any_teammate.id) * 1.2) // Slightly more power for urgency
+                                .build(),
+                        )),
+                    ));
+                } else {
+                    // No teammate in range - transition to dribbling as a last resort
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Dribbling,
+                    ));
+                }
+            } else {
+                // Not under immediate pressure, can take a more measured decision
+                // Try to advance with the ball
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Running,
+                ));
+            }
+        }
+
         // Default - continue in current state looking for options
         None
     }
