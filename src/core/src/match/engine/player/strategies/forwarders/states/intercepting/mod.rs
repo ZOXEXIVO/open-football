@@ -25,12 +25,10 @@ impl StateProcessingHandler for ForwardInterceptingState {
             ));
         }
 
-        if ball_distance < 30.0 {
-            if ctx.tick_context.ball.is_owned {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Tackling,
-                ));
-            }
+        if ball_distance < 30.0 && ctx.tick_context.ball.is_owned {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Tackling,
+            ));
         }
 
         // 2. Check if the defender can reach the interception point before any opponent

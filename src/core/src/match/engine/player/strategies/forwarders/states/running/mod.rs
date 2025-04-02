@@ -505,7 +505,7 @@ impl ForwardRunningState {
         let distance_from_start = ctx.player().distance_from_start_position();
         let team_in_possession = ctx.team().is_control_ball();
 
-        distance_from_start > 20.0 && !team_in_possession
+        distance_from_start > 100.0 && !team_in_possession
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
