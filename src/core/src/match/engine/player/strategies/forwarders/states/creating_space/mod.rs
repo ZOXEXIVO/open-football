@@ -9,12 +9,20 @@ const CREATING_SPACE_THRESHOLD: f32 = 150.0;
 const OPPONENT_DISTANCE_THRESHOLD: f32 = 20.0;
 const MAX_DISTANCE_FROM_START: f32 = 200.0; // Maximum distance from starting position
 const RETURN_TO_POSITION_THRESHOLD: f32 = 250.0; // Distance to trigger return to position
+const MAX_TIME_IN_STATE: u64 = 250; // Maximum time to stay in this state
 
 #[derive(Default)]
 pub struct ForwardCreatingSpaceState {}
 
 impl StateProcessingHandler for ForwardCreatingSpaceState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Check if player has the ball - immediate transition
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Running,
+            ));
+        }
+
         // Check if player has strayed too far from position
         if ctx.player().distance_from_start_position() > RETURN_TO_POSITION_THRESHOLD {
             return Some(StateChangeResult::with_forward_state(
@@ -22,22 +30,31 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
-        // If team doesn't have the ball, switch to Running
+        // Check if team lost possession - switch to running for defensive positioning
         if !ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        // If the ball is close and within reach
+        // If the ball is close and moving toward player, try to intercept
         if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,
             ));
         }
 
-        // Add a time limit for staying in this state
-        if ctx.in_state_time > 300 {
-            // Add a reasonable time limit
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        // Add a time limit for staying in this state to prevent getting stuck
+        if ctx.in_state_time > MAX_TIME_IN_STATE {
+            if ctx.team().is_control_ball() {
+                // If team has possession, go to assisting or running state
+                if rand::random::<bool>() {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+                } else {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Assisting));
+                }
+            } else {
+                // If team doesn't have possession, go to running state
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            }
         }
 
         // Check if the player has created enough space
@@ -71,15 +88,13 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 target: target_position,
                 slowing_distance: 50.0,
             }
-            .calculate(ctx.player)
-            .velocity
+                .calculate(ctx.player)
+                .velocity
                 + ctx.player().separation_velocity(),
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No specific conditions to process
-    }
+    fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl ForwardCreatingSpaceState {
@@ -88,7 +103,7 @@ impl ForwardCreatingSpaceState {
         let space_created = !ctx.players().opponents().exists(CREATING_SPACE_THRESHOLD);
 
         // Additional check: have we been in this state long enough?
-        let minimum_time_in_state = 100;
+        let minimum_time_in_state = 50;
 
         space_created && ctx.in_state_time > minimum_time_in_state
     }
@@ -98,6 +113,7 @@ impl ForwardCreatingSpaceState {
         let close_opponent_threshold = 15.0;
         ctx.players().opponents().exists(close_opponent_threshold)
     }
+
     fn calculate_space_creating_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
@@ -105,6 +121,7 @@ impl ForwardCreatingSpaceState {
         let player_side = ctx.player.side.unwrap_or(PlayerSide::Left);
 
         // Get ball position and team possession information
+        let ball_position = ctx.tick_context.positions.ball.position;
         let team_in_possession = ctx.team().is_control_ball();
 
         // Find current ball holder on same team (if any)
@@ -117,10 +134,11 @@ impl ForwardCreatingSpaceState {
             None
         };
 
-        // If a teammate has the ball, create space away from them but still in attacking position
+        // If a teammate has the ball, create space away from them while maintaining attacking position
         if let Some(holder) = ball_holder {
             // Create space away from the ball holder but still in attacking position
-            let to_holder = holder.position - player_position;
+            let holder_position = holder.position;
+            let to_holder = holder_position - player_position;
             let direction_to_goal = ctx.player().opponent_goal_position() - player_position;
 
             // Calculate a perpendicular direction that tends toward the goal
@@ -164,7 +182,7 @@ impl ForwardCreatingSpaceState {
             );
         }
 
-        // No teammate has the ball - move to a strategic attacking position instead of directly to goal
+        // No teammate has the ball - move to a strategic attacking position
 
         // Get attacking third position based on team side
         let attacking_third_x = if player_side == PlayerSide::Left {
@@ -175,7 +193,7 @@ impl ForwardCreatingSpaceState {
             field_width * 0.3
         };
 
-        // Define zones where forward might create space - notice none are directly at the goal
+        // Define zones where forward might create space - variety of positions
         let potential_zones = [
             Vector3::new(attacking_third_x, field_height * 0.3, 0.0),  // Wide left
             Vector3::new(attacking_third_x, field_height * 0.5, 0.0),  // Center
@@ -184,7 +202,7 @@ impl ForwardCreatingSpaceState {
             Vector3::new(attacking_third_x - 50.0, field_height * 0.6, 0.0),  // Deeper right
         ];
 
-        // Find position with the fewest opponents nearby (within 30 units)
+        // Find position with the fewest opponents nearby
         let best_position = potential_zones.iter()
             .min_by_key(|&&pos| {
                 // Count opponents within 30 units
@@ -192,7 +210,7 @@ impl ForwardCreatingSpaceState {
                     .filter(|o| (o.position - pos).magnitude() < 30.0)
                     .count();
 
-                // Add slight preference for positions closer to goal line, but not directly at goal
+                // Add slight preference for positions closer to goal line
                 let attacking_preference = if player_side == PlayerSide::Left {
                     ((field_width - pos.x) / 50.0) as usize
                 } else {
@@ -204,7 +222,7 @@ impl ForwardCreatingSpaceState {
             .copied()
             .unwrap_or(Vector3::new(attacking_third_x, field_height * 0.5, 0.0));
 
-        // Add some randomization to prevent predictability
+        // Add some randomization to prevent predictability and stickiness
         let jitter_x = (rand::random::<f32>() - 0.5) * 15.0;
         let jitter_y = (rand::random::<f32>() - 0.5) * 15.0;
         let jittered_position = Vector3::new(
