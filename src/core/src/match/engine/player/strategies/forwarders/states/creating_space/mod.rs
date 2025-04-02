@@ -28,12 +28,10 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
 
         // If the ball is close and within reach
-        if ctx.ball().distance() < 200.0 {
-            if ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Intercepting,
-                ));
-            }
+        if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Intercepting,
+            ));
         }
 
         // Add a time limit for staying in this state
@@ -100,9 +98,6 @@ impl ForwardCreatingSpaceState {
         let close_opponent_threshold = 15.0;
         ctx.players().opponents().exists(close_opponent_threshold)
     }
-
-    /// Calculate a position that intelligently creates space based on the current game state
-    /// Calculate a position that intelligently creates space based on the current game state
     fn calculate_space_creating_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
@@ -110,7 +105,6 @@ impl ForwardCreatingSpaceState {
         let player_side = ctx.player.side.unwrap_or(PlayerSide::Left);
 
         // Get ball position and team possession information
-        let ball_position = ctx.tick_context.positions.ball.position;
         let team_in_possession = ctx.team().is_control_ball();
 
         // Find current ball holder on same team (if any)
@@ -123,7 +117,7 @@ impl ForwardCreatingSpaceState {
             None
         };
 
-        // If a teammate has the ball, create space away from them
+        // If a teammate has the ball, create space away from them but still in attacking position
         if let Some(holder) = ball_holder {
             // Create space away from the ball holder but still in attacking position
             let to_holder = holder.position - player_position;
@@ -141,10 +135,10 @@ impl ForwardCreatingSpaceState {
             };
 
             // Calculate position with a significant offset to create real space
-            let target_position = player_position + goal_oriented_perpendicular * 80.0;
+            let target_position = player_position + goal_oriented_perpendicular * 60.0;
 
-            // Add a slight forward bias toward goal
-            let forward_bias = direction_to_goal.normalize() * 20.0;
+            // Add a slight forward bias toward goal (but not directly to it)
+            let forward_bias = direction_to_goal.normalize() * 15.0;
             let biased_position = target_position + forward_bias;
 
             // Ensure we're not moving too far from starting position
@@ -170,18 +164,18 @@ impl ForwardCreatingSpaceState {
             );
         }
 
-        // No teammate has the ball - move to a strategic attacking position
+        // No teammate has the ball - move to a strategic attacking position instead of directly to goal
 
         // Get attacking third position based on team side
         let attacking_third_x = if player_side == PlayerSide::Left {
-            // For left side team, move toward the right (opponent's) side
-            field_width * 0.75
+            // For left side team, move toward the right (opponent's) side but not all the way
+            field_width * 0.7
         } else {
-            // For right side team, move toward the left (opponent's) side
-            field_width * 0.25
+            // For right side team, move toward the left (opponent's) side but not all the way
+            field_width * 0.3
         };
 
-        // Define zones where forward might create space
+        // Define zones where forward might create space - notice none are directly at the goal
         let potential_zones = [
             Vector3::new(attacking_third_x, field_height * 0.3, 0.0),  // Wide left
             Vector3::new(attacking_third_x, field_height * 0.5, 0.0),  // Center
@@ -198,10 +192,14 @@ impl ForwardCreatingSpaceState {
                     .filter(|o| (o.position - pos).magnitude() < 30.0)
                     .count();
 
-                // Add slight preference for positions closer to goal
-                let goal_distance_factor = ((pos - ctx.player().opponent_goal_position()).magnitude() / 100.0) as usize;
+                // Add slight preference for positions closer to goal line, but not directly at goal
+                let attacking_preference = if player_side == PlayerSide::Left {
+                    ((field_width - pos.x) / 50.0) as usize
+                } else {
+                    (pos.x / 50.0) as usize
+                };
 
-                opponent_count + goal_distance_factor
+                opponent_count + attacking_preference
             })
             .copied()
             .unwrap_or(Vector3::new(attacking_third_x, field_height * 0.5, 0.0));

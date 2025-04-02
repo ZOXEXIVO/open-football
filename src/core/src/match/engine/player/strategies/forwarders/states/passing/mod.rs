@@ -79,13 +79,11 @@ impl StateProcessingHandler for ForwardPassingState {
 }
 
 impl ForwardPassingState {
-    /// Find the best pass option using a specialized forward evaluation system
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
+        let teammates = ctx.players().teammates();
 
         // Use player's vision skill to determine range
         let vision_range = ctx.player.skills.mental.vision * 15.0;
@@ -100,8 +98,7 @@ impl ForwardPassingState {
             return None;
         }
 
-        // Evaluate each option - forwards prioritize different types of passes
-        // than midfielders, with more emphasis on attacking potential
+        // Evaluate each option - forwards prioritize different passes than other positions
         pass_options.into_iter()
             .map(|teammate| {
                 let score = self.evaluate_forward_pass(ctx, &teammate);
@@ -113,41 +110,41 @@ impl ForwardPassingState {
             .map(|(teammate, _)| teammate)
     }
 
-    /// Specialized pass evaluation for forwards that focuses on:
-    /// - Passes that lead to goal-scoring opportunities
-    /// - Teammates in better scoring positions
-    /// - Quick, attacking passes rather than possession maintenance
+    /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
     fn evaluate_forward_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
         // Start with the basic pass evaluator score
         let base_score = PassEvaluator::evaluate_pass(ctx, teammate, 100.0);
 
-        // Additional forward-specific factors
+        // Forward-specific factors - much more goal-oriented than midfielders
         let mut score = base_score;
 
-        // Bonus for teammates closer to goal than the forward
+        // Goal distance factors - forwards prioritize passes that get closer to goal
         let forward_to_goal_dist = ctx.ball().distance_to_opponent_goal();
-        let teammate_to_goal_dist =
-            (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+        let teammate_to_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
 
+        // Significantly boost passes that advance toward goal - key forward priority
         if teammate_to_goal_dist < forward_to_goal_dist {
-            // Significant bonus for passes that advance toward goal
-            score += 25.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist));
+            score += 30.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist));
         }
 
-        // Bonus for passes to other forwards (likely in better scoring positions)
+        // Boost for passes to other forwards (likely in better scoring positions)
         if teammate.tactical_positions.is_forward() {
-            score += 15.0;
-        }
-
-        // Bonus for passes that break defensive lines - check if any opponents
-        // are between the forward and the teammate
-        if self.pass_breaks_defensive_line(ctx, teammate) {
             score += 20.0;
         }
 
-        // Bonus for teammates who have a clear shot on goal
+        // Boost for passes that break defensive lines
+        if self.pass_breaks_defensive_line(ctx, teammate) {
+            score += 25.0;
+        }
+
+        // Heavy bonus for teammates who have a clear shot on goal - key forward priority
         if self.teammate_has_clear_shot(ctx, teammate) {
-            score += 30.0;
+            score += 35.0;
+        }
+
+        // Small penalty for backwards passes unless under heavy pressure
+        if teammate.position.x < ctx.player.position.x && !self.is_under_heavy_pressure(ctx) {
+            score -= 15.0;
         }
 
         score
@@ -191,14 +188,14 @@ impl ForwardPassingState {
         opponents_in_line > 0
     }
 
-    /// Check if a teammate is viable for receiving a pass from a forward
+    /// Check if a teammate is viable for receiving a pass
     fn is_viable_pass_target(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         // Basic viability criteria
         let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
         let not_heavily_marked = !self.is_heavily_marked(ctx, teammate);
 
-        // For forwards, we're less concerned about the position being "good"
-        // and more about whether the pass is progressive or creates a chance
+        // Forwards are more aggressive with passing - they care less about position
+        // and more about goal scoring opportunities
         let creates_opportunity = self.pass_creates_opportunity(ctx, teammate);
 
         has_clear_lane && not_heavily_marked && creates_opportunity
@@ -213,10 +210,9 @@ impl ForwardPassingState {
         }
 
         // Check if the teammate is in a good shooting position
-        let distance_to_goal =
-            (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+        let distance_to_goal = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
 
-        if distance_to_goal < 250.0 {
+        if distance_to_goal < 200.0 {
             return true;
         }
 
@@ -229,7 +225,7 @@ impl ForwardPassingState {
         // Default - other passes may still be viable but lower priority
         true
     }
-
+    
     /// Check if a player is heavily marked by opponents
     fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         const MARKING_DISTANCE: f32 = 5.0;

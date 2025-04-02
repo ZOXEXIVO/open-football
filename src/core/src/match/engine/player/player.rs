@@ -163,24 +163,28 @@ impl MatchPlayer {
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
-        let has_ball = self.has_ball(ctx);
-        let is_ball_close = ctx.ball().distance() < 100.0;
-        let team_in_control = ctx.team().is_control_ball();
+        // Check if player has the ball - immediate decision
+        if self.has_ball(ctx) {
+            return false;
+        }
 
-        // Base condition for all players
-        let base_condition = !has_ball && !is_ball_close && team_in_control;
-
-        // Role-specific adjustments
+        let ball_distance = ctx.ball().distance();
+        let is_ball_close = ball_distance < 100.0;
+        
         match self.tactical_position.current_position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => {
-                // Goalkeepers follow waypoints less often
-                base_condition && ctx.ball().distance() > 200.0
+                // Goalkeepers only follow waypoints when the ball is far away
+                !is_ball_close && ball_distance > 200.0 && ctx.team().is_control_ball()
             },
             PlayerFieldPositionGroup::Defender => {
-                // Defenders are more positionally disciplined
-                base_condition || (!has_ball && !is_ball_close)
+                // Defenders are more positionally disciplined - they follow waypoints
+                // even when team doesn't control the ball
+                !is_ball_close
             },
-            _ => base_condition
+            _ => {
+                // For other positions, only follow waypoints when not close to ball and team controls
+                !is_ball_close && ctx.team().is_control_ball()
+            }
         }
     }
 }
