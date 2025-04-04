@@ -1,5 +1,5 @@
 use burn::backend::ndarray::NdArrayDevice;
-use burn::backend::{Autodiff, NdArray};
+use burn::backend::{Autodiff, NdArray, Wgpu};
 use burn::config::Config;
 use burn::data::dataloader::batcher::Batcher;
 use burn::data::dataloader::DataLoaderBuilder;
@@ -14,9 +14,10 @@ use burn::train::metric::LossMetric;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
+use burn::backend::wgpu::WgpuDevice;
 
-type NeuralNetworkDevice = NdArrayDevice;
-type NeuralNetworkBackend = NdArray;
+type NeuralNetworkDevice = WgpuDevice;
+type NeuralNetworkBackend = Wgpu;
 type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
 type NeuralNetwork<B> = MidfielderPassingNeural<B>;
