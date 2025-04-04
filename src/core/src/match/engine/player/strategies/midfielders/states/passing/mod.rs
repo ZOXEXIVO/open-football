@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -170,8 +170,15 @@ impl MidfielderPassingState {
 
     /// Check if teammate is in a good position tactically
     fn is_in_good_position(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        // Determine if this is a backward pass based on player's side
+        let is_backward_pass = match ctx.player.side {
+            Some(PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
+            Some(PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
+            None => false, // Default case, should not happen in a match
+        };
+
         // For midfielders, we want to avoid passing backward unless necessary
-        if teammate.position.x < ctx.player.position.x {
+        if is_backward_pass {
             // Only pass backward if under pressure
             return self.is_under_heavy_pressure(ctx);
         }
