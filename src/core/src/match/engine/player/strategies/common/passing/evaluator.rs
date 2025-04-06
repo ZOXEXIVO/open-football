@@ -74,6 +74,40 @@ impl PassEvaluator {
         1.0 - (opponents_nearby as f32 / max_opponents as f32).min(1.0)
     }
 
+    /// Calculate how well the pass matches the player's skills
+    fn calculate_skill_match_score(ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
+        let passer_skills = &ctx.player.skills;
+
+        // Get relevant skills for passing with more weight on vision and passing
+        let pass_accuracy = passer_skills.technical.passing / 20.0;
+        let vision = passer_skills.mental.vision / 20.0;
+        let composure = passer_skills.mental.composure / 20.0;
+        let decision = passer_skills.mental.decisions / 20.0;
+
+        // Target player skills
+        let player = ctx.player();
+        let target_skills = player.skills(teammate.id);
+        let target_first_touch = target_skills.technical.first_touch / 20.0;
+        let target_control = target_skills.technical.technique / 20.0;
+
+        // Pass distance affects skill requirement
+        let pass_distance = (teammate.position - ctx.player.position).magnitude();
+        let distance_difficulty = (pass_distance / 40.0).min(1.0);
+
+        // Calculate passer capability with greater emphasis on vision and passing
+        let player_skill = (pass_accuracy * 0.5) + (vision * 0.3) + (composure * 0.1) + (decision * 0.1);
+
+        // Calculate receiver capability
+        let receiver_skill = (target_first_touch * 0.6) + (target_control * 0.4);
+
+        // Higher score when both passer and receiver have good skills
+        let required_skill = 0.3 + distance_difficulty * 0.7;
+        let pass_capability = (player_skill / required_skill).min(1.5);
+
+        // Combined skill match score with more weight on passer capability
+        (pass_capability * 0.7) + (receiver_skill * 0.3)
+    }
+    
     /// Calculate the risk of pass interception
     fn calculate_risk_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
         let player_position = ctx.player.position;
@@ -114,36 +148,6 @@ impl PassEvaluator {
 
         // Combined risk score (higher is better - less risky)
         (1.0 - interception_risk) * 0.7 + distance_factor * 0.3
-    }
-
-    /// Calculate how well the pass matches the player's skills
-    fn calculate_skill_match_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        let passer_skills = &ctx.player.skills;
-
-        let player = ctx.player();
-
-        let target_skills = player.skills(target.id);
-
-        // Get relevant skills for passing
-        let pass_accuracy = passer_skills.technical.passing / 20.0;
-        let vision = passer_skills.mental.vision / 20.0;
-        let target_first_touch = target_skills.technical.first_touch / 20.0;
-
-        // Pass distance affects skill requirement
-        let pass_distance = (target.position - ctx.player.position).magnitude();
-        let distance_difficulty = (pass_distance / 40.0).min(1.0);
-
-        // Skill match calculation
-        let required_skill = 0.3 + distance_difficulty * 0.7;
-        let player_skill = (pass_accuracy * 0.5 + vision * 0.5);
-        let receiver_skill = target_first_touch;
-
-        // Higher score when player's skills exceed requirements
-        let pass_capability = (player_skill / required_skill).min(1.0);
-        let receive_capability = receiver_skill;
-
-        // Combined skill match score
-        pass_capability * 0.7 + receive_capability * 0.3
     }
 
     /// Calculate how well the pass aligns with tactical objectives

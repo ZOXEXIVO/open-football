@@ -97,27 +97,32 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self
-            .ctx
-            .tick_context
-            .distances
-            .get(self.ctx.player.id, teammate_id);
+        let distance = self.ctx.tick_context.distances.get(self.ctx.player.id, teammate_id);
 
+        // Use multiple skills to determine pass power
         let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
+        let technique_skill = self.ctx.player.skills.technical.technique / 20.0;
+        let strength_skill = self.ctx.player.skills.physical.strength / 20.0;
 
-        let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.6;
-        let distance_factor = (distance / max_pass_distance).clamp(0.0, 1.0);
+        // Calculate skill-weighted factor
+        let skill_factor = (pass_skill * 0.6) + (technique_skill * 0.2) + (strength_skill * 0.2);
 
+        // More skilled players can hit passes at more appropriate power levels
+        let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.8;
+        let distance_factor = (distance / max_pass_distance).clamp(0.2, 1.0);
+
+        // Calculate base power
         let min_power = 0.5;
         let max_power = 2.5;
+        let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
-        let base_power = min_power + (max_power - min_power) * pass_skill * distance_factor;
-
+        // Add slight randomization
         let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 
-        let pass_power = base_power * random_factor;
+        // Players with better skills have less randomization
+        let final_random_factor = 1.0 + (random_factor - 1.0) * (1.0 - skill_factor * 0.5);
 
-        pass_power
+        base_power * final_random_factor
     }
 
     pub fn kick_teammate_power(&self, teammate_id: u32) -> f32 {
