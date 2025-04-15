@@ -168,22 +168,59 @@ impl MatchPlayer {
             return false;
         }
 
+        // Check if a teammate has the ball
+        let team_has_ball = if let Some(owner_id) = ctx.ball().owner_id() {
+            if let Some(owner) = ctx.context.players.by_id(owner_id) {
+                owner.team_id == self.team_id
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
         let ball_distance = ctx.ball().distance();
         let is_ball_close = ball_distance < 100.0;
-        
+
+        // If ball is free and close, evaluate if this player should go for it
+        if !ctx.ball().is_owned() && is_ball_close {
+            return !ctx.team().is_best_player_to_chase_ball();
+        }
+
         match self.tactical_position.current_position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => {
-                // Goalkeepers only follow waypoints when the ball is far away
-                !is_ball_close && ball_distance > 200.0 && ctx.team().is_control_ball()
+                // Goalkeepers mostly stay in position
+                !is_ball_close && ball_distance > 200.0
             },
             PlayerFieldPositionGroup::Defender => {
-                // Defenders are more positionally disciplined - they follow waypoints
-                // even when team doesn't control the ball
-                !is_ball_close
+                // Defenders are more positionally disciplined
+                if team_has_ball {
+                    // When team has ball, defenders can push up but generally maintain position
+                    !is_ball_close
+                } else {
+                    // When opposing team has ball, maintain defensive shape
+                    !is_ball_close && !ctx.ball().on_own_side()
+                }
             },
-            _ => {
-                // For other positions, only follow waypoints when not close to ball and team controls
-                !is_ball_close && ctx.team().is_control_ball()
+            PlayerFieldPositionGroup::Midfielder => {
+                // Midfielders balance between position and involvement
+                if team_has_ball {
+                    // Follow waypoints to create passing options when team has ball
+                    !is_ball_close
+                } else {
+                    // When defending, maintain shape unless ball is close
+                    !is_ball_close && !ctx.ball().on_own_side()
+                }
+            },
+            PlayerFieldPositionGroup::Forward => {
+                // Forwards make more runs and movement
+                if team_has_ball {
+                    // Make forward runs when team has ball, but not all forwards should rush to ball
+                    !is_ball_close && !ctx.team().is_best_player_to_chase_ball()
+                } else {
+                    // When defending, forwards maintain some structure but press less
+                    !is_ball_close && ball_distance > 150.0
+                }
             }
         }
     }

@@ -9,11 +9,18 @@ pub struct MidfielderPassingState {}
 
 impl StateProcessingHandler for MidfielderPassingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Add a hard timeout to prevent getting stuck
+        if ctx.in_state_time > 50 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
-            // Lost possession, transition to Pressing
+            // Lost possession, transition to Running
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
+                MidfielderState::Running,
             ));
         }
 
@@ -49,54 +56,19 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        // If no good passing option is found and we're close to goal, consider shooting
-        if ctx.ball().distance_to_opponent_goal() < 200.0
-            && self.should_shoot_instead_of_pass(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Shooting,
-            ));
-        }
-
-        // If under excessive pressure, consider dribbling to create space
-        if self.is_under_heavy_pressure(ctx) && self.can_dribble_effectively(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Dribbling,
-            ));
-        }
-
-        // Add a timeout mechanism - if we've been in this state for too long, make a decision
-        if ctx.in_state_time > 60 {  // 60 ticks is a reasonable timeout
-            // If we're under pressure, clear the ball or make a risky pass
-            if self.is_under_heavy_pressure(ctx) {
-                // Just make the safest available pass even if not ideal
-                if let Some(any_teammate) = ctx.players().teammates().nearby(150.0).next() {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::build()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(any_teammate.id)
-                                .with_target(any_teammate.position)
-                                .with_force(ctx.player().pass_teammate_power(any_teammate.id) * 1.2) // Slightly more power for urgency
-                                .build(),
-                        )),
-                    ));
-                } else {
-                    // No teammate in range - transition to dribbling as a last resort
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Dribbling,
-                    ));
-                }
-            } else {
-                // Not under immediate pressure, can take a more measured decision
-                // Try to advance with the ball
+        // If no good passing option is found after waiting a bit, try something else
+        if ctx.in_state_time > 20 {
+            if ctx.ball().distance_to_opponent_goal() < 200.0 {
                 return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Running,
+                    MidfielderState::DistanceShooting,
+                ));
+            } else {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Dribbling,
                 ));
             }
         }
 
-        // Default - continue in current state looking for options
         None
     }
 
@@ -105,6 +77,36 @@ impl StateProcessingHandler for MidfielderPassingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // If player is in passing state but not doing anything, make them move a bit
+        // so they don't appear stuck
+        if ctx.in_state_time > 10 {
+            // Make a small movement based on tactical situation
+            let field_center = Vector3::new(ctx.context.field_size.width as f32 / 2.0,
+                                            ctx.context.field_size.height as f32 / 2.0,
+                                            0.0);
+
+            let to_center = (field_center - ctx.player.position).normalize();
+            let random_jitter = Vector3::new(
+                (rand::random::<f32>() - 0.5) * 0.5,
+                (rand::random::<f32>() - 0.5) * 0.5,
+                0.0
+            );
+
+            // Move slightly to avoid looking frozen
+            return Some((to_center + random_jitter).normalize() * 1.0);
+        }
+
+        // As a fallback, make a small random movement to avoid looking stuck
+        if ctx.in_state_time % 10 == 0 {
+            let jitter = Vector3::new(
+                (rand::random::<f32>() - 0.5) * 0.8,
+                (rand::random::<f32>() - 0.5) * 0.8,
+                0.0
+            );
+            return Some(jitter);
+        }
+
+        // Otherwise use normal logic
         // If the player should adjust position to find better passing angles
         if self.should_adjust_position(ctx) {
             if let Some(nearest_teammate) = ctx.players().teammates().nearby_to_opponent_goal() {
@@ -119,8 +121,11 @@ impl StateProcessingHandler for MidfielderPassingState {
             }
         }
 
-        // Default to minimal movement while preparing to pass
-        Some(Vector3::new(0.0, 0.0, 0.0))
+        // Default to small movement while preparing to pass
+        Some(Vector3::new(
+            (rand::random::<f32>() - 0.5) * 0.3,
+            (rand::random::<f32>() - 0.5) * 0.3,
+            0.0))
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}

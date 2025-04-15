@@ -52,12 +52,10 @@ impl StateProcessingHandler for DefenderRunningState {
                         DefenderState::Tackling,
                     ));
                 }
-            } else {
-                if ctx.ball().is_towards_player_with_angle(0.8) && distance_to_ball < 200.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Intercepting,
-                    ));
-                }
+            } else if self.should_intercept(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
             }
         }
 
@@ -182,6 +180,35 @@ impl DefenderRunningState {
     fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
         if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
             return ctx.player().has_clear_shot();
+        }
+
+        false
+    }
+
+    fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {
+        // Don't intercept if a teammate has the ball
+        if let Some(owner_id) = ctx.ball().owner_id() {
+            if let Some(owner) = ctx.context.players.by_id(owner_id) {
+                if owner.team_id == ctx.player.team_id {
+                    // A teammate has the ball, don't try to intercept
+                    return false;
+                }
+            }
+        }
+
+        // Only intercept if you're the best player to chase the ball
+        if !ctx.team().is_best_player_to_chase_ball() {
+            return false;
+        }
+
+        // Check if the ball is moving toward this player and is close enough
+        if ctx.ball().distance() < 200.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            return true;
+        }
+
+        // Check if the ball is very close and no teammate is clearly going for it
+        if ctx.ball().distance() < 50.0 && !ctx.team().is_teammate_chasing_ball() {
+            return true;
         }
 
         false

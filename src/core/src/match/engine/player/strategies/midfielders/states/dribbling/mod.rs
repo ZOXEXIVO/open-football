@@ -10,6 +10,13 @@ pub struct MidfielderDribblingState {}
 
 impl StateProcessingHandler for MidfielderDribblingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Add timeout to avoid getting stuck
+        if ctx.in_state_time > 60 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running
+            ));
+        }
+
         if ctx.player.has_ball(ctx) {
             // If the player has the ball, consider shooting, passing, or dribbling
             if self.is_in_shooting_position(ctx) {
@@ -23,30 +30,11 @@ impl StateProcessingHandler for MidfielderDribblingState {
                     MidfielderState::Passing
                 ));
             }
-
-            if ctx.in_state_time > 100 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Passing
-                ));
-            }
         } else {
-            if self.should_press(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
-            }
-
-            if self.should_support_attack(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::AttackSupporting,
-                ));
-            }
-
-            if self.should_return_to_position(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Returning,
-                ));
-            }
+            // If they don't have the ball anymore, change state
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
         }
 
         None
@@ -56,8 +44,34 @@ impl StateProcessingHandler for MidfielderDribblingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Instead of returning zero velocity, actually dribble toward goal
+        if ctx.player.has_ball(ctx) {
+            // Dribble toward the goal with some variance
+            let goal_pos = ctx.player().opponent_goal_position();
+            let player_pos = ctx.player.position;
+            let direction = (goal_pos - player_pos).normalize();
+
+            // Add some randomness to dribbling direction for realism
+            let jitter_x = (rand::random::<f32>() - 0.5) * 0.2;
+            let jitter_y = (rand::random::<f32>() - 0.5) * 0.2;
+            let jitter = Vector3::new(jitter_x, jitter_y, 0.0);
+
+            // Calculate speed based on player's dribbling and pace
+            let dribble_skill = ctx.player.skills.technical.dribbling / 20.0;
+            let pace = ctx.player.skills.physical.pace / 20.0;
+            let speed = 3.0 * (0.7 * dribble_skill + 0.3 * pace);
+
+            Some((direction + jitter).normalize() * speed)
+        } else {
+            // If player doesn't have the ball anymore, move toward it
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let player_pos = ctx.player.position;
+            let direction = (ball_pos - player_pos).normalize();
+            let speed = ctx.player.skills.physical.pace * 0.3;
+
+            Some(direction * speed)
+        }
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
