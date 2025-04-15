@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CurrencyValue {
     pub amount: f64,
     pub currency: Currency,
@@ -10,7 +10,7 @@ impl CurrencyValue {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Currency {
     Usd,
 }
