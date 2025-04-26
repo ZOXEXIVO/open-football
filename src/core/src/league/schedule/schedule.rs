@@ -5,7 +5,7 @@ use crate::r#match::{Score, TeamScore};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Schedule {
     pub tours: Vec<ScheduleTour>,
 }
@@ -130,11 +130,6 @@ impl Schedule {
     }
 }
 
-impl Default for Schedule {
-    fn default() -> Self {
-        Schedule { tours: Vec::new() }
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ScheduleError {

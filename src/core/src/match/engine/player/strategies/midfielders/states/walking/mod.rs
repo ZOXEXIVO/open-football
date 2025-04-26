@@ -36,7 +36,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 ));
             }
             
-            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
+            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 300.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
