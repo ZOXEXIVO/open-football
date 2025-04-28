@@ -1,5 +1,6 @@
-use burn::backend::ndarray::NdArrayDevice;
-use burn::backend::{Autodiff, NdArray, Wgpu};
+#![recursion_limit = "256"]
+
+use burn::backend::{Autodiff, Wgpu};
 use burn::config::Config;
 use burn::data::dataloader::batcher::Batcher;
 use burn::data::dataloader::DataLoaderBuilder;
@@ -122,8 +123,8 @@ pub struct TrainingBatch<B: Backend> {
 
 type BatcherItem = (f64, f64, f64);
 
-impl<B: Backend> Batcher<BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
-    fn batch(&self, items: Vec<BatcherItem>) -> TrainingBatch<B> {
+impl<B: Backend> Batcher<B, BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
+    fn batch(&self, items: Vec<BatcherItem>, _device: &B::Device) -> TrainingBatch<B> {
         let mut inputs: Vec<Tensor<B, 2>> = Vec::new();
 
         for item in items.iter() {

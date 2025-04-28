@@ -7,7 +7,7 @@ edition = "2024"
 [dependencies]
 neural = { path = "../neural" }
 chrono = "0.4.40"
-rand = "0.8.5"
+rand = "0.9.1"
 rayon = "1.10.0"
 serde = { version = "1.0.219", features = ["derive"] }
 log = "0.4.27"
