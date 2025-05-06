@@ -24,6 +24,12 @@ impl StateProcessingHandler for DefenderTacklingState {
             }
         }
 
+        if ctx.ball().distance() > 200.0 && !ctx.ball().is_towards_player_with_angle(0.8){
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
+        }
+        
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             if opponent.distance(ctx) > TACKLE_DISTANCE_THRESHOLD {
                 return Some(StateChangeResult::with_defender_state(

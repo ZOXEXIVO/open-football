@@ -1,5 +1,6 @@
-use burn::backend::ndarray::NdArrayDevice;
-use burn::backend::{Autodiff, NdArray};
+#![recursion_limit = "256"]
+
+use burn::backend::{Autodiff, Wgpu};
 use burn::config::Config;
 use burn::data::dataloader::batcher::Batcher;
 use burn::data::dataloader::DataLoaderBuilder;
@@ -14,9 +15,10 @@ use burn::train::metric::LossMetric;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
+use burn::backend::wgpu::WgpuDevice;
 
-type NeuralNetworkDevice = NdArrayDevice;
-type NeuralNetworkBackend = NdArray;
+type NeuralNetworkDevice = WgpuDevice;
+type NeuralNetworkBackend = Wgpu;
 type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
 type NeuralNetwork<B> = MidfielderPassingNeural<B>;
@@ -121,8 +123,8 @@ pub struct TrainingBatch<B: Backend> {
 
 type BatcherItem = (f64, f64, f64);
 
-impl<B: Backend> Batcher<BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
-    fn batch(&self, items: Vec<BatcherItem>) -> TrainingBatch<B> {
+impl<B: Backend> Batcher<B, BatcherItem, TrainingBatch<B>> for BinaryDataBatcher<B> {
+    fn batch(&self, items: Vec<BatcherItem>, _device: &B::Device) -> TrainingBatch<B> {
         let mut inputs: Vec<Tensor<B, 2>> = Vec::new();
 
         for item in items.iter() {
