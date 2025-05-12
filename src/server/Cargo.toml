@@ -9,7 +9,7 @@ database = { path = "../database" }
 axum = "0.8.4"
 log = "0.4.27"
 tokio = { version = "1.45.0", features = ["full"] }
-tower-http = { version = "0.6.2", features = ["fs"] }
+tower-http = { version = "0.6.4", features = ["fs"] }
 serde = { version = "1.0.219", features = ["derive"] }
 serde_json = "1.0.140"
 chrono = "0.4.41"
