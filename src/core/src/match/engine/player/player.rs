@@ -163,68 +163,15 @@ impl MatchPlayer {
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if player has the ball - immediate decision
-        if self.has_ball(ctx) {
-            return false;
-        }
+        // Return true when player should follow waypoints, for example:
+        // - When not in possession
+        // - When not immediately involved in an action
+        // - When team is in a controlling phase
+        let has_ball = self.has_ball(ctx);
+        let is_ball_close = ctx.ball().distance() < 100.0;
+        let team_in_control = ctx.team().is_control_ball();
 
-        // Check if a teammate has the ball
-        let team_has_ball = if let Some(owner_id) = ctx.ball().owner_id() {
-            if let Some(owner) = ctx.context.players.by_id(owner_id) {
-                owner.team_id == self.team_id
-            } else {
-                false
-            }
-        } else {
-            false
-        };
-
-        // CHANGE: Reduce this threshold to make "close" more restrictive
-        let ball_distance = ctx.ball().distance();
-        let is_ball_close = ball_distance < 60.0;  // Reduced from 100.0
-
-        // If ball is free and close, evaluate if this player should go for it
-        if !ctx.ball().is_owned() && is_ball_close {
-            return !ctx.team().is_best_player_to_chase_ball();
-        }
-
-        // CHANGE: Make position-specific logic more likely to follow waypoints
-        match self.tactical_position.current_position.position_group() {
-            PlayerFieldPositionGroup::Goalkeeper => {
-                // Goalkeepers mostly stay in position
-                !is_ball_close && ball_distance > 150.0  // Reduced from 200.0
-            },
-            PlayerFieldPositionGroup::Defender => {
-                // Defenders are more positionally disciplined
-                if team_has_ball {
-                    // When team has ball, defenders should follow waypoints more
-                    ball_distance > 80.0  // More structured positioning
-                } else {
-                    // When opposing team has ball, maintain defensive shape
-                    !is_ball_close && !ctx.ball().on_own_side()
-                }
-            },
-            PlayerFieldPositionGroup::Midfielder => {
-                // Midfielders balance between position and involvement
-                if team_has_ball {
-                    // More structured positioning when team has ball
-                    ball_distance > 70.0
-                } else {
-                    // More likely to follow waypoints when defending
-                    !is_ball_close && !ctx.ball().on_own_side()
-                }
-            },
-            PlayerFieldPositionGroup::Forward => {
-                // Forwards make more runs and movement
-                if team_has_ball {
-                    // Make forward runs when team has ball
-                    ball_distance > 80.0 && !ctx.team().is_best_player_to_chase_ball()
-                } else {
-                    // When defending, forwards maintain more structure
-                    !is_ball_close && ball_distance > 120.0  // Reduced from 150.0
-                }
-            }
-        }
+        !has_ball && !is_ball_close && team_in_control
     }
 }
 
@@ -246,15 +193,5 @@ impl MatchPlayerLite {
 
     pub fn distance(&self, ctx: &StateProcessingContext<'_>) -> f32 {
         ctx.tick_context.distances.get(self.id, ctx.player.id)
-    }
-}
-
-impl Into<MatchPlayerLite> for &MatchPlayer{
-    fn into(self) -> MatchPlayerLite {
-        MatchPlayerLite {
-            id: self.id,
-            position: self.position,
-            tactical_positions: self.tactical_position.current_position
-        }
     }
 }

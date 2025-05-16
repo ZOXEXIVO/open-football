@@ -8,4 +8,4 @@ core = { path = "../core" }
 serde_json = "1.0.140"
 serde = "1.0.219"
 rand = "0.9.1"
-chrono = "0.4.40"
+chrono = "0.4.41"

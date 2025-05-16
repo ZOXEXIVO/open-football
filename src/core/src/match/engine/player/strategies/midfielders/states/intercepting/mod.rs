@@ -7,22 +7,15 @@ pub struct MidfielderInterceptingState {}
 
 impl StateProcessingHandler for MidfielderInterceptingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) || ctx.ball().is_owned() || ctx.team().is_control_ball() {
+        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
         }
-        
 
         if ctx.ball().distance() < 15.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Tackling,
-            ));
-        }
-
-        if ctx.team().is_teammate_chasing_ball() && !ctx.team().is_best_player_to_chase_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
             ));
         }
 

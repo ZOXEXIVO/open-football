@@ -104,7 +104,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
                     .calculate(ctx.player)
-                    .velocity + ctx.player().separation_velocity(),
+                    .velocity,
                 );
             }
         }
@@ -112,41 +112,43 @@ impl StateProcessingHandler for MidfielderRunningState {
         if let Some(target_position) = self.find_space_between_opponents(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: target_position,
+                    target: target_position + ctx.player().separation_velocity(),
                     slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity,
             )
         } else if ctx.player.has_ball(ctx) {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position(),
+                    target: ctx.player().opponent_goal_position()
+                        + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity,
             )
         } else if ctx.team().is_control_ball() {
             Some(
                 SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position(),
+                    target: ctx.player().opponent_goal_position()
+                        + ctx.player().separation_velocity(),
                     slowing_distance: 100.0,
                 }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity,
             )
         } else {
             Some(
                 SteeringBehavior::Wander {
-                    target: ctx.player.start_position,
+                    target: ctx.player.start_position + ctx.player().separation_velocity(),
                     radius: IntegerUtils::random(5, 150) as f32,
                     jitter: IntegerUtils::random(0, 2) as f32,
                     distance: IntegerUtils::random(10, 150) as f32,
                     angle: IntegerUtils::random(0, 360) as f32,
                 }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity,
             )
         }
     }
@@ -299,10 +301,10 @@ impl MidfielderRunningState {
         let distance_from_start = ctx.player().distance_from_start_position();
         let team_in_possession = ctx.team().is_control_ball();
 
-        distance_from_start > 100.0 && !team_in_possession
+        distance_from_start > 20.0 && !team_in_possession
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(50.0)
+        ctx.players().opponents().exists(25.0)
     }
 }

@@ -18,28 +18,24 @@ impl StateProcessingHandler for MidfielderWalkingState {
         }
         
         if ctx.team().is_control_ball() {
-            if ctx.ball().distance() < 100.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
-            
             if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));
             }
         } else {
-            if ctx.ball().distance() < 100.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
-            
-            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 300.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
+            if ctx.ball().is_towards_player_with_angle(0.8) {
+                if  ctx.ball().distance() < 100.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Intercepting,
+                    ));
+                }
+
+                if ctx.ball().distance() < 250.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
             }
 
             let nearby_opponents = ctx.players().opponents().nearby(150.0).collect::<Vec<_>>();
