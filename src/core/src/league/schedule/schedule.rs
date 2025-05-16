@@ -211,6 +211,7 @@ impl ScheduleTour {
 mod tests {
     use super::*;
     use chrono::NaiveDate;
+    use crate::r#match::TeamScore;
 
     #[test]
     fn test_schedule_tour_new() {
