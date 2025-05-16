@@ -91,7 +91,7 @@ impl DefenderTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let aggression = ctx.player.skills.mental.aggression / 20.0;
@@ -107,7 +107,7 @@ impl DefenderTacklingState {
         let success_chance = 0.5 + skill_difference * 0.3;
         let clamped_success_chance = success_chance.clamp(0.1, 0.9);
 
-        let tackle_success = rng.r#gen::<f32>() < clamped_success_chance;
+        let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
         let foul_chance = if tackle_success {
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
@@ -115,7 +115,7 @@ impl DefenderTacklingState {
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
         };
 
-        let committed_foul = rng.r#gen::<f32>() < foul_chance;
+        let committed_foul = rng.random::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

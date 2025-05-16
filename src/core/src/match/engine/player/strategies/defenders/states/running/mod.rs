@@ -13,8 +13,6 @@ pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let distance_to_ball = ctx.ball().distance();
-
         if ctx.player.has_ball(ctx) {
             if self.is_in_shooting_range(ctx) {
                 return Some(StateChangeResult::with_defender_state(

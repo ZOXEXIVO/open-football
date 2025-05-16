@@ -149,11 +149,11 @@ impl DefenderOffsideTrapState {
         // Calculate the success probability based on teamwork and concentration
         let teamwork = ctx.player.skills.mental.teamwork as f32 / 20.0;
         let concentration = ctx.player.skills.mental.concentration as f32 / 20.0;
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let success_probability = (teamwork + concentration) / 2.0;
 
         // Determine the offside trap outcome
-        let offside_trap_successful = rng.r#gen::<f32>() < success_probability;
+        let offside_trap_successful = rng.random::<f32>() < success_probability;
 
         if offside_trap_successful {
             // Check if any opponent is caught offside

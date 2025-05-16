@@ -164,15 +164,15 @@ impl SteeringBehavior {
                 distance,
                 angle: _,
             } => {
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
 
-                let angle = rng.r#gen::<f32>() * std::f32::consts::PI * 2.0;
+                let angle = rng.random::<f32>() * std::f32::consts::PI * 2.0;
 
                 let displacement = Vector3::new(angle.cos() * *radius, angle.sin() * *radius, 0.0);
 
                 let jitter_offset = Vector3::new(
-                    rng.r#gen::<f32>() * *jitter - *jitter * 0.5,
-                    rng.r#gen::<f32>() * *jitter - *jitter * 0.5,
+                    rng.random::<f32>() * *jitter - *jitter * 0.5,
+                    rng.random::<f32>() * *jitter - *jitter * 0.5,
                     0.0,
                 );
 

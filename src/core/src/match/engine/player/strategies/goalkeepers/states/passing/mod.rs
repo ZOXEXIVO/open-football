@@ -71,7 +71,7 @@ impl GoalkeeperPassingState {
                 })
                 .cloned()
         } else {
-            teammates.nearby(300.0).choose(&mut rand::thread_rng())
+            teammates.nearby(300.0).choose(&mut rand::rng())
         }
     }
 

@@ -100,7 +100,7 @@ impl MidfielderTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let aggression = ctx.player.skills.mental.aggression / 20.0;
@@ -120,7 +120,7 @@ impl MidfielderTacklingState {
         let clamped_success_chance = success_chance.clamp(0.1, 0.9);
 
         // Simulate tackle success
-        let tackle_success = rng.r#gen::<f32>() < clamped_success_chance;
+        let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
         // Calculate foul chance
         let foul_chance = if tackle_success {
@@ -132,7 +132,7 @@ impl MidfielderTacklingState {
         };
 
         // Simulate foul
-        let committed_foul = rng.r#gen::<f32>() < foul_chance;
+        let committed_foul = rng.random::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

@@ -63,8 +63,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         // Calculate the maximum deviation in the y-direction based on the goal height and player skills
         let max_y_deviation = goal_height * 0.15 * (1.0 - technique_factor * accuracy_factor);
 
-        let mut rng = rand::thread_rng();
-        let y_offset = rng.gen_range(-max_y_deviation..max_y_deviation);
+        let mut rng = rand::rng();
+        let y_offset = rng.random_range(-max_y_deviation..max_y_deviation);
 
         let mut shooting_target = goal_position;
         
@@ -117,7 +117,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
         // Add slight randomization
-        let random_factor = rand::thread_rng().gen_range(0.9..1.1);
+        let random_factor = rand::rng().random_range(0.9..1.1);
 
         // Players with better skills have less randomization
         let final_random_factor = 1.0 + (random_factor - 1.0) * (1.0 - skill_factor * 0.5);

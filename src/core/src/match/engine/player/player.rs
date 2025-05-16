@@ -195,3 +195,13 @@ impl MatchPlayerLite {
         ctx.tick_context.distances.get(self.id, ctx.player.id)
     }
 }
+
+impl From<&MatchPlayer> for MatchPlayerLite {
+    fn from(player: &MatchPlayer) -> Self {
+        MatchPlayerLite {
+            id: player.id,
+            position: player.position,
+            tactical_positions: player.tactical_position.current_position,
+        }
+    }
+}

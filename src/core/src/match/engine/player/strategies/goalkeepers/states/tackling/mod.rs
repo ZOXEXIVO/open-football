@@ -113,7 +113,7 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
 impl GoalkeeperTacklingState {
     /// Attempts a tackle and returns whether it was successful and if a foul was committed.
     fn attempt_tackle(&self, ctx: &StateProcessingContext) -> (bool, bool) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Get goalkeeper's tackling-related skills
         let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0; // Normalize to [0,1]
@@ -126,13 +126,13 @@ impl GoalkeeperTacklingState {
         let success_chance = overall_skill * TACKLE_SUCCESS_BASE_CHANCE;
 
         // Simulate tackle success
-        let tackle_success = rng.r#gen::<f32>() < success_chance;
+        let tackle_success = rng.random::<f32>() < success_chance;
 
         // Calculate foul chance
         let foul_chance = (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05;
 
         // Simulate foul
-        let committed_foul = !tackle_success && rng.r#gen::<f32>() < foul_chance;
+        let committed_foul = !tackle_success && rng.random::<f32>() < foul_chance;
 
         (tackle_success, committed_foul)
     }

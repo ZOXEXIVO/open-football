@@ -85,7 +85,7 @@ impl MidfielderDribblingState {
 
         let teammates = teammates.nearby_ids(150.0);
 
-        if let Some((teammate_id, _)) = teammates.choose(&mut rand::thread_rng()) {
+        if let Some((teammate_id, _)) = teammates.choose(&mut rand::rng()) {
             return Some(teammate_id)
         }
 
