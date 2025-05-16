@@ -22,12 +22,10 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        if !ctx.team().is_control_ball() {
-            if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
-                ));
-            }
+        if !ctx.team().is_control_ball() && ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Intercepting,
+            ));
         }
 
         if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Small {
@@ -46,11 +44,11 @@ impl StateProcessingHandler for MidfielderReturningState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position + ctx.player().separation_velocity(),
+                target: ctx.player.start_position,
                 slowing_distance: 10.0,
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity  + ctx.player().separation_velocity(),
         )
     }
 

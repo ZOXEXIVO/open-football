@@ -7,8 +7,8 @@ use crate::PlayerSkills;
 use nalgebra::Vector3;
 use rand::Rng;
 
-const SEPARATION_RADIUS: f32 = 10.0;
-const SEPARATION_STRENGTH: f32 = 10.0;
+const SEPARATION_RADIUS: f32 = 20.0;
+const SEPARATION_STRENGTH: f32 = 20.0;
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -97,27 +97,32 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self
-            .ctx
-            .tick_context
-            .distances
-            .get(self.ctx.player.id, teammate_id);
+        let distance = self.ctx.tick_context.distances.get(self.ctx.player.id, teammate_id);
 
+        // Use multiple skills to determine pass power
         let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
+        let technique_skill = self.ctx.player.skills.technical.technique / 20.0;
+        let strength_skill = self.ctx.player.skills.physical.strength / 20.0;
 
-        let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.6;
-        let distance_factor = (distance / max_pass_distance).clamp(0.0, 1.0);
+        // Calculate skill-weighted factor
+        let skill_factor = (pass_skill * 0.6) + (technique_skill * 0.2) + (strength_skill * 0.2);
 
+        // More skilled players can hit passes at more appropriate power levels
+        let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.8;
+        let distance_factor = (distance / max_pass_distance).clamp(0.2, 1.0);
+
+        // Calculate base power
         let min_power = 0.5;
         let max_power = 2.5;
+        let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
-        let base_power = min_power + (max_power - min_power) * pass_skill * distance_factor;
-
+        // Add slight randomization
         let random_factor = rand::thread_rng().gen_range(0.9..1.1);
 
-        let pass_power = base_power * random_factor;
+        // Players with better skills have less randomization
+        let final_random_factor = 1.0 + (random_factor - 1.0) * (1.0 - skill_factor * 0.5);
 
-        pass_power
+        base_power * final_random_factor
     }
 
     pub fn kick_teammate_power(&self, teammate_id: u32) -> f32 {
@@ -255,20 +260,60 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn separation_velocity(&self) -> Vector3<f32> {
         let players = self.ctx.players();
         let teammates = players.teammates();
+        let opponents = players.opponents();
 
         let mut separation = Vector3::zeros();
 
+        // Increased parameters for better separation
+        const SEPARATION_RADIUS: f32 = 30.0; // Increased from 25.0
+        const SEPARATION_STRENGTH: f32 = 25.0; // Increased from 20.0
+        const MIN_SEPARATION_DISTANCE: f32 = 5.0; // New minimum distance to enforce
+
+        // Apply separation from teammates
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
             let to_other = other_player.position - self.ctx.player.position;
             let distance = to_other.magnitude();
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
-                let direction = to_other.normalize();
-                let perpendicular_velocity = Vector3::new(-direction.y, -direction.x, 0.0);
-                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS);
+                // Using quartic falloff for stronger close-range separation
+                let direction = -to_other.normalize();
+                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS).powf(4.0);
+                separation += direction * strength;
 
-                separation += perpendicular_velocity * strength;
+                // Extra strong separation when very close
+                if distance < MIN_SEPARATION_DISTANCE {
+                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(3.0); // Capped at 3x
+                    separation += direction * SEPARATION_STRENGTH * emergency_multiplier;
+                }
             }
+        }
+
+        // Apply separation from opponents (slightly stronger effect)
+        for other_player in opponents.nearby(SEPARATION_RADIUS * 0.8) {
+            let to_other = other_player.position - self.ctx.player.position;
+            let distance = to_other.magnitude();
+
+            if distance > 0.0 && distance < SEPARATION_RADIUS * 0.8 {
+                let direction = -to_other.normalize();
+                let strength = SEPARATION_STRENGTH * 0.8 * (1.0 - distance / (SEPARATION_RADIUS * 0.8)).powf(3.0);
+                separation += direction * strength;
+
+                // Extra strong separation when very close
+                if distance < MIN_SEPARATION_DISTANCE {
+                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(2.5); // Capped at 2.5x
+                    separation += direction * SEPARATION_STRENGTH * 0.7 * emergency_multiplier;
+                }
+            }
+        }
+
+        // Add slight random jitter to separation for natural movement
+        if separation.magnitude() > 0.1 {
+            let jitter = Vector3::new(
+                (rand::random::<f32>() - 0.5) * 0.8,
+                (rand::random::<f32>() - 0.5) * 0.8,
+                0.0
+            );
+            separation += jitter;
         }
 
         separation

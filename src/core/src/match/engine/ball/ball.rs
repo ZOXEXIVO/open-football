@@ -217,11 +217,23 @@ impl Ball {
                 })
                 .collect();
 
+            // Check if a teammate already has the ball - don't allow stealing from teammates
             let is_nearby_already_has_ball = nearby_players
                 .iter()
                 .any(|player| Some(player.id) == self.current_owner);
             if is_nearby_already_has_ball {
                 return;
+            }
+
+            // If a nearby player of the same team as current owner exists, don't change ownership
+            if let Some(current_owner_id) = self.current_owner {
+                let current_owner = context.players.by_id(current_owner_id).unwrap();
+                let same_team_nearby = nearby_players.iter().any(|p| p.team_id == current_owner.team_id && p.id != current_owner.id);
+
+                if same_team_nearby {
+                    // Don't transfer ownership to teammates - they should maintain positions
+                    return;
+                }
             }
 
             let best_tackler = if nearby_players.len() == 1 {
@@ -241,6 +253,15 @@ impl Ball {
             };
 
             if let Some(player) = best_tackler {
+                // Don't allow stealing ball from teammates - check if the player is on the same team as current owner
+                if let Some(current_owner_id) = self.current_owner {
+                    let current_owner = context.players.by_id(current_owner_id).unwrap();
+                    if player.team_id == current_owner.team_id {
+                        // Don't transfer ownership between teammates
+                        return;
+                    }
+                }
+
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
 

@@ -66,8 +66,7 @@ impl PlayerDistanceClosure {
             })
             .map(|dist| dist.distance)
             .unwrap_or_else(|| {
-                error!("no distance between {} and {}",player_from_id, player_to_id);
-                MAX_DISTANCE
+                MAX_DISTANCE  // Required for subs
             })
     }
 
