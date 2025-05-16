@@ -56,7 +56,7 @@ impl GoalkeeperDistributingState {
             .teammates()
             .all()
             .filter(|p| self.is_teammate_open(ctx, p) && ctx.player().has_clear_pass(p.id))
-            .choose(&mut rand::thread_rng())
+            .choose(&mut rand::rng())
         {
             return Some(teammate);
         }

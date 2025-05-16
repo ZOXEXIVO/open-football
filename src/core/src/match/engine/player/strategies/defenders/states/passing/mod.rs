@@ -6,7 +6,6 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::Rng;
 
 #[derive(Default)]
 pub struct DefenderPassingState {}

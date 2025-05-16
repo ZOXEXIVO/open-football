@@ -1,7 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::round::RoundSchedule;
 use crate::league::{LeagueMatch, LeagueSettings, ScheduleGenerator, ScheduleResult, Season};
-use crate::r#match::{Score, TeamScore};
+use crate::r#match::{Score};
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 

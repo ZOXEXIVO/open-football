@@ -87,7 +87,7 @@ impl ForwardTacklingState {
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
     ) -> (bool, bool) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let aggression = ctx.player.skills.mental.aggression / 20.0;
