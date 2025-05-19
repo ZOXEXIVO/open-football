@@ -190,25 +190,11 @@ impl DefenderPassingState {
     fn is_viable_pass_target(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         // Basic viability criteria
         let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-        let not_heavily_marked = !self.is_heavily_marked(ctx, teammate);
         let not_dangerous_position = !self.is_in_dangerous_area(ctx, teammate);
 
-        has_clear_lane && not_heavily_marked && not_dangerous_position
+        has_clear_lane && not_dangerous_position
     }
 
-    /// Check if a player is heavily marked by opponents
-    fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        const MARKING_DISTANCE: f32 = 7.0;
-        const MAX_MARKERS: usize = 2;
-
-        let markers = ctx.players().opponents().all()
-            .filter(|opponent| {
-                (opponent.position - teammate.position).magnitude() <= MARKING_DISTANCE
-            })
-            .count();
-
-        markers >= MAX_MARKERS
-    }
 
     /// Check if a target is in a dangerous position near our goal
     fn is_in_dangerous_area(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {

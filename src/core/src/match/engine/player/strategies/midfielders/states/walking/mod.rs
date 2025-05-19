@@ -31,7 +31,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     ));
                 }
 
-                if ctx.ball().distance() < 250.0 {
+                if ctx.ball().distance() < 150.0 && ctx.ball().is_towards_player_with_angle(0.8) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Pressing,
                     ));
@@ -55,11 +55,6 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     // If the ball is close and an opponent is very close, transition to Tackling state
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
-                    ));
-                } else if ball_distance < 200.0 {
-                    // If the ball is moderately close, transition to Pressing state
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
                     ));
                 }
             }
