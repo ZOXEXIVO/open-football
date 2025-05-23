@@ -73,7 +73,12 @@ impl StateProcessingHandler for DefenderPassingState {
             ));
         }
 
-        // Continue seeking passing options or adjust position
+        if ctx.in_state_time > 100 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            )); 
+        }
+        
         None
     }
 
@@ -270,7 +275,7 @@ impl DefenderPassingState {
 
     /// Determine if player should adjust position to find better passing angles
     fn should_adjust_position(&self, ctx: &StateProcessingContext) -> bool {
-        let under_immediate_pressure = ctx.players().opponents().exists(5.0);
+        let under_immediate_pressure = ctx.players().opponents().exists(20.0);
         let has_clear_option = self.find_best_pass_option(ctx).is_some();
 
         // Adjust position if not under immediate pressure and no clear options

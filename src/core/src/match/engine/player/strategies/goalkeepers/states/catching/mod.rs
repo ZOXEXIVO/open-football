@@ -18,12 +18,10 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 .events
                 .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
 
-            Some(holding_result)
-        } else {
-            Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
-            ))
+            return Some(holding_result);
         }
+
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

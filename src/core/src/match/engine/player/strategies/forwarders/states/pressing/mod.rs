@@ -16,6 +16,12 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
+        if ctx.ball().distance() < 100.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Tackling,
+            ));
+        }
+        
         if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Assisting,

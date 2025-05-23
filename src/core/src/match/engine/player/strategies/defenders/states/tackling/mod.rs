@@ -16,12 +16,10 @@ pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) {
-            if ctx.team().is_control_ball() {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Running,
-                ));
-            }
+        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball(){
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Running,
+            ));
         }
 
         if ctx.ball().distance() > 200.0 && !ctx.ball().is_towards_player_with_angle(0.8){
