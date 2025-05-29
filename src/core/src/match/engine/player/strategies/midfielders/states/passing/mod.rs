@@ -10,7 +10,7 @@ pub struct MidfielderPassingState {}
 impl StateProcessingHandler for MidfielderPassingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Add a hard timeout to prevent getting stuck
-        if ctx.in_state_time > 50 {
+        if ctx.in_state_time > 100 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

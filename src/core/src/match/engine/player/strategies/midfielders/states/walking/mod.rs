@@ -1,9 +1,9 @@
+use crate::IntegerUtils;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
-use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -16,7 +16,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 MidfielderState::Running,
             ));
         }
-        
+
         if ctx.team().is_control_ball() {
             if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -25,7 +25,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
         } else {
             if ctx.ball().is_towards_player_with_angle(0.8) {
-                if  ctx.ball().distance() < 100.0 {
+                if ctx.ball().distance() < 100.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Intercepting,
                     ));
@@ -51,7 +51,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     }
                 }
 
-                if ball_distance < 100.0 && closest_opponent_distance < 50.0 {
+                if ball_distance < 50.0 && closest_opponent_distance < 50.0 {
                     // If the ball is close and an opponent is very close, transition to Tackling state
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
@@ -78,14 +78,14 @@ impl StateProcessingHandler for MidfielderWalkingState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0 // Some randomness for natural movement
+                        path_offset: 5.0, // Some randomness for natural movement
                     }
-                        .calculate(ctx.player)
-                        .velocity,
+                    .calculate(ctx.player)
+                    .velocity,
                 );
             }
         }
-        
+
         Some(
             SteeringBehavior::Wander {
                 target: ctx.player.start_position,

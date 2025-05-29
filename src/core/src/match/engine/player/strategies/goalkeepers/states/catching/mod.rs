@@ -1,8 +1,6 @@
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-};
+use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -19,6 +17,18 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
                 .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
 
             return Some(holding_result);
+        }
+
+        if(ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ReturningToGoal,
+            ))
+        }
+
+        if ctx.in_state_time > 200 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Running,
+            ));
         }
 
         None
