@@ -24,6 +24,12 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
+        if(self.should_shoot_instead_of_pass(ctx)) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Shooting,
+            ));
+        }
+        
         // First, look for high-value breakthrough passes (for skilled players)
         if let Some(breakthrough_target) = self.find_breakthrough_pass_option(ctx) {
             // Execute the high-quality breakthrough pass
