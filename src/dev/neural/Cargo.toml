@@ -5,4 +5,4 @@ edition = "2024"
 
 [dependencies]
 neural = { path = "../../neural" }
-burn = { version = "0.17.0", features = ["train", "ndarray", "vision", "wgpu"] }
+burn = { version = "0.17.1", features = ["train", "ndarray", "vision", "wgpu"] }

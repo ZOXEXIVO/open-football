@@ -42,7 +42,7 @@ impl StateProcessingHandler for GoalkeeperRunningState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.has_ball(ctx) {
-            if let Some(nearest_opponent) = ctx.players().opponents().nearby(100.0).next() {
+            if let Some(nearest_opponent) = ctx.players().opponents().nearby(200.0).next() {
                 let player_goal_velocity = SteeringBehavior::Evade {
                     target: nearest_opponent.position,
                 }
@@ -90,7 +90,7 @@ impl GoalkeeperRunningState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 15.0;
+        let vision_range = ctx.player.skills.mental.vision * 20.0;
         let open_teammates: Vec<MatchPlayerLite> = ctx
             .players()
             .teammates()
@@ -115,14 +115,14 @@ impl GoalkeeperRunningState {
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 5.0;
+        let opponent_distance_threshold = 20.0;
         ctx.players().opponents().all()
             .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
             .count() == 0
     }
 
     fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
-        let max_interception_distance = 10.0;
+        let max_interception_distance = 20.0;
         let player_position = ctx.player.position;
         let pass_direction = (teammate.position - player_position).normalize();
 
