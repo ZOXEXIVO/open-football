@@ -9,13 +9,6 @@ pub struct MidfielderPassingState {}
 
 impl StateProcessingHandler for MidfielderPassingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Add a hard timeout to prevent getting stuck
-        if ctx.in_state_time > 100 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running
@@ -24,7 +17,7 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        if(self.should_shoot_instead_of_pass(ctx)) {
+        if self.should_shoot_instead_of_pass(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Shooting,
             ));
@@ -63,15 +56,15 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // If no good passing option is found after waiting a bit, try something else
-        if ctx.in_state_time > 20 {
-            if ctx.ball().distance_to_opponent_goal() < 200.0 {
-                return Some(StateChangeResult::with_midfielder_state(
+        if ctx.in_state_time > 50 {
+            return if ctx.ball().distance_to_opponent_goal() < 200.0 {
+                Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
-                ));
+                ))
             } else {
-                return Some(StateChangeResult::with_midfielder_state(
+                Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Dribbling,
-                ));
+                ))
             }
         }
 
