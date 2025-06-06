@@ -9,9 +9,6 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 10.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
-const MAX_LONG_SHOOTING_DISTANCE: f32 = 500.0; // Maximum distance to attempt a shot
-const MIN_LONG_SHOOTING_DISTANCE: f32 = 300.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
-
 #[derive(Default)]
 pub struct MidfielderRunningState {}
 
@@ -289,11 +286,144 @@ impl MidfielderRunningState {
     }
 
     fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the team is in possession and the player is in a good position to support the attack
-        let team_in_possession = ctx.team().is_control_ball();
-        let in_attacking_half = ctx.player.position.x > ctx.context.field_size.width as f32 / 2.0;
+        // Basic requirement: team must be in possession
+        if !ctx.team().is_control_ball() {
+            return false;
+        }
 
-        team_in_possession && in_attacking_half && ctx.ball().distance() < 200.0
+        // Get player's mental attributes
+        let vision = ctx.player.skills.mental.vision;
+        let positioning = ctx.player.skills.mental.positioning;
+        let teamwork = ctx.player.skills.mental.teamwork;
+        let decisions = ctx.player.skills.mental.decisions;
+
+        // Get physical attributes that affect ability to support
+        let pace = ctx.player.skills.physical.pace;
+        let stamina = ctx.player.skills.physical.stamina;
+        let current_stamina = ctx.player.player_attributes.condition_percentage() as f32;
+
+        // Calculate tactical intelligence - combination of mental attributes
+        let tactical_intelligence = (vision + positioning + teamwork + decisions) / 4.0;
+
+        // Players with lower tactical intelligence have stricter requirements
+        let intelligence_threshold = if tactical_intelligence < 10.0 {
+            // Low intelligence players only support when ball is very close
+            50.0
+        } else if tactical_intelligence < 14.0 {
+            // Average intelligence players support when ball is moderately close
+            120.0
+        } else {
+            // High intelligence players can read the game and support from further
+            200.0
+        };
+
+        // Check if ball is within the player's tactical range
+        let ball_distance = ctx.ball().distance();
+        if ball_distance > intelligence_threshold {
+            return false;
+        }
+
+        // Vision affects ability to see attacking opportunities
+        let vision_range = vision * 15.0; // Better vision = see opportunities from further
+
+        // Check if there are attacking teammates within vision range
+        let attacking_teammates_nearby = ctx.players()
+            .teammates()
+            .nearby(vision_range)
+            .filter(|teammate| {
+                // Only consider forwards and attacking midfielders
+                teammate.tactical_positions.is_forward() ||
+                    (teammate.tactical_positions.is_midfielder() &&
+                        self.is_in_attacking_position(ctx, teammate))
+            })
+            .count();
+
+        // Players with good vision can spot opportunities even with fewer attacking players
+        let min_attacking_players = if vision >= 16.0 {
+            1 // Excellent vision - can create something from nothing
+        } else if vision >= 12.0 {
+            2 // Good vision - needs some support
+        } else {
+            3 // Poor vision - needs obvious attacking situation
+        };
+
+        if attacking_teammates_nearby < min_attacking_players {
+            return false;
+        }
+
+        // Check stamina - tired players are less likely to make attacking runs
+        let stamina_factor = (current_stamina / 100.0) * (stamina / 20.0);
+        if stamina_factor < 0.6 {
+            return false; // Too tired to support attack effectively
+        }
+
+        // Positioning skill affects understanding of when to support
+        let positional_awareness = positioning / 20.0;
+
+        // Check if player is in a good position to support (not too defensive)
+        let field_length = ctx.context.field_size.width as f32;
+        let player_field_position = match ctx.player.side {
+            Some(PlayerSide::Left) => ctx.player.position.x / field_length,
+            Some(PlayerSide::Right) => (field_length - ctx.player.position.x) / field_length,
+            None => 0.5,
+        };
+
+        // Players with good positioning understand when they're too far back
+        let min_field_position = if positional_awareness >= 0.8 {
+            0.3 // Excellent positioning - can support from deeper
+        } else if positional_awareness >= 0.6 {
+            0.4 // Good positioning - needs to be in middle third
+        } else {
+            0.5 // Poor positioning - needs to be in attacking half
+        };
+
+        if player_field_position < min_field_position {
+            return false;
+        }
+
+        // Check pace - slower players need to be closer to be effective
+        let pace_factor = pace / 20.0;
+        let effective_distance = if pace_factor >= 0.8 {
+            200.0 // Fast players can support from further
+        } else if pace_factor >= 0.6 {
+            150.0 // Average pace players need to be closer
+        } else {
+            100.0 // Slow players need to be quite close
+        };
+
+        if ball_distance > effective_distance {
+            return false;
+        }
+
+        // Teamwork affects willingness to make selfless runs
+        let teamwork_factor = teamwork / 20.0;
+
+        // Players with poor teamwork are more selfish and less likely to support
+        if teamwork_factor < 0.5 {
+            // Selfish players only support when they might get glory (very close to goal)
+            return ctx.ball().distance_to_opponent_goal() < 150.0;
+        }
+
+        // Decision making affects timing of support runs
+        let decision_quality = decisions / 20.0;
+
+        // Poor decision makers might support at wrong times
+        if decision_quality < 0.5 {
+            // Check if this is actually a good time to support (not when defending)
+            let opponents_in_defensive_third = ctx.players()
+                .opponents()
+                .all()
+                .filter(|opponent| self.is_in_defensive_third(ctx, opponent))
+                .count();
+
+            // If many opponents in defensive third, poor decision makers might still go forward
+            if opponents_in_defensive_third >= 3 {
+                return false;
+            }
+        }
+
+        // All checks passed - this player should support the attack
+        true
     }
 
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
@@ -306,5 +436,35 @@ impl MidfielderRunningState {
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players().opponents().exists(25.0)
+    }
+
+    fn is_in_attacking_position(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let field_length = ctx.context.field_size.width as f32;
+        let attacking_third_start = match ctx.player.side {
+            Some(PlayerSide::Left) => field_length * (2.0 / 3.0),
+            Some(PlayerSide::Right) => field_length / 3.0,
+            None => field_length * 0.5,
+        };
+
+        match ctx.player.side {
+            Some(PlayerSide::Left) => teammate.position.x > attacking_third_start,
+            Some(PlayerSide::Right) => teammate.position.x < attacking_third_start,
+            None => false,
+        }
+    }
+
+    fn is_in_defensive_third(&self, ctx: &StateProcessingContext, opponent: &MatchPlayerLite) -> bool {
+        let field_length = ctx.context.field_size.width as f32;
+        let defensive_third_end = match ctx.player.side {
+            Some(PlayerSide::Left) => field_length / 3.0,
+            Some(PlayerSide::Right) => field_length * (2.0 / 3.0),
+            None => field_length * 0.5,
+        };
+
+        match ctx.player.side {
+            Some(PlayerSide::Left) => opponent.position.x < defensive_third_end,
+            Some(PlayerSide::Right) => opponent.position.x > defensive_third_end,
+            None => false,
+        }
     }
 }
