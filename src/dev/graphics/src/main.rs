@@ -282,6 +282,11 @@ const WINDOW_WIDTH: i32 = 1040;
 #[cfg(target_os = "macos")]
 const WINDOW_HEIGHT: i32 = 800;
 
+#[cfg(target_os = "linux")]
+const WINDOW_WIDTH: i32 = 1040;
+#[cfg(target_os = "linux")]
+const WINDOW_HEIGHT: i32 = 800;
+
 #[cfg(target_os = "windows")]
 const WINDOW_WIDTH: i32 = 1948;
 #[cfg(target_os = "windows")]
