@@ -1,3 +1,6 @@
+# Define Rust version
+ARG RUST_VERSION=1.88
+
 # BUILD FRONTEND
 FROM node:22-alpine3.19 AS build-frontend
 
@@ -9,11 +12,11 @@ RUN npm install --force
 
 COPY ./ui/ .
 
-RUN npm run publish 
+RUN npm run publish
 
 # BUILD BACKEND
 
-FROM rust:1.87  as build-backend
+FROM rust:${RUST_VERSION} as build-backend
 WORKDIR /src
 
 COPY ./ ./
@@ -26,7 +29,7 @@ RUN cargo test -p core
 
 RUN cargo build --release
 
-FROM rust:1.87-slim
+FROM rust:${RUST_VERSION}-slim
 WORKDIR /app
 
 COPY --from=build-backend /src/target/release/open_football .
