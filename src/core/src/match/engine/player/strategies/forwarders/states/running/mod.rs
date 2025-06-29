@@ -124,24 +124,24 @@ impl StateProcessingHandler for ForwardRunningState {
         // Look for space between opponents when player has the ball
         if ctx.player.has_ball(ctx) {
             if let Some(target_position) = self.find_space_between_opponents(ctx) {
-                return Some(
+                Some(
                     SteeringBehavior::Arrive {
                         target: target_position,
                         slowing_distance: 10.0,
                     }
                         .calculate(ctx.player)
                         .velocity + ctx.player().separation_velocity(),
-                );
+                )
             } else {
                 // Move toward goal if no space found
-                return Some(
+                Some(
                     SteeringBehavior::Arrive {
                         target: ctx.player().opponent_goal_position(),
                         slowing_distance: 100.0,
                     }
                         .calculate(ctx.player)
                         .velocity + ctx.player().separation_velocity(),
-                );
+                )
             }
         }
         // Team has possession but this player doesn't have the ball
@@ -439,7 +439,6 @@ impl ForwardRunningState {
     // Calculate defensive position when team doesn't have possession
     fn calculate_defensive_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
 
         // Forwards generally stay higher up the pitch
         let forward_line = match ctx.player.side {

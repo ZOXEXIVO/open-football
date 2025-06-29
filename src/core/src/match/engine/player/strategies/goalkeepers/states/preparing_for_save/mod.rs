@@ -69,7 +69,7 @@ impl GoalkeeperPreparingForSaveState {
         if ctx.ball().distance() > 10.0 {
             return false;
         }
-        
+
         // Check if the ball is moving fast towards the goal
         ball_velocity.dot(&(ctx.ball().direction_to_own_goal() - ctx.player.position)) > 0.0
     }

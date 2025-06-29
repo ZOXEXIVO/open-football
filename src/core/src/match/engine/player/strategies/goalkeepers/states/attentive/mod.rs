@@ -1,7 +1,10 @@
+use crate::IntegerUtils;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::strategies::processor::StateChangeResult;
-use crate::r#match::{ConditionContext, PlayerSide, StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions};
-use crate::IntegerUtils;
+use crate::r#match::{
+    ConditionContext, PlayerSide, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    VectorExtensions,
+};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -28,7 +31,7 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
                 ));
             }
             // If the ball is moving toward the goalkeeper, prepare for save
-            else if ctx.ball().is_towards_player_with_angle(0.7) && ball_distance < 350.0 {
+            else if ctx.ball().is_towards_player_with_angle(0.7) && ball_distance < 300.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -69,15 +72,12 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
-            SteeringBehavior::Wander {
+            SteeringBehavior::Arrive {
                 target: ctx.player.start_position,
-                radius: IntegerUtils::random(5, 100) as f32,
-                jitter: IntegerUtils::random(0, 2) as f32,
-                distance: IntegerUtils::random(10, 100) as f32,
-                angle: IntegerUtils::random(0, 360) as f32,
+                slowing_distance: 10.0,
             }
-                .calculate(ctx.player)
-                .velocity,
+            .calculate(ctx.player)
+            .velocity,
         )
     }
 
@@ -147,8 +147,10 @@ impl GoalkeeperAttentiveState {
         }
 
         // Case 3: Ball is loose in dangerous area
-        if !ctx.ball().is_owned() && ball_distance < adjusted_threshold &&
-            self.is_ball_in_danger_area(ctx) {
+        if !ctx.ball().is_owned()
+            && ball_distance < adjusted_threshold
+            && self.is_ball_in_danger_area(ctx)
+        {
             return true;
         }
 
@@ -167,7 +169,11 @@ impl GoalkeeperAttentiveState {
         false
     }
 
-    fn can_reach_before_opponent(&self, ctx: &StateProcessingContext, opponent: &crate::r#match::MatchPlayerLite) -> bool {
+    fn can_reach_before_opponent(
+        &self,
+        ctx: &StateProcessingContext,
+        opponent: &crate::r#match::MatchPlayerLite,
+    ) -> bool {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let keeper_pos = ctx.player.position;
         let opponent_pos = opponent.position;
@@ -239,7 +245,9 @@ impl GoalkeeperAttentiveState {
         ctx: &StateProcessingContext,
     ) -> Vector3<f32> {
         // Get penalty area dimensions
-        let penalty_area = ctx.context.penalty_area(ctx.player.side == Some(PlayerSide::Left));
+        let penalty_area = ctx
+            .context
+            .penalty_area(ctx.player.side == Some(PlayerSide::Left));
 
         // Clamp position to stay within penalty area
         Vector3::new(

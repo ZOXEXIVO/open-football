@@ -102,8 +102,7 @@ impl StateProcessingHandler for DefenderPassingState {
             }
         }
 
-        // Default to minimal movement while preparing to pass
-        Some(Vector3::new(0.0, 0.0, 0.0))
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
