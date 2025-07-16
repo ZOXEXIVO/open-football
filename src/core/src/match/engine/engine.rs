@@ -157,7 +157,7 @@ impl MatchContext {
             field_size: MatchFieldSize::clone(&field.size),
             players,
             goal_positions: GoalPosition::from(&field.size),
-            tactics: TeamsTactics::from_field(&field),
+            tactics: TeamsTactics::from_field(field),
         }
     }
 

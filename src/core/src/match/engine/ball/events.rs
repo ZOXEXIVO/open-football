@@ -39,8 +39,8 @@ impl BallEventDispatcher {
         match event {
             BallEvent::Goal(metadata) => {
                 match metadata.side {
-                    GoalSide::Home => context.score.increment_home_goals(),
-                    GoalSide::Away => context.score.increment_away_goals(),
+                    GoalSide::Home => context.score.increment_away_goals(),
+                    GoalSide::Away => context.score.increment_home_goals(),
                 }
 
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::Goal(
