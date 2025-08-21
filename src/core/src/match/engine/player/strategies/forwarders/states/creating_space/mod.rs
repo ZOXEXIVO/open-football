@@ -6,9 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const CREATING_SPACE_THRESHOLD: f32 = 150.0;
-const OPPONENT_DISTANCE_THRESHOLD: f32 = 20.0;
 const MAX_DISTANCE_FROM_START: f32 = 180.0; // Maximum distance from starting position
-const RETURN_TO_POSITION_THRESHOLD: f32 = 250.0; // Distance to trigger return to position
 const MAX_TIME_IN_STATE: u64 = 200; // Maximum time to stay in this state
 const INTELLIGENT_RUN_DISTANCE: f32 = 120.0; // Distance for intelligent runs
 
@@ -24,33 +22,16 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
-        // Check if player has strayed too far from position
-        if ctx.player().distance_from_start_position() > RETURN_TO_POSITION_THRESHOLD {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Returning,
-            ));
-        }
-
         // Check if team lost possession - switch to defensive positioning
         if !ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Returning));
         }
 
         // If the ball is close and moving toward player, try to intercept
-        if ctx.ball().distance() < 150.0 && ctx.ball().is_towards_player_with_angle(0.9) {
+        if ctx.ball().distance() < 150.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Intercepting,
             ));
-        }
-
-        // Add a time limit for staying in this state to prevent getting stuck
-        if ctx.in_state_time > MAX_TIME_IN_STATE {
-            // Transition based on tactical situation
-            if self.should_make_attacking_run(ctx) {
-                return Some(StateChangeResult::with_forward_state(ForwardState::RunningInBehind));
-            } else {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-            }
         }
 
         // Check if the player has successfully created space and should receive the ball
@@ -71,6 +52,16 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         if self.should_adjust_position_due_to_pressure(ctx) {
             // Continue in creating space state but adjust position
             return None;
+        }
+
+        // Add a time limit for staying in this state to prevent getting stuck
+        if ctx.in_state_time > MAX_TIME_IN_STATE {
+            // Transition based on tactical situation
+            if self.should_make_attacking_run(ctx) {
+                return Some(StateChangeResult::with_forward_state(ForwardState::RunningInBehind));
+            } else {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            }
         }
 
         None
