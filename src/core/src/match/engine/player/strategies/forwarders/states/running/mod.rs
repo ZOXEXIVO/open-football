@@ -9,8 +9,8 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 10.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
-const MAX_LONG_SHOOTING_DISTANCE: f32 = 500.0; // Maximum distance to attempt a shot
-const MIN_LONG_SHOOTING_DISTANCE: f32 = 300.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
+const MAX_LONG_SHOOTING_DISTANCE: f32 = 400.0; // Maximum distance to attempt a shot
+const MIN_LONG_SHOOTING_DISTANCE: f32 = 200.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
 #[derive(Default)]
 pub struct ForwardRunningState {}
@@ -228,18 +228,166 @@ impl ForwardRunningState {
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        // Should pass if under pressure from opponents
-        if ctx.players().opponents().exists(15.0) {
-            return true;
+        // Basic checks - if no teammates around, can't pass
+        let players = ctx.players();
+        let teammates = players.teammates();
+
+        // Check if there are any teammates in reasonable passing range
+        let nearby_teammates: Vec<MatchPlayerLite> = teammates.nearby(150.0).collect();
+        if nearby_teammates.is_empty() {
+            return false;
         }
 
-        // Should pass if player has good vision and can see teammates in better position
-        let vision_threshold = 14.0;
-        if ctx.player.skills.mental.vision >= vision_threshold {
-            return self.find_open_teammate(ctx).is_some();
+        // Get player skills for decision making
+        let vision_skill = ctx.player.skills.mental.vision / 20.0; // Normalize to 0-1
+        let passing_skill = ctx.player.skills.technical.passing / 20.0;
+        let decision_skill = ctx.player.skills.mental.decisions / 20.0;
+        let selfishness = 1.0 - (ctx.player.skills.mental.teamwork / 20.0); // Higher teamwork = less selfish
+
+        // 1. PRESSURE CHECK - Under immediate pressure from opponents
+        let immediate_pressure_distance = 30.0;
+        let pressing_opponents = ctx.players().opponents()
+            .nearby(immediate_pressure_distance)
+            .count();
+
+        if pressing_opponents >= 2 {
+            // Multiple opponents pressing - should pass unless very selfish
+            if selfishness < 0.8 {
+                return true;
+            }
+        }
+
+        // 2. TACTICAL SITUATION - Check if in good position to continue or should pass
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+
+        // If very close to goal, forwards tend to be more selfish
+        if distance_to_goal < 30.0 {
+            // Only pass if teammate is in much better position or under severe pressure
+            let severe_pressure = pressing_opponents >= 3 ||
+                ctx.players().opponents().nearby(30.0).count() >= 1;
+
+            if !severe_pressure {
+                // Check if any teammate is in clearly better scoring position
+                let better_positioned_teammate = nearby_teammates.iter().any(|teammate| {
+                    let teammate_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                    let teammate_pressure = ctx.players().opponents()
+                        .nearby(20.0)
+                        .filter(|opp| (opp.position - teammate.position).magnitude() < 8.0)
+                        .count();
+
+                    // Teammate is significantly closer to goal and not heavily marked
+                    teammate_goal_dist < distance_to_goal * 0.7 && teammate_pressure < 2
+                });
+
+                return better_positioned_teammate && selfishness < 0.6;
+            } else {
+                return true; // Under severe pressure near goal, must pass
+            }
+        }
+
+        // 3. VISION AND AWARENESS CHECK - Good players see better passing opportunities
+        if vision_skill > 0.7 {
+            // High vision players can spot overlapping runs and through balls
+            let overlapping_teammates = nearby_teammates.iter().filter(|teammate| {
+                // Check if teammate is making a forward run
+                let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
+                let is_moving_forward = teammate_velocity.magnitude() > 2.0;
+
+                // Check if teammate is in advanced position
+                let teammate_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                let advancing_run = teammate_goal_dist < distance_to_goal * 1.1;
+
+                is_moving_forward && advancing_run
+            }).count();
+
+            if overlapping_teammates > 0 && decision_skill > 0.6 {
+                return true;
+            }
+        }
+
+        // 4. SKILL-BASED DECISION MAKING
+        if passing_skill > 0.8 && vision_skill > 0.7 {
+            // Highly skilled passers look for creative opportunities
+            let creative_pass_opportunity = nearby_teammates.iter().any(|teammate| {
+                // Check if pass would break defensive lines
+                let player_pos = ctx.player.position;
+                let teammate_pos = teammate.position;
+
+                // Count opponents between player and teammate
+                let opponents_between = ctx.players().opponents().all()
+                    .filter(|opp| {
+                        // Simple check if opponent is roughly between player and teammate
+                        let to_teammate = teammate_pos - player_pos;
+                        let to_opponent = opp.position - player_pos;
+                        let dot_product = to_teammate.normalize().dot(&to_opponent);
+
+                        dot_product > 0.0 && dot_product < to_teammate.magnitude()
+                    })
+                    .count();
+
+                // If passing through opponents and teammate has space
+                opponents_between >= 1 && !self.is_teammate_heavily_marked(ctx, teammate)
+            });
+
+            if creative_pass_opportunity {
+                return true;
+            }
+        }
+
+        // 5. GAME SITUATION AWARENESS
+        // Check time pressure and team needs
+        let team_needs_goal = ctx.team().is_loosing() || ctx.context.time.is_running_out();
+
+        if team_needs_goal {
+            // When team needs goals, look for any decent passing opportunity
+            let decent_opportunity = nearby_teammates.iter().any(|teammate| {
+                let teammate_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                let in_better_position = teammate_goal_dist < distance_to_goal * 0.9;
+                let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
+
+                in_better_position && not_heavily_marked
+            });
+
+            if decent_opportunity && selfishness < 0.7 {
+                return true;
+            }
+        }
+
+        // 6. FATIGUE AND CONDITION CHECK
+        let stamina_percentage = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
+        if stamina_percentage < 0.6 {
+            // Tired players are more likely to pass to conserve energy
+            let safe_pass_available = nearby_teammates.iter().any(|teammate| {
+                ctx.player().has_clear_pass(teammate.id) &&
+                    !self.is_teammate_heavily_marked(ctx, teammate)
+            });
+
+            if safe_pass_available {
+                return true;
+            }
+        }
+
+        // 7. DEFAULT BEHAVIOR - Continue dribbling if no strong reason to pass
+        // But occasionally pass even without perfect reason (adds realism)
+        if decision_skill > 0.8 && rand::random::<f32>() < 0.1 {
+            // Very good decision makers sometimes make unexpected but good passes
+            return nearby_teammates.iter().any(|teammate| {
+                ctx.player().has_clear_pass(teammate.id)
+            });
         }
 
         false
+    }
+
+    fn is_teammate_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let marking_distance = 8.0;
+        let markers = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - teammate.position).magnitude() < marking_distance)
+            .count();
+
+        markers >= 2 || (markers >= 1 &&
+            ctx.players().opponents().all()
+                .any(|opp| (opp.position - teammate.position).magnitude() < 3.0))
     }
 
     fn find_open_teammate(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
