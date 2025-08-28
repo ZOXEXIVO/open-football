@@ -36,7 +36,7 @@ impl StateProcessingHandler for ForwardPassingState {
             ));
         }
 
-        // If no good passing option is found and we're close to goal, consider shooting
+        // If no good passing option is found and we're close to goal, consid-er shooting
         if ctx.ball().distance_to_opponent_goal() < 250.0 && self.should_shoot_instead_of_pass(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Shooting,

@@ -303,7 +303,7 @@ impl MidfielderRunningState {
         let current_stamina = ctx.player.player_attributes.condition_percentage() as f32;
 
         // Calculate tactical intelligence - combination of mental attributes
-        let tactical_intelligence = (vision + positioning + teamwork + decisions) / 4.0;
+        let tactical_intelligence = (vision + positioning + teamwork + decisions) / 40.0;
 
         // Players with lower tactical intelligence have stricter requirements
         let intelligence_threshold = if tactical_intelligence < 10.0 {

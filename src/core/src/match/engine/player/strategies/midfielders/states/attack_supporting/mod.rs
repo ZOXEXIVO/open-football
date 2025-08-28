@@ -16,15 +16,21 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        if ctx.ball().distance() < 15.0 {
+        if !ctx.team().is_control_ball() {
+            if ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Tackling,
+                MidfielderState::Running,
             ));
         }
 
-        if !ctx.team().is_control_ball() {
+        if ctx.ball().distance() < 30.0 {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
+                MidfielderState::Tackling,
             ));
         }
 
@@ -34,15 +40,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        // 2. Check if the attack has broken down (e.g., ball lost)
-        if self.attack_broken_down(ctx) {
-            // Transition back to defensive state
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
-            ));
-        }
-
-        // 3. If midfielder is in a good shooting position, consider shooting
         if self.is_in_shooting_position(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::DistanceShooting,
@@ -73,10 +70,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 }
 
 impl MidfielderAttackSupportingState {
-    fn attack_broken_down(&self, ctx: &StateProcessingContext) -> bool {
-        !ctx.team().is_control_ball()
-    }
-
     /// Checks if the midfielder is in a good position to attempt a shot.
     fn is_in_shooting_position(&self, ctx: &StateProcessingContext) -> bool {
         let shooting_range = 25.0; // Distance from goal to consider shooting
