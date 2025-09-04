@@ -18,14 +18,10 @@ impl StateProcessingHandler for MidfielderWalkingState {
         }
 
         if ctx.team().is_control_ball() {
-            return if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
-                Some(StateChangeResult::with_midfielder_state(
+            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 250.0 {
+                return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
-                ))
-            } else {
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::AttackSupporting,
-                ))
+                ));
             }
         } else {
             if ctx.ball().is_towards_player_with_angle(0.8) {

@@ -27,12 +27,8 @@ impl StateProcessingHandler for ForwardTacklingState {
         let ball_distance = ctx.ball().distance();
 
         // If ball is too far away, return to appropriate state
-        if ball_distance > CHASE_DISTANCE_THRESHOLD {
-            return if ctx.team().is_control_ball() {
-                Some(StateChangeResult::with_forward_state(ForwardState::Returning))
-            } else {
-                Some(StateChangeResult::with_forward_state(ForwardState::Pressing))
-            };
+        if ball_distance > CHASE_DISTANCE_THRESHOLD && ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Returning));
         }
 
         // If team regains possession, switch to supporting role
