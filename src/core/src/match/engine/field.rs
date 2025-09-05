@@ -1,8 +1,5 @@
 ﻿use crate::r#match::ball::Ball;
-use crate::r#match::{
-    FieldSquad, MatchFieldSize, MatchPlayer, PlayerSide, PositionType, TeamSquad,
-    POSITION_POSITIONING,
-};
+use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, PositionType, POSITION_POSITIONING};
 use crate::Tactics;
 use nalgebra::Vector3;
 
@@ -23,8 +20,8 @@ impl MatchField {
     pub fn new(
         width: usize,
         height: usize,
-        left_team_squad: TeamSquad,
-        right_team_squad: TeamSquad,
+        left_team_squad: MatchSquad,
+        right_team_squad: MatchSquad,
     ) -> Self {
         let left_squad = FieldSquad::from_team(&left_team_squad);
         let away_squad = FieldSquad::from_team(&right_team_squad);
@@ -75,10 +72,10 @@ impl MatchField {
 }
 
 fn setup_player_on_field(
-    left_team_squad: TeamSquad,
-    right_team_squad: TeamSquad,
+    left_team_squad: MatchSquad,
+    right_team_squad: MatchSquad,
 ) -> (Vec<MatchPlayer>, Vec<MatchPlayer>) {
-    let setup_squad = |squad: TeamSquad, side: PlayerSide| {
+    let setup_squad = |squad: MatchSquad, side: PlayerSide| {
         let mut players = Vec::new();
         let mut subs = Vec::new();
 

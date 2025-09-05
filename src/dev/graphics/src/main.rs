@@ -1,3 +1,4 @@
+use core::r#match::MatchSquad;
 use core::r#match::ball::Ball;
 use core::r#match::player::MatchPlayer;
 use core::r#match::FootballEngine;
@@ -11,7 +12,6 @@ use std::time::Duration;
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
-use core::r#match::squad::TeamSquad;
 use core::r#match::strategies::ball::MatchBallLogic;
 use core::r#match::MatchPlayerCollection;
 use core::r#match::ResultMatchPositionData;
@@ -162,7 +162,7 @@ async fn main() {
 
 const TRACKING_PLAYER_ID: u32 = 0;
 
-pub fn get_home_squad() -> TeamSquad {
+pub fn get_home_squad() -> MatchSquad {
     let players = [
         get_player(101, PlayerPositionType::Goalkeeper),
         get_player(102, PlayerPositionType::DefenderLeft),
@@ -189,18 +189,22 @@ pub fn get_home_squad() -> TeamSquad {
         })
         .collect();
 
-    let home_squad = TeamSquad {
+    let home_squad = MatchSquad {
         team_id: 1,
         team_name: String::from("123"),
         tactics: Tactics::new(MatchTacticType::T442),
         main_squad: match_players,
         substitutes: Vec::new(),
+        captain_id: None,
+        vice_captain_id: None,
+        penalty_taker_id: None,
+        free_kick_taker_id: None,
     };
 
     home_squad
 }
 
-pub fn get_away_squad() -> TeamSquad {
+pub fn get_away_squad() -> MatchSquad {
     let players = [
         get_player(113, PlayerPositionType::Goalkeeper),
         get_player(114, PlayerPositionType::DefenderLeft),
@@ -227,12 +231,16 @@ pub fn get_away_squad() -> TeamSquad {
         })
         .collect();
 
-    let away_squad = TeamSquad {
+    let away_squad = MatchSquad {
         team_id: 2,
         team_name: String::from("321"),
         tactics: Tactics::new(MatchTacticType::T442),
         main_squad: match_players,
         substitutes: Vec::new(),
+        captain_id: None,
+        vice_captain_id: None,
+        penalty_taker_id: None,
+        free_kick_taker_id: None,
     };
 
     away_squad

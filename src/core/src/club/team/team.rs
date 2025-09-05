@@ -1,6 +1,6 @@
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::context::GlobalContext;
-use crate::r#match::{SquadSelector, TeamSquad};
+use crate::r#match::{MatchSquad, SquadSelector};
 use crate::shared::CurrencyValue;
 use crate::{
     MatchHistory, Player, PlayerCollection, StaffCollection, Tactics, MatchTacticType,
@@ -34,6 +34,8 @@ pub struct Team {
     pub players: PlayerCollection,
     pub staffs: StaffCollection,
 
+    pub behaviour: TeamBehaviour,
+
     pub reputation: TeamReputation,
     pub training_schedule: TrainingSchedule,
     pub transfer_list: Transfers,
@@ -65,6 +67,7 @@ impl Team {
             reputation,
             tactics: None,
             training_schedule,
+            behaviour: TeamBehaviour::new(),
             transfer_list: Transfers::new(),
             match_history: MatchHistory::new(),
         }
@@ -97,26 +100,53 @@ impl Team {
             .sum()
     }
 
-    pub fn get_match_squad(&self) -> TeamSquad {
+    pub fn get_match_squad(&self) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
         let squad = SquadSelector::select(self, head_coach);
 
-        TeamSquad {
+        MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
             tactics: TacticsSelector::select(self, head_coach),
             main_squad: squad.main_squad,
             substitutes: squad.substitutes,
+            captain_id: None,
+            vice_captain_id: None,
+            penalty_taker_id: None,
+            free_kick_taker_id: None,
         }
     }
 
-    pub fn tactics(&self) -> Cow<Tactics> {
+    pub fn tactics(&self) -> Cow<'_, Tactics> {
         if let Some(tactics) = &self.tactics {
             Cow::Borrowed(tactics)
         } else {
             Cow::Owned(Tactics::new(MatchTacticType::T442))
         }
+    }
+    
+
+    /// Method to adapt tactics during a match
+    pub fn adapt_tactics_during_match(
+        &mut self,
+        score_difference: i8,
+        minutes_played: u8,
+        is_home: bool
+    ) -> Option<Tactics> {
+        let current_tactic = &self.tactics().tactic_type;
+        let available_players: Vec<&Player> = self.players.players()
+            .into_iter()
+            .filter(|p| p.is_ready_for_match())
+            .collect();
+
+        TacticsSelector::select_situational_tactic(
+            current_tactic,
+            is_home,
+            score_difference,
+            minutes_played,
+            &available_players
+        )
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
@@ -124,7 +154,7 @@ impl Team {
             self.id,
             self.players.simulate(ctx.with_player(None)),
             self.staffs.simulate(ctx.with_staff(None)),
-            TeamBehaviour::simulate(&mut self.players, &mut self.staffs),
+            self.behaviour.simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
             TeamTraining::train(self, ctx.simulation.date),
         );
 

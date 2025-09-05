@@ -8,6 +8,12 @@ pub struct MatchHistory {
     items: Vec<MatchHistoryItem>,
 }
 
+impl Default for MatchHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchHistory {
     pub fn new() -> Self {
         MatchHistory {
