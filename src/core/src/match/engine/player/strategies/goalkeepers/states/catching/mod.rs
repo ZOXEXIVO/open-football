@@ -25,7 +25,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ))
         }
         
-        if(ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big) {
+        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ))

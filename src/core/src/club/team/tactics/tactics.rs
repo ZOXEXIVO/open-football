@@ -237,7 +237,7 @@ pub const TACTICS_POSITIONS: &[(MatchTacticType, [PlayerPositionType; 11])] = &[
     // Add more formations as needed...
 ];
 
-#[derive(Copy, Debug, Eq, PartialEq, PartialOrd, Clone)]
+#[derive(Copy, Debug, Eq, PartialEq, PartialOrd, Clone, Hash)]
 pub enum MatchTacticType {
     T442,
     T433,

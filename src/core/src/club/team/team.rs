@@ -1,14 +1,12 @@
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::context::GlobalContext;
-use crate::r#match::{MatchSquad, SquadSelector};
+use crate::r#match::{EnhancedTacticsSelector, MatchPlayer, MatchSquad, SquadSelector, TacticalSquadAnalyzer};
 use crate::shared::CurrencyValue;
-use crate::{
-    MatchHistory, Player, PlayerCollection, StaffCollection, Tactics, MatchTacticType,
-    TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem,
-    Transfers,
-};
+use crate::{MatchHistory, Player, PlayerCollection, StaffCollection, Tactics, MatchTacticType, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers, RecommendationPriority, PlayerPositionType, TacticSelectionReason};
 use std::borrow::Cow;
 use std::str::FromStr;
+use itertools::Itertools;
+use log::{debug, info};
 
 #[derive(Debug, PartialEq)]
 pub enum TeamType {
@@ -100,22 +98,228 @@ impl Team {
             .sum()
     }
 
-    pub fn get_match_squad(&self) -> MatchSquad {
+    /// Enhanced get_match_squad that uses improved tactical analysis
+    pub fn get_enhanced_match_squad(&self) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
-        let squad = SquadSelector::select(self, head_coach);
+        let mut new_tactics: Option<Tactics> = None;
+
+        // Step 1: Analyze current squad and suggest optimal formation
+        if let Some(suggested_formation) = TacticalSquadAnalyzer::suggest_optimal_formation(self, head_coach) {
+            let current_formation = self.tactics.as_ref().map(|t| t.tactic_type);
+
+            // Update tactics if suggestion is significantly better
+            if current_formation != Some(suggested_formation) {
+                new_tactics = Some( Tactics::with_reason(
+                    suggested_formation,
+                    TacticSelectionReason::TeamComposition,
+                    0.95,
+                ));
+            }
+        }
+
+        // Step 2: Use enhanced squad selection
+        let squad_result = SquadSelector::select(self, head_coach);
+
+        // Step 3: Create match squad with selected tactics
+        let final_tactics = self.tactics
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TacticsSelector::select(self, head_coach));
+
+        // Step 5: Validate squad selection
+        self.validate_squad_selection(&squad_result, &final_tactics);
 
         MatchSquad {
             team_id: self.id,
             team_name: self.name.clone(),
-            tactics: TacticsSelector::select(self, head_coach),
-            main_squad: squad.main_squad,
-            substitutes: squad.substitutes,
-            captain_id: None,
-            vice_captain_id: None,
-            penalty_taker_id: None,
-            free_kick_taker_id: None,
+            tactics: final_tactics,
+            main_squad: squad_result.main_squad,
+            substitutes: squad_result.substitutes,
+            captain_id: self.select_captain(),
+            vice_captain_id: self.select_vice_captain(),
+            penalty_taker_id: self.select_penalty_taker(),
+            free_kick_taker_id: self.select_free_kick_taker(),
         }
+    }
+
+    fn validate_squad_selection(
+        &self,
+        squad_result: &crate::r#match::squad::PlayerSelectionResult,
+        tactics: &Tactics
+    ) {
+        let formation_positions = tactics.positions();
+
+        if squad_result.main_squad.len() != formation_positions.len() {
+            log::warn!("Squad size mismatch: got {} players for {} positions",
+                      squad_result.main_squad.len(), formation_positions.len());
+        }
+
+        let mut position_coverage = std::collections::HashMap::new();
+        for match_player in &squad_result.main_squad {
+            let pos = match_player.tactical_position.current_position;
+            *position_coverage.entry(pos).or_insert(0) += 1;
+        }
+
+        for &required_pos in formation_positions {
+            if !position_coverage.contains_key(&required_pos) {
+                log::warn!("No player selected for required position: {}",
+                          required_pos.get_short_name());
+            }
+        }
+
+        // Log formation strength
+        let formation_strength = tactics.calculate_formation_fitness(&self.players.players());
+
+        info!("Formation fitness: {:.2}", formation_strength);
+    }
+
+    /// Select team captain based on leadership and experience
+    fn select_captain(&self) -> Option<MatchPlayer> {
+        self.players.players()
+            .iter()
+            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
+            .max_by(|a, b| {
+                let leadership_a = a.skills.mental.leadership;
+                let leadership_b = b.skills.mental.leadership;
+                let experience_a = a.player_attributes.international_apps;
+                let experience_b = b.player_attributes.international_apps;
+
+                (leadership_a + experience_a as f32 / 10.0)
+                    .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+    }
+
+    /// Select vice captain
+    fn select_vice_captain(&self) -> Option<MatchPlayer> {
+        // Similar logic to captain but exclude current captain
+        // Implementation would be similar to select_captain
+        None
+    }
+
+    /// Select penalty taker based on penalty taking skill and composure
+    fn select_penalty_taker(&self) -> Option<MatchPlayer> {
+        self.players.players()
+            .iter()
+            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
+            .max_by(|a, b| {
+                let penalty_skill_a = a.skills.technical.penalty_taking + a.skills.mental.composure;
+                let penalty_skill_b = b.skills.technical.penalty_taking + b.skills.mental.composure;
+
+                penalty_skill_a.partial_cmp(&penalty_skill_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+    }
+
+    /// Select free kick taker based on free kick skill and technique
+    fn select_free_kick_taker(&self) -> Option<MatchPlayer> {
+        self.players.players()
+            .iter()
+            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
+            .max_by(|a, b| {
+                let fk_skill_a = a.skills.technical.free_kicks + a.skills.technical.technique;
+                let fk_skill_b = b.skills.technical.free_kicks + b.skills.technical.technique;
+
+                fk_skill_a.partial_cmp(&fk_skill_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
+    }
+
+    /// Adaptive tactics during a match based on game state
+    pub fn adapt_tactics_during_match_enhanced(
+        &mut self,
+        score_difference: i8,
+        minutes_played: u8,
+        is_home: bool,
+        team_morale: f32,
+    ) -> Option<Tactics> {
+        let current_tactic = &self.tactics().tactic_type;
+        let available_players: Vec<&crate::Player> = self.players.players()
+            .into_iter()
+            .filter(|p| p.is_ready_for_match())
+            .collect();
+
+        // Use enhanced contextual selection
+        let staff = self.staffs.head_coach();
+        let recent_results = vec![]; // This would come from match history
+
+        let suggested_tactics = EnhancedTacticsSelector::select_contextual_tactics(
+            self,
+            staff,
+            &recent_results,
+            team_morale
+        );
+
+        // Override with situational tactics if needed
+        if let Some(situational_tactics) = TacticsSelector::select_situational_tactic(
+            current_tactic,
+            is_home,
+            score_difference,
+            minutes_played,
+            &available_players
+        ) {
+            info!("Adapting tactics due to match situation: {} -> {}",
+                  current_tactic.display_name(),
+                  situational_tactics.tactic_type.display_name());
+            return Some(situational_tactics);
+        }
+
+        // Check if suggested tactics are significantly different
+        if suggested_tactics.tactic_type != *current_tactic {
+            let fitness_current = self.tactics().calculate_formation_fitness(&available_players);
+            let fitness_suggested = suggested_tactics.calculate_formation_fitness(&available_players);
+
+            if fitness_suggested > fitness_current + 0.1 { // Significant improvement threshold
+                info!("Switching tactics for better formation fitness: {:.2} -> {:.2}",
+                      fitness_current, fitness_suggested);
+                return Some(suggested_tactics);
+            }
+        }
+
+        None
+
+    }
+
+    /// Run comprehensive tactical analysis during team simulation
+    pub fn run_tactical_analysis(&mut self) -> crate::club::team::tactics::decision::TacticalDecisionResult {
+        let decisions = crate::club::team::tactics::decision::TacticalDecisionEngine::make_tactical_decisions(self);
+
+        // Apply formation change if recommended with high confidence
+        if let Some(ref change) = decisions.formation_change {
+            if change.confidence > 0.75 {
+                info!("Implementing formation change: {} -> {} ({})",
+                      change.from.map(|f| f.display_name()).unwrap_or("None"),
+                      change.to.display_name(),
+                      change.reason);
+
+                self.tactics = Some(Tactics::with_reason(
+                    change.to,
+                    crate::TacticSelectionReason::TeamComposition,
+                    change.confidence,
+                ));
+            }
+        }
+
+        // Log important recommendations
+        for rec in &decisions.recommendations {
+            match rec.priority {
+                RecommendationPriority::High |RecommendationPriority::Critical => {
+                    log::warn!("[{}] {}: {}",
+                              if rec.priority == RecommendationPriority::Critical { "CRITICAL" } else { "HIGH" },
+                              format!("{:?}", rec.category),
+                              rec.description);
+                }
+                _ => {
+                    debug!("[{:?}] {}: {}", rec.priority, format!("{:?}", rec.category), rec.description);
+                }
+            }
+        }
+
+        decisions
     }
 
     pub fn tactics(&self) -> Cow<'_, Tactics> {

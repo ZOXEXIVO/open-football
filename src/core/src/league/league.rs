@@ -79,15 +79,18 @@ impl League {
         scheduled_matches
             .par_iter_mut()
             .map(|scheduled_match| {
-                let home_team = self.get_team(clubs, scheduled_match.home_team_id);
-                let away_team = self.get_team(clubs, scheduled_match.away_team_id);
+                let mut home_team = self.get_team(clubs, scheduled_match.home_team_id);
+                let home_squad = home_team.get_enhanced_match_squad();
+
+                let mut away_team = self.get_team(clubs, scheduled_match.away_team_id);
+                let away_squad = away_team.get_enhanced_match_squad();
 
                 let match_to_play = Match::make(
                     scheduled_match.id.clone(),
                     scheduled_match.league_id,
                     &scheduled_match.league_slug,
-                    home_team.get_match_squad(),
-                    away_team.get_match_squad(),
+                    home_squad,
+                    away_squad
                 );
 
                 let message = &format!(
