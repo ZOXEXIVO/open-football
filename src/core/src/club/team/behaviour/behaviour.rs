@@ -1,9 +1,7 @@
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::FloatUtils;
-use crate::{
-    Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, StaffCollection,
-};
+use crate::{Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, StaffCollection};
 use chrono::{Datelike, NaiveDateTime};
 use log::{debug, info};
 
@@ -412,7 +410,44 @@ impl TeamBehaviour {
     fn calculate_daily_interaction_change(
         player_a: &Player,
         player_b: &Player,
-        existing_relationship: f32,
+        existing_relationship: &PlayerRelation,  // Changed from f32 to &PlayerRelation
+        _ctx: &GlobalContext<'_>,
+    ) -> f32 {
+        // Extract the relationship level from the PlayerRelation struct
+        let relationship_level = existing_relationship.level;
+
+        // Small random fluctuations based on personalities
+        let temperament_factor =
+            (player_a.attributes.temperament + player_b.attributes.temperament) / 40.0;
+        let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
+
+        // Additional factors from the enhanced relationship data
+        let trust_factor = existing_relationship.trust / 100.0;
+        let friendship_factor = existing_relationship.friendship / 100.0;
+
+        // Relationship decay/improvement tendency
+        if relationship_level > 50.0 {
+            // Very good relationships tend to stay stable but can still improve slightly
+            // Trust and friendship help maintain good relationships
+            let stability_bonus = (trust_factor * 0.3 + friendship_factor * 0.2) * base_change;
+            base_change * 0.5 + stability_bonus
+        } else if relationship_level < -50.0 {
+            // Very bad relationships might improve over time
+            // Low trust makes improvement harder
+            let improvement_chance = base_change + 0.01 * (1.0 - trust_factor);
+            improvement_chance
+        } else {
+            // Neutral relationships are more volatile
+            // Professional respect can stabilize neutral relationships
+            let professional_factor = existing_relationship.professional_respect / 100.0;
+            base_change * (1.0 - professional_factor * 0.3)
+        }
+    }
+
+    fn calculate_daily_interaction_change_simple(
+        player_a: &Player,
+        player_b: &Player,
+        existing_relationship_level: f32,  // Just the level value
         _ctx: &GlobalContext<'_>,
     ) -> f32 {
         // Small random fluctuations based on personalities
@@ -421,10 +456,10 @@ impl TeamBehaviour {
         let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
 
         // Relationship decay/improvement tendency
-        if existing_relationship > 0.5 {
+        if existing_relationship_level > 50.0 {
             // Very good relationships tend to stay stable
             base_change * 0.5
-        } else if existing_relationship < -0.5 {
+        } else if existing_relationship_level < -50.0 {
             // Very bad relationships might improve over time
             base_change + 0.01
         } else {
