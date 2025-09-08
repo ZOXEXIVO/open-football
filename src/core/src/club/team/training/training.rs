@@ -1,5 +1,3 @@
-// Enhanced training system with realistic football training components
-
 use crate::training::result::PlayerTrainingResult;
 use crate::{Player, PlayerPositionType, PlayerTraining, Staff, Team, TeamTrainingResult};
 use chrono::{Datelike, NaiveDateTime, Weekday};
@@ -57,26 +55,22 @@ impl TeamTraining {
         session: &TrainingSession,
         date: NaiveDateTime,
     ) -> Vec<PlayerTrainingResult> {
-        // Determine participants
         let participants = Self::select_participants(team, session);
 
         let mut results = Vec::with_capacity(participants.len());
 
         for player in participants {
-            // Calculate training effects based on session type
-            let effects = PlayerTraining::train(
+            results.push(PlayerTraining::train(
                 player,
                 coach,
                 session,
                 date,
-            );
-
-            results.push(PlayerTrainingResult::new(player.id, effects));
+            ));
         }
 
         results
     }
-    
+
     fn select_participants<'a>(team: &'a Team, session: &TrainingSession) -> Vec<&'a Player> {
         let mut participants = Vec::new();
 

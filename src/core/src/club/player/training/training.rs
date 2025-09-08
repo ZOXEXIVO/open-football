@@ -21,7 +21,7 @@ impl PlayerTraining {
         coach: &Staff,
         session: &TrainingSession,
         date: NaiveDateTime,
-    ) -> TrainingEffects {
+    ) -> PlayerTrainingResult {
         let mut effects = TrainingEffects {
             physical_gains: PhysicalGains::default(),
             technical_gains: TechnicalGains::default(),
@@ -132,9 +132,8 @@ impl PlayerTraining {
         effects.technical_gains = Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
         effects.mental_gains = Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
 
-        effects
+        PlayerTrainingResult::new(player.id, effects)
     }
-
 
     fn apply_bonus_to_physical(mut gains: PhysicalGains, bonus: f32) -> PhysicalGains {
         gains.stamina *= 1.0 + bonus;
