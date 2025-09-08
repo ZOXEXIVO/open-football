@@ -5,7 +5,6 @@ use crate::r#match::{
 };
 use crate::shared::CurrencyValue;
 use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, PlayerPositionType, RecommendationPriority, StaffCollection, TacticSelectionReason, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
-use itertools::Itertools;
 use log::{debug, info};
 use std::borrow::Cow;
 use std::str::FromStr;
