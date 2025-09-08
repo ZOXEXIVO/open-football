@@ -112,7 +112,7 @@ impl StaffCollection {
             })
             .collect();
 
-        return StaffCollectionResult::new(staff_results);
+        StaffCollectionResult::new(staff_results)
     }
 
     pub fn training_coach(&self, team_type: &TeamType) -> &Staff {

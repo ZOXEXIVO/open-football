@@ -1,28 +1,17 @@
-﻿use crate::training::skills::result::{
-    PlayerTrainingMentalResult, PlayerTrainingPhysicalResult, PlayerTrainingTechnicalResult,
-};
-use crate::SimulatorData;
+﻿use crate::{SimulatorData, TrainingEffects};
 
 pub struct PlayerTrainingResult {
     pub player_id: u32,
-    pub mental: PlayerTrainingMentalResult,
-    pub physical: PlayerTrainingPhysicalResult,
-    pub technical: PlayerTrainingTechnicalResult,
+    pub effects: TrainingEffects,
 }
 
 impl PlayerTrainingResult {
-    pub fn new(player_id: u32) -> Self {
+    pub fn new(player_id: u32, effects: TrainingEffects) -> Self {
         PlayerTrainingResult {
             player_id,
-            mental: PlayerTrainingMentalResult::new(),
-            physical: PlayerTrainingPhysicalResult::new(),
-            technical: PlayerTrainingTechnicalResult::new(),
+            effects,
         }
     }
 
-    pub fn process(&self, data: &mut SimulatorData) {
-        self.mental.process(data, self.player_id);
-        self.physical.process(data, self.player_id);
-        self.technical.process(data, self.player_id);
-    }
+    pub fn process(&self, data: &mut SimulatorData) {}
 }
