@@ -1,11 +1,9 @@
 use crate::training::result::PlayerTrainingResult;
-use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects};
+use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects, TrainingIntensity, TrainingSession, TrainingType};
 use chrono::NaiveDateTime;
 
 #[derive(Debug)]
-pub struct PlayerTraining {
-   
-}
+pub struct PlayerTraining {}
 
 impl Default for PlayerTraining {
     fn default() -> Self {
@@ -18,25 +16,11 @@ impl PlayerTraining {
         PlayerTraining {}
     }
 
-    pub fn train(player: &Player, coach: &Staff, now: NaiveDateTime) -> PlayerTrainingResult {
-        let now_date = now.date();
-
-        // Calculate training effects based on player's current state
-        let effects = Self::calculate_individual_training_effects(
-            player,
-            coach,
-            now_date
-        );
-
-        // Return the result with effects that will be applied later
-        PlayerTrainingResult::new(player.id, effects)
-    }
-
-    /// Calculate individual training effects based on player attributes
-    fn calculate_individual_training_effects(
+    pub fn train(
         player: &Player,
         coach: &Staff,
-        now_date: chrono::NaiveDate,
+        session: &TrainingSession,
+        date: NaiveDateTime,
     ) -> TrainingEffects {
         let mut effects = TrainingEffects {
             physical_gains: PhysicalGains::default(),
@@ -47,227 +31,176 @@ impl PlayerTraining {
             morale_change: 0.0,
         };
 
-        // Calculate base effectiveness factors
-        let coach_quality = Self::calculate_coach_effectiveness(coach);
+        // Base effectiveness factors
+        let coach_quality = Self::calculate_coach_effectiveness(coach, &session.session_type);
         let player_receptiveness = Self::calculate_player_receptiveness(player, coach);
-        let age_factor = Self::calculate_age_training_factor(player.age(now_date));
+        let age_factor = Self::calculate_age_training_factor(player.age(date.date()));
 
-        // Check player's training history to determine focus
-        let weeks_since_training = player.training_history.weeks_since_last_training(now_date);
+        // Intensity multipliers
+        let intensity_multiplier = match session.intensity {
+            TrainingIntensity::VeryLight => 0.3,
+            TrainingIntensity::Light => 0.5,
+            TrainingIntensity::Moderate => 1.0,
+            TrainingIntensity::High => 1.5,
+            TrainingIntensity::VeryHigh => 2.0,
+        };
 
-        // If player hasn't trained recently, apply recovery effects
-        if weeks_since_training > 2 {
-            effects.fatigue_change = -20.0; // Recovery
-            effects.injury_risk = -0.01;
-            return effects;
-        }
-
-        // Apply position-specific training
-        Self::apply_position_specific_training(
-            &mut effects,
-            player,
-            coach_quality,
-            player_receptiveness,
-            age_factor
-        );
-
-        // Apply individual focus areas if any
-        if let Some(ref focus) = coach.focus {
-            Self::apply_coach_focus_training(
-                &mut effects,
-                &focus,
-                coach_quality,
-                player_receptiveness
-            );
+        // Calculate gains based on training type
+        match session.session_type {
+            TrainingType::Endurance => {
+                effects.physical_gains.stamina = 0.05 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.natural_fitness = 0.03 * coach_quality * player_receptiveness * age_factor;
+                effects.fatigue_change = 15.0 * intensity_multiplier;
+                effects.injury_risk = 0.02 * intensity_multiplier;
+            }
+            TrainingType::Strength => {
+                effects.physical_gains.strength = 0.04 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.jumping = 0.02 * coach_quality * player_receptiveness * age_factor;
+                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.injury_risk = 0.03 * intensity_multiplier;
+            }
+            TrainingType::Speed => {
+                effects.physical_gains.pace = 0.03 * coach_quality * player_receptiveness * age_factor;
+                effects.physical_gains.agility = 0.04 * coach_quality * player_receptiveness * age_factor;
+                effects.fatigue_change = 25.0 * intensity_multiplier;
+                effects.injury_risk = 0.04 * intensity_multiplier;
+            }
+            TrainingType::BallControl => {
+                effects.technical_gains.first_touch = 0.05 * coach_quality * player_receptiveness;
+                effects.technical_gains.technique = 0.04 * coach_quality * player_receptiveness;
+                effects.technical_gains.dribbling = 0.03 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.injury_risk = 0.01 * intensity_multiplier;
+            }
+            TrainingType::Passing => {
+                effects.technical_gains.passing = 0.06 * coach_quality * player_receptiveness;
+                effects.mental_gains.vision = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 8.0 * intensity_multiplier;
+                effects.injury_risk = 0.01 * intensity_multiplier;
+            }
+            TrainingType::Shooting => {
+                effects.technical_gains.finishing = 0.05 * coach_quality * player_receptiveness;
+                effects.technical_gains.technique = 0.02 * coach_quality * player_receptiveness;
+                effects.mental_gains.decisions = 0.01 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 12.0 * intensity_multiplier;
+                effects.injury_risk = 0.02 * intensity_multiplier;
+            }
+            TrainingType::Positioning => {
+                effects.mental_gains.positioning = 0.06 * coach_quality * player_receptiveness;
+                effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
+                effects.mental_gains.decisions = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 5.0 * intensity_multiplier;
+                effects.injury_risk = 0.005 * intensity_multiplier;
+            }
+            TrainingType::TeamShape => {
+                effects.mental_gains.teamwork = 0.05 * coach_quality * player_receptiveness;
+                effects.mental_gains.positioning = 0.04 * coach_quality * player_receptiveness;
+                effects.mental_gains.work_rate = 0.02 * coach_quality * player_receptiveness;
+                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.injury_risk = 0.01 * intensity_multiplier;
+                effects.morale_change = 0.1; // Team activities boost morale
+            }
+            TrainingType::Recovery => {
+                effects.fatigue_change = -30.0; // Negative means recovery
+                effects.injury_risk = -0.02; // Reduces injury risk
+                effects.morale_change = 0.05;
+            }
+            TrainingType::VideoAnalysis => {
+                effects.mental_gains.decisions = 0.03 * coach_quality;
+                effects.mental_gains.positioning = 0.02 * coach_quality;
+                effects.mental_gains.vision = 0.02 * coach_quality;
+                effects.fatigue_change = 0.0;
+                effects.injury_risk = 0.0;
+            }
+            _ => {
+                // Default minimal gains for unspecified training types
+                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.injury_risk = 0.01 * intensity_multiplier;
+            }
         }
 
         // Apply player condition modifiers
-        Self::apply_condition_modifiers(&mut effects, player);
+        let condition_factor = player.player_attributes.condition_percentage() as f32 / 100.0;
+        if condition_factor < 0.7 {
+            effects.injury_risk *= 1.5; // Higher injury risk when tired
+            effects.fatigue_change *= 1.2; // Get tired faster when already fatigued
+        }
 
-        // Apply professionalism bonus
+        // Apply professionalism bonus to gains
         let professionalism_bonus = player.attributes.professionalism / 20.0;
-        Self::apply_professionalism_bonus(&mut effects, professionalism_bonus);
+        effects.physical_gains = Self::apply_bonus_to_physical(effects.physical_gains, professionalism_bonus);
+        effects.technical_gains = Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
+        effects.mental_gains = Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
 
         effects
     }
 
-    fn apply_position_specific_training(
-        effects: &mut TrainingEffects,
-        player: &Player,
-        coach_quality: f32,
-        player_receptiveness: f32,
-        age_factor: f32,
-    ) {
-        let position = player.position();
 
-        match position {
-            pos if pos.is_goalkeeper() => {
-                // Goalkeeper specific training
-                effects.physical_gains.agility = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.physical_gains.jumping = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.technical_gains.first_touch = 0.02 * coach_quality * player_receptiveness;
-                effects.mental_gains.concentration = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.positioning = 0.05 * coach_quality * player_receptiveness;
+    fn apply_bonus_to_physical(mut gains: PhysicalGains, bonus: f32) -> PhysicalGains {
+        gains.stamina *= 1.0 + bonus;
+        gains.strength *= 1.0 + bonus;
+        gains.pace *= 1.0 + bonus;
+        gains.agility *= 1.0 + bonus;
+        gains.balance *= 1.0 + bonus;
+        gains.jumping *= 1.0 + bonus;
+        gains.natural_fitness *= 1.0 + bonus;
+        gains
+    }
+
+    fn apply_bonus_to_technical(mut gains: TechnicalGains, bonus: f32) -> TechnicalGains {
+        gains.first_touch *= 1.0 + bonus;
+        gains.passing *= 1.0 + bonus;
+        gains.crossing *= 1.0 + bonus;
+        gains.dribbling *= 1.0 + bonus;
+        gains.finishing *= 1.0 + bonus;
+        gains.heading *= 1.0 + bonus;
+        gains.tackling *= 1.0 + bonus;
+        gains.technique *= 1.0 + bonus;
+        gains
+    }
+
+    fn apply_bonus_to_mental(mut gains: MentalGains, bonus: f32) -> MentalGains {
+        gains.concentration *= 1.0 + bonus;
+        gains.decisions *= 1.0 + bonus;
+        gains.positioning *= 1.0 + bonus;
+        gains.teamwork *= 1.0 + bonus;
+        gains.vision *= 1.0 + bonus;
+        gains.work_rate *= 1.0 + bonus;
+        gains.leadership *= 1.0 + bonus;
+        gains
+    }
+
+
+    fn calculate_coach_effectiveness(coach: &Staff, training_type: &TrainingType) -> f32 {
+        let base_effectiveness = match training_type {
+            TrainingType::Endurance | TrainingType::Strength | TrainingType::Speed => {
+                coach.staff_attributes.coaching.fitness as f32 / 20.0
             }
-            pos if pos.is_defender() => {
-                // Defender specific training
-                effects.physical_gains.strength = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.physical_gains.jumping = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.technical_gains.tackling = 0.05 * coach_quality * player_receptiveness;
-                effects.technical_gains.heading = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.positioning = 0.05 * coach_quality * player_receptiveness;
-                effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
+            TrainingType::BallControl | TrainingType::Passing | TrainingType::Shooting => {
+                coach.staff_attributes.coaching.technical as f32 / 20.0
             }
-            pos if pos.is_midfielder() => {
-                // Midfielder specific training
-                effects.physical_gains.stamina = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.technical_gains.passing = 0.05 * coach_quality * player_receptiveness;
-                effects.technical_gains.first_touch = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.vision = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.decisions = 0.03 * coach_quality * player_receptiveness;
+            TrainingType::Positioning | TrainingType::TeamShape => {
+                coach.staff_attributes.coaching.tactical as f32 / 20.0
             }
-            pos if pos.is_forward() => {
-                // Forward specific training
-                effects.physical_gains.pace = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.technical_gains.finishing = 0.05 * coach_quality * player_receptiveness;
-                effects.technical_gains.dribbling = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.positioning = 0.04 * coach_quality * player_receptiveness;
-                effects.mental_gains.decisions = 0.03 * coach_quality * player_receptiveness;
+            TrainingType::Concentration | TrainingType::DecisionMaking => {
+                coach.staff_attributes.coaching.mental as f32 / 20.0
             }
             _ => {
-                // General training for undefined positions
-                effects.physical_gains.stamina = 0.02 * coach_quality * player_receptiveness * age_factor;
-                effects.technical_gains.technique = 0.03 * coach_quality * player_receptiveness;
-                effects.mental_gains.teamwork = 0.03 * coach_quality * player_receptiveness;
+                // Average of all coaching attributes
+                (coach.staff_attributes.coaching.attacking +
+                    coach.staff_attributes.coaching.defending +
+                    coach.staff_attributes.coaching.tactical +
+                    coach.staff_attributes.coaching.technical) as f32 / 80.0
             }
-        }
-
-        // Base fatigue and injury risk for position training
-        effects.fatigue_change = 15.0;
-        effects.injury_risk = 0.02;
-    }
-
-    fn apply_coach_focus_training(
-        effects: &mut TrainingEffects,
-        focus: &crate::CoachFocus,
-        coach_quality: f32,
-        player_receptiveness: f32,
-    ) {
-        use crate::{TechnicalFocusType, MentalFocusType, PhysicalFocusType};
-
-        // Apply technical focus
-        for tech_focus in &focus.technical_focus {
-            match tech_focus {
-                TechnicalFocusType::Passing => effects.technical_gains.passing += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Dribbling => effects.technical_gains.dribbling += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Finishing => effects.technical_gains.finishing += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Crossing => effects.technical_gains.crossing += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Heading => effects.technical_gains.heading += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Tackling => effects.technical_gains.tackling += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Technique => effects.technical_gains.technique += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::FirstTouch => effects.technical_gains.first_touch += 0.02 * coach_quality * player_receptiveness,
-                TechnicalFocusType::FreeKicks => effects.technical_gains.technique += 0.01 * coach_quality * player_receptiveness,
-                TechnicalFocusType::LongShots => effects.technical_gains.technique += 0.01 * coach_quality * player_receptiveness,
-                TechnicalFocusType::LongThrows => effects.technical_gains.technique += 0.01 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Marking => effects.technical_gains.tackling += 0.01 * coach_quality * player_receptiveness,
-                TechnicalFocusType::PenaltyTaking => effects.technical_gains.finishing += 0.01 * coach_quality * player_receptiveness,
-                TechnicalFocusType::Corners => effects.technical_gains.crossing += 0.01 * coach_quality * player_receptiveness,
-            }
-        }
-
-        // Apply mental focus
-        for mental_focus in &focus.mental_focus {
-            match mental_focus {
-                MentalFocusType::Concentration => effects.mental_gains.concentration += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::Decisions => effects.mental_gains.decisions += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::Positioning => effects.mental_gains.positioning += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::Teamwork => effects.mental_gains.teamwork += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::Vision => effects.mental_gains.vision += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::Leadership => effects.mental_gains.leadership += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::WorkRate => effects.mental_gains.work_rate += 0.02 * coach_quality * player_receptiveness,
-                MentalFocusType::OffTheBall => effects.mental_gains.positioning += 0.01 * coach_quality * player_receptiveness,
-                _ => {} // Handle other mental focus types as needed
-            }
-        }
-
-        // Apply physical focus
-        for physical_focus in &focus.physical_focus {
-            match physical_focus {
-                PhysicalFocusType::Stamina => effects.physical_gains.stamina += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::Strength => effects.physical_gains.strength += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::Pace => effects.physical_gains.pace += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::Agility => effects.physical_gains.agility += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::Balance => effects.physical_gains.balance += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::Jumping => effects.physical_gains.jumping += 0.02 * coach_quality * player_receptiveness,
-                PhysicalFocusType::NaturalFitness => effects.physical_gains.natural_fitness += 0.02 * coach_quality * player_receptiveness,
-                _ => {} // Handle other physical focus types as needed
-            }
-        }
-    }
-
-    fn apply_condition_modifiers(effects: &mut TrainingEffects, player: &Player) {
-        let condition_factor = player.player_attributes.condition_percentage() as f32 / 100.0;
-
-        if condition_factor < 0.7 {
-            // Tired players have higher injury risk and get more fatigued
-            effects.injury_risk *= 1.5;
-            effects.fatigue_change *= 1.2;
-
-            // Reduced training effectiveness when tired
-            effects.physical_gains.stamina *= 0.8;
-            effects.physical_gains.strength *= 0.8;
-            effects.physical_gains.pace *= 0.8;
-        } else if condition_factor > 0.9 {
-            // Well-rested players train more effectively
-            effects.injury_risk *= 0.8;
-            effects.morale_change += 0.05;
-        }
-    }
-
-    fn apply_professionalism_bonus(effects: &mut TrainingEffects, bonus: f32) {
-        // Apply bonus to all gains
-        effects.physical_gains.stamina *= 1.0 + bonus;
-        effects.physical_gains.strength *= 1.0 + bonus;
-        effects.physical_gains.pace *= 1.0 + bonus;
-        effects.physical_gains.agility *= 1.0 + bonus;
-        effects.physical_gains.balance *= 1.0 + bonus;
-        effects.physical_gains.jumping *= 1.0 + bonus;
-        effects.physical_gains.natural_fitness *= 1.0 + bonus;
-
-        effects.technical_gains.first_touch *= 1.0 + bonus;
-        effects.technical_gains.passing *= 1.0 + bonus;
-        effects.technical_gains.crossing *= 1.0 + bonus;
-        effects.technical_gains.dribbling *= 1.0 + bonus;
-        effects.technical_gains.finishing *= 1.0 + bonus;
-        effects.technical_gains.heading *= 1.0 + bonus;
-        effects.technical_gains.tackling *= 1.0 + bonus;
-        effects.technical_gains.technique *= 1.0 + bonus;
-
-        effects.mental_gains.concentration *= 1.0 + bonus;
-        effects.mental_gains.decisions *= 1.0 + bonus;
-        effects.mental_gains.positioning *= 1.0 + bonus;
-        effects.mental_gains.teamwork *= 1.0 + bonus;
-        effects.mental_gains.vision *= 1.0 + bonus;
-        effects.mental_gains.work_rate *= 1.0 + bonus;
-        effects.mental_gains.leadership *= 1.0 + bonus;
-    }
-
-    fn calculate_coach_effectiveness(coach: &Staff) -> f32 {
-        // Average of relevant coaching attributes
-        let coaching = &coach.staff_attributes.coaching;
-        let avg = (coaching.attacking + coaching.defending +
-            coaching.tactical + coaching.technical +
-            coaching.mental + coaching.fitness) as f32 / 120.0;
+        };
 
         // Add determination factor
-        let determination = coach.staff_attributes.mental.determination as f32 / 20.0;
+        let determination_factor = coach.staff_attributes.mental.determination as f32 / 20.0;
 
-        (avg * 0.7 + determination * 0.3).min(1.0)
+        (base_effectiveness * 0.7 + determination_factor * 0.3).min(1.0)
     }
 
     fn calculate_player_receptiveness(player: &Player, coach: &Staff) -> f32 {
-        use crate::Person;
-
         // Base receptiveness from player attributes
         let base = (player.attributes.professionalism + player.attributes.ambition) / 40.0;
 
@@ -280,9 +213,8 @@ impl PlayerTraining {
             0.0
         };
 
-        // Age affects receptiveness
-        let age = player.age(chrono::Local::now().date_naive());
-        let age_bonus = match age {
+        // Age affects receptiveness (younger players learn faster)
+        let age_bonus = match player.age(chrono::Local::now().date_naive()) {
             16..=20 => 0.3,
             21..=24 => 0.2,
             25..=28 => 0.1,
