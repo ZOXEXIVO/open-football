@@ -5,10 +5,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const CREATING_SPACE_THRESHOLD: f32 = 150.0;
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0; // Don't move too far from ball
 const MIN_DISTANCE_FROM_BALL: f32 = 15.0; // Don't get too close to ball carrier
-const MAX_TIME_IN_STATE: u64 = 150; // Reduced max time
 const SUPPORT_DISTANCE: f32 = 30.0; // Ideal support distance from teammates
 
 #[derive(Default)]
@@ -47,16 +45,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::RunningInBehind,
             ));
-        }
-
-        // Add a time limit for staying in this state to prevent getting stuck
-        if ctx.in_state_time > MAX_TIME_IN_STATE {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
-        }
-
-        // Check if player is too far from the ball/action
-        if ctx.ball().distance() > MAX_DISTANCE_FROM_BALL * 1.5 {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         None
@@ -132,7 +120,6 @@ impl ForwardCreatingSpaceState {
 
     /// Calculate an intelligent position for creating space that maintains team shape
     fn calculate_space_creating_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let player_pos = ctx.player.position;
         let ball_pos = ctx.tick_context.positions.ball.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
@@ -189,7 +176,7 @@ impl ForwardCreatingSpaceState {
         &self,
         ctx: &StateProcessingContext,
         holder: &crate::r#match::MatchPlayerLite,
-        attacking_direction: f32
+        attacking_direction: f32,
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
@@ -208,7 +195,7 @@ impl ForwardCreatingSpaceState {
     fn move_closer_to_ball_holder(
         &self,
         ctx: &StateProcessingContext,
-        holder: &crate::r#match::MatchPlayerLite
+        holder: &crate::r#match::MatchPlayerLite,
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
@@ -233,7 +220,7 @@ impl ForwardCreatingSpaceState {
         &self,
         ctx: &StateProcessingContext,
         holder: &crate::r#match::MatchPlayerLite,
-        attacking_direction: f32
+        attacking_direction: f32,
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
@@ -249,7 +236,7 @@ impl ForwardCreatingSpaceState {
         Vector3::new(
             holder_position.x + forward_offset,
             holder_position.y + wide_offset,
-            0.0
+            0.0,
         )
     }
 
@@ -259,7 +246,7 @@ impl ForwardCreatingSpaceState {
         ctx: &StateProcessingContext,
         ball_pos: Vector3<f32>,
         field_width: f32,
-        field_height: f32
+        field_height: f32,
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
 
@@ -290,7 +277,7 @@ impl ForwardCreatingSpaceState {
         &self,
         target_position: Vector3<f32>,
         field_width: f32,
-        field_height: f32
+        field_height: f32,
     ) -> Vector3<f32> {
         Vector3::new(
             target_position.x.clamp(field_width * 0.05, field_width * 0.95),
