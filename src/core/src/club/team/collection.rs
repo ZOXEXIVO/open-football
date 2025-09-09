@@ -26,7 +26,6 @@ impl TeamCollection {
         self.teams
             .iter()
             .find(|t| t.id == id)
-            .map(|t| t)
             .expect(format!("no team with id = {}", id).as_str())
     }
 

@@ -303,7 +303,7 @@ impl MidfielderRunningState {
         let current_stamina = ctx.player.player_attributes.condition_percentage() as f32;
 
         // Calculate tactical intelligence - combination of mental attributes
-        let tactical_intelligence = (vision + positioning + teamwork + decisions) / 4.0;
+        let tactical_intelligence = (vision + positioning + teamwork + decisions) / 40.0;
 
         // Players with lower tactical intelligence have stricter requirements
         let intelligence_threshold = if tactical_intelligence < 10.0 {
@@ -427,11 +427,10 @@ impl MidfielderRunningState {
     }
 
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the player is far from their starting position and the team is not in possession
         let distance_from_start = ctx.player().distance_from_start_position();
         let team_in_possession = ctx.team().is_control_ball();
 
-        distance_from_start > 20.0 && !team_in_possession
+        distance_from_start > 200.0 && !team_in_possession
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {

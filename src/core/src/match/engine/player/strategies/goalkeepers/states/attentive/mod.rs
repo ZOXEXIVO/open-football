@@ -73,8 +73,8 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
-                slowing_distance: 10.0,
+                target: ctx.tick_context.positions.ball.position,
+                slowing_distance: 50.0,
             }
             .calculate(ctx.player)
             .velocity,

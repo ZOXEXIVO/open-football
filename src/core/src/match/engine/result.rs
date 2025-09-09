@@ -1,6 +1,6 @@
 ﻿use crate::league::LeagueMatch;
 use crate::r#match::statistics::MatchStatisticType;
-use crate::r#match::{ResultMatchPositionData, TeamSquad};
+use crate::r#match::{MatchSquad, ResultMatchPositionData};
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug)]
@@ -83,7 +83,7 @@ impl FieldSquad {
         }
     }
 
-    pub fn from_team(squad: &TeamSquad) -> Self {
+    pub fn from_team(squad: &MatchSquad) -> Self {
         FieldSquad {
             main: squad.main_squad.iter().map(|p| p.id).collect(),
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),

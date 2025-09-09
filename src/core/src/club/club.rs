@@ -13,7 +13,6 @@ pub struct Club {
 
     pub location: Location,
 
-    pub mood: ClubMood,
     pub board: ClubBoard,
 
     pub finance: ClubFinances,
@@ -42,7 +41,6 @@ impl Club {
             finance,
             status,
             academy,
-            mood: ClubMood::default(),
             board: ClubBoard::new(),
             teams,
         }

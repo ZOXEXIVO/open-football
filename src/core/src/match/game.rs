@@ -1,5 +1,5 @@
 use super::engine::FootballEngine;
-use crate::r#match::{MatchResult, TeamSquad};
+use crate::r#match::{MatchResult, MatchSquad};
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -7,8 +7,8 @@ pub struct Match {
     id: String,
     league_id: u32,
     league_slug: String,
-    pub home_squad: TeamSquad,
-    pub away_squad: TeamSquad,
+    pub home_squad: MatchSquad,
+    pub away_squad: MatchSquad,
 }
 
 impl Match {
@@ -16,8 +16,8 @@ impl Match {
         id: String,
         league_id: u32,
         league_slug: &str,
-        home_squad: TeamSquad,
-        away_squad: TeamSquad,
+        home_squad: MatchSquad,
+        away_squad: MatchSquad,
     ) -> Self {
         Match {
             id,

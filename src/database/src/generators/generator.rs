@@ -150,7 +150,6 @@ impl DatabaseGenerator {
                 location: Location {
                     city_id: club.location.city_id,
                 },
-                mood: ClubMood::default(),
                 board: ClubBoard::new(),
                 status: ClubStatus::Professional,
                 finance: ClubFinances::new(club.finance.balance, Vec::new()),

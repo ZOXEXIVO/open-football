@@ -163,10 +163,6 @@ impl MatchPlayer {
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
-        // Return true when player should follow waypoints, for example:
-        // - When not in possession
-        // - When not immediately involved in an action
-        // - When team is in a controlling phase
         let has_ball = self.has_ball(ctx);
         let is_ball_close = ctx.ball().distance() < 100.0;
         let team_in_control = ctx.team().is_control_ball();

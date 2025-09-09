@@ -63,7 +63,7 @@ impl PersonBehaviour {
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Copy, Clone, Debug, PartialEq)]
 pub enum PersonBehaviourState {
     Poor,
     Normal,

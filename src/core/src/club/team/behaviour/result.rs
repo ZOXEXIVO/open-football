@@ -4,6 +4,12 @@ pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
 }
 
+impl Default for TeamBehaviourResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TeamBehaviourResult {
     pub fn new() -> Self {
         TeamBehaviourResult {
@@ -18,6 +24,12 @@ impl TeamBehaviourResult {
 
 pub struct PlayerBehaviourResult {
     pub relationship_result: Vec<PlayerRelationshipChangeResult>,
+}
+
+impl Default for PlayerBehaviourResult {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl PlayerBehaviourResult {

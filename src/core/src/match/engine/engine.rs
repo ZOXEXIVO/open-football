@@ -3,10 +3,7 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
-use crate::r#match::squad::TeamSquad;
-use crate::r#match::{
-    GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, Score, StateManager,
-};
+use crate::r#match::{GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
 use crate::Tactics;
 use nalgebra::Vector3;
 use std::collections::HashMap;
@@ -18,7 +15,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         FootballEngine {}
     }
 
-    pub fn play(left_squad: TeamSquad, right_squad: TeamSquad) -> MatchResultRaw {
+    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad) -> MatchResultRaw {
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
@@ -338,7 +335,7 @@ pub struct MatchPlayerCollection {
 }
 
 impl MatchPlayerCollection {
-    pub fn from_squads(home_squad: &TeamSquad, away_squad: &TeamSquad) -> Self {
+    pub fn from_squads(home_squad: &MatchSquad, away_squad: &MatchSquad) -> Self {
         let mut result = HashMap::new();
 
         // home_main
