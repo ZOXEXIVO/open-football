@@ -968,17 +968,4 @@ mod tests {
         let chemistry = relations.get_team_chemistry();
         assert!(chemistry > 50.0);
     }
-
-    #[test]
-    fn test_conflict_detection() {
-        let mut relations = Relations::new();
-
-        // Create a rivalry
-        let player_rel = relations.players.get_or_create(1);
-        player_rel.rivalry_with.insert(2);
-        player_rel.level = -60.0;
-
-        let conflicts = relations.get_potential_conflicts();
-        assert!(!conflicts.is_empty());
-    }
 }

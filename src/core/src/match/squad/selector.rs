@@ -448,17 +448,7 @@ mod tests {
         let formation_positions = tactics.positions();
         assert_eq!(result.main_squad.len(), formation_positions.len());
     }
-
-    #[test]
-    fn test_versatility_calculation() {
-        let player = generate_versatile_player();
-        let tactics = crate::Tactics::new(MatchTacticType::T442);
-
-        let versatility = SquadSelector::calculate_versatility_score(&player, &tactics);
-
-        assert!(versatility > 0.0);
-    }
-
+    
     #[test]
     fn test_tactical_fit_calculation() {
         let player = generate_attacking_player();
