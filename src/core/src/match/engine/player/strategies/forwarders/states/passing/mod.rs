@@ -7,6 +7,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
+const MAX_PASS_DURATION: u64 = 100; // Ticks before considering fatigue
+
 #[derive(Default)]
 pub struct ForwardPassingState {}
 
@@ -44,13 +46,24 @@ impl StateProcessingHandler for ForwardPassingState {
         }
 
         // If under excessive pressure, consider going back to dribbling
-        if self.is_under_heavy_pressure(ctx) && self.can_dribble_effectively(ctx) {
+        if self.is_under_heavy_pressure(ctx)  {
+            if self.can_dribble_effectively(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Dribbling,
+                ));
+            } else {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Running,
+                ));
+            }
+        }
+
+        if ctx.in_state_time > MAX_PASS_DURATION {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Dribbling,
+                ForwardState::Running
             ));
         }
 
-        // Default - continue in current state looking for options
         None
     }
 
@@ -292,11 +305,11 @@ impl ForwardPassingState {
 
     /// Check if player is under heavy pressure from opponents
     fn is_under_heavy_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        const PRESSURE_DISTANCE: f32 = 8.0; // Forwards consider closer pressure
+        const PRESSURE_DISTANCE: f32 = 20.0; // Forwards consider closer pressure
         const PRESSURE_THRESHOLD: usize = 1; // Even one opponent is significant for forwards
 
         let pressing_opponents = ctx.players().opponents().nearby(PRESSURE_DISTANCE).count();
-        pressing_opponents >= PRESSURE_THRESHOLD
+        pressing_opponents > PRESSURE_THRESHOLD
     }
 
     /// Determine if player can effectively dribble out of pressure

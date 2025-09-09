@@ -12,7 +12,6 @@ const MAX_LONG_SHOOTING_DISTANCE: f32 = 400.0;
 const MIN_LONG_SHOOTING_DISTANCE: f32 = 200.0;
 const OPTIMAL_SHOOTING_DISTANCE: f32 = 180.0;
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
-const POSITION_SWITCH_COOLDOWN: u64 = 100; // Ticks before switching positions again
 
 #[derive(Default)]
 pub struct ForwardRunningState {}
