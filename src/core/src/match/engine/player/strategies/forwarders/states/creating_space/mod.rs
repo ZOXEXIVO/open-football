@@ -8,6 +8,7 @@ use nalgebra::Vector3;
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0; // Don't move too far from ball
 const MIN_DISTANCE_FROM_BALL: f32 = 15.0; // Don't get too close to ball carrier
 const SUPPORT_DISTANCE: f32 = 30.0; // Ideal support distance from teammates
+const MAX_LATERAL_MOVEMENT: f32 = 40.0; // Maximum sideways movement from current position
 
 #[derive(Default)]
 pub struct ForwardCreatingSpaceState {}
@@ -23,7 +24,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
 
         // Check if team lost possession - switch to defensive positioning
         if !ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Returning));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // If the ball is close and moving toward player, try to intercept
@@ -75,7 +76,7 @@ impl ForwardCreatingSpaceState {
     /// Check if the player has created good space for receiving a pass
     fn has_created_good_space(&self, ctx: &StateProcessingContext) -> bool {
         // Check if there are no opponents within the space threshold
-        let space_created = !ctx.players().opponents().exists(20.0); // Reduced threshold for realism
+        let space_created = !ctx.players().opponents().exists(20.0);
 
         // Check if player is in a reasonable supporting position
         let in_support_position = self.is_in_good_support_position(ctx);
@@ -146,7 +147,7 @@ impl ForwardCreatingSpaceState {
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
-        // Determine attacking direction
+        // Determine attacking direction based on side
         let attacking_direction = match ctx.player.side.unwrap_or(PlayerSide::Left) {
             PlayerSide::Left => 1.0,  // Moving towards positive X
             PlayerSide::Right => -1.0, // Moving towards negative X
@@ -181,12 +182,20 @@ impl ForwardCreatingSpaceState {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
 
-        // Create space by moving diagonally away from holder toward goal
+        // Determine player's natural side based on starting position
+        let player_natural_side = if ctx.player.start_position.y < ctx.context.field_size.height as f32 / 2.0 {
+            -1.0 // Left side player
+        } else {
+            1.0  // Right side player
+        };
+
+        // Create space by moving diagonally away from holder toward goal on player's natural side
         let away_from_holder = (player_position - holder_position).normalize();
         let toward_goal = Vector3::new(attacking_direction, 0.0, 0.0);
+        let to_natural_side = Vector3::new(0.0, player_natural_side, 0.0);
 
-        // Blend the two directions
-        let movement_direction = (away_from_holder + toward_goal * 0.7).normalize();
+        // Blend the directions with emphasis on maintaining side
+        let movement_direction = (away_from_holder * 0.4 + toward_goal * 0.4 + to_natural_side * 0.2).normalize();
 
         holder_position + movement_direction * SUPPORT_DISTANCE
     }
@@ -199,19 +208,30 @@ impl ForwardCreatingSpaceState {
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
+        let field_height = ctx.context.field_size.height as f32;
 
-        // Move toward holder but maintain some separation
+        // Move toward holder but maintain natural side
         let toward_holder = (holder_position - player_position).normalize();
 
-        // Don't move directly toward holder - offset slightly
-        let field_height = ctx.context.field_size.height as f32;
-        let offset_direction = if player_position.y < field_height / 2.0 {
-            Vector3::new(0.0, 1.0, 0.0)  // Move up field
+        // Determine if player should stay on their natural side
+        let player_natural_side = if ctx.player.start_position.y < field_height / 2.0 {
+            -1.0 // Left side
         } else {
-            Vector3::new(0.0, -1.0, 0.0) // Move down field
+            1.0  // Right side
         };
 
-        let movement_direction = (toward_holder + offset_direction * 0.3).normalize();
+        // Calculate offset to maintain width
+        let current_y_diff = player_position.y - holder_position.y;
+        let needs_width_adjustment = current_y_diff.abs() < 15.0; // Too narrow
+
+        let offset_direction = if needs_width_adjustment {
+            Vector3::new(0.0, player_natural_side, 0.0)
+        } else {
+            // Maintain current width relationship
+            Vector3::new(0.0, current_y_diff.signum() * 0.3, 0.0)
+        };
+
+        let movement_direction = (toward_holder * 0.7 + offset_direction * 0.3).normalize();
         player_position + movement_direction * 20.0
     }
 
@@ -224,18 +244,29 @@ impl ForwardCreatingSpaceState {
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let holder_position = holder.position;
+        let field_height = ctx.context.field_size.height as f32;
 
-        // Move to create better passing angles - slightly forward and wide
-        let forward_offset = attacking_direction * 25.0;
-        let wide_offset = if player_position.y > holder_position.y {
-            15.0  // Move wider if already on the "upper" side
+        // Determine player's preferred side
+        let player_preferred_y = if ctx.player.start_position.y < field_height / 2.0 {
+            holder_position.y - 25.0 // Stay on left/lower side
         } else {
-            -15.0 // Move wider if on the "lower" side
+            holder_position.y + 25.0 // Stay on right/upper side
+        };
+
+        // Calculate forward offset based on attacking direction
+        let forward_offset = attacking_direction * 20.0;
+
+        // Don't move too far laterally from current position
+        let target_y = if (player_preferred_y - player_position.y).abs() > MAX_LATERAL_MOVEMENT {
+            // Limit lateral movement
+            player_position.y + (player_preferred_y - player_position.y).signum() * MAX_LATERAL_MOVEMENT
+        } else {
+            player_preferred_y
         };
 
         Vector3::new(
             holder_position.x + forward_offset,
-            holder_position.y + wide_offset,
+            target_y,
             0.0,
         )
     }
@@ -250,29 +281,43 @@ impl ForwardCreatingSpaceState {
     ) -> Vector3<f32> {
         let player_position = ctx.player.position;
 
-        // Move toward ball but maintain reasonable distance
+        // Maintain natural positioning relative to starting position
+        let natural_y_position = ctx.player.start_position.y;
+        let y_deviation = (player_position.y - natural_y_position).abs();
+
+        // Move toward ball but maintain reasonable distance and natural side
         let distance_to_ball = (player_position - ball_pos).magnitude();
 
         if distance_to_ball > MAX_DISTANCE_FROM_BALL {
-            // Move closer to ball
+            // Move closer to ball but stay on natural side
             let toward_ball = (ball_pos - player_position).normalize();
-            player_position + toward_ball * 30.0
+            let to_natural_side = Vector3::new(0.0, (natural_y_position - player_position.y).signum(), 0.0);
+
+            let movement = (toward_ball * 0.8 + to_natural_side * 0.2).normalize();
+            player_position + movement * 30.0
         } else if distance_to_ball < MIN_DISTANCE_FROM_BALL {
             // Move away from ball
             let away_from_ball = (player_position - ball_pos).normalize();
             player_position + away_from_ball * 20.0
         } else {
-            // Adjust position slightly for better support
+            // Adjust position slightly for better support while maintaining side
             let attacking_direction = match ctx.player.side.unwrap_or(PlayerSide::Left) {
                 PlayerSide::Left => Vector3::new(1.0, 0.0, 0.0),
                 PlayerSide::Right => Vector3::new(-1.0, 0.0, 0.0),
             };
 
-            player_position + attacking_direction * 15.0
+            // Correct excessive deviation from natural position
+            let y_correction = if y_deviation > MAX_LATERAL_MOVEMENT {
+                Vector3::new(0.0, (natural_y_position - player_position.y) * 0.1, 0.0)
+            } else {
+                Vector3::zeros()
+            };
+
+            player_position + attacking_direction * 15.0 + y_correction
         }
     }
 
-    /// Constrain position to field boundaries
+    /// Constrain position to field boundaries with margins
     fn constrain_position_to_field(
         &self,
         target_position: Vector3<f32>,
@@ -355,7 +400,7 @@ impl ForwardCreatingSpaceState {
             PlayerSide::Right => Vector3::new(-1.0, 0.0, 0.0),
         };
 
-        let check_position = player_position + attacking_direction * 40.0; // Reduced distance
+        let check_position = player_position + attacking_direction * 40.0;
 
         // Check if there are opponents in the space we want to run into
         let opponents_in_space = ctx.players().opponents().all()

@@ -85,6 +85,10 @@ impl Tactics {
         self.defender_count() >= 5 || (self.defender_count() == 4 && self.midfielder_count() >= 5)
     }
 
+    pub fn is_high_pressing(&self) -> bool {
+        true
+    }
+
     pub fn tactical_style(&self) -> TacticalStyle {
         match self.tactic_type {
             MatchTacticType::T442
