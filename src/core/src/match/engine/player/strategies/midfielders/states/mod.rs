@@ -18,6 +18,7 @@ pub mod takeball;
 pub mod tracking_runner;
 pub mod walking;
 pub mod intercepting;
+pub mod creating_space;
 
 pub use attack_supporting::*;
 pub use crossing::*;
@@ -39,3 +40,5 @@ pub use takeball::*;
 pub use tracking_runner::*;
 pub use walking::*;
 pub use intercepting::*;
+pub use creating_space::*;
+

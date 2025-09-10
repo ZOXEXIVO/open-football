@@ -5,10 +5,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const SUPPORT_DISTANCE_FROM_BALL: f32 = 80.0; // Ideal distance to maintain from ball carrier
-const MAX_SUPPORT_DISTANCE: f32 = 150.0; // Maximum distance to be effective support
-const SHOOTING_RANGE: f32 = 250.0; // Distance from goal to consider shooting
-const TACKLE_RANGE: f32 = 20.0; // Distance to attempt tackling
+const TACKLE_RANGE: f32 = 30.0; // Distance to attempt tackling
 const PRESS_RANGE: f32 = 100.0; // Distance to press opponent
 const FREE_SPACE_RADIUS: f32 = 15.0; // Radius to check for free space
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300; // Max time to stay in support without action
@@ -26,7 +23,36 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         }
 
         // If team loses possession, switch to defensive duties
-        if !ctx.team().is_control_ball() {
+        if ctx.team().is_control_ball() {
+            // Ball coming towards player - try to intercept
+            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Intercepting,
+                ));
+            }
+
+            // If ball is too far away, return to position
+            if ctx.ball().distance() < 300.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::CreatingSpace,
+                ));
+            }
+
+            // If we've been supporting for too long without contributing, reassess
+            if ctx.in_state_time > ATTACK_SUPPORT_TIME_LIMIT {
+                // Check if we're too far from our position
+                if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Returning,
+                    ));
+                }
+
+                // Otherwise continue running to find better support position
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Running,
+                ));
+            }
+        } else {
             // Check if we should tackle or press
             if ctx.ball().distance() < TACKLE_RANGE {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -46,43 +72,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        // Ball coming towards player - try to intercept
-        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 100.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Intercepting,
-            ));
-        }
-
-        // Check if in good shooting position
-        if self.is_in_shooting_position(ctx) && ctx.ball().distance() < 50.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::DistanceShooting,
-            ));
-        }
-
-        // If ball is too far away, return to position
-        if ctx.ball().distance() > 300.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
-            ));
-        }
-
-        // If we've been supporting for too long without contributing, reassess
-        if ctx.in_state_time > ATTACK_SUPPORT_TIME_LIMIT {
-            // Check if we're too far from our position
-            if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Returning,
-                ));
-            }
-
-            // Otherwise continue running to find better support position
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // Continue supporting the attack
         None
     }
 
@@ -108,18 +97,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 }
 
 impl MidfielderAttackSupportingState {
-    /// Check if midfielder is in a good position to shoot
-    fn is_in_shooting_position(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let has_clear_shot = ctx.player().has_clear_shot();
-        let shooting_skill = ctx.player.skills.technical.long_shots;
-
-        // Better shooters can attempt from further
-        let effective_range = SHOOTING_RANGE * (shooting_skill as f32 / 15.0);
-
-        distance_to_goal < effective_range && has_clear_shot
-    }
-
     /// Calculate the optimal position to support the attack
     fn calculate_optimal_support_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;

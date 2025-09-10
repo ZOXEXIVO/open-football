@@ -1,11 +1,4 @@
-use crate::r#match::midfielders::states::{
-    MidfielderAttackSupportingState, MidfielderCrossingState, MidfielderDistanceShootingState,
-    MidfielderDistributingState, MidfielderDribblingState, MidfielderHoldingPossessionState,
-    MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState,
-    MidfielderReturningState, MidfielderRunningState, MidfielderShootingState,
-    MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState,
-    MidfielderTakeBallState, MidfielderTrackingRunnerState, MidfielderWalkingState,
-};
+use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderHoldingPossessionState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderTrackingRunnerState, MidfielderWalkingState};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -29,7 +22,8 @@ pub enum MidfielderState {
     Walking,           // Walking
     TakeBall,          // Take the ball,
     Shooting,          // Shooting,
-    Intercepting,      // Intercepting the ball
+    Intercepting,      // Intercepting the ball,
+    CreatingSpace,     // Creating space for teammates
 }
 
 pub struct MidfielderStrategies {}
@@ -90,7 +84,10 @@ impl MidfielderStrategies {
             }
             MidfielderState::Intercepting => {
                 state_processor.process(MidfielderInterceptingState::default())
-            }
+            },
+            MidfielderState::CreatingSpace => {
+                state_processor.process(MidfielderCreatingSpaceState::default())
+            },
         }
     }
 }
@@ -117,6 +114,7 @@ impl Display for MidfielderState {
             MidfielderState::Dribbling => write!(f, "Dribbling"),
             MidfielderState::Shooting => write!(f, "Shooting"),
             MidfielderState::Intercepting => write!(f, "Intercepting"),
+            MidfielderState::CreatingSpace => write!(f, "Creating Space"),
         }
     }
 }
