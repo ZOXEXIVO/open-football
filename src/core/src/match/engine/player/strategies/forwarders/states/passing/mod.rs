@@ -28,12 +28,10 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state_and_event(
                 ForwardState::Running,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::build()
+                    PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(target_teammate.id)
-                        .with_target(target_teammate.position)
-                        .with_force(ctx.player().pass_teammate_power(target_teammate.id))
-                        .build(),
+                        .build(ctx),
                 )),
             ));
         }

@@ -36,11 +36,10 @@ impl StateProcessingHandler for DefenderHeadingState {
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
             Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::build()
+                ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
-                    .with_force(ctx.player().shoot_goal_power())
-                    .build()
+                    .build(ctx)
             ))))
         } else {
             // Heading failed; transition to appropriate state (e.g., Standing)

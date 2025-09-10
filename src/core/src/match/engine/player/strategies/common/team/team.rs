@@ -1,6 +1,6 @@
 use nalgebra::Vector3;
 use crate::{PlayerFieldPositionGroup, Tactics};
-use crate::r#match::{PlayerSide, StateProcessingContext};
+use crate::r#match::{MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext};
 
 pub struct TeamOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,
@@ -143,7 +143,7 @@ impl<'b> TeamOperationsImpl<'b> {
 
         // Check if the player is already the closest to the ball on their team
         // Calculate player's "ball-chasing score" based on distance, position, and attributes
-        let calculate_score = |player: &crate::r#match::MatchPlayerLite, context: &crate::r#match::MatchContext| -> f32 {
+        let calculate_score = |player: &MatchPlayerLite, context: &MatchContext| -> f32 {
             let pos = self.ctx.tick_context.positions.players.position(player.id);
             let dist = (ball_position - pos).magnitude();
 

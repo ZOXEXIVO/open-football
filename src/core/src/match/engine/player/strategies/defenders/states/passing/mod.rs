@@ -27,12 +27,10 @@ impl StateProcessingHandler for DefenderPassingState {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::build()
+                        PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(safe_option.id)
-                            .with_target(safe_option.position)
-                            .with_force(ctx.player().pass_teammate_power(safe_option.id) * 1.2) // Slightly more power for urgency
-                            .build(),
+                            .build(ctx),
                     )),
                 ));
             } else {
@@ -49,12 +47,10 @@ impl StateProcessingHandler for DefenderPassingState {
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::build()
+                    PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(best_target.id)
-                        .with_target(best_target.position)
-                        .with_force(ctx.player().pass_teammate_power(best_target.id))
-                        .build(),
+                        .build(ctx),
                 )),
             ));
         }

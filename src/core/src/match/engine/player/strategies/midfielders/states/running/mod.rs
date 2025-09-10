@@ -90,6 +90,7 @@ impl StateProcessingHandler for MidfielderRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Priority 1: Follow waypoints when appropriate
         if ctx.player.should_follow_waypoints(ctx) {
             let waypoints = ctx.player.get_waypoints_as_vectors();
 
@@ -100,60 +101,313 @@ impl StateProcessingHandler for MidfielderRunningState {
                         current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: IntegerUtils::random(1, 10) as f32,
                     }
-                    .calculate(ctx.player)
-                    .velocity,
+                        .calculate(ctx.player)
+                        .velocity + ctx.player().separation_velocity(),
                 );
             }
         }
 
-        if let Some(target_position) = self.find_space_between_opponents(ctx) {
-            Some(
-                SteeringBehavior::Arrive {
-                    target: target_position + ctx.player().separation_velocity(),
-                    slowing_distance: 10.0,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            )
-        } else if ctx.player.has_ball(ctx) {
-            Some(
-                SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position()
-                        + ctx.player().separation_velocity(),
-                    slowing_distance: 100.0,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            )
-        } else if ctx.team().is_control_ball() {
-            Some(
-                SteeringBehavior::Arrive {
-                    target: ctx.player().opponent_goal_position()
-                        + ctx.player().separation_velocity(),
-                    slowing_distance: 100.0,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            )
-        } else {
-            Some(
-                SteeringBehavior::Wander {
-                    target: ctx.player.start_position + ctx.player().separation_velocity(),
-                    radius: IntegerUtils::random(5, 150) as f32,
-                    jitter: IntegerUtils::random(0, 2) as f32,
-                    distance: IntegerUtils::random(10, 150) as f32,
-                    angle: IntegerUtils::random(0, 360) as f32,
-                }
-                .calculate(ctx.player)
-                .velocity,
-            )
+        // Priority 2: If player has the ball, use intelligent movement
+        if ctx.player.has_ball(ctx) {
+            return Some(self.calculate_ball_carrying_velocity(ctx));
         }
+
+        // Priority 3: Without ball, move to support play or find space
+        if ctx.team().is_control_ball() {
+            return Some(self.calculate_support_velocity(ctx));
+        }
+
+        // Priority 4: Defensive positioning
+        Some(self.calculate_defensive_velocity(ctx))
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl MidfielderRunningState {
+    /// Calculate velocity when carrying the ball - more intelligent movement
+    fn calculate_ball_carrying_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let goal_position = ctx.player().opponent_goal_position();
+        let player_position = ctx.player.position;
+
+        // Get player's mental attributes for decision making
+        let vision = ctx.player.skills.mental.vision / 20.0;
+        let creativity = ctx.player.skills.mental.flair / 20.0;
+        let decisions = ctx.player.skills.mental.decisions / 20.0;
+
+        // Calculate different movement options
+        let mut movement_options: Vec<(Vector3<f32>, f32)> = Vec::new();
+
+        // Option 1: Direct to goal (but not straight line)
+        let direct_angle_variation = (rand::random::<f32>() - 0.5) * 30.0_f32.to_radians();
+        let to_goal = (goal_position - player_position).normalize();
+        let rotated_to_goal = self.rotate_vector_2d(to_goal, direct_angle_variation);
+        let direct_score = self.evaluate_direction(ctx, player_position + rotated_to_goal * 50.0);
+        movement_options.push((rotated_to_goal, direct_score * (1.0 - creativity * 0.3)));
+
+        // Option 2: Wide movement (use flanks)
+        let field_center_y = field_height / 2.0;
+        let distance_from_center = (player_position.y - field_center_y).abs();
+
+        if distance_from_center < field_height * 0.3 {
+            // Player is central, consider moving wide
+            let wide_direction = if player_position.y < field_center_y {
+                Vector3::new(0.5, -0.8, 0.0).normalize() // Move to left flank
+            } else {
+                Vector3::new(0.5, 0.8, 0.0).normalize() // Move to right flank
+            };
+
+            let wide_target = player_position + wide_direction * 40.0;
+            if self.is_position_valid(wide_target, field_width, field_height) {
+                let wide_score = self.evaluate_direction(ctx, wide_target);
+                movement_options.push((wide_direction, wide_score * (1.0 + creativity * 0.2)));
+            }
+        }
+
+        // Option 3: Cut inside (if on flanks)
+        if distance_from_center > field_height * 0.25 {
+            let cut_inside_direction = Vector3::new(
+                0.7,
+                if player_position.y < field_center_y { 0.3 } else { -0.3 },
+                0.0
+            ).normalize();
+
+            let cut_inside_target = player_position + cut_inside_direction * 40.0;
+            if self.is_position_valid(cut_inside_target, field_width, field_height) {
+                let cut_score = self.evaluate_direction(ctx, cut_inside_target);
+                movement_options.push((cut_inside_direction, cut_score * (1.0 + vision * 0.2)));
+            }
+        }
+
+        // Option 4: Find space between opponents
+        if let Some(space_target) = self.find_space_between_opponents(ctx) {
+            let to_space = (space_target - player_position).normalize();
+            let space_score = self.evaluate_direction(ctx, space_target);
+            movement_options.push((to_space, space_score * (1.0 + decisions * 0.3)));
+        }
+
+        // Option 5: Diagonal runs
+        let diagonal_options = vec![
+            Vector3::new(0.7, 0.3, 0.0),
+            Vector3::new(0.7, -0.3, 0.0),
+            Vector3::new(0.5, 0.5, 0.0),
+            Vector3::new(0.5, -0.5, 0.0),
+        ];
+
+        for diagonal in diagonal_options {
+            let diagonal_dir = diagonal.normalize();
+            let diagonal_target = player_position + diagonal_dir * 35.0;
+
+            if self.is_position_valid(diagonal_target, field_width, field_height) {
+                let diagonal_score = self.evaluate_direction(ctx, diagonal_target);
+                movement_options.push((diagonal_dir, diagonal_score));
+            }
+        }
+
+        // Select best option based on scores
+        let best_option = movement_options
+            .into_iter()
+            .max_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|opt| opt.0)
+            .unwrap_or(to_goal);
+
+        // Calculate dynamic speed based on situation
+        let base_speed = ctx.player.skills.physical.pace * 0.3;
+        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
+
+        // Adjust speed based on pressure
+        let pressure_factor = if ctx.players().opponents().exists(15.0) {
+            0.7 // Slow down when under pressure
+        } else if ctx.players().opponents().exists(25.0) {
+            0.85
+        } else {
+            1.0 // Full speed in open space
+        };
+
+        let final_speed = base_speed * (0.6 + dribbling_skill * 0.4) * pressure_factor;
+
+        // Add some natural movement variation
+        let movement_noise = Vector3::new(
+            (rand::random::<f32>() - 0.5) * 0.1,
+            (rand::random::<f32>() - 0.5) * 0.1,
+            0.0
+        );
+
+        let final_direction = (best_option + movement_noise).normalize();
+
+        // Return velocity with separation
+        SteeringBehavior::Arrive {
+            target: player_position + final_direction * 40.0,
+            slowing_distance: 20.0,
+        }
+            .calculate(ctx.player)
+            .velocity + ctx.player().separation_velocity()
+    }
+
+    /// Calculate velocity when supporting team in possession
+    fn calculate_support_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Find open spaces to support
+        if let Some(support_position) = self.find_support_position(ctx) {
+            return SteeringBehavior::Arrive {
+                target: support_position,
+                slowing_distance: 15.0,
+            }
+                .calculate(ctx.player)
+                .velocity + ctx.player().separation_velocity();
+        }
+
+        // Default: Move into space ahead
+        let forward_space = self.find_forward_space(ctx, field_width, field_height);
+
+        SteeringBehavior::Arrive {
+            target: forward_space,
+            slowing_distance: 20.0,
+        }
+            .calculate(ctx.player)
+            .velocity + ctx.player().separation_velocity()
+    }
+
+    /// Calculate defensive positioning velocity
+    fn calculate_defensive_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        // Balance between returning to position and tracking threats
+        let to_start = ctx.player.start_position - ctx.player.position;
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let to_ball = ball_position - ctx.player.position;
+
+        // Weight based on ball distance
+        let ball_distance = to_ball.magnitude();
+        let position_weight = if ball_distance > 200.0 {
+            0.7 // Prioritize position when ball is far
+        } else if ball_distance > 100.0 {
+            0.5
+        } else {
+            0.3 // Prioritize ball when it's close
+        };
+
+        let combined_target = ctx.player.position +
+            (to_start.normalize() * position_weight +
+                to_ball.normalize() * (1.0 - position_weight)) * 30.0;
+
+        SteeringBehavior::Arrive {
+            target: combined_target,
+            slowing_distance: 15.0,
+        }
+            .calculate(ctx.player)
+            .velocity + ctx.player().separation_velocity()
+    }
+
+    /// Evaluate a potential movement direction
+    fn evaluate_direction(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> f32 {
+        let mut score = 10.0;
+
+        // Check opponent density at target
+        let opponents_near_target = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - target).magnitude() < 20.0)
+            .count();
+        score -= opponents_near_target as f32 * 3.0;
+
+        // Bonus for moving toward goal
+        let current_goal_dist = ctx.ball().distance_to_opponent_goal();
+        let target_goal_dist = (target - ctx.player().opponent_goal_position()).magnitude();
+        if target_goal_dist < current_goal_dist {
+            score += 2.0;
+        }
+
+        // Bonus for open space
+        if !ctx.players().opponents().all()
+            .any(|opp| (opp.position - target).magnitude() < 15.0) {
+            score += 3.0;
+        }
+
+        score.max(0.0)
+    }
+
+    /// Find a good support position when team has possession
+    fn find_support_position(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Create triangle with ball carrier
+        let angle_options: Vec<f32> = vec![45.0, -45.0, 60.0, -60.0, 30.0, -30.0];
+        let support_distance = 30.0;
+
+        for angle_deg in angle_options {
+            let angle_rad = angle_deg.to_radians();
+            let support_offset = Vector3::new(
+                angle_rad.cos() * support_distance,
+                angle_rad.sin() * support_distance,
+                0.0
+            );
+
+            let potential_position = ball_position + support_offset;
+
+            if self.is_position_valid(potential_position, field_width, field_height) &&
+                !self.is_position_occupied(ctx, potential_position) {
+                return Some(potential_position);
+            }
+        }
+
+        None
+    }
+
+    /// Find forward space to move into
+    fn find_forward_space(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
+        let player_position = ctx.player.position;
+        let attacking_direction = match ctx.player.side {
+            Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),
+            Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0),
+            None => Vector3::new(0.0, 0.0, 0.0),
+        };
+
+        // Look for space diagonally forward
+        let lateral_offset = if player_position.y < field_height / 2.0 {
+            Vector3::new(0.0, 20.0, 0.0)
+        } else {
+            Vector3::new(0.0, -20.0, 0.0)
+        };
+
+        let target = player_position + attacking_direction * 40.0 + lateral_offset;
+
+        // Constrain to field
+        Vector3::new(
+            target.x.clamp(10.0, field_width - 10.0),
+            target.y.clamp(10.0, field_height - 10.0),
+            0.0
+        )
+    }
+
+    /// Check if a position is occupied by teammates
+    fn is_position_occupied(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> bool {
+        ctx.players().teammates().all()
+            .any(|teammate| (teammate.position - position).magnitude() < 10.0)
+    }
+
+    /// Validate position is within field bounds
+    fn is_position_valid(&self, position: Vector3<f32>, field_width: f32, field_height: f32) -> bool {
+        position.x >= 5.0 && position.x <= field_width - 5.0 &&
+            position.y >= 5.0 && position.y <= field_height - 5.0
+    }
+
+    /// Rotate a 2D vector by an angle
+    fn rotate_vector_2d(&self, vec: Vector3<f32>, angle_rad: f32) -> Vector3<f32> {
+        let cos_a = angle_rad.cos();
+        let sin_a = angle_rad.sin();
+
+        Vector3::new(
+            vec.x * cos_a - vec.y * sin_a,
+            vec.x * sin_a + vec.y * cos_a,
+            0.0
+        )
+    }
+
+    // Keep existing helper methods unchanged
     fn in_long_distance_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
         (MIN_SHOOTING_DISTANCE..=MAX_SHOOTING_DISTANCE)
             .contains(&ctx.ball().distance_to_opponent_goal())

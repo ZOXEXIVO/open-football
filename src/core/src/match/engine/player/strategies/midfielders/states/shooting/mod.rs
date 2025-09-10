@@ -20,11 +20,10 @@ impl StateProcessingHandler for MidfielderShootingState {
         }
 
         Some(StateChangeResult::with_midfielder_state_and_event(MidfielderState::Standing, Event::PlayerEvent(PlayerEvent::Shoot(
-            ShootingEventContext::build()
+            ShootingEventContext::new()
                 .with_player_id(ctx.player.id)
                 .with_target(ctx.player().shooting_direction())
-                .with_force(ctx.player().shoot_goal_power())
-                .build()
+                .build(ctx)
         ))))
     }
 

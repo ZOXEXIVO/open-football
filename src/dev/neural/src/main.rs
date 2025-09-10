@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-use burn::backend::{Autodiff, Wgpu};
+use burn::backend::{Autodiff, NdArray};
 use burn::config::Config;
 use burn::data::dataloader::batcher::Batcher;
 use burn::data::dataloader::DataLoaderBuilder;
@@ -15,10 +15,10 @@ use burn::train::metric::LossMetric;
 use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
-use burn::backend::wgpu::WgpuDevice;
+use burn::backend::ndarray::NdArrayDevice;
 
-type NeuralNetworkDevice = WgpuDevice;
-type NeuralNetworkBackend = Wgpu;
+type NeuralNetworkDevice = NdArrayDevice;
+type NeuralNetworkBackend = NdArray;
 type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
 type NeuralNetwork<B> = MidfielderPassingNeural<B>;

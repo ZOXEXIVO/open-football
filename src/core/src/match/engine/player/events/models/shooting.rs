@@ -1,4 +1,5 @@
 use nalgebra::Vector3;
+use crate::r#match::StateProcessingContext;
 
 #[derive(Debug)]
 pub struct ShootingEventContext {
@@ -8,15 +9,14 @@ pub struct ShootingEventContext {
 }
 
 impl ShootingEventContext {
-    pub fn build() -> ShootingEventBuilder{
+    pub fn new() -> ShootingEventBuilder{
         ShootingEventBuilder::new()
     }
 }
 
 pub struct ShootingEventBuilder {
     from_player_id: Option<u32>,
-    target: Option<Vector3<f32>>,
-    force: Option<f64>
+    target: Option<Vector3<f32>>
 }
 
 impl Default for ShootingEventBuilder {
@@ -29,8 +29,7 @@ impl ShootingEventBuilder {
     pub fn new() -> Self {
         ShootingEventBuilder {
             from_player_id: None,
-            target: None,
-            force: None,
+            target: None
         }
     }
     
@@ -42,18 +41,13 @@ impl ShootingEventBuilder {
     pub fn with_target(mut self, target: Vector3<f32>) -> Self {
         self.target = Some(target);
         self
-    }  
-    
-    pub fn with_force(mut self, force: f64) -> Self {
-        self.force = Some(force);
-        self
-    }    
+    }
 
-    pub fn build(self) -> ShootingEventContext {
+    pub fn build(self, ctx: &StateProcessingContext) -> ShootingEventContext {
         ShootingEventContext {
             from_player_id: self.from_player_id.unwrap(),
             target: self.target.unwrap(),
-            force: self.force.unwrap(),
+            force: ctx.player().shoot_goal_power(),
         }
     }
 }

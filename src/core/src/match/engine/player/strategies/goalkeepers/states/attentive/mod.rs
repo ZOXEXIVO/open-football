@@ -1,4 +1,3 @@
-use crate::IntegerUtils;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::strategies::processor::StateChangeResult;
 use crate::r#match::{

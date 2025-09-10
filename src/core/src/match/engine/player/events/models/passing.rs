@@ -1,4 +1,5 @@
 use nalgebra::Vector3;
+use crate::r#match::StateProcessingContext;
 
 #[derive(Debug)]
 pub struct PassingEventContext {
@@ -9,16 +10,14 @@ pub struct PassingEventContext {
 }
 
 impl PassingEventContext {
-    pub fn build() -> PassingEventBuilder{
+    pub fn new() -> PassingEventBuilder{
         PassingEventBuilder::new()
     }
 }
 
 pub struct PassingEventBuilder {
     from_player_id: Option<u32>,
-    to_player_id: Option<u32>,
-    pass_target: Option<Vector3<f32>>,
-    pass_force: Option<f32>
+    to_player_id: Option<u32>
 }
 
 impl Default for PassingEventBuilder {
@@ -31,9 +30,7 @@ impl PassingEventBuilder {
     pub fn new() -> Self {
         PassingEventBuilder {
             from_player_id: None,
-            to_player_id: None,
-            pass_target: None,
-            pass_force: None,
+            to_player_id: None
         }
     }
     
@@ -47,22 +44,14 @@ impl PassingEventBuilder {
         self
     }
 
-    pub fn with_target(mut self, pass_target: Vector3<f32>) -> Self {
-        self.pass_target = Some(pass_target);
-        self
-    }  
-    
-    pub fn with_force(mut self, pass_force: f32) -> Self {
-        self.pass_force = Some(pass_force);
-        self
-    }    
-
-    pub fn build(self) -> PassingEventContext {
+    pub fn build(self, ctx: &StateProcessingContext) -> PassingEventContext {
+        let to_player_id = self.to_player_id.unwrap();    
+        
         PassingEventContext {
             from_player_id: self.from_player_id.unwrap(),
-            to_player_id: self.to_player_id.unwrap(),
-            pass_target: self.pass_target.unwrap(),
-            pass_force: self.pass_force.unwrap(),
+            to_player_id,
+            pass_target: ctx.tick_context.positions.players.position(to_player_id),
+            pass_force: ctx.player().pass_teammate_power(to_player_id),
         }
     }
 }

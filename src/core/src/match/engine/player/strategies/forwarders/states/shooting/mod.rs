@@ -14,11 +14,10 @@ impl StateProcessingHandler for ForwardShootingState {
         Some(StateChangeResult::with_forward_state_and_event(
             ForwardState::Standing,
             Event::PlayerEvent(PlayerEvent::Shoot(
-                ShootingEventContext::build()
+                ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
-                    .with_force(ctx.player().shoot_goal_power())
-                    .build()
+                    .build(ctx)
             )),
         ))
     }

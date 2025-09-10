@@ -21,11 +21,10 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         // 4. Shoot the ball towards the opponent's goal
         let mut events = EventCollection::new();
 
-        events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::build()
+        events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::new()
             .with_player_id(ctx.player.id)
             .with_target(ctx.player().shooting_direction())
-            .with_force(ctx.player().shoot_goal_power())
-            .build()));
+            .build(ctx)));
 
         Some(StateChangeResult::with_events(events))
     }

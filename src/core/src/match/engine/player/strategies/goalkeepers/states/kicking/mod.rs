@@ -28,12 +28,10 @@ impl StateProcessingHandler for GoalkeeperKickingState {
             let mut events = EventCollection::new();
 
             events.add_player_event(PlayerEvent::PassTo(
-                PassingEventContext::build()
+                PassingEventContext::new()
                     .with_from_player_id(ctx.player.id)
-                    .with_to_player_id(teammate.id)
-                    .with_target(teammate.position)
-                    .with_force(ctx.player().kick_teammate_power(teammate.id))
-                    .build()
+                    .with_to_player_id(teammate.id)                   
+                    .build(ctx)
             ));
 
             return Some(StateChangeResult::with_events(events));
