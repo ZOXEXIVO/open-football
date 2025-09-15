@@ -1,7 +1,7 @@
 use crate::club::academy::ClubAcademy;
 use crate::club::board::ClubBoard;
 use crate::club::status::ClubStatus;
-use crate::club::{ClubFinances, ClubMood, ClubResult};
+use crate::club::{ClubFinances, ClubResult};
 use crate::context::GlobalContext;
 use crate::shared::Location;
 use crate::TeamCollection;

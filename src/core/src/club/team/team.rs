@@ -4,7 +4,7 @@ use crate::r#match::{
     EnhancedTacticsSelector, MatchPlayer, MatchSquad, SquadSelector, TacticalSquadAnalyzer,
 };
 use crate::shared::CurrencyValue;
-use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, PlayerPositionType, RecommendationPriority, StaffCollection, TacticSelectionReason, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
+use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, RecommendationPriority, StaffCollection, TacticSelectionReason, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
 use log::{debug, info};
 use std::borrow::Cow;
 use std::str::FromStr;

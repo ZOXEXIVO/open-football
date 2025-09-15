@@ -35,7 +35,7 @@ pub enum StaffStatus {
 
 #[derive(Debug)]
 pub struct StaffClubContract {
-    expired: NaiveDate,
+    pub expired: NaiveDate,
     pub salary: u32,
     pub position: StaffPosition,
     pub status: StaffStatus,

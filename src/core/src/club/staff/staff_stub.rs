@@ -81,6 +81,11 @@ impl StaffStub {
                 mental_focus: vec![MentalFocusType::OffTheBall, MentalFocusType::Teamwork],
                 physical_focus: vec![PhysicalFocusType::NaturalFitness],
             }),
+            fatigue: 0.0,
+            job_satisfaction: 0.0,
+            recent_performance: Default::default(),
+            coaching_style: Default::default(),
+            training_schedule: vec![],
         };
         staff
     }

@@ -189,9 +189,10 @@ impl TeamTraining {
 }
 
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum TrainingType {
     // Physical Training
+    #[default]
     Endurance,
     Strength,
     Speed,
