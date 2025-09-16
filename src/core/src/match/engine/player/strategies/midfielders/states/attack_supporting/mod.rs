@@ -7,9 +7,7 @@ use nalgebra::Vector3;
 
 const TACKLE_RANGE: f32 = 30.0;
 const PRESS_RANGE: f32 = 100.0;
-const FREE_SPACE_RADIUS: f32 = 15.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
-const FORWARD_RUN_TRIGGER_DISTANCE: f32 = 250.0; // Distance from goal to trigger forward runs
 const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 
 #[derive(Default)]
@@ -83,6 +81,53 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let player_position = ctx.player.position;
+        let ball_distance = ctx.ball().distance();
+
+        // Check if we have the ball - if so, drive forward
+        if ctx.player.has_ball(ctx) {
+            return Some(self.calculate_ball_carrying_velocity(ctx));
+        }
+
+        // Key change: Don't run to the ball if a teammate has it
+        if let Some(ball_owner_id) = ctx.ball().owner_id() {
+            if let Some(ball_owner) = ctx.context.players.by_id(ball_owner_id) {
+                if ball_owner.team_id == ctx.player.team_id {
+                    // Teammate has ball - make attacking run instead of clustering
+                    let target_position = self.calculate_attacking_run_position(ctx);
+
+                    // Vary speed based on situation
+                    let urgency_factor = self.calculate_urgency_factor(ctx);
+                    let slowing_distance = 20.0 * (1.0 - urgency_factor * 0.3);
+
+                    return Some(
+                        SteeringBehavior::Arrive {
+                            target: target_position,
+                            slowing_distance,
+                        }
+                            .calculate(ctx.player)
+                            .velocity + ctx.player().separation_velocity() * 1.5, // Increase separation
+                    );
+                }
+            }
+        }
+
+        // Ball is loose or opponent has it - only pursue if we're closest
+        if !ctx.team().is_control_ball() || !ctx.ball().is_owned() {
+            if ctx.team().is_best_player_to_chase_ball() && ball_distance < 100.0 {
+                // We're best positioned - go get the ball
+                return Some(
+                    SteeringBehavior::Pursuit {
+                        target: ball_position,
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                );
+            }
+        }
+
+        // Default: Make intelligent supporting run
         let target_position = self.calculate_optimal_support_position(ctx);
 
         // Adjust speed based on urgency
@@ -103,6 +148,314 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 }
 
 impl MidfielderAttackSupportingState {
+    // Add new helper method for attacking runs when teammate has ball
+    fn calculate_attacking_run_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let player_position = ctx.player.position;
+        let goal_position = ctx.player().opponent_goal_position();
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Determine attacking direction
+        let attacking_direction = match ctx.player.side {
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
+            None => 0.0,
+        };
+
+        let distance_to_goal = (ball_position - goal_position).magnitude();
+
+        // Different run types based on position and situation
+        let run_type = self.determine_run_type(ctx, distance_to_goal);
+
+        match run_type {
+            AttackingRunType::ThroughBall => {
+                // Run beyond the defensive line toward goal
+                let advanced_position = Vector3::new(
+                    goal_position.x - (attacking_direction * 120.0),
+                    player_position.y + self.calculate_lateral_run_adjustment(ctx),
+                    0.0
+                );
+
+                // Check offside risk and adjust
+                if self.is_offside_risk(ctx, advanced_position) {
+                    Vector3::new(
+                        advanced_position.x - (attacking_direction * 20.0),
+                        advanced_position.y,
+                        0.0
+                    ).clamp_to_field(field_width, field_height)
+                } else {
+                    advanced_position.clamp_to_field(field_width, field_height)
+                }
+            },
+            AttackingRunType::OverlapRun => {
+                // Wide overlapping run
+                let side_adjustment = if player_position.y < field_height / 2.0 {
+                    -field_height * 0.35  // Go to left flank
+                } else {
+                    field_height * 0.35   // Go to right flank
+                };
+
+                Vector3::new(
+                    ball_position.x + (attacking_direction * 60.0),
+                    field_height / 2.0 + side_adjustment,
+                    0.0
+                ).clamp_to_field(field_width, field_height)
+            },
+            AttackingRunType::LateBoxRun => {
+                // Late run into the box
+                let box_entry_point = self.find_box_entry_point(ctx, goal_position);
+                box_entry_point.clamp_to_field(field_width, field_height)
+            },
+            AttackingRunType::SupportRun => {
+                // Supporting run to create passing option
+                let support_angle = if player_position.y < ball_position.y {
+                    -30.0_f32.to_radians()
+                } else {
+                    30.0_f32.to_radians()
+                };
+
+                let support_distance = 40.0;
+                let support_offset = Vector3::new(
+                    support_distance * support_angle.cos() * attacking_direction,
+                    support_distance * support_angle.sin(),
+                    0.0
+                );
+
+                (ball_position + support_offset).clamp_to_field(field_width, field_height)
+            },
+            AttackingRunType::DiagonalRun => {
+                // Diagonal run to exploit space between defenders
+                let diagonal_target = Vector3::new(
+                    ball_position.x + (attacking_direction * 70.0),
+                    player_position.y + if player_position.y < field_height / 2.0 { 40.0 } else { -40.0 },
+                    0.0
+                );
+
+                diagonal_target.clamp_to_field(field_width, field_height)
+            }
+        }
+    }
+
+    // Add new helper to determine run type
+    fn determine_run_type(&self, ctx: &StateProcessingContext, distance_to_goal: f32) -> AttackingRunType {
+        let field_width = ctx.context.field_size.width as f32;
+        let player_skills = &ctx.player.skills;
+
+        // Player attributes affect run selection
+        let pace = player_skills.physical.pace;
+        let off_the_ball = player_skills.mental.off_the_ball;
+        let anticipation = player_skills.mental.anticipation;
+
+        // Close to goal - make decisive runs
+        if distance_to_goal < field_width * 0.25 {
+            if off_the_ball > 14.0 && pace > 14.0 {
+                AttackingRunType::ThroughBall
+            } else if anticipation > 13.0 {
+                AttackingRunType::LateBoxRun
+            } else {
+                AttackingRunType::SupportRun
+            }
+        }
+        // Middle third - varied runs
+        else if distance_to_goal < field_width * 0.5 {
+            let has_space_wide = self.check_wide_space(ctx);
+
+            if has_space_wide && pace > 13.0 {
+                AttackingRunType::OverlapRun
+            } else if off_the_ball > 12.0 {
+                AttackingRunType::DiagonalRun
+            } else {
+                AttackingRunType::SupportRun
+            }
+        }
+        // Build-up phase - support play
+        else {
+            AttackingRunType::SupportRun
+        }
+    }
+
+    // Add helper to calculate lateral adjustment for runs
+    fn calculate_lateral_run_adjustment(&self, ctx: &StateProcessingContext) -> f32 {
+        let field_height = ctx.context.field_size.height as f32;
+        let player_y = ctx.player.position.y;
+
+        // Check defender positioning
+        let defenders_central = ctx.players().opponents().all()
+            .filter(|opp| {
+                opp.tactical_positions.is_defender() &&
+                    (opp.position.y - field_height / 2.0).abs() < field_height * 0.2
+            })
+            .count();
+
+        // If defenders are concentrated centrally, make wider runs
+        if defenders_central >= 2 {
+            if player_y < field_height / 2.0 {
+                -30.0  // Go wider left
+            } else {
+                30.0   // Go wider right
+            }
+        } else {
+            // Make central runs if space exists
+            if (player_y - field_height / 2.0).abs() > field_height * 0.25 {
+                if player_y < field_height / 2.0 {
+                    20.0   // Come inside from left
+                } else {
+                    -20.0  // Come inside from right
+                }
+            } else {
+                0.0
+            }
+        }
+    }
+
+    // Add helper to find best box entry point
+    fn find_box_entry_point(&self, ctx: &StateProcessingContext, goal_position: Vector3<f32>) -> Vector3<f32> {
+        let field_height = ctx.context.field_size.height as f32;
+        let player_position = ctx.player.position;
+
+        // Identify gaps in the box
+        let box_defenders = ctx.players().opponents().all()
+            .filter(|opp| {
+                let dist_to_goal = (opp.position - goal_position).magnitude();
+                dist_to_goal < 200.0 && opp.tactical_positions.is_defender()
+            })
+            .collect::<Vec<_>>();
+
+        // Find best entry point based on defender positions
+        if box_defenders.is_empty() {
+            // No defenders - go straight to goal
+            Vector3::new(
+                goal_position.x - 100.0,
+                goal_position.y,
+                0.0
+            )
+        } else {
+            // Find gap between defenders
+            let mut best_gap_y = goal_position.y;
+            let mut max_gap_size = 0.0;
+
+            for window in box_defenders.windows(2) {
+                let gap_y = (window[0].position.y + window[1].position.y) / 2.0;
+                let gap_size = (window[1].position.y - window[0].position.y).abs();
+
+                if gap_size > max_gap_size {
+                    max_gap_size = gap_size;
+                    best_gap_y = gap_y;
+                }
+            }
+
+            // Also check edges
+            let edge_gap_top = field_height * 0.35 - box_defenders.first().map(|d| d.position.y).unwrap_or(0.0);
+            let edge_gap_bottom = field_height * 0.65 - box_defenders.last().map(|d| d.position.y).unwrap_or(field_height);
+
+            if edge_gap_top > max_gap_size {
+                best_gap_y = goal_position.y - 80.0;
+            } else if edge_gap_bottom > max_gap_size {
+                best_gap_y = goal_position.y + 80.0;
+            }
+
+            Vector3::new(
+                goal_position.x - 150.0,
+                best_gap_y,
+                0.0
+            )
+        }
+    }
+
+    // Add helper to check wide space availability
+    fn check_wide_space(&self, ctx: &StateProcessingContext) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let player_y = ctx.player.position.y;
+
+        // Determine which flank to check
+        let flank_y = if player_y < field_height / 2.0 {
+            field_height * 0.15  // Left flank
+        } else {
+            field_height * 0.85  // Right flank
+        };
+
+        // Count opponents in wide area
+        let opponents_wide = ctx.players().opponents().all()
+            .filter(|opp| (opp.position.y - flank_y).abs() < 30.0)
+            .count();
+
+        opponents_wide < 2
+    }
+
+    // Add method for ball carrying when midfielder has possession
+    fn calculate_ball_carrying_velocity(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let goal_position = ctx.player().opponent_goal_position();
+        let player_position = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Check pressure
+        let under_pressure = ctx.players().opponents().exists(15.0);
+
+        if under_pressure {
+            // Under pressure - make quick decision
+            if ctx.player().has_clear_shot() && ctx.ball().distance_to_opponent_goal() < 250.0 {
+                // Face goal for shot
+                let to_goal = (goal_position - player_position).normalize();
+                return to_goal * 2.0;
+            }
+
+            // Look for outlet pass by turning away from pressure
+            let nearest_opponent = ctx.players().opponents().nearby(15.0).next();
+            if let Some(opponent) = nearest_opponent {
+                let away_from_pressure = (player_position - opponent.position).normalize();
+                return away_from_pressure * 3.0;
+            }
+        }
+
+        // Not under immediate pressure - drive forward intelligently
+        let attacking_direction = match ctx.player.side {
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
+            None => 0.0,
+        };
+
+        // Find space to drive into
+        let forward_space = Vector3::new(
+            player_position.x + (attacking_direction * 40.0),
+            player_position.y,
+            0.0
+        );
+
+        // Check if forward space is clear
+        let forward_clear = !ctx.players().opponents().all()
+            .any(|opp| (opp.position - forward_space).magnitude() < 20.0);
+
+        if forward_clear {
+            // Drive forward with pace
+            let drive_speed = ctx.player.skills.physical.pace * 0.35;
+            SteeringBehavior::Seek {
+                target: goal_position,
+            }
+                .calculate(ctx.player)
+                .velocity * (drive_speed / ctx.player.skills.max_speed())
+        } else {
+            // Space blocked - move laterally to find space
+            let lateral_target = Vector3::new(
+                player_position.x + (attacking_direction * 20.0),
+                if player_position.y < field_height / 2.0 {
+                    player_position.y + 30.0
+                } else {
+                    player_position.y - 30.0
+                },
+                0.0
+            ).clamp_to_field(field_width, field_height);
+
+            SteeringBehavior::Arrive {
+                target: lateral_target,
+                slowing_distance: 10.0,
+            }
+                .calculate(ctx.player)
+                .velocity
+        }
+    }
+
     /// Calculate the optimal position to support the attack
     fn calculate_optimal_support_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -574,6 +927,15 @@ impl MidfielderAttackSupportingState {
         }
         None
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum AttackingRunType {
+    ThroughBall,   // Run behind defensive line
+    OverlapRun,    // Wide overlapping run
+    LateBoxRun,    // Late run into penalty area
+    SupportRun,    // Supporting run for passing option
+    DiagonalRun,   // Diagonal run to exploit space
 }
 
 /// Channel between defenders
