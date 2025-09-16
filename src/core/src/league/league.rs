@@ -78,6 +78,7 @@ impl League {
     ) -> Vec<MatchResult> {
         scheduled_matches
             .iter_mut()
+            .take(1)
             .map(|scheduled_match| {
                 let home_team = self.get_team(clubs, scheduled_match.home_team_id);
                 let home_squad = home_team.get_enhanced_match_squad();

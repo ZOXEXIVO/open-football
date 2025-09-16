@@ -82,7 +82,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
-        let player_position = ctx.player.position;
         let ball_distance = ctx.ball().distance();
 
         // Check if we have the ball - if so, drive forward
@@ -539,9 +538,6 @@ impl MidfielderAttackSupportingState {
         field_width: f32,
         field_height: f32
     ) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let player_position = ctx.player.position;
-
         // Check where attacking teammates are
         let attacking_players = self.get_attacking_teammates(ctx);
 
