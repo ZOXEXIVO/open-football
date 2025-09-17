@@ -1,223 +1,511 @@
-use crate::r#match::{MatchPlayerLite, StateProcessingContext, MATCH_TIME_MS};
+use nalgebra::Vector3;
+use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 
-/// Unified system for evaluating pass quality across all player types
+/// Enhanced pass evaluation system with sophisticated decision-making
 pub struct PassEvaluator;
 
 impl PassEvaluator {
-    /// Calculate an overall score for a potential pass to a teammate
+    /// Main evaluation function with comprehensive pass assessment
     pub fn evaluate_pass(
         ctx: &StateProcessingContext,
-        target: &MatchPlayerLite,
-        max_score: f32,
+        teammate: &MatchPlayerLite,
+        pass_range: f32,
     ) -> f32 {
-        // Base parameters for weighting different factors
-        let weights = PassWeights {
-            progression: 0.25,      // Forward progression importance
-            space: 0.20,            // Open space around target
-            risk: 0.30,             // Risk of interception (negative)
-            pass_skill_match: 0.15, // How well the pass matches player skills
-            tactical: 0.10,         // Tactical alignment with team strategy
-        };
+        let mut score = 0.0;
 
-        // Calculate individual component scores
-        let progression_score = Self::calculate_progression_score(ctx, target);
-        let space_score = Self::calculate_space_score(ctx, target);
-        let risk_score = Self::calculate_risk_score(ctx, target);
-        let skill_match_score = Self::calculate_skill_match_score(ctx, target);
-        let tactical_score = Self::calculate_tactical_score(ctx, target);
+        // 1. Distance-based score (20% weight)
+        let distance_score = Self::evaluate_distance(ctx, teammate, pass_range);
+        score += distance_score * 20.0;
 
-        // Game state modifiers
-        let game_state_modifier = Self::game_state_modifier(ctx);
+        // 2. Pass safety score (25% weight)
+        let safety_score = Self::evaluate_pass_safety(ctx, teammate);
+        score += safety_score * 25.0;
 
-        // Combine scores with weights and apply game state modifier
-        let weighted_score = (
-            progression_score * weights.progression +
-                space_score * weights.space +
-                risk_score * weights.risk +
-                skill_match_score * weights.pass_skill_match +
-                tactical_score * weights.tactical
-        ) * game_state_modifier;
+        // 3. Teammate readiness (15% weight)
+        let readiness_score = Self::evaluate_teammate_readiness(ctx, teammate);
+        score += readiness_score * 15.0;
 
-        // Normalize score to desired range
-        weighted_score * max_score
+        // 4. Progressive pass value (20% weight)
+        let progression_score = Self::evaluate_progression(ctx, teammate);
+        score += progression_score * 20.0;
+
+        // 5. Space availability (10% weight)
+        let space_score = Self::evaluate_space_around_target(ctx, teammate);
+        score += space_score * 10.0;
+
+        // 6. Tactical advantage (10% weight)
+        let tactical_score = Self::evaluate_tactical_advantage(ctx, teammate);
+        score += tactical_score * 10.0;
+
+        score
     }
 
-    /// Calculate how much the pass progresses the ball forward
-    fn calculate_progression_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        let player_position = ctx.player.position;
-        let target_position = target.position;
-        let goal_position = ctx.player().opponent_goal_position();
+    /// Evaluate distance factor with non-linear scaling
+    fn evaluate_distance(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+        pass_range: f32,
+    ) -> f32 {
+        let distance = teammate.distance(ctx);
 
-        // Calculate distances to goal
-        let player_to_goal = (goal_position - player_position).magnitude();
-        let target_to_goal = (goal_position - target_position).magnitude();
+        if distance > pass_range {
+            return 0.0; // Out of range
+        }
 
-        // Calculate progression as reduction in distance to goal
-        let progression = (player_to_goal - target_to_goal) / player_to_goal;
+        // Non-linear scoring: optimal at medium range
+        let optimal_distance = pass_range * 0.4; // 40% of max range is optimal
+        let distance_ratio = distance / pass_range;
 
-        // Normalize to 0-1 range
-        (progression + 1.0) / 2.0
+        if distance <= optimal_distance {
+            // Close passes: good but not optimal
+            1.0 - (optimal_distance - distance) / optimal_distance * 0.3
+        } else if distance <= pass_range * 0.7 {
+            // Medium range: optimal
+            1.0
+        } else {
+            // Long passes: progressively harder
+            1.0 - (distance_ratio - 0.7) * 2.0
+        }
     }
 
-    /// Calculate how much open space is around the target player
-    fn calculate_space_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        let space_radius = 10.0;
-        let opponents_nearby = ctx.players().opponents().all()
-            .filter(|opponent| {
-                let distance = (opponent.position - target.position).magnitude();
-                distance <= space_radius
-            })
-            .count();
+    /// Evaluate pass safety considering interception risk
+    fn evaluate_pass_safety(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let player_pos = ctx.player.position;
+        let teammate_pos = teammate.position;
+        let pass_vector = teammate_pos - player_pos;
+        let pass_distance = pass_vector.magnitude();
 
-        // More space = higher score (inverse relationship to opponent count)
-        let max_opponents = 3; // Reasonable maximum for normalization
-        1.0 - (opponents_nearby as f32 / max_opponents as f32).min(1.0)
-    }
+        if pass_distance == 0.0 {
+            return 0.0;
+        }
 
-    /// Calculate how well the pass matches the player's skills
-    fn calculate_skill_match_score(ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
-        let passer_skills = &ctx.player.skills;
+        let pass_direction = pass_vector.normalize();
+        let mut safety_score = 1.0;
 
-        // Get relevant skills for passing with more weight on vision and passing
-        let pass_accuracy = passer_skills.technical.passing / 20.0;
-        let vision = passer_skills.mental.vision / 20.0;
-        let composure = passer_skills.mental.composure / 20.0;
-        let decision = passer_skills.mental.decisions / 20.0;
-
-        // Target player skills
-        let player = ctx.player();
-        let target_skills = player.skills(teammate.id);
-        let target_first_touch = target_skills.technical.first_touch / 20.0;
-        let target_control = target_skills.technical.technique / 20.0;
-
-        // Pass distance affects skill requirement
-        let pass_distance = (teammate.position - ctx.player.position).magnitude();
-        let distance_difficulty = (pass_distance / 40.0).min(1.0);
-
-        // Calculate passer capability with greater emphasis on vision and passing
-        let player_skill = (pass_accuracy * 0.5) + (vision * 0.3) + (composure * 0.1) + (decision * 0.1);
-
-        // Calculate receiver capability
-        let receiver_skill = (target_first_touch * 0.6) + (target_control * 0.4);
-
-        // Higher score when both passer and receiver have good skills
-        let required_skill = 0.3 + distance_difficulty * 0.7;
-        let pass_capability = (player_skill / required_skill).min(1.5);
-
-        // Combined skill match score with more weight on passer capability
-        (pass_capability * 0.7) + (receiver_skill * 0.3)
-    }
-    
-    /// Calculate the risk of pass interception
-    fn calculate_risk_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        let player_position = ctx.player.position;
-        let target_position = target.position;
-        let pass_direction = (target_position - player_position).normalize();
-        let pass_distance = (target_position - player_position).magnitude();
-
-        // Look for opponents in the passing lane
+        // Check for opponents in passing lane
         let opponents_in_lane = ctx.players().opponents().all()
             .filter(|opponent| {
-                // Vector from player to opponent
-                let to_opponent = opponent.position - player_position;
-
-                // Project opponent position onto pass direction
-                let projection_dist = to_opponent.dot(&pass_direction);
-
-                // Only consider opponents between passer and target
-                if projection_dist <= 0.0 || projection_dist >= pass_distance {
-                    return false;
-                }
-
-                // Calculate perpendicular distance from passing lane
-                let projected_point = player_position + pass_direction * projection_dist;
-                let perp_distance = (opponent.position - projected_point).magnitude();
-
-                // Consider opponents close to passing lane
-                let intercept_width = 3.0 + (projection_dist / pass_distance) * 2.0;
-                perp_distance < intercept_width
+                Self::is_in_passing_lane(
+                    player_pos,
+                    teammate_pos,
+                    opponent.position,
+                    5.0 // Interception radius
+                )
             })
             .count();
 
-        // Calculate risk based on opponents in lane
-        let max_opponents = 2; // Max expected opponents in lane
-        let interception_risk = (opponents_in_lane as f32 / max_opponents as f32).min(1.0);
+        // Reduce score for each opponent in lane
+        safety_score -= opponents_in_lane as f32 * 0.3;
 
-        // Factor in pass distance (longer = riskier)
-        let distance_factor = 1.0 - (pass_distance / 50.0).min(1.0).max(0.0);
+        // Check for opponent pressure on passer
+        let passer_pressure = Self::calculate_pressure_on_position(ctx, player_pos, 10.0);
+        safety_score -= passer_pressure * 0.2;
 
-        // Combined risk score (higher is better - less risky)
-        (1.0 - interception_risk) * 0.7 + distance_factor * 0.3
+        // Check for opponent pressure on receiver
+        let receiver_pressure = Self::calculate_pressure_on_position(ctx, teammate_pos, 8.0);
+        safety_score -= receiver_pressure * 0.15;
+
+        // Consider pass angle difficulty
+        let angle_factor = Self::evaluate_pass_angle(ctx, teammate);
+        safety_score *= angle_factor;
+
+        safety_score.max(0.0)
     }
 
-    /// Calculate how well the pass aligns with tactical objectives
-    fn calculate_tactical_score(ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        let team = ctx.team();
-        let tactics = team.tactics();
+    /// Check if a point is in the passing lane
+    fn is_in_passing_lane(
+        from: Vector3<f32>,
+        to: Vector3<f32>,
+        point: Vector3<f32>,
+        threshold: f32,
+    ) -> bool {
+        let pass_vector = to - from;
+        let pass_length = pass_vector.magnitude();
 
-        // Basic score based on formation and mentality
-        let mut score: f32 = 0.5;
+        if pass_length == 0.0 {
+            return false;
+        }
 
-        // Adjust based on tactical alignment
-        match tactics.tactic_type {
-            // For counter-attacking tactics, prefer longer, progressive passes
-            crate::MatchTacticType::T442 => {
-                let progression = Self::calculate_progression_score(ctx, target);
-                if progression > 0.6 {
-                    score += 0.3;
+        let pass_direction = pass_vector.normalize();
+        let to_point = point - from;
+
+        // Project point onto pass line
+        let projection = to_point.dot(&pass_direction);
+
+        // Check if projection is within pass segment
+        if projection < 0.0 || projection > pass_length {
+            return false;
+        }
+
+        // Calculate perpendicular distance
+        let projected_point = from + pass_direction * projection;
+        let perpendicular_distance = (point - projected_point).magnitude();
+
+        perpendicular_distance <= threshold
+    }
+
+    /// Calculate pressure on a specific position
+    fn calculate_pressure_on_position(
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+        radius: f32,
+    ) -> f32 {
+        let opponents_nearby = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - position).magnitude() <= radius)
+            .count();
+
+        // Convert to pressure factor (0.0 to 1.0)
+        match opponents_nearby {
+            0 => 0.0,
+            1 => 0.3,
+            2 => 0.6,
+            3 => 0.85,
+            _ => 1.0,
+        }
+    }
+
+    /// Evaluate the angle of the pass (behind, square, forward)
+    fn evaluate_pass_angle(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let player_velocity = ctx.player.velocity;
+        let to_teammate = teammate.position - ctx.player.position;
+
+        if player_velocity.magnitude() < 0.1 || to_teammate.magnitude() < 0.1 {
+            return 1.0; // No movement, any angle is fine
+        }
+
+        let velocity_normalized = player_velocity.normalize();
+        let pass_normalized = to_teammate.normalize();
+        let dot_product = velocity_normalized.dot(&pass_normalized);
+
+        // Forward passes while moving forward: easier
+        if dot_product > 0.5 {
+            1.0
+        }
+        // Square passes: moderate
+        else if dot_product > -0.5 {
+            0.85
+        }
+        // Backward passes while moving forward: harder
+        else {
+            0.7
+        }
+    }
+
+    /// Evaluate teammate's readiness to receive
+    fn evaluate_teammate_readiness(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let mut readiness = 1.0;
+
+        // Check if teammate is moving
+        let teammate_velocity = teammate.velocity(ctx);
+        let speed = teammate_velocity.magnitude();
+
+        // Stationary teammates are more ready
+        if speed < 2.0 {
+            readiness *= 1.0;
+        } else if speed < 5.0 {
+            readiness *= 0.9;
+        } else {
+            readiness *= 0.75; // Fast-moving teammates harder to find
+        }
+
+        // Check if teammate is facing towards passer (approximation)
+        if speed > 0.1 {
+            let to_passer = ctx.player.position - teammate.position;
+            let facing_score = teammate_velocity.normalize().dot(&to_passer.normalize());
+
+            if facing_score > 0.0 {
+                // Moving towards passer: good
+                readiness *= 1.1;
+            } else {
+                // Moving away: less ready
+                readiness *= 0.9;
+            }
+        }
+
+        // Check if teammate is marked
+        let marking_pressure = Self::calculate_pressure_on_position(ctx, teammate.position, 5.0);
+        readiness *= (1.0 - marking_pressure * 0.5);
+
+        readiness.min(1.0).max(0.0)
+    }
+
+    /// Evaluate if pass progresses play towards goal
+    fn evaluate_progression(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let goal_pos = ctx.player().opponent_goal_position();
+        let player_to_goal = (goal_pos - ctx.player.position).magnitude();
+        let teammate_to_goal = (goal_pos - teammate.position).magnitude();
+
+        // Calculate progression distance
+        let progression = player_to_goal - teammate_to_goal;
+
+        if progression > 50.0 {
+            // Significant forward progression
+            1.0
+        } else if progression > 20.0 {
+            // Moderate progression
+            0.8
+        } else if progression > 0.0 {
+            // Slight progression
+            0.6
+        } else if progression > -20.0 {
+            // Lateral or slight backward
+            0.4
+        } else {
+            // Significant backward pass
+            0.2
+        }
+    }
+
+    /// Evaluate space around the target teammate
+    fn evaluate_space_around_target(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        // Count opponents in different radius zones
+        let close_opponents = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - teammate.position).magnitude() <= 5.0)
+            .count();
+
+        let medium_opponents = ctx.players().opponents().all()
+            .filter(|opp| {
+                let dist = (opp.position - teammate.position).magnitude();
+                dist > 5.0 && dist <= 15.0
+            })
+            .count();
+
+        // Calculate space score
+        let close_penalty = close_opponents as f32 * 0.4;
+        let medium_penalty = medium_opponents as f32 * 0.1;
+
+        (1.0 - close_penalty - medium_penalty).max(0.0)
+    }
+
+    /// Evaluate tactical advantage of the pass
+    fn evaluate_tactical_advantage(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let mut tactical_score = 0.5; // Base score
+
+        // 1. Check for numerical superiority in target area
+        let target_area_advantage = Self::evaluate_numerical_superiority(ctx, teammate.position, 20.0);
+        tactical_score += target_area_advantage * 0.2;
+
+        // 2. Check if pass switches play
+        if Self::is_switch_of_play(ctx, teammate) {
+            tactical_score += 0.2;
+        }
+
+        // 3. Check if pass breaks lines
+        if Self::breaks_defensive_lines(ctx, teammate) {
+            tactical_score += 0.3;
+        }
+
+        // 4. Position-specific bonuses
+        tactical_score += Self::position_specific_bonus(ctx, teammate);
+
+        tactical_score.min(1.0)
+    }
+
+    /// Check for numerical superiority in an area
+    fn evaluate_numerical_superiority(
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+        radius: f32,
+    ) -> f32 {
+        let teammates = ctx.players().teammates().all()
+            .filter(|t| (t.position - position).magnitude() <= radius)
+            .count();
+
+        let opponents = ctx.players().opponents().all()
+            .filter(|o| (o.position - position).magnitude() <= radius)
+            .count();
+
+        let difference = teammates as i32 - opponents as i32;
+
+        match difference {
+            d if d >= 2 => 1.0,   // Strong superiority
+            1 => 0.7,              // Slight superiority
+            0 => 0.5,              // Equal
+            -1 => 0.3,             // Slight inferiority
+            _ => 0.0,              // Strong inferiority
+        }
+    }
+
+    /// Check if pass represents a switch of play
+    fn is_switch_of_play(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
+        let field_width = ctx.context.field_size.width as f32;
+        let y_difference = (ctx.player.position.y - teammate.position.y).abs();
+
+        // Consider it a switch if moving across more than 40% of field width
+        y_difference > field_width * 0.4
+    }
+
+    /// Check if pass breaks defensive lines
+    fn breaks_defensive_lines(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
+        let player_x = ctx.player.position.x;
+        let teammate_x = teammate.position.x;
+
+        // Count opponents between passer and receiver (x-axis)
+        let opponents_between = ctx.players().opponents().all()
+            .filter(|opp| {
+                let opp_x = opp.position.x;
+                (opp_x > player_x.min(teammate_x) && opp_x < player_x.max(teammate_x))
+            })
+            .count();
+
+        // If passing through 2+ opponents, likely breaking lines
+        opponents_between >= 2
+    }
+
+    /// Position-specific tactical bonuses
+    fn position_specific_bonus(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        use crate::PlayerPositionType;
+
+        match teammate.tactical_positions {
+            // Passes to strikers in advanced positions
+            PlayerPositionType::Striker | PlayerPositionType::ForwardCenter => {
+                if Self::is_in_attacking_third(ctx, teammate.position) {
+                    0.15
+                } else {
+                    0.05
                 }
             },
-
-            // Default behavior for other tactics
-            _ => {}
+            // Passes to attacking midfielders in space
+            PlayerPositionType::AttackingMidfielderCenter |
+            PlayerPositionType::AttackingMidfielderLeft |
+            PlayerPositionType::AttackingMidfielderRight => {
+                let space = Self::evaluate_space_around_target(ctx, teammate);
+                space * 0.1
+            },
+            // Passes to wide players when isolated
+            PlayerPositionType::MidfielderLeft |
+            PlayerPositionType::MidfielderRight |
+            PlayerPositionType::WingbackLeft |
+            PlayerPositionType::WingbackRight => {
+                if Self::is_wide_and_free(ctx, teammate) {
+                    0.1
+                } else {
+                    0.0
+                }
+            },
+            _ => 0.0,
         }
-
-        // Consider game phase and player positions
-        if target.tactical_positions.is_forward() && ctx.ball().on_own_side() {
-            // Long balls to forwards when in defensive third
-            score += 0.2;
-        }
-
-        score.min(1.0f32)
     }
 
-    /// Modify passing decisions based on game state
-    fn game_state_modifier(ctx: &StateProcessingContext) -> f32 {
-        let time_elapsed = ctx.context.time.time as f32;
-        let total_time = MATCH_TIME_MS as f32;
-        let game_progress = time_elapsed / total_time;
+    /// Check if position is in attacking third
+    fn is_in_attacking_third(ctx: &StateProcessingContext, position: Vector3<f32>) -> bool {
+        let field_length = ctx.context.field_size.width as f32;
+        let attacking_third_start = field_length * 0.67;
 
-        // Adjust passing strategy based on score
-        let score_situation = if ctx.team().is_leading() {
-            if game_progress > 0.8 {
-                // Protect lead late in game - safer passes
-                0.8
-            } else {
-                // Maintain lead - balanced approach
-                1.0
-            }
-        } else if ctx.team().is_loosing() {
-            if game_progress > 0.7 {
-                // Chasing game late - riskier, progressive passes
-                1.3
-            } else {
-                // Still time to recover - slightly more aggressive
-                1.1
-            }
-        } else {
-            // Tied game - normal behavior
-            1.0
-        };
-
-        score_situation
+        // Assuming attacking towards higher x values
+        position.x >= attacking_third_start
     }
-}
 
-/// Weights for different passing factors
-struct PassWeights {
-    progression: f32,
-    space: f32,
-    risk: f32,
-    pass_skill_match: f32,
-    tactical: f32,
+    /// Check if wide player is free
+    fn is_wide_and_free(ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let is_wide = teammate.position.y < field_height * 0.2 ||
+            teammate.position.y > field_height * 0.8;
+
+        if !is_wide {
+            return false;
+        }
+
+        // Check for space
+        let opponents_nearby = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - teammate.position).magnitude() <= 10.0)
+            .count();
+
+        opponents_nearby == 0
+    }
+
+    /// Advanced evaluation for through balls
+    pub fn evaluate_through_ball(
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+        target_position: Vector3<f32>,
+    ) -> f32 {
+        let mut score = 0.0;
+
+        // Check if teammate can reach the target position
+        let teammate_to_target = (target_position - teammate.position).magnitude();
+        let teammate_speed = ctx.context.players.by_id(teammate.id)
+            .map(|p| p.skills.physical.pace)
+            .unwrap_or(10.0);
+
+        // Check for offside
+        if Self::would_be_offside(ctx, target_position) {
+            return 0.0;
+        }
+
+        // Calculate if teammate can reach ball before opponents
+        let time_to_reach = teammate_to_target / teammate_speed;
+        let mut can_reach_first = true;
+
+        for opponent in ctx.players().opponents().all() {
+            let opp_to_target = (target_position - opponent.position).magnitude();
+            let opp_speed = 12.0; // Assume average opponent speed
+            let opp_time = opp_to_target / opp_speed;
+
+            if opp_time < time_to_reach * 0.9 {
+                can_reach_first = false;
+                break;
+            }
+        }
+
+        if !can_reach_first {
+            return 0.0;
+        }
+
+        // Base score for viable through ball
+        score = 50.0;
+
+        // Add bonus for space behind defense
+        let space_score = Self::evaluate_space_around_target(ctx, teammate);
+        score += space_score * 30.0;
+
+        // Add bonus for goal proximity
+        let goal_distance = (target_position - ctx.player().opponent_goal_position()).magnitude();
+        if goal_distance < 30.0 {
+            score += 20.0;
+        }
+
+        score
+    }
+
+    /// Simple offside check (would need proper implementation)
+    fn would_be_offside(
+        ctx: &StateProcessingContext,
+        target_position: Vector3<f32>,
+    ) -> bool {
+        // Simplified: check if teammate would be behind last defender
+        let last_defender_x = ctx.players().opponents().all()
+            .map(|opp| opp.position.x)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(0.0);
+
+        target_position.x > last_defender_x + 5.0 // Buffer for offside
+    }
 }

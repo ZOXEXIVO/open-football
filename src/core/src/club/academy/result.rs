@@ -1,15 +1,13 @@
-use crate::{PlayerCollectionResult, PlayerResult, SimulatorData};
+use crate::{Player, PlayerCollectionResult,SimulatorData};
 
 pub struct ClubAcademyResult {
-    pub players: PlayerCollectionResult,
-    pub produce_result: ProduceYouthPlayersResult,
+    pub players: PlayerCollectionResult
 }
 
 impl ClubAcademyResult {
-    pub fn new(players: PlayerCollectionResult, produce_result: ProduceYouthPlayersResult) -> Self {
+    pub fn new(players: PlayerCollectionResult) -> Self {
         ClubAcademyResult {
-            players,
-            produce_result,
+            players
         }
     }
 
@@ -17,11 +15,11 @@ impl ClubAcademyResult {
 }
 
 pub struct ProduceYouthPlayersResult {
-    pub players: Vec<PlayerResult>,
+    pub players: Vec<Player>,
 }
 
 impl ProduceYouthPlayersResult {
-    pub fn new(players: Vec<PlayerResult>) -> Self {
+    pub fn new(players: Vec<Player>) -> Self {
         ProduceYouthPlayersResult { players }
     }
 

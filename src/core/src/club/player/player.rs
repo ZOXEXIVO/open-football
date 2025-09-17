@@ -243,7 +243,11 @@ impl PlayerCollection {
             .collect()
     }
 
-    pub fn add(&mut self, players: Vec<Player>) {
+    pub fn add(&mut self, player: Player) {
+        self.players.push(player);
+    }
+
+    pub fn add_range(&mut self, players: Vec<Player>) {
         for player in players {
             self.players.push(player);
         }
