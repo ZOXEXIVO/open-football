@@ -1,15 +1,15 @@
 use crate::context::GlobalContext;
-use crate::country::{CountryResult};
+use crate::country::CountryResult;
 use crate::league::LeagueCollection;
-use crate::utils::Logging;
-use crate::{Club, ClubResult, ClubTransferStrategy};
 use crate::shared::{Currency, CurrencyValue};
-use chrono::{Datelike, NaiveDate};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
-use std::collections::HashMap;
-use log::{info, debug};
 use crate::transfers::market::{TransferListing, TransferListingType, TransferMarket};
 use crate::transfers::window::TransferWindowManager;
+use crate::utils::Logging;
+use crate::{Club, ClubResult, ClubTransferStrategy};
+use chrono::{Datelike, NaiveDate};
+use log::{debug, info};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use std::collections::HashMap;
 
 // Enhanced Country struct with more features
 pub struct Country {
@@ -151,6 +151,9 @@ impl Country {
     }
 
     fn negotiate_transfers(&mut self, date: NaiveDate, summary: &mut TransferActivitySummary) {
+        // Collect negotiations to process (avoid borrow conflicts)
+        let mut negotiations_to_process = Vec::new();
+
         // Clubs look at available listings and make offers
         for buying_club in &self.clubs {
             let budget = CurrencyValue {
@@ -165,41 +168,53 @@ impl Country {
                 selling_willingness: 0.5,
                 buying_aggressiveness: self.calculate_buying_aggressiveness(buying_club),
                 target_positions: self.identify_target_positions(buying_club),
-                reputation_level: 0//buying_club.reputation.world,
+                reputation_level: 0, //buying_club.reputation.world,
             };
 
-            // Look through available listings
-            for listing in self.transfer_market.get_available_listings() {
-                // Skip own players
-                if listing.club_id == buying_club.id {
-                    continue;
-                }
+            // Collect available listings first to avoid borrow conflicts
+            let available_listings: Vec<_> = self.transfer_market.get_available_listings()
+                .into_iter()
+                .filter(|listing| listing.club_id != buying_club.id)
+                .cloned()
+                .collect();
 
+            // Look through available listings
+            for listing in available_listings {
                 // Find the player
                 if let Some(player) = self.find_player(listing.player_id) {
                     if strategy.decide_player_interest(player) {
                         let offer = strategy.calculate_initial_offer(
                             player,
                             &listing.asking_price,
-                            date
+                            date,
                         );
 
-                        if let Some(neg_id) = self.transfer_market.start_negotiation(
+                        negotiations_to_process.push((
                             listing.player_id,
                             buying_club.id,
+                            listing.club_id,
                             offer,
-                            date
-                        ) {
-                            summary.active_negotiations += 1;
+                        ));
+                    }
+                }
+            }
+        }
 
-                            // Simulate negotiation outcome
-                            if self.simulate_negotiation_outcome(neg_id, listing.club_id, buying_club.id) {
-                                if let Some(completed) = self.transfer_market.complete_transfer(neg_id, date) {
-                                    summary.completed_transfers += 1;
-                                    summary.total_fees_exchanged += completed.fee.amount;
-                                }
-                            }
-                        }
+        // Process all negotiations
+        for (player_id, buying_club_id, selling_club_id, offer) in negotiations_to_process {
+            if let Some(neg_id) = self.transfer_market.start_negotiation(
+                player_id,
+                buying_club_id,
+                offer,
+                date,
+            ) {
+                summary.active_negotiations += 1;
+
+                // Simulate negotiation outcome
+                if self.simulate_negotiation_outcome(neg_id, selling_club_id, buying_club_id) {
+                    if let Some(completed) = self.transfer_market.complete_transfer(neg_id, date) {
+                        summary.completed_transfers += 1;
+                        summary.total_fees_exchanged += completed.fee.amount;
                     }
                 }
             }
@@ -213,7 +228,7 @@ impl Country {
     fn simulate_clubs_with_context(
         &mut self,
         ctx: &GlobalContext<'_>,
-        transfer_summary: &TransferActivitySummary
+        transfer_summary: &TransferActivitySummary,
     ) -> Vec<ClubResult> {
         // Add country-specific context for club simulation
         let country_context = CountrySimulationContext {
@@ -223,13 +238,16 @@ impl Country {
             regulatory_constraints: self.regulations.clone(),
         };
 
+        // Apply context to all clubs first (avoiding the borrow conflict)
+        for club in &mut self.clubs {
+            Self::apply_country_context_to_club_static(club, &country_context);
+        }
+
+        // Then simulate clubs
         self.clubs
             .iter_mut()
-            .map(|mut club| {
+            .map(|club| {
                 let message = &format!("simulate club: {}", &club.name);
-
-                // Apply country context to club
-                self.apply_country_context_to_club(club, &country_context);
 
                 Logging::estimate_result(
                     || club.simulate(ctx.with_club(club.id, &club.name.clone())),
@@ -237,6 +255,20 @@ impl Country {
                 )
             })
             .collect()
+    }
+
+    fn apply_country_context_to_club(&self, club: &mut Club, context: &CountrySimulationContext) {
+        Self::apply_country_context_to_club_static(club, context);
+    }
+
+    fn apply_country_context_to_club_static(club: &mut Club, context: &CountrySimulationContext) {
+        // Apply economic multiplier to finances
+        if let Some(budget) = &mut club.finance.transfer_budget {
+            budget.amount *= context.economic_multiplier as f64;
+        }
+
+        // Apply regulatory constraints
+        // This would affect things like foreign player limits, salary caps, etc.
     }
 
     fn simulate_international_competitions(&mut self, ctx: &GlobalContext<'_>) {
@@ -378,16 +410,6 @@ impl Country {
         IntegerUtils::random(0, 100) > 60 // 40% success rate (simplified)
     }
 
-    fn apply_country_context_to_club(&self, club: &mut Club, context: &CountrySimulationContext) {
-        // Apply economic multiplier to finances
-        // if let Some(budget) = &mut club.finance.transfer_budget {
-        //     budget.amount *= context.economic_multiplier as f64;
-        // }
-
-        // Apply regulatory constraints
-        // This would affect things like foreign player limits, salary caps, etc.
-    }
-
     fn schedule_friendly_matches(&mut self, ctx: &GlobalContext<'_>) {
         // Schedule preseason friendlies between clubs
         debug!("Scheduling preseason friendlies");
@@ -485,7 +507,6 @@ impl CountryEconomicFactors {
         self.tv_revenue_multiplier = self.tv_revenue_multiplier.clamp(0.8, 1.5);
     }
 }
-
 
 
 #[derive(Debug)]
