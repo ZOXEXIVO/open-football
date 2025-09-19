@@ -11,7 +11,7 @@ pub mod result;
 pub mod staff;
 pub mod status;
 pub mod team;
-mod transfers;
+pub mod transfers;
 
 pub use board::*;
 pub use club::*;
@@ -25,3 +25,4 @@ pub use result::*;
 pub use staff::*;
 pub use status::*;
 pub use team::*;
+pub use transfers::*;

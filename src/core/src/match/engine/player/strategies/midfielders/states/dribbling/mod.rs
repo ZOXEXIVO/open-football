@@ -25,7 +25,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
                 ));
             }
 
-            if let Some(_) = self.find_open_teammate(ctx) {
+            if self.find_open_teammate(ctx).is_some() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing
                 ));

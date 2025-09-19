@@ -1,1 +1,3 @@
-mod strategy;
+pub mod strategy;
+
+pub use strategy::*;

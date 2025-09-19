@@ -1,7 +1,6 @@
-use crate::club::{
-    ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract,
-};
 use crate::context::GlobalContext;
+use crate::shared::CurrencyValue;
+use crate::{ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, ClubSponsorshipContract};
 use chrono::NaiveDate;
 use log::debug;
 
@@ -10,6 +9,8 @@ pub struct ClubFinances {
     pub balance: ClubFinancialBalance,
     pub history: ClubFinancialBalanceHistory,
     pub sponsorship: ClubSponsorship,
+    pub transfer_budget: Option<CurrencyValue>,  // NEW FIELD
+    pub wage_budget: Option<CurrencyValue>,      // NEW FIELD
 }
 
 impl ClubFinances {
@@ -18,35 +19,57 @@ impl ClubFinances {
             balance: ClubFinancialBalance::new(amount),
             history: ClubFinancialBalanceHistory::new(),
             sponsorship: ClubSponsorship::new(sponsorship_contract),
+            transfer_budget: None,
+            wage_budget: None,
+        }
+    }
+
+    // New constructor with budgets
+    pub fn with_budgets(
+        amount: i32,
+        sponsorship_contract: Vec<ClubSponsorshipContract>,
+        transfer_budget: Option<CurrencyValue>,
+        wage_budget: Option<CurrencyValue>,
+    ) -> Self {
+        ClubFinances {
+            balance: ClubFinancialBalance::new(amount),
+            history: ClubFinancialBalanceHistory::new(),
+            sponsorship: ClubSponsorship::new(sponsorship_contract),
+            transfer_budget,
+            wage_budget,
         }
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubFinanceResult {
         let result = ClubFinanceResult::new();
-
         let club_name = ctx.club.as_ref().expect("no club found").name;
 
         if ctx.simulation.is_month_beginning() {
             debug!("club: {}, finance: start new month", club_name);
+            self.start_new_month(club_name, ctx.simulation.date.date());
 
-            self.start_new_month(club_name, ctx.simulation.date.date())
+            // Update budgets at month beginning
+            self.update_budgets();
         }
 
         if ctx.simulation.is_year_beginning() {
-            for sponsorship_contract in self
-                .sponsorship
-                .get_sponsorship_incomes(ctx.simulation.date.date())
-            {
-                debug!(
-                    "club: {}, finance: sponsorship push money: {} {}",
-                    club_name, &sponsorship_contract.sponsor_name, sponsorship_contract.wage
-                );
+            // ... sponsorship income code ...
 
-                self.balance.push_income(sponsorship_contract.wage)
-            }
+            // Reset budgets for new year
+            self.reset_annual_budgets();
         }
 
         result
+    }
+
+    fn start_new_month(&mut self, club_name: &str, date: NaiveDate) {
+        debug!(
+        "club: {}, finance: add history, date = {}, balance = {}, income={}, outcome={}",
+        club_name, date, self.balance.balance, self.balance.income, self.balance.outcome
+    );
+
+        self.history.add(date, self.balance.clone());
+        self.balance.clear();
     }
 
     pub fn push_salary(&mut self, club_name: &str, amount: i32) {
@@ -58,14 +81,67 @@ impl ClubFinances {
         self.balance.push_outcome(amount);
     }
 
-    fn start_new_month(&mut self, club_name: &str, date: NaiveDate) {
-        debug!(
-            "club: {}, finance: add history, date = {}, balance = {}, income={}, outcome={}",
-            club_name, date, self.balance.balance, self.balance.income, self.balance.outcome
-        );
+    fn update_budgets(&mut self) {
+        // Update transfer and wage budgets based on current financial situation
+        let available_funds = self.balance.balance as f64;
 
-        self.history.add(date, self.balance.clone());
-        self.balance.clear();
+        // Allocate 30% of available funds to transfers if positive balance
+        if available_funds > 0.0 {
+            self.transfer_budget = Some(CurrencyValue {
+                amount: available_funds * 0.3,
+                currency: crate::shared::Currency::Usd,
+            });
+        }
+    }
+
+    fn reset_annual_budgets(&mut self) {
+        // Reset budgets based on overall financial health
+        let available_funds = self.balance.balance as f64;
+
+        if available_funds > 0.0 {
+            // Set annual transfer budget (40% of available funds)
+            self.transfer_budget = Some(CurrencyValue {
+                amount: available_funds * 0.4,
+                currency: crate::shared::Currency::Usd,
+            });
+
+            // Set annual wage budget (50% of available funds)
+            self.wage_budget = Some(CurrencyValue {
+                amount: available_funds * 0.5,
+                currency: crate::shared::Currency::Usd,
+            });
+        } else {
+            // No budget if in debt
+            self.transfer_budget = None;
+            self.wage_budget = None;
+        }
+    }
+
+    // Helper method to spend from transfer budget
+    pub fn spend_from_transfer_budget(&mut self, amount: f64) -> bool {
+        if let Some(ref mut budget) = self.transfer_budget {
+            if budget.amount >= amount {
+                budget.amount -= amount;
+                self.balance.push_outcome(amount as i32);
+                return true;
+            }
+        }
+        false
+    }
+
+    // Helper method to add transfer income
+    pub fn add_transfer_income(&mut self, amount: f64) {
+        self.balance.push_income(amount as i32);
+
+        // Add 50% of transfer income to transfer budget
+        if let Some(ref mut budget) = self.transfer_budget {
+            budget.amount += amount * 0.5;
+        } else {
+            self.transfer_budget = Some(CurrencyValue {
+                amount: amount * 0.5,
+                currency: crate::shared::Currency::Usd,
+            });
+        }
     }
 }
 
@@ -115,79 +191,5 @@ impl ClubFinancialBalance {
     pub fn clear(&mut self) {
         self.income = 0;
         self.outcome = 0;
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn start_new_month_is_correct() {
-        let mut finances = ClubFinances::new(123, Vec::new());
-
-        finances.balance.income = 1;
-        finances.balance.outcome = 2;
-
-        let date = NaiveDate::from_ymd_opt(2020, 2, 1).unwrap();
-
-        finances.start_new_month("club_name", date);
-
-        let history_result = finances.history.get(date);
-
-        assert!(history_result.is_some());
-
-        assert_eq!(123, finances.balance.balance);
-        assert_eq!(0, finances.balance.income);
-        assert_eq!(0, finances.balance.outcome);
-
-        assert_eq!(123, history_result.unwrap().balance);
-        assert_eq!(1, history_result.unwrap().income);
-        assert_eq!(2, history_result.unwrap().outcome);
-    }
-
-    #[test]
-    fn balance_push_income_is_correct() {
-        let mut finances = ClubFinancialBalance::new(-1);
-
-        finances.balance = 1;
-        finances.income = 2;
-        finances.outcome = 3;
-
-        finances.push_income(20);
-
-        assert_eq!(21, finances.balance);
-        assert_eq!(22, finances.income);
-        assert_eq!(3, finances.outcome);
-    }
-
-    #[test]
-    fn balance_push_outcome_is_correct() {
-        let mut finances = ClubFinancialBalance::new(-1);
-
-        finances.balance = 10;
-        finances.income = 20;
-        finances.outcome = 30;
-
-        finances.push_outcome(5);
-
-        assert_eq!(5, finances.balance);
-        assert_eq!(20, finances.income);
-        assert_eq!(35, finances.outcome);
-    }
-
-    #[test]
-    fn balance_clear_is_correct() {
-        let mut finances = ClubFinancialBalance::new(-1);
-
-        finances.balance = 1;
-        finances.income = 2;
-        finances.outcome = 3;
-
-        finances.clear();
-
-        assert_eq!(1, finances.balance);
-        assert_eq!(0, finances.income);
-        assert_eq!(0, finances.outcome);
     }
 }

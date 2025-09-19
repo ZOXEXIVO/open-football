@@ -69,12 +69,36 @@ impl StateProcessingHandler for DefenderPassingState {
             ));
         }
 
-        if ctx.in_state_time > 100 {
+        // Time-based fallback - don't get stuck in this state too long
+        if ctx.in_state_time > 50 {
+            // If we've been in this state for a while, make a decision
+
+            // Try to find ANY teammate to pass to
+            if let Some(any_teammate) = self.find_any_teammate(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(any_teammate.id)
+                            .build(ctx),
+                    )),
+                ));
+            }
+
+            // If no teammates at all, clear the ball
+            if ctx.in_state_time > 75 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Clearing,
+                ));
+            }
+
+            // Otherwise start running with the ball
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
-            )); 
+            ));
         }
-        
+
         None
     }
 
@@ -83,6 +107,8 @@ impl StateProcessingHandler for DefenderPassingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // While holding the ball and looking for pass options, move slowly or stand still
+
         // If player should adjust position to find better passing angles
         if self.should_adjust_position(ctx) {
             // Calculate target position based on the defensive situation
@@ -98,13 +124,27 @@ impl StateProcessingHandler for DefenderPassingState {
             }
         }
 
-        None
+        // Default to very slow movement or stationary
+        Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl DefenderPassingState {
+    /// Find ANY teammate as a last resort option
+    fn find_any_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        // Get the closest teammate regardless of quality
+        ctx.players()
+            .teammates()
+            .nearby(200.0) // Increased range
+            .min_by(|a, b| {
+                let dist_a = (a.position - ctx.player.position).magnitude();
+                let dist_b = (b.position - ctx.player.position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
     /// Find the best pass option using an improved evaluation system
     fn find_best_pass_option<'a>(
         &self,
@@ -195,7 +235,6 @@ impl DefenderPassingState {
         has_clear_lane && not_dangerous_position
     }
 
-
     /// Check if a target is in a dangerous position near our goal
     fn is_in_dangerous_area(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         let goal_position = ctx.ball().direction_to_own_goal();
@@ -270,7 +309,12 @@ impl DefenderPassingState {
 
     /// Determine if player should adjust position to find better passing angles
     fn should_adjust_position(&self, ctx: &StateProcessingContext) -> bool {
-        let under_immediate_pressure = ctx.players().opponents().exists(20.0);
+        // Don't adjust if we've been in state too long
+        if ctx.in_state_time > 40 {
+            return false;
+        }
+
+        let under_immediate_pressure = ctx.players().opponents().exists(5.0);
         let has_clear_option = self.find_best_pass_option(ctx).is_some();
 
         // Adjust position if not under immediate pressure and no clear options

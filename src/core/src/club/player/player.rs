@@ -1,11 +1,10 @@
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerCollectionResult, PlayerMailbox,
-    PlayerResult, PlayerSkills, PlayerTraining, Staff,
+    PlayerResult, PlayerSkills, PlayerTraining,
 };
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
-use crate::training::result::PlayerTrainingResult;
 use crate::utils::{DateUtils, Logging};
 use crate::{
     Person, PersonAttributes, PlayerHappiness, PlayerPositionType, PlayerPositions,
@@ -243,7 +242,11 @@ impl PlayerCollection {
             .collect()
     }
 
-    pub fn add(&mut self, players: Vec<Player>) {
+    pub fn add(&mut self, player: Player) {
+        self.players.push(player);
+    }
+
+    pub fn add_range(&mut self, players: Vec<Player>) {
         for player in players {
             self.players.push(player);
         }

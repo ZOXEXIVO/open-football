@@ -32,12 +32,11 @@ impl DatabaseGenerator {
         let continents = data
             .continents
             .iter()
-            .map(|continent| Continent {
-                id: continent.id,
-                name: continent.name.clone(),
-                countries: DatabaseGenerator::generate_countries(continent, data),
-            })
-            .collect();
+            .map(|continent| Continent::new(                
+                continent.id,
+                continent.name.clone(),
+                DatabaseGenerator::generate_countries(continent, data)
+            )).collect();
 
         SimulatorData::new(current_date, continents)
     }
@@ -73,19 +72,19 @@ impl DatabaseGenerator {
                     &mut staff_generator,
                 );
 
-                let country = Country {
-                    id: country.id,
-                    code: country.code.clone(),
-                    slug: country.slug.clone(),
-                    name: country.name.clone(),
-                    continent_id: continent.id,
-                    leagues: LeagueCollection::new(DatabaseGenerator::generate_leagues(
+                let country = Country::new(
+                    country.id,
+                    country.code.clone(),
+                    country.slug.clone(),
+                    country.name.clone(),
+                    continent.id,
+                    LeagueCollection::new(DatabaseGenerator::generate_leagues(
                         country.id, data,
                     )),
                     clubs,
-                    reputation: country.reputation,
-                    generator_data,
-                };
+                    country.reputation,
+                    generator_data
+                );
 
                 country
             })
