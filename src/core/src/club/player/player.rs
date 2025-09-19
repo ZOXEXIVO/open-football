@@ -1,11 +1,10 @@
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerCollectionResult, PlayerMailbox,
-    PlayerResult, PlayerSkills, PlayerTraining, Staff,
+    PlayerResult, PlayerSkills, PlayerTraining,
 };
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
-use crate::training::result::PlayerTrainingResult;
 use crate::utils::{DateUtils, Logging};
 use crate::{
     Person, PersonAttributes, PlayerHappiness, PlayerPositionType, PlayerPositions,

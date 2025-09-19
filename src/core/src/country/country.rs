@@ -8,10 +8,8 @@ use crate::utils::Logging;
 use crate::{Club, ClubResult, ClubTransferStrategy};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use std::collections::HashMap;
 
-// Enhanced Country struct with more features
 pub struct Country {
     pub id: u32,
     pub code: String,
@@ -23,7 +21,6 @@ pub struct Country {
     pub reputation: u16,
     pub generator_data: CountryGeneratorData,
 
-    // New fields for enhanced simulation
     pub transfer_market: TransferMarket,
     pub economic_factors: CountryEconomicFactors,
     pub international_competitions: Vec<InternationalCompetition>,
@@ -32,8 +29,37 @@ pub struct Country {
 }
 
 impl Country {
+    pub fn new(id: u32,
+               code: String,
+               slug: String,
+               name: String,
+               continent_id: u32,
+               leagues: LeagueCollection,
+               clubs: Vec<Club>,
+               reputation: u16,
+               generator_data: CountryGeneratorData) -> Self {
+        Country {
+            id,
+            code,
+            slug,
+            name,
+            continent_id,
+            leagues,
+            clubs,
+            reputation,
+            generator_data,
+
+            transfer_market: TransferMarket::new(),
+            economic_factors: CountryEconomicFactors::new(),
+            international_competitions: vec![],
+            media_coverage: MediaCoverage::new(),
+            regulations: CountryRegulations::new(),
+        }
+    }
+
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
         let country_name = self.name.clone();
+
         info!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
 
         // Phase 1: Pre-season activities (if applicable)
