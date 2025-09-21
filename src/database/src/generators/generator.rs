@@ -105,30 +105,22 @@ impl DatabaseGenerator {
                     .map(|t| t.id)
                     .collect();
 
-                League {
-                    id: league.id,
-                    slug: league.slug.clone(),
-                    name: league.name.clone(),
-                    country_id: league.country_id,
-                    schedule: Schedule::new(),
-                    settings: LeagueSettings {
-                        season_starting_half: DayMonthPeriod {
-                            from_day: league.settings.season_starting_half.from_day,
-                            from_month: league.settings.season_starting_half.from_month,
-                            to_day: league.settings.season_starting_half.to_day,
-                            to_month: league.settings.season_starting_half.to_month,
-                        },
-                        season_ending_half: DayMonthPeriod {
-                            from_day: league.settings.season_ending_half.from_day,
-                            from_month: league.settings.season_ending_half.from_month,
-                            to_day: league.settings.season_ending_half.to_day,
-                            to_month: league.settings.season_ending_half.to_month,
-                        },
+                let settings = LeagueSettings {
+                    season_starting_half: DayMonthPeriod {
+                        from_day: league.settings.season_starting_half.from_day,
+                        from_month: league.settings.season_starting_half.from_month,
+                        to_day: league.settings.season_starting_half.to_day,
+                        to_month: league.settings.season_starting_half.to_month,
                     },
-                    matches: MatchStorage::new(),
-                    table: LeagueTable::new(&league_clubs),
-                    reputation: 0,
-                }
+                    season_ending_half: DayMonthPeriod {
+                        from_day: league.settings.season_ending_half.from_day,
+                        from_month: league.settings.season_ending_half.from_month,
+                        to_day: league.settings.season_ending_half.to_day,
+                        to_month: league.settings.season_ending_half.to_month,
+                    },
+                };
+                
+                League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, 0, settings)                 
             })
             .collect()
     }
