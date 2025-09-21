@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0; // Don't move too far from ball
-const MIN_DISTANCE_FROM_BALL: f32 = 15.0; // Don't get too close to ball carrier
+const MIN_DISTANCE_FROM_BALL: f32 = 50.0; // Don't get too close to ball carrier
 const SUPPORT_DISTANCE: f32 = 30.0; // Ideal support distance from teammates
 const MAX_LATERAL_MOVEMENT: f32 = 40.0; // Maximum sideways movement from current position
 
@@ -56,12 +56,10 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let target_position = self.calculate_space_creating_position(ctx);
-
         Some(
             SteeringBehavior::Arrive {
-                target: target_position,
-                slowing_distance: 15.0,
+                target: ctx.ball().direction_to_opponent_goal(),
+                slowing_distance: 150.0,
             }
                 .calculate(ctx.player)
                 .velocity
@@ -119,220 +117,7 @@ impl ForwardCreatingSpaceState {
         ball_holder_can_pass && space_ahead && not_offside && in_good_phase && not_too_far
     }
 
-    /// Calculate an intelligent position for creating space that maintains team shape
-    fn calculate_space_creating_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Get ball holder information
-        let ball_holder = self.get_ball_holder(ctx);
-
-        if let Some(holder) = ball_holder {
-            return self.calculate_support_position_relative_to_holder(ctx, &holder);
-        }
-
-        // No specific ball holder - calculate general support position
-        self.calculate_general_support_position(ctx, ball_pos, field_width, field_height)
-    }
-
-    /// Calculate position relative to the ball holder that creates good support
-    fn calculate_support_position_relative_to_holder(
-        &self,
-        ctx: &StateProcessingContext,
-        holder: &crate::r#match::MatchPlayerLite,
-    ) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let holder_position = holder.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Determine attacking direction based on side
-        let attacking_direction = match ctx.player.side.unwrap_or(PlayerSide::Left) {
-            PlayerSide::Left => 1.0,  // Moving towards positive X
-            PlayerSide::Right => -1.0, // Moving towards negative X
-        };
-
-        // Calculate distance from ball holder
-        let distance_from_holder = (player_position - holder_position).magnitude();
-
-        // Determine movement type based on current situation
-        let target_position = if distance_from_holder < MIN_DISTANCE_FROM_BALL {
-            // Too close to ball holder - move away to create space
-            self.move_away_from_ball_holder(ctx, holder, attacking_direction)
-        } else if distance_from_holder > MAX_DISTANCE_FROM_BALL {
-            // Too far from ball holder - move closer for support
-            self.move_closer_to_ball_holder(ctx, holder)
-        } else {
-            // Good distance - adjust position for optimal passing angles
-            self.adjust_for_passing_angles(ctx, holder, attacking_direction)
-        };
-
-        // Ensure the position is within field boundaries
-        self.constrain_position_to_field(target_position, field_width, field_height)
-    }
-
-    /// Move away from ball holder while maintaining attacking intent
-    fn move_away_from_ball_holder(
-        &self,
-        ctx: &StateProcessingContext,
-        holder: &crate::r#match::MatchPlayerLite,
-        attacking_direction: f32,
-    ) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let holder_position = holder.position;
-
-        // Determine player's natural side based on starting position
-        let player_natural_side = if ctx.player.start_position.y < ctx.context.field_size.height as f32 / 2.0 {
-            -1.0 // Left side player
-        } else {
-            1.0  // Right side player
-        };
-
-        // Create space by moving diagonally away from holder toward goal on player's natural side
-        let away_from_holder = (player_position - holder_position).normalize();
-        let toward_goal = Vector3::new(attacking_direction, 0.0, 0.0);
-        let to_natural_side = Vector3::new(0.0, player_natural_side, 0.0);
-
-        // Blend the directions with emphasis on maintaining side
-        let movement_direction = (away_from_holder * 0.4 + toward_goal * 0.4 + to_natural_side * 0.2).normalize();
-
-        holder_position + movement_direction * SUPPORT_DISTANCE
-    }
-
-    /// Move closer to ball holder for better support
-    fn move_closer_to_ball_holder(
-        &self,
-        ctx: &StateProcessingContext,
-        holder: &crate::r#match::MatchPlayerLite,
-    ) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let holder_position = holder.position;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Move toward holder but maintain natural side
-        let toward_holder = (holder_position - player_position).normalize();
-
-        // Determine if player should stay on their natural side
-        let player_natural_side = if ctx.player.start_position.y < field_height / 2.0 {
-            -1.0 // Left side
-        } else {
-            1.0  // Right side
-        };
-
-        // Calculate offset to maintain width
-        let current_y_diff = player_position.y - holder_position.y;
-        let needs_width_adjustment = current_y_diff.abs() < 15.0; // Too narrow
-
-        let offset_direction = if needs_width_adjustment {
-            Vector3::new(0.0, player_natural_side, 0.0)
-        } else {
-            // Maintain current width relationship
-            Vector3::new(0.0, current_y_diff.signum() * 0.3, 0.0)
-        };
-
-        let movement_direction = (toward_holder * 0.7 + offset_direction * 0.3).normalize();
-        player_position + movement_direction * 20.0
-    }
-
-    /// Adjust position for optimal passing angles
-    fn adjust_for_passing_angles(
-        &self,
-        ctx: &StateProcessingContext,
-        holder: &crate::r#match::MatchPlayerLite,
-        attacking_direction: f32,
-    ) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-        let holder_position = holder.position;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Determine player's preferred side
-        let player_preferred_y = if ctx.player.start_position.y < field_height / 2.0 {
-            holder_position.y - 25.0 // Stay on left/lower side
-        } else {
-            holder_position.y + 25.0 // Stay on right/upper side
-        };
-
-        // Calculate forward offset based on attacking direction
-        let forward_offset = attacking_direction * 20.0;
-
-        // Don't move too far laterally from current position
-        let target_y = if (player_preferred_y - player_position.y).abs() > MAX_LATERAL_MOVEMENT {
-            // Limit lateral movement
-            player_position.y + (player_preferred_y - player_position.y).signum() * MAX_LATERAL_MOVEMENT
-        } else {
-            player_preferred_y
-        };
-
-        Vector3::new(
-            holder_position.x + forward_offset,
-            target_y,
-            0.0,
-        )
-    }
-
-    /// Calculate a general support position when no specific ball holder
-    fn calculate_general_support_position(
-        &self,
-        ctx: &StateProcessingContext,
-        ball_pos: Vector3<f32>,
-        field_width: f32,
-        field_height: f32,
-    ) -> Vector3<f32> {
-        let player_position = ctx.player.position;
-
-        // Maintain natural positioning relative to starting position
-        let natural_y_position = ctx.player.start_position.y;
-        let y_deviation = (player_position.y - natural_y_position).abs();
-
-        // Move toward ball but maintain reasonable distance and natural side
-        let distance_to_ball = (player_position - ball_pos).magnitude();
-
-        if distance_to_ball > MAX_DISTANCE_FROM_BALL {
-            // Move closer to ball but stay on natural side
-            let toward_ball = (ball_pos - player_position).normalize();
-            let to_natural_side = Vector3::new(0.0, (natural_y_position - player_position.y).signum(), 0.0);
-
-            let movement = (toward_ball * 0.8 + to_natural_side * 0.2).normalize();
-            player_position + movement * 30.0
-        } else if distance_to_ball < MIN_DISTANCE_FROM_BALL {
-            // Move away from ball
-            let away_from_ball = (player_position - ball_pos).normalize();
-            player_position + away_from_ball * 20.0
-        } else {
-            // Adjust position slightly for better support while maintaining side
-            let attacking_direction = match ctx.player.side.unwrap_or(PlayerSide::Left) {
-                PlayerSide::Left => Vector3::new(1.0, 0.0, 0.0),
-                PlayerSide::Right => Vector3::new(-1.0, 0.0, 0.0),
-            };
-
-            // Correct excessive deviation from natural position
-            let y_correction = if y_deviation > MAX_LATERAL_MOVEMENT {
-                Vector3::new(0.0, (natural_y_position - player_position.y) * 0.1, 0.0)
-            } else {
-                Vector3::zeros()
-            };
-
-            player_position + attacking_direction * 15.0 + y_correction
-        }
-    }
-
-    /// Constrain position to field boundaries with margins
-    fn constrain_position_to_field(
-        &self,
-        target_position: Vector3<f32>,
-        field_width: f32,
-        field_height: f32,
-    ) -> Vector3<f32> {
-        Vector3::new(
-            target_position.x.clamp(field_width * 0.05, field_width * 0.95),
-            target_position.y.clamp(field_height * 0.05, field_height * 0.95),
-            0.0,
-        )
-    }
-
     // Helper methods for tactical decision making
-
     fn get_ball_holder(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
         ctx.players()
             .teammates()
