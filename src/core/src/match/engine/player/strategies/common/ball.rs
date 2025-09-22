@@ -29,6 +29,14 @@ impl<'b> BallOperationsImpl<'b> {
             .distance_to(&self.ctx.player.position)
     }
 
+    pub fn velocity(&self) -> Vector3<f32> {
+        self.ctx
+            .tick_context
+            .positions
+            .ball
+            .velocity        
+    }
+
     #[inline]
     pub fn speed(&self) -> f32 {
         self.ctx.tick_context.positions.ball.velocity.norm()

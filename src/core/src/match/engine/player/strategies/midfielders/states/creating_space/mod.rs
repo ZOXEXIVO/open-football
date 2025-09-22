@@ -67,44 +67,72 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let target_position = self.calculate_intelligent_space_position(ctx);
+        // Find the optimal free zone on the opposite side
+        let target_position = self.find_opposite_side_free_zone(ctx);
 
-        // Vary movement pattern to confuse markers
-        let movement_pattern = self.get_movement_pattern(ctx);
+        // Add dynamic avoidance of congested areas during movement
+        let avoidance_vector = self.calculate_congestion_avoidance(ctx);
+
+        // Vary movement pattern to confuse markers and exploit space
+        let movement_pattern = self.get_intelligent_movement_pattern(ctx);
 
         match movement_pattern {
             MovementPattern::Direct => {
+                // Direct run to free space with congestion avoidance
+                let base_velocity = SteeringBehavior::Arrive {
+                    target: target_position,
+                    slowing_distance: 15.0,
+                }
+                    .calculate(ctx.player)
+                    .velocity;
+
+                Some(base_velocity + avoidance_vector + ctx.player().separation_velocity())
+            },
+            MovementPattern::Curved => {
+                // Curved run to lose markers and find space
+                let curved_target = self.add_intelligent_curve(ctx, target_position);
+                let base_velocity = SteeringBehavior::Arrive {
+                    target: curved_target,
+                    slowing_distance: 20.0,
+                }
+                    .calculate(ctx.player)
+                    .velocity;
+
+                Some(base_velocity + avoidance_vector * 0.8)
+            },
+            MovementPattern::CheckToReceive => {
+                // Quick check toward ball then sprint to space
+                if ctx.in_state_time % 30 < 10 {
+                    // Check toward ball
+                    let check_position = self.calculate_check_position(ctx);
+                    Some(
+                        SteeringBehavior::Seek {
+                            target: check_position,
+                        }
+                            .calculate(ctx.player)
+                            .velocity
+                    )
+                } else {
+                    // Sprint to free space
+                    Some(
+                        SteeringBehavior::Pursuit {
+                            target: target_position,
+                        }
+                            .calculate(ctx.player)
+                            .velocity + avoidance_vector
+                    )
+                }
+            },
+            MovementPattern::OppositeRun => {
+                // New pattern: Run opposite to ball movement to find space
+                let opposite_target = self.calculate_opposite_run_target(ctx);
                 Some(
                     SteeringBehavior::Arrive {
-                        target: target_position,
+                        target: opposite_target,
                         slowing_distance: 10.0,
                     }
                         .calculate(ctx.player)
-                        .velocity + ctx.player().separation_velocity()
-                )
-            },
-            MovementPattern::Curved => {
-                // Add curve to movement to lose markers
-                let curved_target = self.add_curve_to_path(ctx, target_position);
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: curved_target,
-                        slowing_distance: 15.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity + ctx.player().separation_velocity()
-                )
-            },
-            MovementPattern::CheckToReceive => {
-                // Quick check back toward ball then continue
-                let check_position = self.calculate_check_position(ctx);
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: check_position,
-                        slowing_distance: 5.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity
+                        .velocity + avoidance_vector * 1.2
                 )
             },
         }
@@ -114,6 +142,327 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
 }
 
 impl MidfielderCreatingSpaceState {
+    /// Find free zone on the opposite side of play
+    fn find_opposite_side_free_zone(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Determine which side the ball is on
+        let ball_on_left = ball_pos.y < field_height / 2.0;
+
+        // Calculate opposite side base position
+        let opposite_y = if ball_on_left {
+            field_height * 0.75 // Right side
+        } else {
+            field_height * 0.25 // Left side
+        };
+
+        // Find the freest zone on that side
+        let mut best_position = Vector3::new(
+            ball_pos.x,
+            opposite_y,
+            0.0
+        );
+
+        let mut min_congestion = f32::MAX;
+
+        // Scan a grid on the opposite side
+        let scan_width = 80.0;
+        let scan_depth = 100.0;
+        let grid_step = 15.0;
+
+        for x_offset in (-scan_depth as i32..=scan_depth as i32).step_by(grid_step as usize) {
+            for y_offset in (-scan_width as i32..=scan_width as i32).step_by(grid_step as usize) {
+                let test_pos = Vector3::new(
+                    (ball_pos.x + x_offset as f32).clamp(20.0, field_width - 20.0),
+                    (opposite_y + y_offset as f32).clamp(20.0, field_height - 20.0),
+                    0.0
+                );
+
+                // Calculate dynamic congestion considering player velocities
+                let congestion = self.calculate_dynamic_congestion(ctx, test_pos);
+
+                // Prefer progressive positions
+                let progression_bonus = self.calculate_progression_value(ctx, test_pos);
+
+                // Prefer positions with good passing angles
+                let passing_angle_bonus = self.calculate_passing_angle_value(ctx, test_pos);
+
+                let total_score = congestion - progression_bonus - passing_angle_bonus;
+
+                if total_score < min_congestion {
+                    min_congestion = total_score;
+                    best_position = test_pos;
+                }
+            }
+        }
+
+        // Apply tactical adjustments based on formation
+        self.apply_tactical_position_adjustment(ctx, best_position)
+    }
+
+    /// Calculate congestion avoidance vector
+    fn calculate_congestion_avoidance(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let mut avoidance = Vector3::zeros();
+        let player_pos = ctx.player.position;
+
+        // Consider all nearby players (both teams)
+        let avoidance_radius = 30.0;
+        let mut total_weight = 0.0;
+
+        for opponent in ctx.players().opponents().all() {
+            let distance = (opponent.position - player_pos).magnitude();
+            if distance < avoidance_radius && distance > 0.1 {
+                // Calculate repulsion force
+                let direction = (player_pos - opponent.position).normalize();
+                let weight = 1.0 - (distance / avoidance_radius);
+                avoidance += direction * weight * 15.0;
+                total_weight += weight;
+            }
+        }
+
+        // Also avoid teammates slightly to spread out
+        for teammate in ctx.players().teammates().all() {
+            if teammate.id == ctx.player.id {
+                continue;
+            }
+
+            let distance = (teammate.position - player_pos).magnitude();
+            if distance < avoidance_radius * 0.7 && distance > 0.1 {
+                let direction = (player_pos - teammate.position).normalize();
+                let weight = 1.0 - (distance / (avoidance_radius * 0.7));
+                avoidance += direction * weight * 8.0;
+                total_weight += weight;
+            }
+        }
+
+        if total_weight > 0.0 {
+            avoidance / total_weight
+        } else {
+            avoidance
+        }
+    }
+
+    /// Calculate dynamic congestion considering player movements
+    fn calculate_dynamic_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+        let mut congestion = 0.0;
+
+        // Check opponents
+        for opponent in ctx.players().opponents().all() {
+            let distance = (opponent.position - position).magnitude();
+
+            // Consider opponent velocity - where they're heading
+            let future_position = opponent.position + opponent.velocity(ctx) * 0.5;
+            let future_distance = (future_position - position).magnitude();
+
+            if distance < 40.0 {
+                congestion += 40.0 / (distance + 1.0);
+            }
+
+            if future_distance < 30.0 {
+                congestion += 20.0 / (future_distance + 1.0);
+            }
+        }
+
+        // Check teammates (less weight)
+        for teammate in ctx.players().teammates().all() {
+            if teammate.id == ctx.player.id {
+                continue;
+            }
+
+            let distance = (teammate.position - position).magnitude();
+            if distance < 25.0 {
+                congestion += 10.0 / (distance + 1.0);
+            }
+        }
+
+        congestion
+    }
+
+    /// Get intelligent movement pattern based on game state
+    fn get_intelligent_movement_pattern(&self, ctx: &StateProcessingContext) -> MovementPattern {
+        // Analyze current situation
+        let congestion_level = self.calculate_local_congestion(ctx);
+        let has_marker = self.has_close_marker(ctx);
+        let ball_moving_away = ctx.ball().velocity().magnitude() > 5.0;
+
+        if has_marker && congestion_level > 5.0 {
+            // Need to lose marker in congested area
+            MovementPattern::Curved
+        } else if ball_moving_away && ctx.ball().distance() > 50.0 {
+            // Ball is moving away, make opposite run
+            MovementPattern::OppositeRun
+        } else if ctx.in_state_time % 60 < 15 {
+            // Periodically check back
+            MovementPattern::CheckToReceive
+        } else {
+            // Direct run to space
+            MovementPattern::Direct
+        }
+    }
+
+    /// Calculate intelligent curve to lose markers
+    fn add_intelligent_curve(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
+        let player_pos = ctx.player.position;
+
+        // Find nearest opponent
+        if let Some(nearest_opponent) = ctx.players().opponents().all()
+            .min_by(|a, b| {
+                let dist_a = (a.position - player_pos).magnitude();
+                let dist_b = (b.position - player_pos).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            }) {
+            // Curve away from opponent
+            let to_target = (target - player_pos).normalize();
+            let to_opponent = (nearest_opponent.position - player_pos).normalize();
+
+            // Create perpendicular vector away from opponent
+            let perpendicular = Vector3::new(-to_target.y, to_target.x, 0.0);
+            let away_from_opponent = if perpendicular.dot(&to_opponent) > 0.0 {
+                -perpendicular
+            } else {
+                perpendicular
+            };
+
+            // Create curved waypoint
+            let midpoint = (player_pos + target) * 0.5;
+            midpoint + away_from_opponent * 20.0
+        } else {
+            // Default curve
+            self.add_curve_to_path(ctx, target)
+        }
+    }
+
+    /// Calculate target for opposite run
+    fn calculate_opposite_run_target(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Run opposite to ball movement direction
+        let opposite_direction = -ball_velocity.normalize();
+
+        // Calculate target based on opposite direction
+        let base_distance = 40.0;
+        let mut target = ball_pos + opposite_direction * base_distance;
+
+        // Shift to opposite side laterally as well
+        let lateral_shift = if ball_pos.y < field_height / 2.0 {
+            Vector3::new(0.0, 30.0, 0.0) // Shift right
+        } else {
+            Vector3::new(0.0, -30.0, 0.0) // Shift left
+        };
+
+        target += lateral_shift;
+
+        // Ensure within field bounds
+        target.x = target.x.clamp(15.0, field_width - 15.0);
+        target.y = target.y.clamp(15.0, field_height - 15.0);
+
+        target
+    }
+
+    /// Calculate progression value for a position
+    fn calculate_progression_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+        let goal_pos = ctx.player().opponent_goal_position();
+        let current_to_goal = (ctx.player.position - goal_pos).magnitude();
+        let test_to_goal = (position - goal_pos).magnitude();
+
+        if test_to_goal < current_to_goal {
+            (current_to_goal - test_to_goal) * 0.5
+        } else {
+            0.0
+        }
+    }
+
+    /// Calculate passing angle value for a position
+    fn calculate_passing_angle_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
+        if let Some(ball_holder) = self.find_ball_holder(ctx) {
+            // Check angle to ball holder
+            let to_ball_holder = (ball_holder.position - position).normalize();
+
+            // Count how many opponents are in the passing lane
+            let opponents_in_lane = ctx.players().opponents().all()
+                .filter(|opp| {
+                    let to_opp = opp.position - position;
+                    let projection = to_opp.dot(&to_ball_holder);
+
+                    if projection <= 0.0 || projection >= (ball_holder.position - position).magnitude() {
+                        return false;
+                    }
+
+                    let projected_point = position + to_ball_holder * projection;
+                    let perp_dist = (opp.position - projected_point).magnitude();
+
+                    perp_dist < 5.0
+                })
+                .count();
+
+            if opponents_in_lane == 0 {
+                15.0 // Clear passing lane bonus
+            } else {
+                0.0
+            }
+        } else {
+            5.0 // Default value
+        }
+    }
+
+    /// Apply tactical adjustments based on formation
+    fn apply_tactical_position_adjustment(&self, ctx: &StateProcessingContext, mut position: Vector3<f32>) -> Vector3<f32> {
+        // Get the appropriate tactics based on player's side
+        let player_tactics = match ctx.player.side {
+            Some(PlayerSide::Left) => &ctx.context.tactics.left,
+            Some(PlayerSide::Right) => &ctx.context.tactics.right,
+            None => return position, // No side assigned, return unchanged
+        };
+
+        // Adjust based on tactical style
+        match player_tactics.tactical_style() {
+            crate::TacticalStyle::WidePlay | crate::TacticalStyle::WingPlay => {
+                // Push wider in wide formations
+                let field_height = ctx.context.field_size.height as f32;
+                if position.y < field_height / 2.0 {
+                    position.y = (position.y - 15.0).max(10.0);
+                } else {
+                    position.y = (position.y + 15.0).min(field_height - 10.0);
+                }
+            },
+            crate::TacticalStyle::Possession => {
+                // Stay more central for passing options
+                let field_height = ctx.context.field_size.height as f32;
+                let center_y = field_height / 2.0;
+                position.y = position.y * 0.8 + center_y * 0.2;
+            },
+            _ => {}
+        }
+
+        position
+    }
+
+    /// Calculate local congestion around player
+    fn calculate_local_congestion(&self, ctx: &StateProcessingContext) -> f32 {
+        let player_pos = ctx.player.position;
+        let mut congestion = 0.0;
+
+        for opponent in ctx.players().opponents().all() {
+            let distance = (opponent.position - player_pos).magnitude();
+            if distance < 20.0 {
+                congestion += 1.0;
+            }
+        }
+
+        congestion
+    }
+
+    /// Check if player has a close marker
+    fn has_close_marker(&self, ctx: &StateProcessingContext) -> bool {
+        ctx.players().opponents().all()
+            .any(|opp| (opp.position - ctx.player.position).magnitude() < 10.0)
+    }
+
     /// Calculate intelligent position for creating space
     fn calculate_intelligent_space_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
@@ -781,13 +1130,6 @@ enum SpaceType {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum MovementPattern {
-    Direct,
-    Curved,
-    CheckToReceive,
-}
-
-#[derive(Debug, Clone, Copy)]
 enum BallZone {
     DefensiveThird,
     MiddleThird,
@@ -847,4 +1189,13 @@ impl VectorFieldExtensions for Vector3<f32> {
             self.z
         )
     }
+}
+
+// Supporting types (expanded)
+#[derive(Debug, Clone, Copy)]
+enum MovementPattern {
+    Direct,
+    Curved,
+    CheckToReceive,
+    OppositeRun, // New pattern for running to opposite side
 }

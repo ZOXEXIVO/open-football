@@ -4,6 +4,12 @@ pub struct StateManager {
     current_state: MatchState,
 }
 
+impl Default for StateManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateManager {
     pub fn new() -> Self {
         StateManager {
@@ -16,7 +22,7 @@ impl StateManager {
     }
 
     pub fn next(&mut self) -> Option<MatchState> {
-        let next_state = Self::get_next_state(self.current_state);
+        let next_state: MatchState = Self::get_next_state(self.current_state);
 
         match next_state {
             MatchState::End => None,
