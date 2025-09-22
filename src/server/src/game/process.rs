@@ -16,17 +16,17 @@ pub async fn game_process_action(State(mut state): State<GameAppData>) -> impl I
 
     let mut simulator_data_guard = data.write_owned().await;
 
-    if state.match_simulated {
-        return (StatusCode::OK, Json(()));
-    }
-
     let result = tokio::task::spawn_blocking(move || {
         let simulator_data = simulator_data_guard.as_mut().unwrap();
 
+        if(simulator_data.match_simulated){
+            return;
+        }
+
         let result = FootballSimulator::simulate(simulator_data);
         if result.has_match_results() {
-            state.match_simulated = true;
-            
+            simulator_data.match_simulated = true;
+
             tokio::task::spawn(async  {
                 write_match_results(result).await
             });

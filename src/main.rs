@@ -23,8 +23,7 @@ async fn main() {
 
     let data = GameAppData {
         database: Arc::new(database),
-        data: Arc::new(RwLock::new(Some(game_data))),
-        match_simulated: false
+        data: Arc::new(RwLock::new(Some(game_data)))
     };
     
     FootballSimulatorServer::new(data).run().await;

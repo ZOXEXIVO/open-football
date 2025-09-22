@@ -102,7 +102,7 @@ impl SquadSelector {
                     team_id,
                     best_player,
                     required_position,
-                    position_index < DEFAULT_SQUAD_SIZE,
+                    false,
                 ));
                 used_players.push(best_player.id);
 
@@ -130,7 +130,7 @@ impl SquadSelector {
                     team_id,
                     best_remaining,
                     best_position,
-                    true,
+                    false,
                 ));
                 used_players.push(best_remaining.id);
             } else {

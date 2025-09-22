@@ -42,16 +42,14 @@ impl FootballSimulatorServer {
 
 pub struct GameAppData {
     pub database: Arc<DatabaseEntity>,
-    pub data: Arc<RwLock<Option<SimulatorData>>>,
-    pub match_simulated: bool
+    pub data: Arc<RwLock<Option<SimulatorData>>>
 }
 
 impl Clone for GameAppData {
     fn clone(&self) -> Self {
         GameAppData {
             database: Arc::clone(&self.database),
-            data: Arc::clone(&self.data),
-            match_simulated: false
+            data: Arc::clone(&self.data)
         }
     }
 }
