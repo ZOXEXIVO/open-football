@@ -848,64 +848,11 @@ impl ForwardRunningState {
 
     fn is_teammate_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         let marking_distance = 8.0;
-        let markers = ctx.players().opponents().all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < marking_distance)
-            .count();
+        let markers = ctx.players().opponents().nearby(marking_distance).count();
 
-        markers >= 2 || (markers >= 1 &&
-            ctx.players().opponents().all()
-                .any(|opp| (opp.position - teammate.position).magnitude() < 3.0))
+        markers >= 2 || (markers >= 1 && ctx.players().opponents().nearby(3.0).count() > 0)    
     }
-
-    fn find_open_teammate(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        // Look for teammates in better attacking positions
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-
-        // Calculate forward distance threshold based on team side
-        let forward_distance = match ctx.player.side {
-            Some(PlayerSide::Left) => player_position.x + 20.0,
-            Some(PlayerSide::Right) => player_position.x - 20.0,
-            None => return None,
-        };
-
-        // Find teammates who are more advanced and not closely marked
-        let open_teammates: Vec<MatchPlayerLite> = ctx
-            .players()
-            .teammates()
-            .nearby(200.0)
-            .filter(|teammate| {
-                // Check if teammate is more advanced
-                let is_more_advanced = match ctx.player.side {
-                    Some(PlayerSide::Left) => teammate.position.x > forward_distance,
-                    Some(PlayerSide::Right) => teammate.position.x < forward_distance,
-                    None => false,
-                };
-
-                // Check if teammate is open (not closely marked)
-                let is_open = !ctx
-                    .players()
-                    .opponents()
-                    .all()
-                    .any(|opponent| (opponent.position - teammate.position).magnitude() < 10.0);
-
-                is_more_advanced && is_open && ctx.player().has_clear_pass(teammate.id)
-            })
-            .collect();
-
-        if open_teammates.is_empty() {
-            None
-        } else {
-            // Find the teammate in best position
-            open_teammates.into_iter()
-                .min_by(|a, b| {
-                    let a_goal_dist = (a.position - ctx.player().opponent_goal_position()).magnitude();
-                    let b_goal_dist = (b.position - ctx.player().opponent_goal_position()).magnitude();
-                    a_goal_dist.partial_cmp(&b_goal_dist).unwrap()
-                })
-        }
-    }
-
+    
     fn find_space_between_opponents(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let opponent_goal = ctx.player().opponent_goal_position();
         let players = ctx.players();
@@ -996,7 +943,6 @@ impl ForwardRunningState {
     // Calculate tactical run position for better support when team has possession
     fn calculate_tactical_run_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let player_position = ctx.player.position;
-        let ball_position = ctx.tick_context.positions.ball.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 

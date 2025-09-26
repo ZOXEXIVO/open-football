@@ -158,7 +158,6 @@ impl ForwardCreatingSpaceState {
     fn find_optimal_free_zone(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
-        let ball_pos = ctx.tick_context.positions.ball.position;
 
         let mut best_position = ctx.player.position;
         let mut best_score = f32::MIN;

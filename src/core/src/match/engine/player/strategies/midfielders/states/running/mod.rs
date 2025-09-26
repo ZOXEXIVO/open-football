@@ -1,13 +1,11 @@
-use crate::IntegerUtils;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0;
-const MIN_SHOOTING_DISTANCE: f32 = 10.0;
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -163,19 +161,7 @@ impl MidfielderRunningState {
             .calculate(ctx.player)
             .velocity + ctx.player().separation_velocity()
     }
-
-    // Keep only the essential helper methods with optimizations
-    fn in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
-        let dist = ctx.ball().distance_to_opponent_goal();
-        dist >= MIN_SHOOTING_DISTANCE && dist <= MAX_SHOOTING_DISTANCE
-    }
-
-    fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        // Simplified passing logic - just check if under pressure
-        self.has_close_opponent_fast(ctx) &&
-            ctx.tick_context.distances.teammates(ctx.player, 50.0, 100.0).next().is_some()
-    }
-
+    
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
         // Simple dribble check
         !self.has_close_opponent_fast(ctx) && ctx.player.skills.technical.dribbling > 15.0

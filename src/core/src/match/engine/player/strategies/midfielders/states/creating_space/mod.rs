@@ -444,57 +444,14 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate local congestion around player
     fn calculate_local_congestion(&self, ctx: &StateProcessingContext) -> f32 {
-        let player_pos = ctx.player.position;
-        let mut congestion = 0.0;
-
-        for opponent in ctx.players().opponents().all() {
-            let distance = (opponent.position - player_pos).magnitude();
-            if distance < 20.0 {
-                congestion += 1.0;
-            }
-        }
-
-        congestion
+        ctx.players().opponents().nearby(20.0).count() as f32
     }
 
     /// Check if player has a close marker
     fn has_close_marker(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().all()
-            .any(|opp| (opp.position - ctx.player.position).magnitude() < 10.0)
+        ctx.players().opponents().nearby(10.0).count() > 0
     }
-
-    /// Calculate intelligent position for creating space
-    fn calculate_intelligent_space_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let player_pos = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Identify space type to exploit
-        let space_type = self.identify_best_space_type(ctx);
-
-        match space_type {
-            SpaceType::HalfSpace => {
-                self.move_into_half_space(ctx, field_width, field_height)
-            },
-            SpaceType::BetweenLines => {
-                self.position_between_lines(ctx, field_width, field_height)
-            },
-            SpaceType::WideOverload => {
-                self.create_wide_overload(ctx, field_width, field_height)
-            },
-            SpaceType::DeepPocket => {
-                self.find_deep_pocket(ctx, field_width, field_height)
-            },
-            SpaceType::ThirdManRun => {
-                self.make_third_man_run(ctx, field_width, field_height)
-            },
-            SpaceType::CentralOverload => {
-                self.create_central_overload(ctx, field_width, field_height)
-            },
-        }
-    }
-
+    
     /// Identify the best type of space to create
     fn identify_best_space_type(&self, ctx: &StateProcessingContext) -> SpaceType {
         let ball_zone = self.get_ball_zone(ctx);
