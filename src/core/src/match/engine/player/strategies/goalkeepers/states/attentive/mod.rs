@@ -30,7 +30,7 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
                 ));
             }
             // If the ball is moving toward the goalkeeper, prepare for save
-            else if ctx.ball().is_towards_player_with_angle(0.7) && ball_distance < 300.0 {
+            else if ctx.ball().is_towards_player_with_angle(0.8) && ball_distance < 200.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -155,9 +155,7 @@ impl GoalkeeperAttentiveState {
 
         // Case 4: Opponent with ball is approaching but still at interceptable distance
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
-
-            if distance_to_opponent < adjusted_threshold * 0.8 {
+            if ctx.player().distance_to_player(opponent.id) < adjusted_threshold * 0.8 {
                 // Check if goalkeeper can reach ball before opponent
                 if self.can_reach_before_opponent(ctx, &opponent) {
                     return true;

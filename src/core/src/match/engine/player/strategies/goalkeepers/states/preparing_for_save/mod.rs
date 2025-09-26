@@ -15,23 +15,22 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                 GoalkeeperState::Passing,
             ));
         } else {
-            if ctx.ball().distance() < 50.0 {
-                if self.is_ball_catchable(ctx) {
+            if ctx.ball().on_own_side() {
+                if ctx.team().is_control_ball() {
                     return Some(StateChangeResult::with_goalkeeper_state(
-                        GoalkeeperState::Catching,
+                        GoalkeeperState::Attentive
+                    ));
+                }
+
+                if self.should_dive(ctx) {
+                    return Some(StateChangeResult::with_goalkeeper_state(
+                        GoalkeeperState::Diving,
                     ));
                 }
             }
-
-            if ctx.team().is_control_ball() {
+            else {
                 return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Attentive
-                ));
-            }
-
-            if self.should_dive(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Diving,
+                    GoalkeeperState::ReturningToGoal,
                 ));
             }
         }

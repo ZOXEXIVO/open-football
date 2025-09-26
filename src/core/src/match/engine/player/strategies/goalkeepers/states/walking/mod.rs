@@ -27,14 +27,14 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         let threat_level = self.assess_threat_level(ctx);
 
         // Transition to Attentive if ball is on own side and moderately close
-        if ball_on_own_side && ball_distance < 350.0 {
+        if ball_on_own_side && ball_distance < 250.0 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Attentive,
             ));
         }
 
         // Check if ball is coming directly at goalkeeper
-        if ctx.ball().is_towards_player_with_angle(0.85) && ball_distance < 300.0 {
+        if ctx.ball().is_towards_player_with_angle(0.85) && ball_distance < 200.0 {
             // Use anticipation skill to determine response timing
             let anticipation_factor = ctx.player.skills.mental.anticipation / 20.0;
             let reaction_distance = 250.0 + (anticipation_factor * 100.0); // Better anticipation = earlier reaction
