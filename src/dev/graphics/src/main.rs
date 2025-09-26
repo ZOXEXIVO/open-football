@@ -231,7 +231,7 @@ pub fn get_away_squad() -> MatchSquad {
         })
         .collect();
 
-    let away_squad = MatchSquad {
+    MatchSquad {
         team_id: 2,
         team_name: String::from("321"),
         tactics: Tactics::new(MatchTacticType::T442),
@@ -241,9 +241,7 @@ pub fn get_away_squad() -> MatchSquad {
         vice_captain_id: None,
         penalty_taker_id: None,
         free_kick_taker_id: None,
-    };
-
-    away_squad
+    }
 }
 
 fn get_player(id: u32, position: PlayerPositionType) -> Player {

@@ -41,16 +41,13 @@ impl StateProcessingHandler for GoalkeeperKickingState {
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
         None
     }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Remain stationary while kicking the ball
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
     }
 }

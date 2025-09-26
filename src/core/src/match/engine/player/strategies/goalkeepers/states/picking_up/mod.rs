@@ -34,12 +34,12 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
                 .events
                 .add_player_event(PlayerEvent::CaughtBall(ctx.player.id));
 
-            return Some(state_change);
+            Some(state_change)
         } else {
             // Pickup failed, transition to appropriate state (e.g., Diving)
-            return Some(StateChangeResult::with_goalkeeper_state(
+            Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Diving,
-            ));
+            ))
         }
     }
 
