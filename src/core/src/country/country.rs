@@ -207,21 +207,19 @@ impl Country {
             // Look through available listings
             for listing in available_listings {
                 // Find the player
-                if let Some(player) = self.find_player(listing.player_id) {
-                    if strategy.decide_player_interest(player) {
-                        let offer = strategy.calculate_initial_offer(
-                            player,
-                            &listing.asking_price,
-                            date,
-                        );
+                if let Some(player) = self.find_player(listing.player_id) && strategy.decide_player_interest(player) {
+                    let offer = strategy.calculate_initial_offer(
+                        player,
+                        &listing.asking_price,
+                        date,
+                    );
 
-                        negotiations_to_process.push((
-                            listing.player_id,
-                            buying_club.id,
-                            listing.club_id,
-                            offer,
-                        ));
-                    }
+                    negotiations_to_process.push((
+                        listing.player_id,
+                        buying_club.id,
+                        listing.club_id,
+                        offer,
+                    ));
                 }
             }
         }
@@ -281,10 +279,6 @@ impl Country {
                 )
             })
             .collect()
-    }
-
-    fn apply_country_context_to_club(&self, club: &mut Club, context: &CountrySimulationContext) {
-        Self::apply_country_context_to_club_static(club, context);
     }
 
     fn apply_country_context_to_club_static(club: &mut Club, context: &CountrySimulationContext) {
