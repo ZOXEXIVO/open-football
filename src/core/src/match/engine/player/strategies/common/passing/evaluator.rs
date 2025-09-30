@@ -84,11 +84,8 @@ impl PassEvaluator {
 
     /// Calculate how distance affects pass success
     fn calculate_distance_factor(ctx: &StateProcessingContext, distance: f32, passer: &MatchPlayer) -> f32 {
-        let players = ctx.player();
-        let skills = players.skills(passer.id);
-
-        let optimal_range = skills.technical.passing * 2.5;
-        let max_effective_range = skills.technical.passing * 5.0;
+        let optimal_range = passer.skills.technical.passing * 2.5;
+        let max_effective_range = passer.skills.technical.passing * 5.0;
 
         if distance <= optimal_range {
             // Short to medium passes - very high success
@@ -144,9 +141,6 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         passer: &MatchPlayer,
     ) -> f32 {
-        let players = ctx.player();
-        let skills = players.skills(passer.id);
-
         const PRESSURE_RADIUS: f32 = 15.0;
 
         let nearby_opponents: Vec<(u32, f32)> = ctx.tick_context
@@ -174,8 +168,8 @@ impl PassEvaluator {
         let number_pressure = (1.0 - (num_opponents - 1.0) * 0.15).max(0.5);
 
         // Mental attributes help under pressure
-        let composure_factor = skills.mental.composure / 20.0;
-        let decision_factor = skills.mental.decisions / 20.0;
+        let composure_factor = passer.skills.mental.composure / 20.0;
+        let decision_factor = passer.skills.mental.decisions / 20.0;
 
         let base_pressure = distance_pressure * number_pressure;
         let pressure_with_mentals = base_pressure + (1.0 - base_pressure) * composure_factor * decision_factor;
@@ -229,14 +223,9 @@ impl PassEvaluator {
 
     /// Calculate passer's ability to execute this pass
     fn calculate_passer_ability(ctx: &StateProcessingContext, passer: &MatchPlayer, distance: f32) -> f32 {
-        let players = ctx.player();
-
-        let skills = players.skills(passer.id);
-        let player_attributes = players.attributes(passer.id);
-
-        let passing_skill = skills.technical.passing / 20.0;
-        let technique_skill = skills.technical.technique / 20.0;
-        let vision_skill = skills.mental.vision / 20.0;
+        let passing_skill = passer.skills.technical.passing / 20.0;
+        let technique_skill = passer.skills.technical.technique / 20.0;
+        let vision_skill = passer.skills.mental.vision / 20.0;
 
         // For short passes, technique matters more
         // For long passes, passing skill matters more
@@ -248,7 +237,7 @@ impl PassEvaluator {
                 vision_skill * 0.2;
 
         // Condition affects ability
-        let condition_factor = player_attributes.condition as f32 / 10000.0;
+        let condition_factor = passer.player_attributes.condition as f32 / 10000.0;
 
         (ability * condition_factor).clamp(0.3, 1.0)
     }
@@ -342,7 +331,7 @@ impl PassEvaluator {
         let mut best_score = 0.0;
 
         for teammate in teammates.nearby(max_distance) {
-            let evaluation = Self::evaluate_pass(ctx, &ctx.player, &teammate);
+            let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
 
             // Score based on expected value, but prefer safer passes when under pressure
             let score = if evaluation.factors.pressure_factor < 0.5 {
