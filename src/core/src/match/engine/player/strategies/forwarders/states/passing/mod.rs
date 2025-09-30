@@ -124,7 +124,7 @@ impl ForwardPassingState {
     /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
     fn evaluate_forward_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
         // Start with the basic pass evaluator score
-        let base_score = PassEvaluator::evaluate_pass(ctx, &ctx.player, teammate);
+        let base_score = PassEvaluator::evaluate_pass(ctx, ctx.player, teammate);
 
         // Forward-specific factors - much more goal-oriented than midfielders
         let mut score = base_score.expected_value;
@@ -236,7 +236,7 @@ impl ForwardPassingState {
         // Default - other passes may still be viable but lower priority
         true
     }
-    
+
     /// Check if a player is heavily marked by opponents
     fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         const MARKING_DISTANCE: f32 = 5.0;
