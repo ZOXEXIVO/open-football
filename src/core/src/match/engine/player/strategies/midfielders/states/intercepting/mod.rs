@@ -13,22 +13,25 @@ impl StateProcessingHandler for MidfielderInterceptingState {
             ));
         }
 
-        if ctx.ball().distance() < 20.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Tackling,
-            ));
+        if ctx.team().is_control_ball() {
+            if ctx.ball().distance() > 150.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Returning,
+                ));
+            }
         }
+        else {
+            if ctx.ball().distance() < 30.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
 
-        if ctx.team().is_control_ball() && ctx.ball().distance() > 150.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
-            ));
-        }
-
-        if !self.can_reach_before_opponent(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
-            ));
+            if !self.can_reach_before_opponent(ctx) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
         }
 
         None

@@ -1,9 +1,8 @@
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
-};
+use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
+use crate::r#match::events::Event;
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0;
 
@@ -18,18 +17,25 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             if goal_dist < MAX_SHOOTING_DISTANCE {
                 // Simplified clear shot check
-                if goal_dist < 100.0 || (goal_dist < 200.0 && !self.has_close_opponent_fast(ctx)) {
+                if goal_dist < 100.0 || (goal_dist < 200.0 && !ctx.players().opponents().exists(30.0)) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Shooting,
                     ));
                 }
             }
 
-            // Simple pressure check
-            if self.has_close_opponent_fast(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Passing,
-                ));
+            if self.is_under_pressure(ctx) || self.can_passing(ctx)  {
+                if let Some(target_teammate) = self.find_best_pass_option(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target_teammate.id)
+                                .build(ctx),
+                        )),
+                    ));
+                }
             }
         } else {
             // Without ball - use simpler checks
@@ -87,10 +93,53 @@ impl StateProcessingHandler for MidfielderRunningState {
 }
 
 impl MidfielderRunningState {
-    /// Fast opponent check without iteration
-    fn has_close_opponent_fast(&self, ctx: &StateProcessingContext) -> bool {
-        // Use the distance closure which is already calculated
-        ctx.tick_context.distances.opponents(ctx.player.id, 15.0).next().is_some()
+    fn find_best_pass_option<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
+        let vision_range = ctx.player.skills.mental.vision * 10.0;
+
+        let open_teammates: Vec<MatchPlayerLite> = ctx
+            .players()
+            .teammates()
+            .nearby(vision_range)
+            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
+            .collect();
+
+        if !open_teammates.is_empty() {
+            open_teammates
+                .iter()
+                .min_by(|a, b| {
+                    let risk_a = self.estimate_interception_risk(ctx, a);
+                    let risk_b = self.estimate_interception_risk(ctx, b);
+                    risk_a
+                        .partial_cmp(&risk_b)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .cloned()
+        } else {
+            None
+        }
+    }
+
+    fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
+        let max_interception_distance = 20.0;
+        let player_position = ctx.player.position;
+        let pass_direction = (teammate.position - player_position).normalize();
+
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - player_position).dot(&pass_direction) > 0.0)
+            .map(|o| (o.position - player_position).magnitude())
+            .filter(|d| *d <= max_interception_distance)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .unwrap_or(max_interception_distance)
+    }
+
+    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+        let opponent_distance_threshold = 20.0;
+        ctx.players().opponents().all()
+            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
+            .count() == 0
     }
 
     /// Simplified ball carrying movement
@@ -161,9 +210,12 @@ impl MidfielderRunningState {
             .calculate(ctx.player)
             .velocity + ctx.player().separation_velocity()
     }
-    
-    fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        // Simple dribble check
-        !self.has_close_opponent_fast(ctx) && ctx.player.skills.technical.dribbling > 15.0
+
+    fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
+        ctx.players().opponents().exists(50.0)
+    }
+
+    fn can_passing(&self, ctx: &StateProcessingContext) -> bool {
+        ctx.player.skills.technical.passing > 10.0
     }
 }

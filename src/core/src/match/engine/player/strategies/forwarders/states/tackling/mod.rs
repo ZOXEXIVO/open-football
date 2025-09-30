@@ -110,8 +110,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Pressing));
         }
 
-        // Ball is too far for effective tackling - return to defensive position
-        Some(StateChangeResult::with_forward_state(ForwardState::Returning))
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

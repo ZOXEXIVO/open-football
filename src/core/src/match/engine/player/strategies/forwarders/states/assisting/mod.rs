@@ -82,7 +82,7 @@ impl StateProcessingHandler for ForwardAssistingState {
 
 impl ForwardAssistingState {
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(10.0)
+        ctx.players().opponents().exists(30.0)
     }
 
     fn should_make_quick_pass(&self, ctx: &StateProcessingContext) -> bool {

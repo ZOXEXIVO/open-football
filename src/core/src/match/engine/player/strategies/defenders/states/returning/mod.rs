@@ -16,33 +16,34 @@ impl StateProcessingHandler for DefenderReturningState {
             ));
         }
 
-        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting
-            ));
+        if ctx.team().is_control_ball() {
+            if ctx.player().distance_from_start_position() < 5.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Standing,
+                ));
+            }
         }
+        else {
+            if ctx.ball().distance() < 100.0{
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
 
-        if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0{
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Tackling,
-            ));
-        }
+            if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting
+                ));
+            }
 
-        // Stay in returning state until very close to start position
-        if ctx.player().distance_from_start_position() < 5.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
-        }
-
-        // Transition to Pressing late in the game only if ball is close as well
-        if ctx.team().is_loosing()
-            && ctx.context.time.time > (MATCH_HALF_TIME_MS - 180)
-            && ctx.ball().distance() < 30.0
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Pressing,
-            ));
+            if ctx.team().is_loosing()
+                && ctx.context.time.time > (MATCH_HALF_TIME_MS - 180)
+                && ctx.ball().distance() < 30.0
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
         }
 
         None
