@@ -90,7 +90,7 @@ impl MidfielderRunningState {
     /// Fast opponent check without iteration
     fn has_close_opponent_fast(&self, ctx: &StateProcessingContext) -> bool {
         // Use the distance closure which is already calculated
-        ctx.tick_context.distances.opponents(ctx.player, 15.0).next().is_some()
+        ctx.tick_context.distances.opponents(ctx.player.id, 15.0).next().is_some()
     }
 
     /// Simplified ball carrying movement

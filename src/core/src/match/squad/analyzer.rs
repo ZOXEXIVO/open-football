@@ -1,5 +1,5 @@
 use crate::club::{PlayerPositionType, Staff};
-use crate::r#match::{MatchPlayer, MatchResult};
+use crate::r#match::{MatchResult};
 use crate::{Player, Tactics, Team, MatchTacticType, TacticalStyle, TacticSelectionReason};
 use std::collections::HashMap;
 use log::{info};

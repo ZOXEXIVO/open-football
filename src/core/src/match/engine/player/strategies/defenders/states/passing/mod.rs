@@ -150,38 +150,7 @@ impl DefenderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let teammates = ctx.players().teammates();
-
-        // Use player's vision skill to determine range
-        let vision_skill = ctx.player.skills.mental.vision;
-        let vision_range = vision_skill * 15.0; // Adjust range based on skill
-
-        // Get viable passing options within range
-        let pass_options: Vec<MatchPlayerLite> = teammates
-            .nearby(vision_range)
-            .filter(|t| self.is_viable_pass_target(ctx, t))
-            .collect();
-
-        if pass_options.is_empty() {
-            return None;
-        }
-
-        // Evaluate each option using the pass evaluator
-        pass_options.into_iter()
-            .map(|teammate| {
-                let score = PassEvaluator::evaluate_pass(ctx, &teammate, 100.0);
-                // Defenders should prioritize safety more than midfielders
-                let adjusted_score = if self.is_safer_pass(ctx, &teammate) {
-                    score * 1.3 // Boost safer passes
-                } else {
-                    score
-                };
-                (teammate, adjusted_score)
-            })
-            .max_by(|(_, score_a), (_, score_b)| {
-                score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(teammate, _)| teammate)
+        PassEvaluator::find_best_pass_option(ctx,300.0)
     }
 
     /// Find a safe pass option when under pressure

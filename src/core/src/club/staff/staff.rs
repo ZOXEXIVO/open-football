@@ -4,7 +4,7 @@ use crate::club::{
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
-use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, SimulatorData, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
+use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
 use chrono::{NaiveDate, NaiveDateTime, Datelike, Timelike};
 
 #[derive(Debug)]
@@ -499,7 +499,7 @@ impl Staff {
         base * performance_multiplier * ambition_multiplier
     }
 
-    fn calculate_workload(&self, ctx: &GlobalContext<'_>) -> f32 {
+    fn calculate_workload(&self, _ctx: &GlobalContext<'_>) -> f32 {
         // Base workload from position
         let position_load = match self.contract.as_ref().map(|c| &c.position) {
             Some(StaffPosition::Manager) => 8.0,

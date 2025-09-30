@@ -124,10 +124,10 @@ impl ForwardPassingState {
     /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
     fn evaluate_forward_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
         // Start with the basic pass evaluator score
-        let base_score = PassEvaluator::evaluate_pass(ctx, teammate, 100.0);
+        let base_score = PassEvaluator::evaluate_pass(ctx, &ctx.player, teammate);
 
         // Forward-specific factors - much more goal-oriented than midfielders
-        let mut score = base_score;
+        let mut score = base_score.expected_value;
 
         // Goal distance factors - forwards prioritize passes that get closer to goal
         let forward_to_goal_dist = ctx.ball().distance_to_opponent_goal();

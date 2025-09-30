@@ -84,7 +84,7 @@ impl Continent {
         info!("📊 Updating continental rankings for {}", self.name);
 
         // Update country coefficients based on club performances
-        for country in &mut self.countries {
+        for _country in &mut self.countries {
             // let coefficient = self.calculate_country_coefficient(country);
             // self.continental_rankings.update_country_ranking(country.id, coefficient);
         }
@@ -93,7 +93,7 @@ impl Continent {
         let all_clubs = self.get_all_clubs();
 
         for club in all_clubs {
-            let club_points = self.calculate_club_continental_points(club);
+            let _club_points = self.calculate_club_continental_points(club);
             //self.continental_rankings.update_club_ranking(club.id, club_points);
         }
 
@@ -240,16 +240,16 @@ impl Continent {
         info!("🏆 Processing continental awards for {}", self.name);
 
         // Player of the Year
-        let player_of_year = self.determine_player_of_year();
+        let _player_of_year = self.determine_player_of_year();
 
         // Team of the Year
-        let team_of_year = self.determine_team_of_year();
+        let _team_of_year = self.determine_team_of_year();
 
         // Coach of the Year
-        let coach_of_year = self.determine_coach_of_year();
+        let _coach_of_year = self.determine_coach_of_year();
 
         // Young Player Award
-        let young_player = self.determine_young_player_award();
+        let _young_player = self.determine_young_player_award();
 
         debug!("Continental awards distributed");
     }
@@ -530,7 +530,7 @@ impl ConferenceLeague {
         }
     }
 
-    pub fn conduct_draw(&mut self, clubs: &[u32], rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, date: NaiveDate) {
         debug!(
             "Conference League draw conducted with {} clubs",
             clubs.len()

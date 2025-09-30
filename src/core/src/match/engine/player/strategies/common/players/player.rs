@@ -3,7 +3,7 @@ use crate::r#match::{
     MatchPlayer, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateProcessingContext,
 };
-use crate::PlayerSkills;
+use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::Rng;
 
@@ -39,6 +39,11 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn skills(&self, player_id: u32) -> &PlayerSkills {
         let player = self.ctx.context.players.by_id(player_id).unwrap();
         &player.skills
+    }
+
+    pub fn attributes(&self, player_id: u32) -> &PlayerAttributes {
+        let player = self.ctx.context.players.by_id(player_id).unwrap();
+        &player.player_attributes
     }
 
     pub fn on_own_side(&self) -> bool {

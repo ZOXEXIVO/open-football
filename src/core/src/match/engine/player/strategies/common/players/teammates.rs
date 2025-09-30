@@ -81,7 +81,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
+            .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
             .map(|(pid, _)| MatchPlayerLite {
                 id: pid,
                 position: self.ctx.tick_context.positions.players.position(pid),
@@ -113,7 +113,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
+            .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
     }
 
     pub fn exists(&self, max_distance: f32) -> bool {
@@ -122,7 +122,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player, MIN_DISTANCE, max_distance)
+            .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
             .any(|_| true)
     }
 }

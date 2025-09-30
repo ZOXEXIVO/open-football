@@ -79,25 +79,25 @@ impl PlayerDistanceClosure {
 
     pub fn teammates<'t>(
         &'t self,
-        player: &'t MatchPlayer,
+        player_id: u32,
         min_distance: f32,
         max_distance: f32,
     ) -> impl Iterator<Item = (u32, f32)> + 't {
         self.distances
             .iter()
             .filter(move |p| p.distance >= min_distance && p.distance <= max_distance)
-            .filter_map(|item| {
+            .filter_map(move |item| {
                 if item.player_from_id == item.player_to_id
                 {
                     return None;
                 }
                 
-                if item.player_from_id == player.id && item.player_from_team == item.player_to_team
+                if item.player_from_id == player_id && item.player_from_team == item.player_to_team
                 {
                     return Some((item.player_to_id, item.distance));
                 }
 
-                if item.player_to_id == player.id && item.player_from_team == item.player_to_team {
+                if item.player_to_id == player_id && item.player_from_team == item.player_to_team {
                     return Some((item.player_from_id, item.distance));
                 }
 
@@ -107,24 +107,24 @@ impl PlayerDistanceClosure {
 
     pub fn opponents<'t>(
         &'t self,
-        player: &'t MatchPlayer,
+        player_id: u32,
         distance: f32,
     ) -> impl Iterator<Item = (u32, f32)> + 't {
         self.distances
             .iter()
             .filter(move |p| p.distance <= distance)
-            .filter_map(|item| {
+            .filter_map(move |item| {
                 if item.player_from_id == item.player_to_id
                 {
                     return None;
                 }
                 
-                if item.player_from_id == player.id && item.player_from_team != item.player_to_team
+                if item.player_from_id == player_id && item.player_from_team != item.player_to_team
                 {
                     return Some((item.player_to_id, item.distance));
                 }
 
-                if item.player_to_id == player.id && item.player_from_team != item.player_to_team {
+                if item.player_to_id == player_id && item.player_from_team != item.player_to_team {
                     return Some((item.player_from_id, item.distance));
                 }
 
