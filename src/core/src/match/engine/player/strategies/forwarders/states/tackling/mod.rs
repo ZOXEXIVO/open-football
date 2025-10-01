@@ -24,20 +24,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        let ball_distance = ctx.ball().distance();
-
-        // If ball is too far away, return to appropriate state
-        if ball_distance > CHASE_DISTANCE_THRESHOLD && ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Returning));
-        }
-
-        // If team regains possession, switch to supporting role
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Assisting));
-        }
-
-        // Look for opponent with ball to tackle
-        let players =ctx.players();
+        let players = ctx.players();
         let opponents = players.opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
@@ -105,8 +92,15 @@ impl StateProcessingHandler for ForwardTacklingState {
             ));
         }
 
-        // If no tackling opportunity and ball is moderately close, switch to pressing
-        if ball_distance <= PRESSURE_DISTANCE {
+        let ball_distance = ctx.ball().distance();
+
+        if ctx.team().is_control_ball() {
+            if ball_distance > CHASE_DISTANCE_THRESHOLD {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Returning));
+            }
+
+            return Some(StateChangeResult::with_forward_state(ForwardState::Assisting));
+        } else if ball_distance <= PRESSURE_DISTANCE {
             return Some(StateChangeResult::with_forward_state(ForwardState::Pressing));
         }
 
