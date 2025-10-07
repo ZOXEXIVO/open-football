@@ -1,7 +1,7 @@
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior, MatchPlayerLite
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 
 // Movement patterns for forwards
@@ -87,7 +87,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                     .velocity;
 
                 Some(base_velocity + avoidance_vector * 1.2 + ctx.player().separation_velocity())
-            },
+            }
             ForwardMovementPattern::DiagonalRun => {
                 // Diagonal run to create space and angles
                 let diagonal_target = self.calculate_diagonal_run_target(ctx, target_position);
@@ -99,7 +99,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                     .velocity;
 
                 Some(base_velocity + avoidance_vector)
-            },
+            }
             ForwardMovementPattern::ChannelRun => {
                 // Run between defenders into channels
                 let channel_target = self.find_defensive_channel(ctx);
@@ -110,7 +110,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 0.8
                 )
-            },
+            }
             ForwardMovementPattern::DriftWide => {
                 // Drift wide to create space centrally
                 let wide_target = self.calculate_wide_position(ctx);
@@ -122,7 +122,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 0.6
                 )
-            },
+            }
             ForwardMovementPattern::CheckToFeet => {
                 // Come short to receive to feet
                 let check_target = self.calculate_check_position(ctx);
@@ -134,7 +134,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                         .calculate(ctx.player)
                         .velocity
                 )
-            },
+            }
             ForwardMovementPattern::OppositeMovement => {
                 // Move opposite to defensive line shift
                 let opposite_target = self.calculate_opposite_movement(ctx);
@@ -146,7 +146,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 1.5
                 )
-            },
+            }
         }
     }
 
@@ -172,7 +172,7 @@ impl ForwardCreatingSpaceState {
                 let test_pos = Vector3::new(
                     (search_center.x + x_offset as f32).clamp(20.0, field_width - 20.0),
                     (search_center.y + y_offset as f32).clamp(20.0, field_height - 20.0),
-                    0.0
+                    0.0,
                 );
 
                 // Calculate position score
@@ -200,10 +200,6 @@ impl ForwardCreatingSpaceState {
         // Goal threat score
         let goal_threat = self.calculate_goal_threat(ctx, position);
         score += goal_threat * 4.0;
-
-        // Passing option score
-        let passing_value = self.calculate_receiving_value(ctx, position);
-        score += passing_value * 2.5;
 
         // Offside avoidance
         if !self.would_be_offside(ctx, position) {
@@ -445,31 +441,7 @@ impl ForwardCreatingSpaceState {
         }
     }
 
-    /// Calculate value as passing target
-    fn calculate_receiving_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
-        let mut value = 0.0;
-
-        // Check passing lanes from teammates
-        for teammate in ctx.players().teammates().all() {
-            if teammate.id == ctx.player.id {
-                continue;
-            }
-
-            if self.has_clear_passing_lane(teammate.position, position, ctx) {
-                value += 5.0;
-
-                // Bonus for lanes from playmakers
-                if teammate.tactical_positions.is_midfielder() {
-                    value += 2.0;
-                }
-            }
-        }
-
-        value
-    }
-
     // Helper methods
-
     fn get_forward_search_center(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let field_width = ctx.context.field_size.width as f32;
         let ball_pos = ctx.tick_context.positions.ball.position;
@@ -668,14 +640,14 @@ impl ForwardCreatingSpaceState {
                 // Push higher up the pitch
                 let attacking_direction = self.get_attacking_direction(ctx);
                 position += attacking_direction * 10.0;
-            },
+            }
             crate::TacticalStyle::Counterattack => {
                 // Stay ready to exploit space
                 if self.has_space_behind_defense(ctx) {
                     let attacking_direction = self.get_attacking_direction(ctx);
                     position += attacking_direction * 15.0;
                 }
-            },
+            }
             crate::TacticalStyle::WidePlay | crate::TacticalStyle::WingPlay => {
                 // Push wider
                 let field_height = ctx.context.field_size.height as f32;
@@ -684,13 +656,13 @@ impl ForwardCreatingSpaceState {
                 } else {
                     position.y = (position.y + 10.0).min(field_height - 10.0);
                 }
-            },
+            }
             crate::TacticalStyle::Possession => {
                 // Come shorter to help build play
                 let ball_pos = ctx.tick_context.positions.ball.position;
                 let to_ball = (ball_pos - position).normalize();
                 position += to_ball * 5.0;
-            },
+            }
             _ => {}
         }
 
