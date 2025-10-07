@@ -118,14 +118,14 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Prevent getting stuck in running state
             if ctx.in_state_time > 300 {
-                if ctx.team().is_control_ball() {
-                    return Some(StateChangeResult::with_forward_state(
+                return if ctx.team().is_control_ball() {
+                    Some(StateChangeResult::with_forward_state(
                         ForwardState::CreatingSpace,
-                    ));
+                    ))
                 } else {
-                    return Some(StateChangeResult::with_forward_state(
+                    Some(StateChangeResult::with_forward_state(
                         ForwardState::Standing,
-                    ));
+                    ))
                 }
             }
         }
@@ -698,7 +698,7 @@ impl ForwardRunningState {
         let teammates = players.teammates();
 
         // Check if there are any teammates in reasonable passing range
-        let nearby_teammates: Vec<MatchPlayerLite> = teammates.nearby(150.0).collect();
+        let nearby_teammates: Vec<MatchPlayerLite> = teammates.nearby(250.0).collect();
         if nearby_teammates.is_empty() {
             return false;
         }
@@ -715,7 +715,7 @@ impl ForwardRunningState {
             .nearby(immediate_pressure_distance)
             .count();
 
-        if pressing_opponents >= 2 {
+        if pressing_opponents >= 1 {
             // Multiple opponents pressing - should pass unless very selfish
             if selfishness < 0.8 {
                 return true;
@@ -726,12 +726,12 @@ impl ForwardRunningState {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         // If very close to goal, forwards tend to be more selfish
-        if distance_to_goal < 30.0 {
+        if distance_to_goal < 150.0 {
             // Only pass if teammate is in much better position or under severe pressure
             let severe_pressure = pressing_opponents >= 3 ||
                 ctx.players().opponents().nearby(30.0).count() >= 1;
 
-            if !severe_pressure {
+            return if !severe_pressure {
                 // Check if any teammate is in clearly better scoring position
                 let better_positioned_teammate = nearby_teammates.iter().any(|teammate| {
                     let teammate_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
@@ -744,9 +744,9 @@ impl ForwardRunningState {
                     teammate_goal_dist < distance_to_goal * 0.7 && teammate_pressure < 2
                 });
 
-                return better_positioned_teammate && selfishness < 0.6;
+                better_positioned_teammate && selfishness < 0.6
             } else {
-                return true; // Under severe pressure near goal, must pass
+                true // Under severe pressure near goal, must pass
             }
         }
 
@@ -849,66 +849,6 @@ impl ForwardRunningState {
         let markers = ctx.players().opponents().nearby(marking_distance).count();
 
         markers >= 2 || (markers >= 1 && ctx.players().opponents().nearby(3.0).count() > 0)    
-    }
-    
-    fn find_space_between_opponents(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let opponent_goal = ctx.player().opponent_goal_position();
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        // Get opponents between player and goal
-        let player_position = ctx.player.position;
-        let opponents_in_path: Vec<(u32, f32)> = opponents
-            .nearby_raw(200.0)
-            .filter(|(opp_id, _)| {
-                let opp_pos = ctx.tick_context.positions.players.position(*opp_id);
-                let to_goal = opponent_goal - player_position;
-                let to_opp = opp_pos - player_position;
-
-                // Check if opponent is roughly between player and goal
-                to_goal.normalize().dot(&to_opp.normalize()) > 0.7
-            })
-            .collect();
-
-        if opponents_in_path.len() < 2 {
-            // Not enough opponents to find meaningful gap
-            return None;
-        }
-
-        // Find the best gap between opponents
-        let mut best_gap_position = None;
-        let mut best_gap_score = 0.0;
-
-        for i in 0..opponents_in_path.len() {
-            for j in i+1..opponents_in_path.len() {
-                let first_id = opponents_in_path[i].0;
-                let second_id = opponents_in_path[j].0;
-
-                let first_position = ctx.tick_context.positions.players.position(first_id);
-                let second_position = ctx.tick_context.positions.players.position(second_id);
-
-                // Calculate midpoint between opponents
-                let midpoint = (first_position + second_position) * 0.5;
-
-                // Calculate gap width
-                let gap_width = (first_position - second_position).magnitude();
-
-                // Calculate alignment with goal direction
-                let to_goal = opponent_goal - player_position;
-                let to_gap = midpoint - player_position;
-                let alignment = to_goal.normalize().dot(&to_gap.normalize());
-
-                // Calculate final gap score
-                let gap_score = gap_width * alignment;
-
-                if gap_score > best_gap_score && gap_width > 15.0 {
-                    best_gap_score = gap_score;
-                    best_gap_position = Some(midpoint);
-                }
-            }
-        }
-
-        best_gap_position
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
