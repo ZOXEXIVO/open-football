@@ -161,15 +161,15 @@ impl StateProcessingHandler for ForwardRunningState {
 
         // Movement with ball
         if ctx.player.has_ball(ctx) {
-            return Some(self.calculate_ball_carrying_movement(ctx) * fatigue_factor);
+            Some(self.calculate_ball_carrying_movement(ctx) * fatigue_factor)
         }
         // Team has possession but this player doesn't have the ball
         else if ctx.team().is_control_ball() {
-            return Some(self.calculate_supporting_movement(ctx) * fatigue_factor);
+            Some(self.calculate_supporting_movement(ctx) * fatigue_factor)
         }
         // Team doesn't have possession
         else {
-            return Some(self.calculate_defensive_movement(ctx) * fatigue_factor);
+            Some(self.calculate_defensive_movement(ctx) * fatigue_factor)
         }
     }
 
@@ -244,22 +244,20 @@ impl ForwardRunningState {
 
     /// Check if under immediate pressure
     fn is_under_immediate_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        let very_close_opponents = ctx.players().opponents().nearby(8.0).count();
-        let close_opponents = ctx.players().opponents().nearby(15.0).count();
-
-        very_close_opponents >= 1 || close_opponents >= 2
+        let close_opponents = ctx.players().opponents().nearby(30.0).count();
+        close_opponents >= 1
     }
 
     /// Determine if should pass when under pressure
     fn should_pass_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
         // Check for available passing options
-        let safe_pass_available = ctx.players().teammates().nearby(100.0)
+        let safe_pass_available = ctx.players().teammates().nearby(200.0)
             .any(|t| ctx.player().has_clear_pass(t.id));
 
         let composure = ctx.player.skills.mental.composure / 20.0;
 
         // Low composure players pass more under pressure
-        safe_pass_available && (composure < 0.7 || ctx.players().opponents().nearby(5.0).count() >= 2)
+        safe_pass_available && (composure < 0.7 || ctx.players().opponents().nearby(30.0).count() >= 1)
     }
 
     /// Check if can dribble out of pressure
@@ -268,12 +266,12 @@ impl ForwardRunningState {
         let agility = ctx.player.skills.physical.agility / 20.0;
         let composure = ctx.player.skills.mental.composure / 20.0;
 
-        let skill_factor = (dribbling * 0.5 + agility * 0.3 + composure * 0.2);
+        let skill_factor = dribbling * 0.5 + agility * 0.3 + composure * 0.2;
 
         // Check for escape route
         let has_space = self.find_dribbling_space(ctx).is_some();
 
-        skill_factor > 0.6 && has_space
+        skill_factor > 0.5 && has_space
     }
 
     /// Find space to dribble into
