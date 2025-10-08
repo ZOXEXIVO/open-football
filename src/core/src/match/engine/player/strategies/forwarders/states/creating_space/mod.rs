@@ -19,7 +19,7 @@ use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 15.0;
-const SPACE_SCAN_RADIUS: f32 = 60.0;
+const SPACE_SCAN_RADIUS: f32 = 100.0;
 const CONGESTION_THRESHOLD: f32 = 3.0;
 
 #[derive(Default)]
