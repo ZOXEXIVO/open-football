@@ -1,9 +1,9 @@
-use crate::IntegerUtils;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
+use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -60,6 +60,12 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
         }
 
+        if ctx.in_state_time > 100 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running
+            ));
+        }
+
         None
     }
 
@@ -80,8 +86,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
                         current_waypoint: ctx.player.waypoint_manager.current_index,
                         path_offset: 5.0, // Some randomness for natural movement
                     }
-                    .calculate(ctx.player)
-                    .velocity,
+                        .calculate(ctx.player)
+                        .velocity,
                 );
             }
         }
@@ -91,11 +97,11 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 target: ctx.player.start_position,
                 radius: IntegerUtils::random(5, 150) as f32,
                 jitter: IntegerUtils::random(0, 2) as f32,
-                distance: IntegerUtils::random(10, 150) as f32,
-                angle: IntegerUtils::random(0, 180) as f32,
+                distance: IntegerUtils::random(10, 250) as f32,
+                angle: IntegerUtils::random(0, 110) as f32,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 

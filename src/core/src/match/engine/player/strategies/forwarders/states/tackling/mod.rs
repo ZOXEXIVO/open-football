@@ -8,10 +8,10 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::Rng;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // Maximum distance to attempt a tackle
-const CLOSE_TACKLE_DISTANCE: f32 = 3.0; // Distance for immediate tackle attempt
+const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance to attempt a tackle
+const CLOSE_TACKLE_DISTANCE: f32 = 10.0; // Distance for immediate tackle attempt
 const FOUL_CHANCE_BASE: f32 = 0.15; // Base chance of committing a foul
-const CHASE_DISTANCE_THRESHOLD: f32 = 150.0; // Maximum distance to chase for tackle
+const CHASE_DISTANCE_THRESHOLD: f32 = 100.0; // Maximum distance to chase for tackle
 const PRESSURE_DISTANCE: f32 = 15.0; // Distance to apply pressure without tackling
 
 #[derive(Default)]

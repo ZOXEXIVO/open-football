@@ -155,33 +155,81 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
 
 impl ForwardCreatingSpaceState {
     /// Find optimal free zone for a forward
+    /// Find optimal free zone for a forward - optimized to search gaps between opponents
     fn find_optimal_free_zone(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
 
-        let mut best_position = ctx.player.position;
+        // Collect relevant opponents (defenders and midfielders in forward zones)
+        let opponents: Vec<Vector3<f32>> = ctx.players()
+            .opponents()
+            .all()
+            .filter(|opp| {
+                let is_relevant_position = opp.tactical_positions.is_defender()
+                    || opp.tactical_positions.is_midfielder();
+                let distance = (opp.position - player_pos).magnitude();
+                is_relevant_position && distance < SPACE_SCAN_RADIUS
+            })
+            .map(|opp| opp.position)
+            .collect();
+
+        // If no nearby opponents, move toward goal
+        if opponents.is_empty() {
+            let forward_direction = (goal_pos - player_pos).normalize();
+            return self.apply_forward_tactical_adjustment(
+                ctx,
+                player_pos + forward_direction * 30.0,
+            );
+        }
+
+        // Find gaps between opponents using Voronoi-like approach
+        let mut candidate_positions = Vec::with_capacity(20);
+
+        // Add midpoints between adjacent opponents as candidates
+        for i in 0..opponents.len() {
+            for j in (i + 1)..opponents.len() {
+                let midpoint = (opponents[i] + opponents[j]) * 0.5;
+                let gap_width = (opponents[i] - opponents[j]).magnitude();
+
+                // Only consider significant gaps
+                if gap_width > 15.0 && gap_width < 60.0 {
+                    candidate_positions.push(midpoint);
+                }
+            }
+        }
+
+        // Add positions slightly offset from each opponent (to exploit space beside them)
+        for &opp_pos in &opponents {
+            let to_goal = (goal_pos - opp_pos).normalize();
+            let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0);
+
+            // Create positions on both sides and ahead of opponent
+            candidate_positions.push(opp_pos + perpendicular * 20.0 + to_goal * 15.0);
+            candidate_positions.push(opp_pos - perpendicular * 20.0 + to_goal * 15.0);
+        }
+
+        // Add current player position as fallback
+        candidate_positions.push(player_pos);
+
+        // Evaluate candidates and pick best
+        let mut best_position = player_pos;
         let mut best_score = f32::MIN;
 
-        // Define search area based on forward positioning
-        let search_center = self.get_forward_search_center(ctx);
+        for candidate in candidate_positions {
+            // Ensure position is within bounds
+            let clamped = Vector3::new(
+                candidate.x.clamp(20.0, field_width - 20.0),
+                candidate.y.clamp(20.0, field_height - 20.0),
+                0.0,
+            );
 
-        // Grid search for best position
-        let grid_size = 10.0;
-        for x_offset in (-SPACE_SCAN_RADIUS as i32..=SPACE_SCAN_RADIUS as i32).step_by(grid_size as usize) {
-            for y_offset in (-SPACE_SCAN_RADIUS as i32..=SPACE_SCAN_RADIUS as i32).step_by(grid_size as usize) {
-                let test_pos = Vector3::new(
-                    (search_center.x + x_offset as f32).clamp(20.0, field_width - 20.0),
-                    (search_center.y + y_offset as f32).clamp(20.0, field_height - 20.0),
-                    0.0,
-                );
+            let score = self.evaluate_forward_position(ctx, clamped);
 
-                // Calculate position score
-                let score = self.evaluate_forward_position(ctx, test_pos);
-
-                if score > best_score {
-                    best_score = score;
-                    best_position = test_pos;
-                }
+            if score > best_score {
+                best_score = score;
+                best_position = clamped;
             }
         }
 
