@@ -52,7 +52,7 @@ impl League {
             milestones: LeagueMilestones::new(),
         }
     }
-
+    
     pub fn simulate(&mut self, clubs: &[Club], ctx: GlobalContext<'_>) -> LeagueResult {
         let league_name = self.name.clone();
         let current_date = ctx.simulation.date.date();
@@ -78,49 +78,32 @@ impl League {
 
         // Phase 4: Match execution with enhanced dynamics
         if schedule_result.is_match_scheduled() {
-            let match_results = self.play_matches_with_dynamics(
+            let match_results = self.play_scheduled_matches(
                 &mut schedule_result.scheduled_matches,
                 clubs,
                 &ctx,
             );
 
-            // Phase 5: Post-match processing
-            self.process_match_results(&match_results, clubs, &ctx);
-
-            self.table.update_from_results(&match_results);
-
-            match_results.iter().for_each(|mr| {
-                self.matches.push(mr.copy_without_data_positions());
-            });
-
-            // Phase 6: Update league dynamics
-            self.update_league_dynamics(&match_results, clubs, current_date);
-
-            // Phase 7: Check for milestones and special events
-            self.check_milestones_and_events(clubs, current_date);
-
-            // Phase 8: Apply regulatory actions if needed
-            self.apply_regulatory_actions(clubs, &ctx);
+            self.process_match_day_results(&match_results, clubs, &ctx, current_date);
 
             return LeagueResult::with_match_result(self.id, table_result, match_results);
         }
 
-        // Phase 9: Off-season or mid-season processing
-        if !schedule_result.is_match_scheduled() {
-            self.process_non_matchday(clubs, &ctx);
-        }
+        // Phase 5: Off-season or mid-season processing
+        self.process_non_matchday(clubs, &ctx);
 
         LeagueResult::new(self.id, table_result)
     }
 
-    /// Prepare for matchday - team preparations, weather, attendance predictions
+    // ========== MATCHDAY PREPARATION ==========
+
     fn prepare_matchday(&mut self, ctx: &GlobalContext<'_>, clubs: &[Club]) {
         debug!("Preparing matchday for {}", self.name);
 
         let current_date = ctx.simulation.date.date();
         let day_of_week = current_date.weekday();
 
-        // Update attendance predictions based on various factors
+        // Update attendance predictions
         self.dynamics.update_attendance_predictions(
             &self.table,
             day_of_week,
@@ -140,8 +123,17 @@ impl League {
         self.dynamics.assign_referees();
     }
 
-    /// Play matches with enhanced dynamics including momentum, pressure, etc.
-    fn play_matches_with_dynamics(
+    fn check_fixture_congestion(&self, team: &Team, current_date: NaiveDate) {
+        let upcoming_matches = self.schedule.get_matches_for_team_in_days(team.id, current_date, 7);
+        if upcoming_matches.len() > 2 {
+            debug!("⚠️ Fixture congestion for team {}: {} matches in 7 days",
+                   team.name, upcoming_matches.len());
+        }
+    }
+
+    // ========== MATCH EXECUTION ==========
+
+    fn play_scheduled_matches(
         &mut self,
         scheduled_matches: &mut Vec<LeagueMatch>,
         clubs: &[Club],
@@ -150,195 +142,88 @@ impl League {
         scheduled_matches
             .iter_mut()
             .map(|scheduled_match| {
-                let home_team = self.get_team(clubs, scheduled_match.home_team_id);
-                let away_team = self.get_team(clubs, scheduled_match.away_team_id);
-
-                // Get team form and momentum
-                let home_momentum = self.dynamics.get_team_momentum(scheduled_match.home_team_id);
-                let away_momentum = self.dynamics.get_team_momentum(scheduled_match.away_team_id);
-
-                // Get pressure factors
-                let home_pressure = self.calculate_match_pressure(
-                    home_team,
-                    &self.table,
-                    ctx.simulation.date.date(),
-                );
-                let away_pressure = self.calculate_match_pressure(
-                    away_team,
-                    &self.table,
-                    ctx.simulation.date.date(),
-                );
-
-                // Enhanced squad selection considering fatigue and form
-                let mut home_squad = home_team.get_enhanced_match_squad();
-                let mut away_squad = away_team.get_enhanced_match_squad();
-
-                // Apply momentum and pressure modifiers
-                self.apply_psychological_factors(
-                    &mut home_squad,
-                    home_momentum,
-                    home_pressure,
-                );
-                self.apply_psychological_factors(
-                    &mut away_squad,
-                    away_momentum,
-                    away_pressure,
-                );
-
-                // Create match with additional context
-                let match_to_play = Match::make(
-                    scheduled_match.id.clone(),
-                    scheduled_match.league_id,
-                    &scheduled_match.league_slug,
-                    home_squad,
-                    away_squad,
-                );
-
-                let message = &format!(
-                    "play match: {} vs {} (Momentum: {:.1} vs {:.1})",
-                    &match_to_play.home_squad.team_name,
-                    &match_to_play.away_squad.team_name,
-                    home_momentum,
-                    away_momentum
-                );
-
-                let match_result = Logging::estimate_result(|| match_to_play.play(), message);
-
-                // Set match result in schedule
-                scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
-
-                // Update team momentum based on result
-                self.dynamics.update_team_momentum_after_match(
-                    scheduled_match.home_team_id,
-                    scheduled_match.away_team_id,
-                    &match_result,
-                );
-
-                match_result
+                self.play_single_match(scheduled_match, clubs, ctx)
             })
-            .collect::<Vec<MatchResult>>()
+            .collect()
     }
 
-    /// Process match results for statistics, disciplinary actions, etc.
-    fn process_match_results(
+    fn play_single_match(
         &mut self,
-        results: &[MatchResult],
+        scheduled_match: &mut LeagueMatch,
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
-    ) {
-        for result in results {
-            // Update statistics
-            self.statistics.process_match_result(result);
+    ) -> MatchResult {
+        let home_team = self.get_team(clubs, scheduled_match.home_team_id);
+        let away_team = self.get_team(clubs, scheduled_match.away_team_id);
 
-            // Check for disciplinary actions (cards, suspensions)
-            self.regulations.process_disciplinary_actions(result);
+        // Get psychological factors
+        let (home_momentum, away_momentum) = self.get_team_momentums(
+            scheduled_match.home_team_id,
+            scheduled_match.away_team_id,
+        );
 
-            // Update team streaks
-            self.dynamics.update_team_streaks(
-                result.score.home_team.team_id,
-                result.score.away_team.team_id,
-                &result.score,
-            );
+        let (home_pressure, away_pressure) = self.calculate_match_pressures(
+            home_team,
+            away_team,
+            ctx.simulation.date.date(),
+        );
 
-            // Check for manager pressure situations
-            self.check_manager_pressure(result, clubs, ctx.simulation.date.date());
-        }
+        // Prepare squads with psychological modifiers
+        let mut home_squad = home_team.get_enhanced_match_squad();
+        let mut away_squad = away_team.get_enhanced_match_squad();
 
-        // Update top scorers, assists, clean sheets
-        self.statistics.update_player_rankings(clubs);
+        self.apply_psychological_factors(&mut home_squad, home_momentum, home_pressure);
+        self.apply_psychological_factors(&mut away_squad, away_momentum, away_pressure);
+
+        // Create and play match
+        let match_to_play = Match::make(
+            scheduled_match.id.clone(),
+            scheduled_match.league_id,
+            &scheduled_match.league_slug,
+            home_squad,
+            away_squad,
+        );
+
+        let message = &format!(
+            "play match: {} vs {} (Momentum: {:.1} vs {:.1})",
+            &match_to_play.home_squad.team_name,
+            &match_to_play.away_squad.team_name,
+            home_momentum,
+            away_momentum
+        );
+
+        let match_result = Logging::estimate_result(|| match_to_play.play(), message);
+
+        // Update match result in schedule
+        scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
+
+        // Update momentum after match
+        self.dynamics.update_team_momentum_after_match(
+            scheduled_match.home_team_id,
+            scheduled_match.away_team_id,
+            &match_result,
+        );
+
+        match_result
     }
 
-    /// Update league dynamics including title race, relegation battle, etc.
-    fn update_league_dynamics(
-        &mut self,
-        results: &[MatchResult],
-        clubs: &[Club],
+    fn get_team_momentums(&self, home_id: u32, away_id: u32) -> (f32, f32) {
+        let home = self.dynamics.get_team_momentum(home_id);
+        let away = self.dynamics.get_team_momentum(away_id);
+        (home, away)
+    }
+
+    fn calculate_match_pressures(
+        &self,
+        home_team: &Team,
+        away_team: &Team,
         current_date: NaiveDate,
-    ) {
-        let total_teams = self.table.rows.len();
-        let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
-        let total_matches = (total_teams - 1) * 2; // Home and away
-
-        // Calculate season progress
-        let season_progress = matches_played as f32 / total_matches as f32;
-
-        // Update title race dynamics
-        if season_progress > 0.6 {
-            self.dynamics.update_title_race(&self.table);
-        }
-
-        // Update relegation battle
-        if season_progress > 0.5 {
-            self.dynamics.update_relegation_battle(&self.table, total_teams);
-        }
-
-        // Update European qualification race
-        if season_progress > 0.7 {
-            self.dynamics.update_european_race(&self.table);
-        }
-
-        // Calculate competitive balance
-        self.statistics.update_competitive_balance(&self.table);
-
-        // Update league reputation based on performance
-        self.update_league_reputation(clubs, season_progress);
+    ) -> (f32, f32) {
+        let home = self.calculate_match_pressure(home_team, &self.table, current_date);
+        let away = self.calculate_match_pressure(away_team, &self.table, current_date);
+        (home, away)
     }
 
-    /// Check for milestones and special events
-    fn check_milestones_and_events(&mut self, clubs: &[Club], current_date: NaiveDate) {
-        // Check for record-breaking performances
-        self.milestones.check_records(&self.statistics, &self.table);
-
-        // Check for special derbies or rivalry matches
-        let upcoming_matches = self.schedule.get_matches_in_next_days(current_date, 7);
-        for match_item in upcoming_matches {
-            if self.dynamics.is_derby(match_item.home_team_id, match_item.away_team_id) {
-                info!("🔥 Derby coming up: Team {} vs Team {}",
-                      match_item.home_team_id, match_item.away_team_id);
-            }
-        }
-
-        // Season milestones
-        let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
-        self.milestones.check_season_milestones(matches_played, &self.table);
-    }
-
-    /// Apply regulatory actions like point deductions, transfer bans, etc.
-    fn apply_regulatory_actions(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
-        // Check Financial Fair Play violations
-        for club in clubs {
-            if self.regulations.check_ffp_violation(club) {
-                warn!("⚠️ FFP violation detected for club: {}", club.name);
-                // Apply sanctions
-                self.regulations.apply_ffp_sanctions(club.id, &mut self.table);
-            }
-        }
-
-        // Check for pending disciplinary cases
-        self.regulations.process_pending_cases(ctx.simulation.date.date());
-    }
-
-    /// Process non-matchday activities
-    fn process_non_matchday(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
-        let current_date = ctx.simulation.date.date();
-
-        // End of season processing
-        if self.is_season_end(current_date) {
-            self.process_season_end(clubs);
-        }
-
-        // Mid-season break
-        if self.is_winter_break(current_date) {
-            self.process_winter_break(clubs);
-        }
-
-        // International break
-        if self.is_international_break(current_date) {
-            debug!("International break - no league matches");
-        }
-    }
-
-    /// Calculate match pressure based on league position and situation
     fn calculate_match_pressure(
         &self,
         team: &Team,
@@ -361,9 +246,6 @@ impl League {
             pressure += 0.4;
         }
 
-        // Derby or rivalry match
-        // This would need a rivalry system to be fully implemented
-
         // Manager under pressure
         let losing_streak = self.dynamics.get_team_losing_streak(team.id);
         if losing_streak > 3 {
@@ -373,20 +255,82 @@ impl League {
         pressure.min(1.0)
     }
 
-    /// Apply psychological factors to match squad
     fn apply_psychological_factors(
         &self,
         squad: &mut crate::r#match::MatchSquad,
         momentum: f32,
         pressure: f32,
     ) {
-        // This would modify player attributes temporarily based on momentum and pressure
-        // For now, we'll just log the factors
         debug!("Team {} - Momentum: {:.2}, Pressure: {:.2}",
                squad.team_name, momentum, pressure);
     }
 
-    /// Check manager pressure after poor results
+    fn calculate_matches_remaining(&self, team_id: u32) -> usize {
+        self.schedule.tours.iter()
+            .flat_map(|t| &t.items)
+            .filter(|item| item.result.is_none() &&
+                (item.home_team_id == team_id || item.away_team_id == team_id))
+            .count()
+    }
+
+    // ========== POST-MATCH PROCESSING ==========
+
+    fn process_match_day_results(
+        &mut self,
+        match_results: &[MatchResult],
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+        current_date: NaiveDate,
+    ) {
+        // Update match results and statistics
+        self.process_match_results(match_results, clubs, ctx);
+
+        // Update table standings
+        self.table.update_from_results(match_results);
+
+        // Store match results
+        match_results.iter().for_each(|mr| {
+            self.matches.push(mr.copy_without_data_positions());
+        });
+
+        // Update league dynamics
+        self.update_league_dynamics(match_results, clubs, current_date);
+
+        // Check for milestones
+        self.check_milestones_and_events(clubs, current_date);
+
+        // Apply regulatory actions
+        self.apply_regulatory_actions(clubs, ctx);
+    }
+
+    fn process_match_results(
+        &mut self,
+        results: &[MatchResult],
+        clubs: &[Club],
+        ctx: &GlobalContext<'_>,
+    ) {
+        for result in results {
+            // Update statistics
+            self.statistics.process_match_result(result);
+
+            // Process disciplinary actions
+            self.regulations.process_disciplinary_actions(result);
+
+            // Update team streaks
+            self.dynamics.update_team_streaks(
+                result.score.home_team.team_id,
+                result.score.away_team.team_id,
+                &result.score,
+            );
+
+            // Check manager pressure
+            self.check_manager_pressure(result, clubs, ctx.simulation.date.date());
+        }
+
+        // Update player rankings
+        self.statistics.update_player_rankings(clubs);
+    }
+
     fn check_manager_pressure(
         &self,
         result: &MatchResult,
@@ -406,7 +350,41 @@ impl League {
         }
     }
 
-    /// Update league reputation based on competitive balance and quality
+    // ========== LEAGUE DYNAMICS ==========
+
+    fn update_league_dynamics(
+        &mut self,
+        results: &[MatchResult],
+        clubs: &[Club],
+        current_date: NaiveDate,
+    ) {
+        let total_teams = self.table.rows.len();
+        let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
+        let total_matches = (total_teams - 1) * 2;
+        let season_progress = matches_played as f32 / total_matches as f32;
+
+        // Update title race dynamics
+        if season_progress > 0.6 {
+            self.dynamics.update_title_race(&self.table);
+        }
+
+        // Update relegation battle
+        if season_progress > 0.5 {
+            self.dynamics.update_relegation_battle(&self.table, total_teams);
+        }
+
+        // Update European qualification race
+        if season_progress > 0.7 {
+            self.dynamics.update_european_race(&self.table);
+        }
+
+        // Calculate competitive balance
+        self.statistics.update_competitive_balance(&self.table);
+
+        // Update league reputation
+        self.update_league_reputation(clubs, season_progress);
+    }
+
     fn update_league_reputation(&mut self, clubs: &[Club], season_progress: f32) {
         if season_progress < 0.1 {
             return; // Too early in season
@@ -416,7 +394,6 @@ impl League {
         let avg_goals_per_game = self.statistics.total_goals as f32 /
             self.statistics.total_matches.max(1) as f32;
 
-        // Factors that increase reputation
         let mut reputation_change: i16 = 0;
 
         if competitive_balance > 0.7 {
@@ -427,68 +404,98 @@ impl League {
             reputation_change += 1; // Entertaining matches
         }
 
-        // Apply change
         self.reputation = (self.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
     }
 
-    /// Check for fixture congestion
-    fn check_fixture_congestion(&self, team: &Team, current_date: NaiveDate) {
-        let upcoming_matches = self.schedule.get_matches_for_team_in_days(team.id, current_date, 7);
-        if upcoming_matches.len() > 2 {
-            debug!("⚠️ Fixture congestion for team {}: {} matches in 7 days",
-                   team.name, upcoming_matches.len());
+    // ========== MILESTONES & EVENTS ==========
+
+    fn check_milestones_and_events(&mut self, clubs: &[Club], current_date: NaiveDate) {
+        // Check for record-breaking performances
+        self.milestones.check_records(&self.statistics, &self.table);
+
+        // Check for special derbies or rivalry matches
+        let upcoming_matches = self.schedule.get_matches_in_next_days(current_date, 7);
+        for match_item in upcoming_matches {
+            if self.dynamics.is_derby(match_item.home_team_id, match_item.away_team_id) {
+                info!("🔥 Derby coming up: Team {} vs Team {}",
+                      match_item.home_team_id, match_item.away_team_id);
+            }
+        }
+
+        // Season milestones
+        let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
+        self.milestones.check_season_milestones(matches_played, &self.table);
+    }
+
+    // ========== REGULATORY ACTIONS ==========
+
+    fn apply_regulatory_actions(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
+        // Check Financial Fair Play violations
+        for club in clubs {
+            if self.regulations.check_ffp_violation(club) {
+                warn!("⚠️ FFP violation detected for club: {}", club.name);
+                self.regulations.apply_ffp_sanctions(club.id, &mut self.table);
+            }
+        }
+
+        // Process pending disciplinary cases
+        self.regulations.process_pending_cases(ctx.simulation.date.date());
+    }
+
+    // ========== NON-MATCHDAY PROCESSING ==========
+
+    fn process_non_matchday(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) {
+        let current_date = ctx.simulation.date.date();
+
+        // End of season processing
+        if self.is_season_end(current_date) {
+            self.process_season_end(clubs);
+        }
+
+        // Mid-season break
+        if self.is_winter_break(current_date) {
+            self.process_winter_break(clubs);
+        }
+
+        // International break
+        if self.is_international_break(current_date) {
+            debug!("International break - no league matches");
         }
     }
 
-    /// Calculate remaining matches for a team
-    fn calculate_matches_remaining(&self, team_id: u32) -> usize {
-        self.schedule.tours.iter()
-            .flat_map(|t| &t.items)
-            .filter(|item| item.result.is_none() &&
-                (item.home_team_id == team_id || item.away_team_id == team_id))
-            .count()
-    }
-
-    /// Check if it's end of season
     fn is_season_end(&self, date: NaiveDate) -> bool {
         date.month() == 5 && date.day() >= 25
     }
 
-    /// Check if it's winter break
     fn is_winter_break(&self, date: NaiveDate) -> bool {
         date.month() == 12 && date.day() >= 20 && date.day() <= 31
     }
 
-    /// Check if it's international break
     fn is_international_break(&self, date: NaiveDate) -> bool {
-        // Simplified - typically certain weeks in Sep, Oct, Nov, Mar
         (date.month() == 9 && date.day() >= 4 && date.day() <= 12) ||
             (date.month() == 10 && date.day() >= 9 && date.day() <= 17) ||
             (date.month() == 11 && date.day() >= 13 && date.day() <= 21) ||
             (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
     }
 
-    /// Process end of season
     fn process_season_end(&mut self, clubs: &[Club]) {
         info!("🏆 Season ended for league: {}", self.name);
 
-        // Determine champions, promoted, relegated teams
         let champion_id = self.table.rows.first().map(|r| r.team_id);
         if let Some(champion) = champion_id {
             info!("🥇 Champions: Team {}", champion);
             self.milestones.record_champion(champion);
         }
 
-        // Reset dynamics for new season
         self.dynamics.reset_for_new_season();
         self.statistics.archive_season_stats();
     }
 
-    /// Process winter break
     fn process_winter_break(&mut self, clubs: &[Club]) {
         debug!("❄️ Winter break for league: {}", self.name);
-        // Teams would rest and recover during this period
     }
+
+    // ========== UTILITY METHODS ==========
 
     fn get_team<'c>(&self, clubs: &'c [Club], id: u32) -> &'c Team {
         clubs

@@ -102,11 +102,7 @@ impl Ball {
         }
     }
 
-    pub fn try_intercept(&mut self, _players: &[MatchPlayer], _events: &mut EventCollection) {
-        if self.current_owner.is_some() {
-            return;
-        }
-    }
+    pub fn try_intercept(&mut self, _players: &[MatchPlayer], _events: &mut EventCollection) {}
 
     pub fn is_stands_outside(&self) -> bool {
         self.is_ball_outside()
@@ -295,7 +291,6 @@ impl Ball {
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
             if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
-
                 let player = context.players.by_id(goalscorer).unwrap();
                 let is_auto_goal = match player.side {
                     Some(PlayerSide::Left) => goal_side == GoalSide::Home,
@@ -306,7 +301,7 @@ impl Ball {
                 let goal_event_metadata = BallGoalEventMetadata {
                     side: goal_side,
                     goalscorer_player_id: goalscorer,
-                    auto_goal: is_auto_goal
+                    auto_goal: is_auto_goal,
                 };
 
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));

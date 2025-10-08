@@ -79,7 +79,7 @@ impl LeagueTable {
         team.points += 1;
     }
 
-    pub fn update_from_results(&mut self, match_result: &Vec<MatchResult>) {
+    pub fn update_from_results(&mut self, match_result: &[MatchResult]) {
         for result in match_result {
             match Ord::cmp(&result.score.home_team.get(), &result.score.away_team.get()) {
                 Ordering::Equal => {

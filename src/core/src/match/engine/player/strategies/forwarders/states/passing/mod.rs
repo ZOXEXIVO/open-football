@@ -7,7 +7,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MAX_PASS_DURATION: u64 = 100; // Ticks before considering fatigue
+const MAX_PASS_DURATION: u64 = 50; // Ticks before considering fatigue
 
 #[derive(Default)]
 pub struct ForwardPassingState {}
@@ -44,7 +44,7 @@ impl StateProcessingHandler for ForwardPassingState {
         }
 
         // If under excessive pressure, consider going back to dribbling
-        if self.is_under_heavy_pressure(ctx)  {
+        if self.is_under_heavy_pressure(ctx) {
             if self.can_dribble_effectively(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
@@ -165,7 +165,7 @@ impl ForwardPassingState {
     fn pass_breaks_defensive_line(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> bool {
         let player_pos = ctx.player.position;
         let teammate_pos = teammate.position;
@@ -392,7 +392,7 @@ impl ForwardPassingState {
         let mut max_gap_width = 0.0;
 
         for i in 0..opponents_between.len() {
-            for j in i+1..opponents_between.len() {
+            for j in i + 1..opponents_between.len() {
                 let opp1 = &opponents_between[i];
                 let opp2 = &opponents_between[j];
 

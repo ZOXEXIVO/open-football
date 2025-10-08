@@ -1,6 +1,6 @@
-use std::collections::{HashMap, HashSet, VecDeque};
 use chrono::NaiveDate;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 /// Enhanced Relations system with complex relationship dynamics
 #[derive(Debug, Clone)]
@@ -21,6 +21,12 @@ pub struct Relations {
     chemistry: TeamChemistry,
 }
 
+impl Default for Relations {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Relations {
     pub fn new() -> Self {
         Relations {
@@ -39,12 +45,12 @@ impl Relations {
         let change = if increment >= 0.0 {
             RelationshipChange::positive(
                 ChangeType::NaturalProgression,
-                increment.abs()
+                increment.abs(),
             )
         } else {
             RelationshipChange::negative(
                 ChangeType::NaturalProgression,
-                increment.abs()
+                increment.abs(),
             )
         };
 
@@ -260,7 +266,7 @@ impl Relations {
     ) {
         // Players training together build relationships
         for i in 0..participants.len() {
-            for j in i+1..participants.len() {
+            for j in i + 1..participants.len() {
                 let change = if training_quality > 0.7 {
                     RelationshipChange::positive(
                         ChangeType::TrainingBonding,
@@ -322,7 +328,7 @@ impl<T: Relationship> RelationStore<T> {
         }
     }
 
-    fn iter(&self) -> impl Iterator<Item = (&u32, &T)> {
+    fn iter(&self) -> impl Iterator<Item=(&u32, &T)> {
         self.relations.iter()
     }
 }
@@ -685,7 +691,7 @@ impl TeamChemistry {
     fn recalculate<T: Relationship, S: Relationship>(
         &mut self,
         players: &RelationStore<T>,
-        staffs: &RelationStore<S>
+        staffs: &RelationStore<S>,
     ) {
         // Calculate various chemistry factors
         let player_harmony = self.calculate_player_harmony(players);
@@ -916,13 +922,13 @@ mod tests {
 
         let change = RelationshipChange::positive(
             ChangeType::TrainingBonding,
-            0.5
+            0.5,
         );
 
         relations.update_player_relationship(
             1,
             change,
-            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
         );
 
         let rel = relations.get_player(1).unwrap();
@@ -935,13 +941,13 @@ mod tests {
 
         let change = RelationshipChange::positive(
             ChangeType::CoachingSuccess,
-            0.8
+            0.8,
         );
 
         relations.update_staff_relationship(
             1,
             change,
-            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()
+            NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
         );
 
         let receptiveness = relations.get_coaching_receptiveness(1);
@@ -956,12 +962,12 @@ mod tests {
         for i in 1..5 {
             let change = RelationshipChange::positive(
                 ChangeType::TeamSuccess,
-                0.5
+                0.5,
             );
             relations.update_player_relationship(
                 i,
                 change,
-                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap()
+                NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
             );
         }
 
