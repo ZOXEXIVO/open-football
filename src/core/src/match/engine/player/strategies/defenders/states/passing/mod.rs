@@ -1,5 +1,5 @@
-use crate::r#match::events::Event;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
@@ -22,9 +22,8 @@ impl StateProcessingHandler for DefenderPassingState {
 
         // Under heavy pressure - make a quick decision
         if self.is_under_heavy_pressure(ctx) {
-            if let Some(safe_option) = self.find_safe_pass_option(ctx) {
-                // Execute a quick, safe pass
-                return Some(StateChangeResult::with_defender_state_and_event(
+            return if let Some(safe_option) = self.find_safe_pass_option(ctx) {
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
@@ -32,13 +31,13 @@ impl StateProcessingHandler for DefenderPassingState {
                             .with_to_player_id(safe_option.id)
                             .build(ctx),
                     )),
-                ));
+                ))
             } else {
                 // No safe option, clear the ball
-                return Some(StateChangeResult::with_defender_state(
+                Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
-                ));
-            }
+                ))
+            };
         }
 
         // Normal passing situation - evaluate options more carefully
@@ -150,7 +149,7 @@ impl DefenderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx,300.0)
+        PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 
     /// Find a safe pass option when under pressure

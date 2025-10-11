@@ -43,7 +43,7 @@ impl PassEvaluator {
         let pass_distance = pass_vector.norm();
 
         // Calculate individual factors
-        let distance_factor = Self::calculate_distance_factor(ctx, pass_distance, passer);
+        let distance_factor = Self::calculate_distance_factor(pass_distance, passer);
         let angle_factor = Self::calculate_angle_factor(ctx, passer, receiver);
         let pressure_factor = Self::calculate_pressure_factor(ctx, passer);
         let receiver_positioning = Self::calculate_receiver_positioning(ctx, receiver);
@@ -83,7 +83,7 @@ impl PassEvaluator {
     }
 
     /// Calculate how distance affects pass success
-    fn calculate_distance_factor(ctx: &StateProcessingContext, distance: f32, passer: &MatchPlayer) -> f32 {
+    fn calculate_distance_factor(distance: f32, passer: &MatchPlayer) -> f32 {
         let optimal_range = passer.skills.technical.passing * 2.5;
         let max_effective_range = passer.skills.technical.passing * 5.0;
 

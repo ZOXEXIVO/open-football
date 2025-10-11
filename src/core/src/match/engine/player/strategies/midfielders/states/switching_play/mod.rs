@@ -19,7 +19,7 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
         }
 
         // Check if there's a good opportunity to switch play
-        if let Some((teammate_id, teammate_position)) = self.find_switch_play_target(ctx) {
+        if let Some((teammate_id, _)) = self.find_switch_play_target(ctx) {
             // If a suitable target position is found, switch play
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Passing,
@@ -46,7 +46,7 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
             let steering = SteeringBehavior::Seek {
                 target: teammate_position,
             }
-            .calculate(ctx.player);
+                .calculate(ctx.player);
 
             Some(steering.velocity)
         } else {
@@ -89,9 +89,9 @@ impl MidfielderSwitchingPlayState {
         });
 
         if let Some(teammate) = best_teammate.map(|teammate| teammate) {
-           return Some((teammate.id, teammate.position))
+            return Some((teammate.id, teammate.position));
         }
-        
+
         None
     }
 

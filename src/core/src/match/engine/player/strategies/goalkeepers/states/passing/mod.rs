@@ -1,9 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
 
 #[derive(Default)]
 pub struct GoalkeeperPassingState {}
@@ -33,7 +32,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                 GoalkeeperState::Running,
             ));
         }
-        
+
         None
     }
 
@@ -50,35 +49,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
 
 impl GoalkeeperPassingState {
     fn find_best_pass_option(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-        let vision_range = ctx.player.skills.mental.vision * 10.0;
-
-        let open_teammates: Vec<MatchPlayerLite> = teammates
-            .nearby(vision_range)
-            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
-            .collect();
-
-        if !open_teammates.is_empty() {
-            open_teammates
-                .iter()
-                .max_by(|a, b| {
-                    let space_a = self.calculate_space_around_player(ctx, a);
-                    let space_b = self.calculate_space_around_player(ctx, b);
-                    space_a.partial_cmp(&space_b).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .cloned()
-        } else {
-            teammates.nearby(300.0).choose(&mut rand::rng())
-        }
-    }
-
-    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 5.0;
-
-        ctx.players().opponents().all()
-            .filter(|opponent| (opponent.position - teammate.position).magnitude() <= opponent_distance_threshold)
-            .count() == 0
+        PassEvaluator::find_best_pass_option(ctx, 400.0)
     }
 
     fn calculate_space_around_player(&self, ctx: &StateProcessingContext, player: &MatchPlayerLite) -> f32 {

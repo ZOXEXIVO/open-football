@@ -1,8 +1,8 @@
-use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
-use nalgebra::Vector3;
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0;
 
@@ -24,7 +24,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            if self.is_under_pressure(ctx) || self.can_passing(ctx)  {
+            if self.is_under_pressure(ctx) || self.can_passing(ctx) {
                 if let Some(target_teammate) = self.find_best_pass_option(ctx) {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Running,
@@ -46,12 +46,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             // Check every 10 ticks for less critical states
-            if ctx.in_state_time % 10 == 0 {
-                if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
-                    ));
-                }
+            if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
             }
         }
 
@@ -97,49 +95,7 @@ impl MidfielderRunningState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 10.0;
-
-        let open_teammates: Vec<MatchPlayerLite> = ctx
-            .players()
-            .teammates()
-            .nearby(vision_range)
-            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
-            .collect();
-
-        if !open_teammates.is_empty() {
-            open_teammates
-                .iter()
-                .min_by(|a, b| {
-                    let risk_a = self.estimate_interception_risk(ctx, a);
-                    let risk_b = self.estimate_interception_risk(ctx, b);
-                    risk_a
-                        .partial_cmp(&risk_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .cloned()
-        } else {
-            None
-        }
-    }
-
-    fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
-        let max_interception_distance = 20.0;
-        let player_position = ctx.player.position;
-        let pass_direction = (teammate.position - player_position).normalize();
-
-        ctx.players().opponents().all()
-            .filter(|o| (o.position - player_position).dot(&pass_direction) > 0.0)
-            .map(|o| (o.position - player_position).magnitude())
-            .filter(|d| *d <= max_interception_distance)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(max_interception_distance)
-    }
-
-    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 20.0;
-        ctx.players().opponents().all()
-            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
-            .count() == 0
+        PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 
     /// Simplified ball carrying movement
@@ -182,7 +138,7 @@ impl MidfielderRunningState {
         let support_offset = Vector3::new(
             angle.cos() * 30.0,
             angle.sin() * 30.0,
-            0.0
+            0.0,
         );
 
         let target = ball_pos + support_offset;

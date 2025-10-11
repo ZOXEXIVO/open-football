@@ -63,7 +63,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Dribbling,
                 ))
-            }
+            };
         }
 
         None
@@ -79,14 +79,14 @@ impl StateProcessingHandler for MidfielderPassingState {
             let field_center = Vector3::new(
                 ctx.context.field_size.width as f32 / 2.0,
                 ctx.context.field_size.height as f32 / 2.0,
-                0.0
+                0.0,
             );
 
             let to_center = (field_center - ctx.player.position).normalize();
             let random_jitter = Vector3::new(
                 (rand::random::<f32>() - 0.5) * 0.5,
                 (rand::random::<f32>() - 0.5) * 0.5,
-                0.0
+                0.0,
             );
 
             return Some((to_center + random_jitter).normalize() * 1.0);
@@ -97,7 +97,7 @@ impl StateProcessingHandler for MidfielderPassingState {
             let jitter = Vector3::new(
                 (rand::random::<f32>() - 0.5) * 0.8,
                 (rand::random::<f32>() - 0.5) * 0.8,
-                0.0
+                0.0,
             );
             return Some(jitter);
         }
@@ -120,7 +120,7 @@ impl StateProcessingHandler for MidfielderPassingState {
         Some(Vector3::new(
             (rand::random::<f32>() - 0.5) * 0.3,
             (rand::random::<f32>() - 0.5) * 0.3,
-            0.0
+            0.0,
         ))
     }
 
@@ -171,89 +171,14 @@ impl MidfielderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 20.0;
-        let player_position = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Get all viable passing options
-        let pass_options: Vec<MatchPlayerLite> = ctx.players()
-            .teammates()
-            .nearby(vision_range)
-            .filter(|t| self.is_viable_pass_target(ctx, t))
-            .collect();
-
-        if pass_options.is_empty() {
-            return None;
-        }
-
-        // Score each option with improved criteria
-        let scored_options: Vec<(MatchPlayerLite, f32)> = pass_options.into_iter()
-            .map(|teammate| {
-                let mut score = 0.0;
-
-                // 1. Distance score - prefer medium-range passes over very short ones
-                let distance = (teammate.position - player_position).magnitude();
-                let distance_score = self.calculate_distance_score(distance);
-                score += distance_score * 0.25;
-
-                // 2. Field spread score - reward passes that maintain team width
-                let spread_score = self.calculate_field_spread_score(ctx, &teammate);
-                score += spread_score * 0.3;
-
-                // 3. Progressive score - reward forward passes
-                let progress_score = self.calculate_progression_score(ctx, &teammate);
-                score += progress_score * 0.2;
-
-                // 4. Space score - check space around receiver
-                let space_score = self.calculate_improved_space_score(ctx, &teammate);
-                score += space_score * 0.15;
-
-                // 5. Position-specific score - different positions have different priorities
-                let position_score = self.calculate_position_specific_score(ctx, &teammate);
-                score += position_score * 0.1;
-
-                (teammate, score)
-            })
-            .collect();
-
-        // Select the best option
-        scored_options.into_iter()
-            .max_by(|(_, score_a), (_, score_b)| {
-                score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|(teammate, _)| teammate)
-    }
-
-    /// Calculate distance score - prefer medium-range passes
-    fn calculate_distance_score(&self, distance: f32) -> f32 {
-        // Penalize very short passes (< 15m) to prevent clustering
-        // Optimal distance is 25-60m
-        // Longer passes (60-100m) are acceptable but slightly less preferred
-
-        if distance < 15.0 {
-            // Very short pass - heavily penalized
-            0.2 * (distance / 15.0)
-        } else if distance < 25.0 {
-            // Short pass - slightly penalized
-            0.5 + 0.3 * ((distance - 15.0) / 10.0)
-        } else if distance < 60.0 {
-            // Optimal range
-            0.8 + 0.2 * ((60.0 - distance) / 35.0)
-        } else if distance < 100.0 {
-            // Long pass - slightly less preferred
-            0.7 * ((100.0 - distance) / 40.0)
-        } else {
-            // Very long pass - risky
-            0.3
-        }
+        PassEvaluator::find_best_pass_option(ctx, 350.0)
     }
 
     /// Calculate field spread score to maintain team width
     fn calculate_field_spread_score(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> f32 {
         let field_height = ctx.context.field_size.height as f32;
         let player_y = ctx.player.position.y;
@@ -306,7 +231,7 @@ impl MidfielderPassingState {
     fn calculate_progression_score(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> f32 {
         let goal_position = ctx.player().opponent_goal_position();
         let player_to_goal = (goal_position - ctx.player.position).magnitude();
@@ -327,7 +252,7 @@ impl MidfielderPassingState {
     fn calculate_improved_space_score(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> f32 {
         // Check for opponents in different radius zones
         let very_close_opponents = ctx.players().opponents().all()
@@ -361,7 +286,7 @@ impl MidfielderPassingState {
     fn calculate_position_specific_score(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> f32 {
         // Different positions should receive passes in different situations
         let ball_to_goal_distance = ctx.ball().distance_to_opponent_goal();
@@ -393,7 +318,7 @@ impl MidfielderPassingState {
     fn would_pass_break_defensive_lines(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> bool {
         let player_pos = ctx.player.position;
         let teammate_pos = teammate.position;
@@ -432,7 +357,7 @@ impl MidfielderPassingState {
     fn calculate_breakthrough_value(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite
+        teammate: &MatchPlayerLite,
     ) -> f32 {
         let goal_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
         let field_width = ctx.context.field_size.width as f32;
@@ -589,7 +514,7 @@ impl MidfielderPassingState {
     fn calculate_better_passing_position(
         &self,
         ctx: &StateProcessingContext,
-        target: &MatchPlayerLite
+        target: &MatchPlayerLite,
     ) -> Vector3<f32> {
         let player_pos = ctx.player.position;
         let target_pos = target.position;
