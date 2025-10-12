@@ -72,6 +72,12 @@ pub struct ContinentalCompetitions {
     pub super_cup: SuperCup,
 }
 
+impl Default for ContinentalCompetitions {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ContinentalCompetitions {
     pub fn new() -> Self {
         ContinentalCompetitions {

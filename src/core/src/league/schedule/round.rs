@@ -11,6 +11,12 @@ use log::warn;
 
 pub struct RoundSchedule;
 
+impl Default for RoundSchedule {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RoundSchedule {
     pub fn new() -> Self {
         RoundSchedule {}
@@ -134,7 +140,7 @@ fn generate_game_pairs(teams: &[u32], tours_count: usize) -> Vec<(u32, u32)> {
     result
 }
 
-fn rotate(clubs: &mut Vec<(u32, u32)>) {
+fn rotate(clubs: &mut [(u32, u32)]) {
     let teams_len = clubs.len();
 
     let right_top = clubs[0].1;

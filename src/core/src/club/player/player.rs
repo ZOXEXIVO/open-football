@@ -256,7 +256,7 @@ impl Index<u32> for PlayerCollection {
             .players
             .iter()
             .find(|p| p.id == player_id)
-            .expect(format!("no player with id = {}", player_id).as_str())
+            .expect(&format!("no player with id = {}", player_id))
     }
 }
 

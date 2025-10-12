@@ -1,13 +1,11 @@
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
 use crate::league::LeagueCollection;
-use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::market::{TransferListingType, TransferMarket};
+use crate::transfers::market::{TransferMarket};
 use crate::utils::Logging;
 use crate::{Club, ClubResult};
-use chrono::{Datelike, NaiveDate};
+use chrono::{NaiveDate};
 use log::{debug, info};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use std::collections::HashMap;
 use crate::country::builder::CountryBuilder;
 
@@ -77,6 +75,12 @@ pub struct CountryEconomicFactors {
     pub tv_revenue_multiplier: f32,
     pub sponsorship_market_strength: f32,
     pub stadium_attendance_factor: f32,
+}
+
+impl Default for CountryEconomicFactors {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl CountryEconomicFactors {

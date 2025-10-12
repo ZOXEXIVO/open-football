@@ -38,9 +38,7 @@ impl PlayerUtils {
     }
 
     pub fn age_factor(age: u8) -> f32 {
-        let a = age as f32;
-        let factor = 1.0 / (1.0 + (-0.1 * a).exp());
-        factor
+        1.0 / (1.0 + (-0.1 * age as f32).exp())
     }
 }
 

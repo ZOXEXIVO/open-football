@@ -166,15 +166,6 @@ impl ScheduleItem {
         }
     }
 }
-//
-// impl Score {
-//     pub fn new(home_team: &TeamScore, away_team: &TeamScore) -> Self {
-//         Score {
-//             home: TeamScore::from(home_team),
-//             away: TeamScore::from(away_team),
-//         }
-//     }
-// }
 
 impl ScheduleTour {
     pub fn new(num: u8, games_count: usize) -> Self {
