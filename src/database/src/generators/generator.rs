@@ -95,14 +95,6 @@ impl DatabaseGenerator {
             .iter()
             .filter(|l| l.country_id == country_id)
             .map(|league| {
-                let league_clubs: Vec<u32> = data
-                    .clubs
-                    .iter()
-                    .flat_map(|c| &c.teams)
-                    .filter(|team| team.league_id == league.id)
-                    .map(|t| t.id)
-                    .collect();
-
                 let settings = LeagueSettings {
                     season_starting_half: DayMonthPeriod {
                         from_day: league.settings.season_starting_half.from_day,
