@@ -117,7 +117,7 @@ pub async fn team_schedule_get_action(
     Json(model).into_response()
 }
 
-fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam> {
+fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam<'_>> {
     let club = data.club(club_id).unwrap();
 
     let mut teams: Vec<ClubTeam> = club

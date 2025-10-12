@@ -8,6 +8,7 @@ use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, Recommendat
 use log::{debug, info};
 use std::borrow::Cow;
 use std::str::FromStr;
+use crate::team::builder::TeamBuilder;
 
 #[derive(Debug, PartialEq)]
 pub enum TeamType {
@@ -42,34 +43,8 @@ pub struct Team {
 }
 
 impl Team {
-    pub fn new(
-        id: u32,
-        league_id: u32,
-        club_id: u32,
-        name: String,
-        slug: String,
-        team_type: TeamType,
-        training_schedule: TrainingSchedule,
-        reputation: TeamReputation,
-        players: PlayerCollection,
-        staffs: StaffCollection,
-    ) -> Self {
-        Team {
-            id,
-            league_id,
-            club_id,
-            name,
-            slug,
-            team_type,
-            players,
-            staffs,
-            reputation,
-            tactics: None,
-            training_schedule,
-            behaviour: TeamBehaviour::new(),
-            transfer_list: Transfers::new(),
-            match_history: MatchHistory::new(),
-        }
+    pub fn builder() -> TeamBuilder {
+        TeamBuilder::new()
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {

@@ -659,32 +659,33 @@ mod tests {
     use super::*;
     use crate::shared::fullname::FullName;
     use crate::PersonAttributes;
-    use chrono::NaiveDate;
+    use crate::club::player::builder::PlayerBuilder;
 
     fn create_test_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
         use crate::club::player::*;
 
-        Player::new(
-            id,
-            FullName::new("Test".to_string(), "Player".to_string()),
-            NaiveDate::from_ymd_opt(1995, 1, 1).unwrap(),
-            1,
-            PlayerSkills::default(),
-            PersonAttributes::default(),
-            PlayerAttributes {
+        PlayerBuilder::new()
+            .id(id)
+            .full_name(FullName::new("Test".to_string(), "Player".to_string()))
+            .birth_date(NaiveDate::from_ymd_opt(1995, 1, 1).unwrap())
+            .country_id(1)
+            .skills(PlayerSkills::default())
+            .attributes(PersonAttributes::default())
+            .player_attributes(PlayerAttributes {
                 current_ability: ability,
                 potential_ability: ability + 10,
                 condition: 10000,
                 ..Default::default()
-            },
-            None,
-            PlayerPositions {
+            })
+            .contract(None)
+            .positions(PlayerPositions {
                 positions: vec![PlayerPosition {
                     position,
                     level: 18,
                 }],
-            },
-        )
+            })
+            .build()
+            .expect("Failed to build test player")
     }
 
     #[test]

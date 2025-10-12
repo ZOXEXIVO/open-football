@@ -792,7 +792,7 @@ impl EconomicZone {
     pub fn recalculate_tv_rights(&mut self, rankings: &ContinentalRankings) {
         // Adjust TV rights based on competitive balance
         let competitive_balance = self.calculate_competitive_balance(rankings);
-        self.tv_rights_pool *= (1.0 + competitive_balance as f64 * 0.1);
+        self.tv_rights_pool *= 1.0 + competitive_balance as f64 * 0.1;
     }
 
     pub fn update_sponsorship_market(&mut self, rankings: &ContinentalRankings) {

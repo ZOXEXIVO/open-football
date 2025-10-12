@@ -8,7 +8,9 @@ use crate::utils::Logging;
 use crate::{Club, ClubResult, ClubTransferStrategy};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
+use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use std::collections::HashMap;
+use crate::country::builder::CountryBuilder;
 
 pub struct Country {
     pub id: u32,
@@ -29,70 +31,48 @@ pub struct Country {
 }
 
 impl Country {
-    pub fn new(id: u32,
-               code: String,
-               slug: String,
-               name: String,
-               continent_id: u32,
-               leagues: LeagueCollection,
-               clubs: Vec<Club>,
-               reputation: u16,
-               generator_data: CountryGeneratorData) -> Self {
-        Country {
-            id,
-            code,
-            slug,
-            name,
-            continent_id,
-            leagues,
-            clubs,
-            reputation,
-            generator_data,
-
-            transfer_market: TransferMarket::new(),
-            economic_factors: CountryEconomicFactors::new(),
-            international_competitions: vec![],
-            media_coverage: MediaCoverage::new(),
-            regulations: CountryRegulations::new(),
-        }
+    pub fn builder() -> CountryBuilder {
+        CountryBuilder::default()
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
         let country_name = self.name.clone();
 
-        info!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
+        info!(
+            "🌍 Simulating country: {} (Reputation: {})",
+            country_name, self.reputation
+        );
 
         // Phase 1: Pre-season activities (if applicable)
         if self.is_preseason(&ctx) {
             self.simulate_preseason_activities(&ctx);
         }
 
-        // Phase 2: Transfer Market Activities
-        let transfer_activities = self.simulate_transfer_market(&ctx);
-
-        // Phase 3: League Competitions
+        // Phase 2: League Competitions
         let league_results = self.simulate_leagues(&ctx);
 
-        // Phase 4: Club Operations (with awareness of league standings)
-        let clubs_results = self.simulate_clubs_with_context(&ctx, &transfer_activities);
+        // Phase 3: Club Operations (with awareness of league standings)
+        let clubs_results = self.simulate_clubs(&ctx);
 
-        // Phase 5: International Competitions
+        // Phase 4: International Competitions
         self.simulate_international_competitions(&ctx);
 
-        // Phase 6: Economic Updates
+        // Phase 5: Economic Updates
         self.update_economic_factors(&ctx);
 
-        // Phase 7: Media and Public Interest
+        // Phase 6: Media and Public Interest
         self.simulate_media_coverage(&ctx, &league_results);
 
-        // Phase 8: End of Period Processing
+        // Phase 7: End of Period Processing
         self.process_end_of_period(&ctx, &clubs_results);
 
-        // Phase 9: Country Reputation Update
+        // Phase 8: Country Reputation Update
         self.update_country_reputation(&league_results, &clubs_results);
 
-        info!("✅ Country {} simulation complete. New reputation: {}",
-              country_name, self.reputation);
+        info!(
+            "✅ Country {} simulation complete. New reputation: {}",
+            country_name, self.reputation
+        );
 
         CountryResult::new(league_results, clubs_results)
     }
@@ -117,159 +97,14 @@ impl Country {
         self.organize_preseason_tournaments();
     }
 
-    fn simulate_transfer_market(&mut self, ctx: &GlobalContext<'_>) -> TransferActivitySummary {
-        let current_date = ctx.simulation.date.date();
-        let mut summary = TransferActivitySummary::new();
-
-        // Check if transfer window is open
-        let window_manager = TransferWindowManager::new();
-        if !window_manager.is_window_open(self.id, current_date) {
-            return summary;
-        }
-
-        info!("💰 Transfer window is OPEN - simulating market activity");
-
-        // Phase 1: Clubs list players for transfer
-        self.list_players_for_transfer(current_date, &mut summary);
-
-        // Phase 2: Generate interest and negotiate transfers
-        self.negotiate_transfers(current_date, &mut summary);
-
-        // Phase 3: Process loan deals
-        self.process_loan_deals(current_date, &mut summary);
-
-        // Phase 4: Free agents and contract expirations
-        self.handle_free_agents(current_date, &mut summary);
-
-        // Phase 5: Update market based on completed deals
-        self.transfer_market.update(current_date);
-
-        debug!("Transfer Activity - Listings: {}, Negotiations: {}, Completed: {}",
-               summary.total_listings, summary.active_negotiations, summary.completed_transfers);
-
-        summary
-    }
-
-    fn list_players_for_transfer(&mut self, date: NaiveDate, summary: &mut TransferActivitySummary) {
-        for club in &self.clubs {
-            // Analyze squad and determine transfer needs
-            let squad_analysis = self.analyze_squad_needs(club);
-
-            // List surplus players
-            for player in &club.teams.teams[0].players.players {
-                if self.should_list_player(player, &squad_analysis, club) {
-                    let asking_price = self.calculate_asking_price(player, club, date);
-
-                    let listing = TransferListing::new(
-                        player.id,
-                        club.id,
-                        club.teams.teams[0].id,
-                        asking_price,
-                        date,
-                        TransferListingType::Transfer,
-                    );
-
-                    self.transfer_market.add_listing(listing);
-                    summary.total_listings += 1;
-                }
-            }
-        }
-    }
-
-    fn negotiate_transfers(&mut self, date: NaiveDate, summary: &mut TransferActivitySummary) {
-        // Collect negotiations to process (avoid borrow conflicts)
-        let mut negotiations_to_process = Vec::new();
-
-        // Clubs look at available listings and make offers
-        for buying_club in &self.clubs {
-            let budget = CurrencyValue {
-                amount: 1_000_000.0,
-                currency: Currency::Usd,
-            };
-
-            // Get club's transfer strategy
-            let strategy = ClubTransferStrategy {
-                club_id: buying_club.id,
-                budget: Some(budget),
-                selling_willingness: 0.5,
-                buying_aggressiveness: self.calculate_buying_aggressiveness(buying_club),
-                target_positions: self.identify_target_positions(buying_club),
-                reputation_level: 0, //buying_club.reputation.world,
-            };
-
-            // Collect available listings first to avoid borrow conflicts
-            let available_listings: Vec<_> = self.transfer_market.get_available_listings()
-                .into_iter()
-                .filter(|listing| listing.club_id != buying_club.id)
-                .cloned()
-                .collect();
-
-            // Look through available listings
-            for listing in available_listings {
-                // Find the player
-                if let Some(player) = self.find_player(listing.player_id) && strategy.decide_player_interest(player) {
-                    let offer = strategy.calculate_initial_offer(
-                        player,
-                        &listing.asking_price,
-                        date,
-                    );
-
-                    negotiations_to_process.push((
-                        listing.player_id,
-                        buying_club.id,
-                        listing.club_id,
-                        offer,
-                    ));
-                }
-            }
-        }
-
-        // Process all negotiations
-        for (player_id, buying_club_id, selling_club_id, offer) in negotiations_to_process {
-            if let Some(neg_id) = self.transfer_market.start_negotiation(
-                player_id,
-                buying_club_id,
-                offer,
-                date,
-            ) {
-                summary.active_negotiations += 1;
-
-                // Simulate negotiation outcome
-                if self.simulate_negotiation_outcome(neg_id, selling_club_id, buying_club_id) {
-                    if let Some(completed) = self.transfer_market.complete_transfer(neg_id, date) {
-                        summary.completed_transfers += 1;
-                        summary.total_fees_exchanged += completed.fee.amount;
-                    }
-                }
-            }
-        }
-    }
-
     fn simulate_leagues(&mut self, ctx: &GlobalContext<'_>) -> Vec<crate::league::LeagueResult> {
         self.leagues.simulate(&self.clubs, ctx)
     }
 
-    fn simulate_clubs_with_context(
-        &mut self,
-        ctx: &GlobalContext<'_>,
-        transfer_summary: &TransferActivitySummary,
-    ) -> Vec<ClubResult> {
-        // Add country-specific context for club simulation
-        let country_context = CountrySimulationContext {
-            economic_multiplier: self.economic_factors.get_financial_multiplier(),
-            transfer_market_heat: transfer_summary.get_market_heat_index(),
-            media_pressure: self.media_coverage.get_pressure_level(),
-            regulatory_constraints: self.regulations.clone(),
-        };
-
-        // Apply context to all clubs first (avoiding the borrow conflict)
-        for club in &mut self.clubs {
-            Self::apply_country_context_to_club_static(club, &country_context);
-        }
-
+    fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
         // Then simulate clubs
         self.clubs
-            .iter_mut()
+            .par_iter_mut()
             .map(|club| {
                 let message = &format!("simulate club: {}", &club.name);
 
@@ -279,16 +114,6 @@ impl Country {
                 )
             })
             .collect()
-    }
-
-    fn apply_country_context_to_club_static(club: &mut Club, context: &CountrySimulationContext) {
-        // Apply economic multiplier to finances
-        if let Some(budget) = &mut club.finance.transfer_budget {
-            budget.amount *= context.economic_multiplier as f64;
-        }
-
-        // Apply regulatory constraints
-        // This would affect things like foreign player limits, salary caps, etc.
     }
 
     fn simulate_international_competitions(&mut self, ctx: &GlobalContext<'_>) {
@@ -305,7 +130,11 @@ impl Country {
         }
     }
 
-    fn simulate_media_coverage(&mut self, ctx: &GlobalContext<'_>, league_results: &[crate::league::LeagueResult]) {
+    fn simulate_media_coverage(
+        &mut self,
+        ctx: &GlobalContext<'_>,
+        league_results: &[crate::league::LeagueResult],
+    ) {
         // Update media coverage based on recent results
         self.media_coverage.update_from_results(league_results);
 
@@ -338,7 +167,11 @@ impl Country {
         }
     }
 
-    fn update_country_reputation(&mut self, league_results: &[crate::league::LeagueResult], club_results: &[ClubResult]) {
+    fn update_country_reputation(
+        &mut self,
+        league_results: &[crate::league::LeagueResult],
+        club_results: &[ClubResult],
+    ) {
         // Base reputation change
         let mut reputation_change: i16 = 0;
 
@@ -360,9 +193,17 @@ impl Country {
         let new_reputation = (self.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
 
         if new_reputation != self.reputation {
-            debug!("Country {} reputation changed: {} -> {} ({})",
-                   self.name, self.reputation, new_reputation,
-                   if reputation_change > 0 { format!("+{}", reputation_change) } else { reputation_change.to_string() });
+            debug!(
+                "Country {} reputation changed: {} -> {} ({})",
+                self.name,
+                self.reputation,
+                new_reputation,
+                if reputation_change > 0 {
+                    format!("+{}", reputation_change)
+                } else {
+                    reputation_change.to_string()
+                }
+            );
             self.reputation = new_reputation;
         }
     }
@@ -378,13 +219,23 @@ impl Country {
         }
     }
 
-    fn should_list_player(&self, player: &crate::Player, analysis: &SquadAnalysis, club: &Club) -> bool {
+    fn should_list_player(
+        &self,
+        player: &crate::Player,
+        analysis: &SquadAnalysis,
+        club: &Club,
+    ) -> bool {
         // Complex logic to determine if a player should be listed
         // Consider: performance, age, contract, squad role, etc.
         false // Simplified for now
     }
 
-    fn calculate_asking_price(&self, player: &crate::Player, club: &Club, date: NaiveDate) -> CurrencyValue {
+    fn calculate_asking_price(
+        &self,
+        player: &crate::Player,
+        club: &Club,
+        date: NaiveDate,
+    ) -> CurrencyValue {
         use crate::transfers::window::PlayerValuationCalculator;
 
         let base_value = PlayerValuationCalculator::calculate_value(player, date);
@@ -423,7 +274,12 @@ impl Country {
         None
     }
 
-    fn simulate_negotiation_outcome(&self, negotiation_id: u32, selling_club: u32, buying_club: u32) -> bool {
+    fn simulate_negotiation_outcome(
+        &self,
+        negotiation_id: u32,
+        selling_club: u32,
+        buying_club: u32,
+    ) -> bool {
         // Simulate whether negotiation succeeds
         // Consider: offer vs asking price, club relationships, player wishes, etc.
         use crate::utils::IntegerUtils;
@@ -527,7 +383,6 @@ impl CountryEconomicFactors {
         self.tv_revenue_multiplier = self.tv_revenue_multiplier.clamp(0.8, 1.5);
     }
 }
-
 
 #[derive(Debug)]
 pub struct InternationalCompetition {

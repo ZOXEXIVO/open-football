@@ -229,7 +229,7 @@ impl PassEvaluator {
 
         // For short passes, technique matters more
         // For long passes, passing skill matters more
-        let short_pass_weight = (1.0 - (distance / 100.0).min(1.0));
+        let short_pass_weight = 1.0 - (distance / 100.0).min(1.0);
 
         let ability =
             passing_skill * (0.5 + short_pass_weight * 0.2) +

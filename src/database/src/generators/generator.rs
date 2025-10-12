@@ -6,19 +6,17 @@ use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::continent::Continent;
 use core::league::LeagueCollection;
-use core::league::Schedule;
-use core::league::{DayMonthPeriod, League, LeagueSettings, LeagueTable};
+use core::league::{DayMonthPeriod, League, LeagueSettings};
 use core::shared::Location;
 use core::utils::IntegerUtils;
 use core::ClubStatus;
 use core::TeamCollection;
 use core::{
-    Club, ClubBoard, ClubFinances, ClubMood, Country, CountryGeneratorData, Player,
+    Club, ClubBoard, ClubFinances, Country, CountryGeneratorData, Player,
     PlayerCollection, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
 };
 use std::str::FromStr;
-use core::league::MatchStorage;
 
 pub struct DatabaseGenerator;
 
@@ -72,23 +70,23 @@ impl DatabaseGenerator {
                     &mut staff_generator,
                 );
 
-                let country = Country::new(
-                    country.id,
-                    country.code.clone(),
-                    country.slug.clone(),
-                    country.name.clone(),
-                    continent.id,
-                    LeagueCollection::new(DatabaseGenerator::generate_leagues(
-                        country.id, data,
-                    )),
-                    clubs,
-                    country.reputation,
-                    generator_data
+                let leagues = LeagueCollection::new(
+                    DatabaseGenerator::generate_leagues(country.id, data)
                 );
 
-                country
-            })
-            .collect()
+                Country::builder()
+                    .id(country.id)
+                    .code(country.code.clone())
+                    .slug(country.slug.clone())
+                    .name(country.name.clone())
+                    .continent_id(continent.id)
+                    .leagues(leagues)
+                    .clubs(clubs)
+                    .reputation(country.reputation)
+                    .generator_data(generator_data)
+                    .build()
+                    .expect("Failed to build Country")
+            }).collect()
     }
 
     fn generate_leagues(country_id: u32, data: &DatabaseEntity) -> Vec<League> {
@@ -149,29 +147,31 @@ impl DatabaseGenerator {
                     club.teams
                         .iter()
                         .map(|t| {
-                            Team::new(
-                                t.id,
-                                t.league_id,
-                                club.id,
-                                t.name.clone(),
-                                t.slug.clone(),
-                                TeamType::from_str(&t.team_type).unwrap(),
-                                TrainingSchedule::new(
+                            Team::builder()
+                                .id(t.id)
+                                .league_id(t.league_id)
+                                .club_id(club.id)
+                                .name(t.name.clone())
+                                .slug(t.slug.clone())
+                                .team_type(TeamType::from_str(&t.team_type).unwrap())
+                                .training_schedule(TrainingSchedule::new(
                                     NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
                                     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
-                                ),
-                                TeamReputation::new(
+                                ))
+                                .reputation(TeamReputation::new(
                                     t.reputation.home,
                                     t.reputation.national,
                                     t.reputation.world,
-                                ),
-                                PlayerCollection::new(Self::generate_players(
+                                ))
+                                .players(PlayerCollection::new(Self::generate_players(
                                     player_generator,
                                     country_id,
-                                )),
-                                StaffCollection::new(
-                                    Self::generate_staffs(staff_generator, country_id)),
-                            )
+                                )))
+                                .staffs(StaffCollection::new(
+                                    Self::generate_staffs(staff_generator, country_id)
+                                ))
+                                .build()
+                                .expect("Failed to build Team")
                         })
                         .collect(),
                 ),

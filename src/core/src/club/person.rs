@@ -30,7 +30,7 @@ pub struct PersonAttributes {
     pub temperament: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PersonBehaviour {
     pub state: PersonBehaviourState,
 }
@@ -77,5 +77,11 @@ impl PersonBehaviourState {
             PersonBehaviourState::Normal => "Normal",
             PersonBehaviourState::Good => "Good",
         }
+    }
+}
+
+impl Default for PersonBehaviourState {
+    fn default() -> Self {
+        PersonBehaviourState::Normal
     }
 }

@@ -232,7 +232,7 @@ impl GoalkeeperWalkingState {
             optimal_distance += (15.0 - threat_factor * 10.0) * command_of_area;
 
             // Better positioning = more accurate placement
-            optimal_distance *= (0.8 + positioning_skill * 0.4);
+            optimal_distance *= 0.8 + positioning_skill * 0.4;
 
             // If ball is wide, adjust position laterally
             let ball_y_offset = ball_position.y - goal_position.y;
