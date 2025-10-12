@@ -108,6 +108,12 @@ pub struct ChampionsLeague {
     pub prize_pool: f64,
 }
 
+impl Default for ChampionsLeague {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChampionsLeague {
     pub fn new() -> Self {
         ChampionsLeague {
@@ -118,7 +124,7 @@ impl ChampionsLeague {
         }
     }
 
-    pub fn conduct_draw(&mut self, clubs: &[u32], rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, _date: NaiveDate) {
         // Implement draw logic with seeding based on rankings
         debug!("Champions League draw conducted with {} clubs", clubs.len());
     }

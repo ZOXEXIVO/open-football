@@ -172,6 +172,6 @@ impl MidfielderRunningState {
     }
 
     fn can_passing(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player.skills.technical.passing > 10.0
+        ctx.players().opponents().exists(30.0)
     }
 }

@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const DANGER_ZONE_RADIUS: f32 = 30.0;
-const OPTIMAL_DISTANCE_FROM_GOAL: f32 = 200.0; //
+const OPTIMAL_DISTANCE_FROM_GOAL: f32 = 200.0;
 
 #[derive(Default)]
 pub struct GoalkeeperStandingState {}

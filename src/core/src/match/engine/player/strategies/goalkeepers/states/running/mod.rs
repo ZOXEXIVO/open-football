@@ -37,7 +37,7 @@ impl StateProcessingHandler for GoalkeeperRunningState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.has_ball(ctx) {
-            if let Some(nearest_opponent) = ctx.players().opponents().nearby(200.0).next() {
+            if let Some(nearest_opponent) = ctx.players().opponents().nearby(100.0).next() {
                 let player_goal_velocity = SteeringBehavior::Evade {
                     target: nearest_opponent.position,
                 }
@@ -52,7 +52,7 @@ impl StateProcessingHandler for GoalkeeperRunningState {
                         radius: IntegerUtils::random(5, 150) as f32,
                         jitter: IntegerUtils::random(0, 2) as f32,
                         distance: IntegerUtils::random(10, 150) as f32,
-                        angle: IntegerUtils::random(0, 360) as f32,
+                        angle: IntegerUtils::random(0, 180) as f32,
                     }
                         .calculate(ctx.player)
                         .velocity,

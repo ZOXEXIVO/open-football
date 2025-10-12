@@ -118,7 +118,7 @@ pub struct InternationalCompetition {
 }
 
 impl InternationalCompetition {
-    pub fn simulate_round(&mut self, date: NaiveDate) {
+    pub fn simulate_round(&mut self, _date: NaiveDate) {
         // Simulate competition rounds
         debug!("Simulating {} round: {}", self.name, self.current_round);
     }
@@ -139,6 +139,12 @@ pub struct MediaCoverage {
     pub pressure_targets: HashMap<u32, f32>, // club_id -> pressure level
 }
 
+impl Default for MediaCoverage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MediaCoverage {
     pub fn new() -> Self {
         MediaCoverage {
@@ -152,7 +158,7 @@ impl MediaCoverage {
         self.intensity
     }
 
-    pub fn update_from_results(&mut self, results: &[crate::league::LeagueResult]) {
+    pub fn update_from_results(&mut self, _results: &[crate::league::LeagueResult]) {
         // Update media intensity based on exciting results
         self.intensity = (self.intensity * 0.9 + 0.1).min(1.0);
     }

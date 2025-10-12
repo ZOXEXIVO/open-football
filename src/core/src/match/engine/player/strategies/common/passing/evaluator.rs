@@ -222,7 +222,7 @@ impl PassEvaluator {
     }
 
     /// Calculate passer's ability to execute this pass
-    fn calculate_passer_ability(ctx: &StateProcessingContext, passer: &MatchPlayer, distance: f32) -> f32 {
+    fn calculate_passer_ability(_ctx: &StateProcessingContext, passer: &MatchPlayer, distance: f32) -> f32 {
         let passing_skill = passer.skills.technical.passing / 20.0;
         let technique_skill = passer.skills.technical.technique / 20.0;
         let vision_skill = passer.skills.mental.vision / 20.0;

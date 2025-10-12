@@ -140,17 +140,19 @@ impl SteeringBehavior {
                 }
             }
             SteeringBehavior::Evade { target } => {
-                let to_target = *target - player.position;
-                let distance = to_target.norm();
-                let prediction = distance / player.skills.max_speed().max(f32::EPSILON);
-                let target_position = target + player.velocity * prediction;
-                let to_player = player.position - target_position;
+                let to_player = player.position - *target;
+
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * player.skills.max_speed()
                 } else {
                     Vector3::zeros()
                 };
+
                 let steering = desired_velocity - player.velocity;
+
+                // Limit the steering force like other behaviors
+                let max_force = player.skills.physical.acceleration / 20.0;
+                let steering = Self::limit_magnitude(steering, max_force);
 
                 SteeringOutput {
                     velocity: steering,
@@ -162,43 +164,43 @@ impl SteeringBehavior {
                 radius,
                 jitter,
                 distance,
-                angle: _,
+                angle
             } => {
-                let mut rng = rand::rng();
+                // The wander circle is projected in front of the player
+                let circle_center = player.position + player.velocity.normalize() * *distance;
 
-                let angle = rng.random::<f32>() * std::f32::consts::PI * 2.0;
-
-                let displacement = Vector3::new(angle.cos() * *radius, angle.sin() * *radius, 0.0);
-
-                let jitter_offset = Vector3::new(
-                    rng.random::<f32>() * *jitter - *jitter * 0.5,
-                    rng.random::<f32>() * *jitter - *jitter * 0.5,
+                // Calculate the displacement around the circle using the stored angle
+                let displacement = Vector3::new(
+                    angle.cos() * *radius,
+                    angle.sin() * *radius,
                     0.0,
                 );
 
-                let wander_target = *target + displacement + jitter_offset;
+                // The wander target is on the circle's edge
+                let wander_target = circle_center + displacement;
 
-                let wandering_force = wander_target - player.position;
+                // Calculate desired velocity toward the wander target
+                let to_target = wander_target - player.position;
+                let desired_velocity = if to_target.norm() > 0.0 {
+                    to_target.normalize() * player.skills.max_speed() * 0.3 // Reduced speed for wandering
+                } else {
+                    Vector3::zeros()
+                };
 
-                let steering_force = wandering_force - player.velocity;
+                let steering = desired_velocity - player.velocity;
 
-                let max_force = 1.0;
-                let steering_force = Self::limit_magnitude(steering_force, max_force);
+                // Limit steering force
+                let max_force = player.skills.physical.acceleration / 30.0; // Gentler force
+                let steering = Self::limit_magnitude(steering, max_force);
 
-                let speed_multiplier = 0.003; // Adjust this value to control the speed
-                let new_velocity = Self::limit_magnitude(
-                    player.velocity + steering_force,
-                    *distance * speed_multiplier,
-                );
-
-                let rotation = if new_velocity.x != 0.0 || new_velocity.y != 0.0 {
-                    new_velocity.y.atan2(new_velocity.x)
+                let rotation = if steering.x != 0.0 || steering.y != 0.0 {
+                    steering.y.atan2(steering.x)
                 } else {
                     0.0
                 };
 
                 SteeringOutput {
-                    velocity: new_velocity,
+                    velocity: steering,
                     rotation,
                 }
             }
