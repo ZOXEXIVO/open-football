@@ -1,9 +1,9 @@
-use std::collections::HashMap;
-use chrono::NaiveDate;
 use crate::shared::CurrencyValue;
-use crate::transfers::{CompletedTransfer, TransferType};
 use crate::transfers::negotiation::{NegotiationStatus, TransferNegotiation};
 use crate::transfers::offer::TransferOffer;
+use crate::transfers::{CompletedTransfer, TransferType};
+use chrono::NaiveDate;
+use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
 pub struct TransferMarket {
@@ -103,7 +103,6 @@ impl TransferMarket {
         if let Some(listing_index) = self.listings.iter().position(|l|
             l.player_id == player_id &&
                 l.status == TransferListingStatus::Available) {
-
             let listing = &mut self.listings[listing_index];
 
             // Create a negotiation
@@ -164,7 +163,7 @@ impl TransferMarket {
                                 .unwrap_or(current_date)
                         });
                     TransferType::Loan(loan_end)
-                },
+                }
                 TransferListingType::EndOfContract => TransferType::Free,
                 _ => TransferType::Permanent,
             };

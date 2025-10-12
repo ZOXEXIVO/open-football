@@ -5,7 +5,7 @@ pub struct Space {
     colliders: Vec<SphereCollider>,
 }
 
-impl From<&MatchField> for Space{
+impl From<&MatchField> for Space {
     fn from(field: &MatchField) -> Self {
         let mut space = Space::new();
 

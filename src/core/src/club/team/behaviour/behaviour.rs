@@ -254,7 +254,7 @@ impl TeamBehaviour {
     /// Process reactions to recent match performances
     fn process_recent_performance_reactions(
         players: &PlayerCollection,
-        result: &mut TeamBehaviourResult
+        result: &mut TeamBehaviourResult,
     ) {
         debug!("⚽ Processing recent performance reactions...");
 
@@ -1030,45 +1030,4 @@ impl TeamBehaviour {
 
         0.0
     }
-}
-
-fn calculate_player_happiness(player: &Player) -> f32 {
-    let mut happiness = 0.0;
-
-    // Contract satisfaction
-    happiness += player
-        .contract
-        .as_ref()
-        .map(|c| (c.salary as f32 / 10000.0).min(1.0))
-        .unwrap_or(-0.5); // No contract = unhappy
-
-    // Playing time satisfaction
-    if player.statistics.played > 20 {
-        happiness += 0.3; // Regular starter
-    } else if player.statistics.played > 10 {
-        happiness += 0.1; // Squad player
-    } else {
-        happiness -= 0.2; // Barely plays
-    }
-
-    // Performance satisfaction
-    let goals_ratio = player.statistics.goals as f32 / player.statistics.played.max(1) as f32;
-    if player.position().is_forward() && goals_ratio > 0.5 {
-        happiness += 0.2; // Scoring forward
-    } else if !player.position().is_forward() && goals_ratio > 0.3 {
-        happiness += 0.15; // Scoring non-forward
-    }
-
-    // Personality factors
-    happiness += (player.attributes.professionalism - 10.0) / 100.0;
-    happiness -= (player.attributes.controversy - 10.0) / 50.0;
-
-    // Behavior state affects happiness
-    match player.behaviour.state {
-        PersonBehaviourState::Good => happiness += 0.2,
-        PersonBehaviourState::Poor => happiness -= 0.3,
-        PersonBehaviourState::Normal => {}
-    }
-
-    happiness.clamp(-1.0, 1.0)
 }

@@ -52,7 +52,7 @@ impl League {
             milestones: LeagueMilestones::new(),
         }
     }
-    
+
     pub fn simulate(&mut self, clubs: &[Club], ctx: GlobalContext<'_>) -> LeagueResult {
         let league_name = self.name.clone();
         let current_date = ctx.simulation.date.date();

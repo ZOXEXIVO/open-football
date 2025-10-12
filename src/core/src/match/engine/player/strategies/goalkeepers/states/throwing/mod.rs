@@ -1,9 +1,8 @@
-use crate::r#match::events::{Event, EventCollection};
+use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use crate::r#match::goalkeepers::states::GoalkeeperRunningState;
 
 #[derive(Default)]
 pub struct GoalkeeperThrowingState {}

@@ -18,7 +18,7 @@ impl MatchPlayerStatistics {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Goal,
             match_second,
-            is_auto_goal
+            is_auto_goal,
         })
     }
 
@@ -26,7 +26,7 @@ impl MatchPlayerStatistics {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Assist,
             match_second,
-            is_auto_goal: false
+            is_auto_goal: false,
         })
     }
 }

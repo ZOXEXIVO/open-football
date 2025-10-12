@@ -78,11 +78,6 @@ impl GoalkeeperDivingState {
         dive_direction
     }
 
-    fn calculate_dive_distance(&self, ctx: &StateProcessingContext) -> f32 {
-        let urgency = self.calculate_urgency(ctx);
-        ctx.player.skills.physical.jumping * 0.3 * urgency
-    }
-
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
         (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.2 * urgency

@@ -51,12 +51,4 @@ impl GoalkeeperPassingState {
     fn find_best_pass_option(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         PassEvaluator::find_best_pass_option(ctx, 400.0)
     }
-
-    fn calculate_space_around_player(&self, ctx: &StateProcessingContext, player: &MatchPlayerLite) -> f32 {
-        let space_radius = 10.0;
-
-        space_radius - ctx.players().opponents().all()
-            .filter(|opponent| (opponent.position - player.position).magnitude() <= space_radius)
-            .count() as f32
-    }
 }

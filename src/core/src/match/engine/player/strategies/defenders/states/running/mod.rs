@@ -1,9 +1,9 @@
-use crate::IntegerUtils;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
+use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 400.0;

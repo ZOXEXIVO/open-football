@@ -21,11 +21,13 @@ pub mod intercepting;
 pub mod creating_space;
 
 pub use attack_supporting::*;
+pub use creating_space::*;
 pub use crossing::*;
 pub use distance_shooting::*;
 pub use distributing::*;
 pub use dribbling::*;
 pub use holding_posession::*;
+pub use intercepting::*;
 pub use passing::*;
 pub use pressing::*;
 pub use resting::*;
@@ -39,6 +41,4 @@ pub use tackling::*;
 pub use takeball::*;
 pub use tracking_runner::*;
 pub use walking::*;
-pub use intercepting::*;
-pub use creating_space::*;
 

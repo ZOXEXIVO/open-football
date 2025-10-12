@@ -1,10 +1,10 @@
+use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use crate::r#match::events::Event;
 
 #[derive(Default)]
 pub struct MidfielderShootingState {}

@@ -123,25 +123,7 @@ impl Team {
     /// Enhanced get_match_squad that uses improved tactical analysis
     pub fn get_enhanced_match_squad(&self) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
-
-        let mut new_tactics: Option<Tactics> = None;
-
-        // Step 1: Analyze current squad and suggest optimal formation
-        if let Some(suggested_formation) =
-            TacticalSquadAnalyzer::suggest_optimal_formation(self, head_coach)
-        {
-            let current_formation = self.tactics.as_ref().map(|t| t.tactic_type);
-
-            // Update tactics if suggestion is significantly better
-            if current_formation != Some(suggested_formation) {
-                new_tactics = Some(Tactics::with_reason(
-                    suggested_formation,
-                    TacticSelectionReason::TeamComposition,
-                    0.95,
-                ));
-            }
-        }
-
+        
         // Step 2: Use enhanced squad selection
         let squad_result = SquadSelector::select(self, head_coach);
 

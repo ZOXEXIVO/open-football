@@ -7,9 +7,6 @@ use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::Rng;
 
-const SEPARATION_RADIUS: f32 = 20.0;
-const SEPARATION_STRENGTH: f32 = 20.0;
-
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
@@ -72,7 +69,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let y_offset = rng.random_range(-max_y_deviation..max_y_deviation);
 
         let mut shooting_target = goal_position;
-        
+
         shooting_target.y += y_offset;
 
         shooting_target
@@ -316,7 +313,7 @@ impl<'p> PlayerOperationsImpl<'p> {
             let jitter = Vector3::new(
                 (rand::random::<f32>() - 0.5) * 0.8,
                 (rand::random::<f32>() - 0.5) * 0.8,
-                0.0
+                0.0,
             );
             separation += jitter;
         }

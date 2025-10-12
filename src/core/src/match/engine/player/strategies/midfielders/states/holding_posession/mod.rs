@@ -35,10 +35,10 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing
                 ))
-            }
+            };
         }
 
-        let players= ctx.players();
+        let players = ctx.players();
         let teammates = players.teammates();
 
         if let Some(_) = teammates
@@ -64,8 +64,8 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
                 target: ctx.player().opponent_goal_position(),
                 slowing_distance: 30.0,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 

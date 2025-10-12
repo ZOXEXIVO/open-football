@@ -1,7 +1,7 @@
 use crate::context::GlobalContext;
 use crate::league::round::RoundSchedule;
 use crate::league::{LeagueMatch, LeagueSettings, ScheduleGenerator, ScheduleResult, Season};
-use crate::r#match::{Score};
+use crate::r#match::Score;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 
@@ -210,8 +210,8 @@ impl ScheduleTour {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
     use crate::r#match::TeamScore;
+    use chrono::NaiveDate;
 
     #[test]
     fn test_schedule_tour_new() {
@@ -235,7 +235,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let item2 = ScheduleItem {
@@ -251,7 +251,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let mut items_with_results = Vec::new();
@@ -302,7 +302,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let item2 = ScheduleItem {
@@ -318,7 +318,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let schedule_tour = ScheduleTour {
@@ -343,7 +343,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let item2 = ScheduleItem {
@@ -358,7 +358,7 @@ mod tests {
             result: Some(Score {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
-                details: Vec::new()
+                details: Vec::new(),
             }),
         };
         let schedule_tour = ScheduleTour {

@@ -1,5 +1,5 @@
-use crate::PlayerPositionType;
 use crate::r#match::{PositionType, POSITION_POSITIONING};
+use crate::PlayerPositionType;
 
 #[derive(Debug, Clone)]
 pub struct MatchTacticalPosition {
@@ -10,7 +10,7 @@ pub struct MatchTacticalPosition {
 #[derive(Debug, Clone)]
 pub struct TacticalPositions {
     pub current_position: PlayerPositionType,
-    pub tactical_positions: Vec<MatchTacticalPosition>
+    pub tactical_positions: Vec<MatchTacticalPosition>,
 }
 
 impl TacticalPositions {
@@ -24,7 +24,7 @@ impl TacticalPositions {
 
         TacticalPositions {
             current_position,
-            tactical_positions
+            tactical_positions,
         }
     }
 
@@ -40,7 +40,7 @@ impl TacticalPositions {
                     (base_x, base_y - 30.0),    // Slight left
                     (base_x, base_y + 30.0),    // Slight right
                 ]
-            },
+            }
 
             // Defender positions
             PlayerPositionType::DefenderLeft |
@@ -57,7 +57,7 @@ impl TacticalPositions {
                     (base_x - 15.0, base_y - 20.0), // Diagonal back-left
                     (base_x - 15.0, base_y + 20.0), // Diagonal back-right
                 ]
-            },
+            }
 
             PlayerPositionType::Sweeper => {
                 vec![
@@ -67,7 +67,7 @@ impl TacticalPositions {
                     (base_x, base_y - 40.0),   // Left cover
                     (base_x, base_y + 40.0),   // Right cover
                 ]
-            },
+            }
 
             // Midfield positions - more movement range
             PlayerPositionType::DefensiveMidfielder => {
@@ -82,7 +82,7 @@ impl TacticalPositions {
                     (base_x + 20.0, base_y - 25.0), // Diagonal forward-left
                     (base_x + 20.0, base_y + 25.0), // Diagonal forward-right
                 ]
-            },
+            }
 
             PlayerPositionType::WingbackLeft => {
                 vec![
@@ -92,7 +92,7 @@ impl TacticalPositions {
                     (base_x + 50.0, base_y + 30.0), // Forward inside
                     (base_x - 30.0, base_y - 15.0), // Defensive wide
                 ]
-            },
+            }
 
             PlayerPositionType::WingbackRight => {
                 vec![
@@ -102,7 +102,7 @@ impl TacticalPositions {
                     (base_x + 50.0, base_y - 30.0), // Forward inside
                     (base_x - 30.0, base_y + 15.0), // Defensive wide
                 ]
-            },
+            }
 
             PlayerPositionType::MidfielderLeft |
             PlayerPositionType::MidfielderCenterLeft |
@@ -119,7 +119,7 @@ impl TacticalPositions {
                     (base_x + 25.0, base_y - 30.0), // Diagonal forward-wide
                     (base_x + 40.0, base_y),      // Advanced position
                 ]
-            },
+            }
 
             // Attacking midfield positions - aggressive movement
             PlayerPositionType::AttackingMidfielderLeft |
@@ -136,7 +136,7 @@ impl TacticalPositions {
                     (base_x + 30.0, base_y),     // Advanced central position
                     (base_x - 35.0, base_y + 25.0), // Deep support position
                 ]
-            },
+            }
 
             // Forward positions - dynamic movement with focus on final third
             PlayerPositionType::ForwardLeft |
@@ -153,7 +153,7 @@ impl TacticalPositions {
                     (base_x + 25.0, base_y + 15.0), // Push diagonally central
                     (base_x - 30.0, base_y + 15.0), // Drop diagonally central
                 ]
-            },
+            }
 
             PlayerPositionType::Striker => {
                 vec![
@@ -167,7 +167,7 @@ impl TacticalPositions {
                     (base_x + 20.0, base_y - 20.0), // Push diagonally left
                     (base_x + 20.0, base_y + 20.0), // Push diagonally right
                 ]
-            },
+            }
 
             // Default for any other position
             _ => {
@@ -178,7 +178,7 @@ impl TacticalPositions {
                     (base_x, base_y - 25.0),     // Left
                     (base_x, base_y + 25.0),     // Right
                 ]
-            },
+            }
         }
     }
 

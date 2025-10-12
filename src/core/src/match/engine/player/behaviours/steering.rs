@@ -30,7 +30,7 @@ pub enum SteeringBehavior {
         waypoints: Vec<Vector3<f32>>,
         current_waypoint: usize,
         path_offset: f32,
-    }
+    },
 }
 
 impl SteeringBehavior {
@@ -101,7 +101,7 @@ impl SteeringBehavior {
                     rotation: 0.0,
                 }
             }
-            SteeringBehavior::Pursuit { target} => {
+            SteeringBehavior::Pursuit { target } => {
                 let to_target = *target - player.position;
 
                 // Normalize skill values to a range of 0.5 to 1.5
@@ -216,7 +216,7 @@ impl SteeringBehavior {
                     velocity: steering,
                     rotation: 0.0,
                 }
-            },
+            }
 
             SteeringBehavior::FollowPath { waypoints, current_waypoint, path_offset } => {
                 if waypoints.is_empty() {
@@ -239,16 +239,6 @@ impl SteeringBehavior {
                 // Calculate distance to current waypoint
                 let to_waypoint = target - player.position;
                 let distance = to_waypoint.norm();
-
-                // If we're close enough to the current waypoint, target the next one
-                let waypoint_radius = 5.0; // Distance to consider waypoint reached
-                let mut current_wp = *current_waypoint;
-
-                if distance < waypoint_radius && current_wp < waypoints.len() - 1 {
-                    current_wp += 1;
-                    // We'd need to mutate current_waypoint here, but this would require
-                    // changing the function signature. For now, let's continue with the logic.
-                }
 
                 // Calculate desired velocity toward waypoint with slight offset for natural movement
                 let direction = if distance > 0.0 {
@@ -276,7 +266,7 @@ impl SteeringBehavior {
                     velocity: steering,
                     rotation: 0.0,
                 }
-            },
+            }
         }
     }
 

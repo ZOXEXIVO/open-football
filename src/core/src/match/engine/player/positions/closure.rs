@@ -1,5 +1,5 @@
-use crate::r#match::{MatchField, MatchPlayer, VectorExtensions};
-use log::{debug};
+use crate::r#match::{MatchField, VectorExtensions};
+use log::debug;
 use std::cmp::Ordering;
 use std::collections::BinaryHeap;
 

@@ -1,5 +1,5 @@
-use chrono::NaiveDate;
 use crate::shared::CurrencyValue;
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
 pub struct TransferOffer {

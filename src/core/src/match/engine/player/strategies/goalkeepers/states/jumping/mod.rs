@@ -1,6 +1,6 @@
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 
 const JUMP_DURATION: u64 = 30; // Duration of jump animation in ticks

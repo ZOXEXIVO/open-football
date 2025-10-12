@@ -1,8 +1,8 @@
-use crate::IntegerUtils;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
+use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default)]

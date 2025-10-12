@@ -1,5 +1,5 @@
-use crate::{Player, Team};
 use crate::r#match::{SquadSelector, TacticalSquadAnalyzer};
+use crate::{Player, Team};
 
 pub struct TacticalDecisionEngine;
 

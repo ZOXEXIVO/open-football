@@ -173,60 +173,7 @@ impl MidfielderPassingState {
     ) -> Option<MatchPlayerLite> {
         PassEvaluator::find_best_pass_option(ctx, 350.0)
     }
-
-    /// Calculate field spread score to maintain team width
-    fn calculate_field_spread_score(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> f32 {
-        let field_height = ctx.context.field_size.height as f32;
-        let player_y = ctx.player.position.y;
-        let teammate_y = teammate.position.y;
-
-        // Calculate how this pass affects field width
-        let y_difference = (teammate_y - player_y).abs();
-
-        // Check current team spread
-        let team_positions: Vec<f32> = ctx.players()
-            .teammates()
-            .all()
-            .map(|t| t.position.y)
-            .collect();
-
-        if team_positions.is_empty() {
-            return 0.5;
-        }
-
-        let min_y = team_positions.iter().min_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&0.0);
-        let max_y = team_positions.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap_or(&field_height);
-        let current_spread = max_y - min_y;
-
-        // Ideal spread is about 60-70% of field height
-        let ideal_spread = field_height * 0.65;
-
-        if current_spread < ideal_spread * 0.8 {
-            // Team is too narrow - reward wide passes
-            if y_difference > 30.0 {
-                1.0 // Excellent - creating width
-            } else if y_difference > 15.0 {
-                0.7 // Good - some width
-            } else {
-                0.3 // Not helping spread
-            }
-        } else if current_spread > ideal_spread * 1.2 {
-            // Team is too spread - reward more central passes
-            if y_difference < 20.0 {
-                0.9 // Good - maintaining connections
-            } else {
-                0.4 // Making team too spread
-            }
-        } else {
-            // Good spread - maintain it
-            0.6 + (y_difference / field_height) * 0.4
-        }
-    }
-
+    
     /// Calculate progression score for forward movement
     fn calculate_progression_score(
         &self,

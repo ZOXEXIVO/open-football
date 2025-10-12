@@ -15,7 +15,7 @@ impl TimeEstimation {
 
     pub async fn estimate_async<T, F>(action: F) -> (T, u32)
     where
-        F: FnOnce() -> Pin<Box<dyn Future<Output = T> + Send>>,
+        F: FnOnce() -> Pin<Box<dyn Future<Output=T> + Send>>,
     {
         let now = Instant::now();
 

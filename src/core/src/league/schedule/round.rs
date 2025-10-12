@@ -44,7 +44,7 @@ impl ScheduleGenerator for RoundSchedule {
                 league_settings.season_starting_half.from_month as u32,
                 league_settings.season_starting_half.from_day as u32,
             )
-            .unwrap(),
+                .unwrap(),
         );
 
         let current_date_time =

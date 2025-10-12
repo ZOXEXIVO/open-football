@@ -263,7 +263,7 @@ impl SimulatorData {
 }
 
 pub struct SimulationResult {
-    pub match_results: Vec<MatchResult>
+    pub match_results: Vec<MatchResult>,
 }
 
 impl SimulationResult {

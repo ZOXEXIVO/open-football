@@ -86,7 +86,7 @@ impl MidfielderDribblingState {
         let teammates = teammates.nearby_ids(150.0);
 
         if let Some((teammate_id, _)) = teammates.choose(&mut rand::rng()) {
-            return Some(teammate_id)
+            return Some(teammate_id);
         }
 
         None
@@ -100,14 +100,6 @@ impl MidfielderDribblingState {
         let distance_to_goal = (player_position - goal_position).magnitude();
 
         distance_to_goal <= shooting_range
-    }
-
-    fn should_support_attack(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the team is in possession and the player is in a good position to support the attack
-        let team_in_possession = ctx.team().is_control_ball();
-        let in_attacking_half = ctx.player.position.x > ctx.context.field_size.width as f32 / 2.0;
-
-        team_in_possession && in_attacking_half
     }
 
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {

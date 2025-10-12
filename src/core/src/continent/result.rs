@@ -1,9 +1,9 @@
-use std::collections::HashMap;
 use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalRankings};
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
-use crate::SimulationResult;
 use crate::transfers::CompletedTransfer;
+use crate::SimulationResult;
+use std::collections::HashMap;
 
 pub struct ContinentResult {
     pub countries: Vec<CountryResult>,
@@ -72,19 +72,19 @@ impl ContinentResult {
 
         // Update continental rankings in data
         if let Some(rankings) = self.rankings_update {
-           // self.process_rankings_update(rankings, data);
+            // self.process_rankings_update(rankings, data);
         }
 
         // Apply economic impacts
         if let Some(economic) = self.economic_impact {
-           // self.process_economic_impact(economic, data);
+            // self.process_economic_impact(economic, data);
         }
     }
 
     fn process_competition_results(
         &self,
         results: ContinentalCompetitionResults,
-        data: &mut SimulatorData
+        data: &mut SimulatorData,
     ) {
         // Process Champions League results
         if let Some(cl_results) = results.champions_league_results {

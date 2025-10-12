@@ -1,8 +1,8 @@
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::{Player, Tactics, Team};
-use std::borrow::Borrow;
 use log::{debug, warn};
+use std::borrow::Borrow;
 
 pub struct SquadSelector;
 
@@ -242,7 +242,7 @@ impl SquadSelector {
 
     /// Find the best remaining player regardless of position
     fn find_best_remaining_player<'p>(
-        available_players: &'p[&Player],
+        available_players: &'p [&Player],
         used_players: &[u32],
         staff: &Staff,
         tactics: &Tactics,
@@ -406,26 +406,15 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         Self::select_substitutes_optimized(team_id, players, staff, tactics)
     }
-
-    /// Legacy method for backward compatibility
-    fn calculate_player_rating(
-        player: &Player,
-        staff: &Staff,
-        position: &PlayerPositionType,
-    ) -> f32 {
-        // Use a default tactics for legacy compatibility
-        let default_tactics = crate::Tactics::new(crate::MatchTacticType::T442);
-        Self::calculate_player_rating_for_position(player, staff, *position, &default_tactics)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{
-        IntegerUtils, PlayerCollection, PlayerGenerator, StaffCollection,
-        MatchTacticType, TeamReputation, TeamType, TrainingSchedule,
-        TACTICS_POSITIONS,
+        IntegerUtils, MatchTacticType, PlayerCollection, PlayerGenerator,
+        StaffCollection, TeamReputation, TeamType, TrainingSchedule
+        ,
     };
     use chrono::{NaiveTime, Utc};
 
@@ -448,7 +437,7 @@ mod tests {
         let formation_positions = tactics.positions();
         assert_eq!(result.main_squad.len(), formation_positions.len());
     }
-    
+
     #[test]
     fn test_tactical_fit_calculation() {
         let player = generate_attacking_player();

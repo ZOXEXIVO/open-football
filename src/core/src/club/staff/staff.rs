@@ -1,3 +1,5 @@
+// Assuming rand is available
+extern crate rand;
 use crate::club::{
     PersonBehaviour, StaffClubContract, StaffPosition, StaffStatus
 };
@@ -5,7 +7,7 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
-use chrono::{NaiveDate, NaiveDateTime, Datelike, Timelike};
+use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 #[derive(Debug)]
 pub struct Staff {
@@ -852,5 +854,3 @@ impl StaffClubContract {
     }
 }
 
-// Assuming rand is available
-extern crate rand;

@@ -48,7 +48,7 @@ impl LeagueResult {
 
         league.schedule.update_match_result(
             &result.id,
-            &result.score
+            &result.score,
         );
 
         let home_team = data.team_mut(result.score.home_team.team_id).unwrap();
@@ -128,7 +128,6 @@ impl LeagueMatchResultResult {
             details: score.detail().to_vec(),
         }
     }
-
 }
 
 impl From<ScheduleItem> for LeagueMatch {
