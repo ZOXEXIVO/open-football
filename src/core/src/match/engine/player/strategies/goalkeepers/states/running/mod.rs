@@ -12,7 +12,7 @@ impl StateProcessingHandler for GoalkeeperRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             if let Some(teammate) = self.find_best_pass_option(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                Some(StateChangeResult::with_goalkeeper_state_and_event(
                     GoalkeeperState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
@@ -20,15 +20,19 @@ impl StateProcessingHandler for GoalkeeperRunningState {
                             .with_to_player_id(teammate.id)
                             .build(ctx),
                     )),
-                ));
+                ))
+            } else {
+                // If no pass option is available, transition to HoldingBall state
+                // This allows the goalkeeper to look for other options or kick the ball
+                Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::HoldingBall,
+                ))
             }
         } else {
-            return Some(StateChangeResult::with_goalkeeper_state(
+            Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
-            ));
+            ))
         }
-
-        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
