@@ -43,7 +43,7 @@ impl StateProcessingHandler for MidfielderPassingState {
         // Find the best regular pass option with improved logic
         if let Some(target_teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Standing,
+                MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
@@ -173,27 +173,6 @@ impl MidfielderPassingState {
     ) -> Option<MatchPlayerLite> {
         PassEvaluator::find_best_pass_option(ctx, 350.0)
     }
-    
-    /// Calculate progression score for forward movement
-    fn calculate_progression_score(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> f32 {
-        let goal_position = ctx.player().opponent_goal_position();
-        let player_to_goal = (goal_position - ctx.player.position).magnitude();
-        let teammate_to_goal = (goal_position - teammate.position).magnitude();
-
-        let progression = (player_to_goal - teammate_to_goal) / player_to_goal;
-
-        // Reward forward passes more
-        if progression > 0.0 {
-            0.5 + progression * 0.5
-        } else {
-            // Backward passes are sometimes necessary but less preferred
-            0.3 + (1.0 + progression) * 0.2
-        }
-    }
 
     /// Improved space calculation around player
     fn calculate_improved_space_score(
@@ -227,38 +206,6 @@ impl MidfielderPassingState {
             - (medium_opponents as f32 * 0.1);
 
         space_score.max(0.0)
-    }
-
-    /// Position-specific scoring to encourage tactical passing
-    fn calculate_position_specific_score(
-        &self,
-        ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
-    ) -> f32 {
-        // Different positions should receive passes in different situations
-        let ball_to_goal_distance = ctx.ball().distance_to_opponent_goal();
-        let field_width = ctx.context.field_size.width as f32;
-
-        if teammate.tactical_positions.is_forward() {
-            // Forwards should receive when in attacking third
-            if ball_to_goal_distance < field_width * 0.4 {
-                0.9
-            } else {
-                0.5
-            }
-        } else if teammate.tactical_positions.is_midfielder() {
-            // Midfielders are always good options
-            0.7
-        } else if teammate.tactical_positions.is_defender() {
-            // Defenders for recycling possession
-            if ball_to_goal_distance > field_width * 0.7 {
-                0.6
-            } else {
-                0.3 // Avoid passing back to defenders when attacking
-            }
-        } else {
-            0.4
-        }
     }
 
     /// Check if pass would break defensive lines
@@ -317,20 +264,6 @@ impl MidfielderPassingState {
         let finishing_skill = target_skills.technical.finishing / 20.0;
 
         (goal_distance_value * 0.5) + (space_value * 0.3) + (finishing_skill * 0.2)
-    }
-
-    /// Check if teammate is viable for pass
-    fn is_viable_pass_target(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        // Don't pass to goalkeepers unless necessary
-        if teammate.tactical_positions.is_goalkeeper() {
-            return false;
-        }
-
-        let has_clear_lane = self.has_clear_passing_lane(ctx, teammate);
-        let not_heavily_marked = !self.is_heavily_marked(ctx, teammate);
-        let is_in_good_position = self.is_in_good_position(ctx, teammate);
-
-        has_clear_lane && not_heavily_marked && is_in_good_position
     }
 
     /// Check for clear passing lanes with improved logic

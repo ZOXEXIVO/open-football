@@ -182,34 +182,55 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         receiver: &MatchPlayerLite,
     ) -> f32 {
-        const SPACE_CHECK_RADIUS: f32 = 10.0;
+        const VERY_CLOSE_RADIUS: f32 = 3.0;
+        const CLOSE_RADIUS: f32 = 7.0;
+        const MEDIUM_RADIUS: f32 = 12.0;
 
-        // Check how much space the receiver has
-        let nearby_opponents: Vec<(u32, f32)> = ctx.tick_context
+        // Check opponents at multiple distance ranges for nuanced space evaluation
+        let all_opponents: Vec<(u32, f32)> = ctx.tick_context
             .distances
-            .opponents(receiver.id, SPACE_CHECK_RADIUS)
+            .opponents(receiver.id, MEDIUM_RADIUS)
             .collect();
 
-        let space_factor = if nearby_opponents.is_empty() {
-            1.0 // Lots of space
-        } else {
-            let closest_distance = nearby_opponents
-                .iter()
-                .map(|(_, dist)| *dist)
-                .min_by(|a, b| a.partial_cmp(b).unwrap())
-                .unwrap_or(SPACE_CHECK_RADIUS);
+        // Count opponents in each zone
+        let very_close_opponents = all_opponents.iter()
+            .filter(|(_, dist)| *dist < VERY_CLOSE_RADIUS)
+            .count();
 
-            (closest_distance / SPACE_CHECK_RADIUS).clamp(0.4, 1.0)
+        let close_opponents = all_opponents.iter()
+            .filter(|(_, dist)| *dist >= VERY_CLOSE_RADIUS && *dist < CLOSE_RADIUS)
+            .count();
+
+        let medium_opponents = all_opponents.iter()
+            .filter(|(_, dist)| *dist >= CLOSE_RADIUS && *dist < MEDIUM_RADIUS)
+            .count();
+
+        // Calculate space quality with heavy penalties for nearby opponents
+        let space_factor = if very_close_opponents > 0 {
+            // Very tightly marked - poor option
+            0.2 - (very_close_opponents as f32 * 0.1).min(0.15)
+        } else if close_opponents > 0 {
+            // Marked but manageable
+            0.6 - (close_opponents as f32 * 0.15).min(0.3)
+        } else if medium_opponents > 0 {
+            // Some pressure but good space
+            0.85 - (medium_opponents as f32 * 0.1).min(0.2)
+        } else {
+            // Completely free - excellent option
+            1.0
         };
 
         // Check if receiver is moving into space or standing still
         let receiver_velocity = ctx.tick_context.positions.players.velocity(receiver.id);
-        let movement_factor = if receiver_velocity.norm() > 1.0 {
-            // Moving - better positioning
-            1.1
+        let movement_factor = if receiver_velocity.norm() > 1.5 {
+            // Moving into space - excellent
+            1.15
+        } else if receiver_velocity.norm() > 0.5 {
+            // Some movement - good
+            1.05
         } else {
-            // Standing still
-            0.9
+            // Standing still - acceptable but not ideal
+            0.95
         };
 
         // Off the ball movement skill affects positioning quality
@@ -217,8 +238,9 @@ impl PassEvaluator {
         let skills = players.skills(receiver.id);
 
         let off_ball_factor = skills.mental.off_the_ball / 20.0;
+        let positioning_factor = skills.mental.positioning / 20.0;
 
-        (space_factor * movement_factor * (0.8 + off_ball_factor * 0.2)).min(1.0)
+        (space_factor * movement_factor * (0.7 + off_ball_factor * 0.15 + positioning_factor * 0.15)).clamp(0.1, 1.0)
     }
 
     /// Calculate passer's ability to execute this pass
@@ -297,13 +319,15 @@ impl PassEvaluator {
     /// Calculate overall success probability from factors
     fn calculate_success_probability(factors: &PassFactors) -> f32 {
         // Weighted combination of all factors
+        // Receiver positioning is now much more important - free players are better targets
         let probability =
-            factors.distance_factor * 0.20 +
-                factors.angle_factor * 0.15 +
-                factors.pressure_factor * 0.15 +
-                factors.receiver_positioning * 0.10 +
-                factors.passer_ability * 0.15 +
-                factors.receiver_ability * 0.10;
+            factors.distance_factor * 0.15 +
+                factors.angle_factor * 0.12 +
+                factors.pressure_factor * 0.12 +
+                factors.receiver_positioning * 0.30 +  // Significantly increased from 0.10
+                factors.passer_ability * 0.13 +
+                factors.receiver_ability * 0.10 +
+                factors.tactical_value * 0.08;  // Also consider tactical value
 
         probability.clamp(0.1, 0.99)
     }
@@ -311,12 +335,64 @@ impl PassEvaluator {
     /// Calculate overall risk level
     fn calculate_risk_level(factors: &PassFactors) -> f32 {
         // Risk is inverse of safety factors
+        // Poor receiver positioning (crowded by opponents) is now a major risk
         let risk =
-            (1.0 - factors.distance_factor) * 0.25 +
-                (1.0 - factors.pressure_factor) * 0.25 +
-                (1.0 - factors.receiver_positioning) * 0.20;
+            (1.0 - factors.distance_factor) * 0.20 +
+                (1.0 - factors.pressure_factor) * 0.20 +
+                (1.0 - factors.receiver_positioning) * 0.40 +  // Increased from 0.20
+                (1.0 - factors.receiver_ability) * 0.20;
 
         risk.clamp(0.0, 1.0)
+    }
+
+    /// Calculate interception risk from opponents along the pass path
+    fn calculate_interception_risk(
+        ctx: &StateProcessingContext,
+        passer: &MatchPlayer,
+        receiver: &MatchPlayerLite,
+    ) -> f32 {
+        let pass_vector = receiver.position - passer.position;
+        let pass_distance = pass_vector.norm();
+        let pass_direction = pass_vector.normalize();
+
+        // Check for opponents who could intercept the pass
+        let intercepting_opponents = ctx.players().opponents().all()
+            .filter(|opponent| {
+                let to_opponent = opponent.position - passer.position;
+                let projection_distance = to_opponent.dot(&pass_direction);
+
+                // Only consider opponents between passer and receiver
+                if projection_distance <= 0.0 || projection_distance >= pass_distance {
+                    return false;
+                }
+
+                // Calculate perpendicular distance from pass line
+                let projected_point = passer.position + pass_direction * projection_distance;
+                let perp_distance = (opponent.position - projected_point).norm();
+
+                // Consider opponent's interception ability
+                let players = ctx.player();
+                let opponent_skills = players.skills(opponent.id);
+                let interception_ability = opponent_skills.technical.tackling / 20.0;
+                let anticipation = opponent_skills.mental.anticipation / 20.0;
+
+                // Better opponents can intercept from further away
+                let effective_radius = 3.0 + (interception_ability + anticipation) * 2.0;
+
+                perp_distance < effective_radius
+            })
+            .count();
+
+        // Convert count to risk factor
+        if intercepting_opponents == 0 {
+            0.0  // No risk
+        } else if intercepting_opponents == 1 {
+            0.3  // Moderate risk
+        } else if intercepting_opponents == 2 {
+            0.6  // High risk
+        } else {
+            0.9  // Very high risk
+        }
     }
 
     /// Find the best pass option from available teammates
@@ -332,17 +408,37 @@ impl PassEvaluator {
 
         for teammate in teammates.nearby(max_distance) {
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
+            let interception_risk = Self::calculate_interception_risk(ctx, ctx.player, &teammate);
 
-            // Score based on expected value, but prefer safer passes when under pressure
-            let score = if evaluation.factors.pressure_factor < 0.5 {
-                // Under heavy pressure - prioritize safety
-                evaluation.success_probability * 1.5
+            // Comprehensive scoring that heavily favors free players
+            let positioning_bonus = evaluation.factors.receiver_positioning * 2.0;  // Double bonus for good positioning
+            let space_quality = if evaluation.factors.receiver_positioning > 0.8 {
+                // Heavily reward completely free players
+                1.5
+            } else if evaluation.factors.receiver_positioning > 0.6 {
+                1.2
+            } else if evaluation.factors.receiver_positioning > 0.4 {
+                1.0
             } else {
-                // Normal situation - consider expected value
-                evaluation.expected_value
+                // Penalize crowded receivers
+                0.6
             };
 
-            if score > best_score && evaluation.is_recommended {
+            let interception_penalty = 1.0 - (interception_risk * 0.5);  // Penalize risky pass lanes
+
+            let score = if evaluation.factors.pressure_factor < 0.5 {
+                // Under heavy pressure - prioritize safety AND space
+                (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3
+            } else {
+                // Normal situation - balance expected value with space quality
+                (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality
+            };
+
+            // Lower threshold for recommended passes - allow more options if they're in good space
+            let is_acceptable = evaluation.is_recommended ||
+                (evaluation.factors.receiver_positioning > 0.7 && evaluation.success_probability > 0.5);
+
+            if score > best_score && is_acceptable {
                 best_score = score;
                 best_option = Some(teammate);
             }
