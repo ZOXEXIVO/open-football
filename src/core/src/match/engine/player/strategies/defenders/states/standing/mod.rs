@@ -3,7 +3,7 @@ use nalgebra::Vector3;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler,
+    StateProcessingHandler, SteeringBehavior,
 };
 
 const INTERCEPTION_DISTANCE: f32 = 200.0;
@@ -85,7 +85,24 @@ impl StateProcessingHandler for DefenderStandingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Check if player should follow waypoints even when standing
+        if ctx.player.should_follow_waypoints(ctx) {
+            let waypoints = ctx.player.get_waypoints_as_vectors();
+
+            if !waypoints.is_empty() {
+                return Some(
+                    SteeringBehavior::FollowPath {
+                        waypoints,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
+                        path_offset: 3.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity * 0.5, // Slower speed when standing
+                );
+            }
+        }
+
         Some(Vector3::zeros())
     }
 

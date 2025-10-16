@@ -59,19 +59,22 @@ impl TacticalPositions {
         };
 
         match position {
-            // Goalkeeper - stay near own goal, minimal waypoints
+            // Goalkeeper - stay near own goal with minimal movement pattern
             PlayerPositionType::Goalkeeper => {
                 vec![
                     (base_x, base_y),
+                    (base_x + 20.0 * direction, base_y),
                 ]
             }
 
-            // Defenders - path from defensive position toward midfield
+            // Defenders - extended path from defensive position through midfield
             PlayerPositionType::DefenderLeft => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 50.0 * direction, base_y),      // Push forward
-                    (base_x + 100.0 * direction, base_y),     // Further forward
+                    (base_x + 80.0 * direction, base_y),      // First push
+                    (base_x + 160.0 * direction, base_y),     // Midfield approach
+                    (base_x + 240.0 * direction, base_y),     // Deep into midfield
+                    (base_x + 320.0 * direction, base_y),     // Attacking third
                 ]
             }
 
@@ -80,60 +83,76 @@ impl TacticalPositions {
             PlayerPositionType::DefenderCenterRight => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 50.0 * direction, base_y),      // Push forward
-                    (base_x + 100.0 * direction, base_y),     // Further forward
+                    (base_x + 80.0 * direction, base_y),
+                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 320.0 * direction, base_y),
                 ]
             }
 
             PlayerPositionType::DefenderRight => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 50.0 * direction, base_y),      // Push forward
-                    (base_x + 100.0 * direction, base_y),     // Further forward
+                    (base_x + 80.0 * direction, base_y),
+                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 320.0 * direction, base_y),
                 ]
             }
 
             PlayerPositionType::Sweeper => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 40.0 * direction, base_y),
+                    (base_x + 60.0 * direction, base_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 180.0 * direction, base_y),
                 ]
             }
 
-            // Defensive midfielder - path from defensive midfield to attacking midfield
+            // Defensive midfielder - extended path through midfield to attack
             PlayerPositionType::DefensiveMidfielder => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 60.0 * direction, base_y),
-                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 100.0 * direction, base_y),
+                    (base_x + 200.0 * direction, base_y),
+                    (base_x + 300.0 * direction, base_y),
+                    (base_x + 400.0 * direction, base_y),
                 ]
             }
 
-            // Wingbacks - diagonal path toward opponent's corner
+            // Wingbacks - diagonal path toward opponent's corner with more waypoints
             PlayerPositionType::WingbackLeft => {
                 let target_y = if direction > 0.0 { 50.0 } else { 500.0 };
+                let mid_y = (base_y + target_y) / 2.0;
                 vec![
                     (base_x, base_y),
-                    (base_x + 100.0 * direction, base_y),
-                    (base_x + 200.0 * direction, target_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, mid_y),
+                    (base_x + 360.0 * direction, target_y),
+                    (base_x + 480.0 * direction, target_y),
                 ]
             }
 
             PlayerPositionType::WingbackRight => {
                 let target_y = if direction > 0.0 { 500.0 } else { 50.0 };
+                let mid_y = (base_y + target_y) / 2.0;
                 vec![
                     (base_x, base_y),
-                    (base_x + 100.0 * direction, base_y),
-                    (base_x + 200.0 * direction, target_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, mid_y),
+                    (base_x + 360.0 * direction, target_y),
+                    (base_x + 480.0 * direction, target_y),
                 ]
             }
 
-            // Midfielders - path from midfield toward attacking third, staying in lane
+            // Midfielders - extended path through attacking third
             PlayerPositionType::MidfielderLeft => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 80.0 * direction, base_y),
-                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
                 ]
             }
 
@@ -142,53 +161,70 @@ impl TacticalPositions {
             PlayerPositionType::MidfielderCenterRight => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 80.0 * direction, base_y),
-                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
                 ]
             }
 
             PlayerPositionType::MidfielderRight => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 80.0 * direction, base_y),
-                    (base_x + 160.0 * direction, base_y),
+                    (base_x + 120.0 * direction, base_y),
+                    (base_x + 240.0 * direction, base_y),
+                    (base_x + 360.0 * direction, base_y),
+                    (base_x + 480.0 * direction, base_y),
                 ]
             }
 
-            // Attacking midfielders - path toward goal
+            // Attacking midfielders - progressive path toward goal
             PlayerPositionType::AttackingMidfielderLeft |
             PlayerPositionType::AttackingMidfielderCenter |
             PlayerPositionType::AttackingMidfielderRight => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 4.0;
                 vec![
                     (base_x, base_y),
-                    (base_x + 50.0 * direction, base_y),
-                    (goal_x, goal_y),  // Final waypoint at opponent's goal
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (base_x + step * 3.0 * direction, base_y),
+                    (goal_x, goal_y),
                 ]
             }
 
-            // Forwards - direct path to opponent's goal
+            // Forwards - extended path to opponent's goal with intermediate waypoints
             PlayerPositionType::ForwardLeft |
             PlayerPositionType::ForwardCenter |
             PlayerPositionType::ForwardRight => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 3.0;
                 vec![
                     (base_x, base_y),
-                    (goal_x, goal_y),  // Direct line to opponent's goal
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (goal_x, goal_y),
                 ]
             }
 
-            // Striker - direct path to opponent's goal
+            // Striker - direct path to opponent's goal with intermediate waypoints
             PlayerPositionType::Striker => {
+                let distance_to_goal = (goal_x - base_x).abs();
+                let step = distance_to_goal / 3.0;
                 vec![
                     (base_x, base_y),
-                    (goal_x, goal_y),  // Direct line to opponent's goal
+                    (base_x + step * direction, base_y),
+                    (base_x + step * 2.0 * direction, base_y),
+                    (goal_x, goal_y),
                 ]
             }
 
-            // Default - simple forward movement
+            // Default - extended forward movement
             _ => {
                 vec![
                     (base_x, base_y),
-                    (base_x + 100.0 * direction, base_y),
+                    (base_x + 150.0 * direction, base_y),
+                    (base_x + 300.0 * direction, base_y),
                 ]
             }
         }

@@ -1,5 +1,5 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Maximum distance to attempt a shot
@@ -57,7 +57,24 @@ impl StateProcessingHandler for ForwardStandingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Check if player should follow waypoints even when standing
+        if ctx.player.should_follow_waypoints(ctx) {
+            let waypoints = ctx.player.get_waypoints_as_vectors();
+
+            if !waypoints.is_empty() {
+                return Some(
+                    SteeringBehavior::FollowPath {
+                        waypoints,
+                        current_waypoint: ctx.player.waypoint_manager.current_index,
+                        path_offset: 3.0,
+                    }
+                    .calculate(ctx.player)
+                    .velocity * 0.5, // Slower speed when standing
+                );
+            }
+        }
+
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
