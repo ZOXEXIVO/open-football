@@ -62,7 +62,6 @@ impl TacticalPositions {
             // Goalkeeper - stay near own goal with minimal movement pattern
             PlayerPositionType::Goalkeeper => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 20.0 * direction, base_y),
                 ]
             }
@@ -70,7 +69,6 @@ impl TacticalPositions {
             // Defenders - extended path from defensive position through midfield
             PlayerPositionType::DefenderLeft => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 80.0 * direction, base_y),      // First push
                     (base_x + 160.0 * direction, base_y),     // Midfield approach
                     (base_x + 240.0 * direction, base_y),     // Deep into midfield
@@ -82,7 +80,6 @@ impl TacticalPositions {
             PlayerPositionType::DefenderCenter |
             PlayerPositionType::DefenderCenterRight => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 80.0 * direction, base_y),
                     (base_x + 160.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
@@ -92,7 +89,6 @@ impl TacticalPositions {
 
             PlayerPositionType::DefenderRight => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 80.0 * direction, base_y),
                     (base_x + 160.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
@@ -102,7 +98,6 @@ impl TacticalPositions {
 
             PlayerPositionType::Sweeper => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 60.0 * direction, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 180.0 * direction, base_y),
@@ -112,7 +107,6 @@ impl TacticalPositions {
             // Defensive midfielder - extended path through midfield to attack
             PlayerPositionType::DefensiveMidfielder => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 100.0 * direction, base_y),
                     (base_x + 200.0 * direction, base_y),
                     (base_x + 300.0 * direction, base_y),
@@ -125,7 +119,6 @@ impl TacticalPositions {
                 let target_y = if direction > 0.0 { 50.0 } else { 500.0 };
                 let mid_y = (base_y + target_y) / 2.0;
                 vec![
-                    (base_x, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, mid_y),
                     (base_x + 360.0 * direction, target_y),
@@ -137,7 +130,6 @@ impl TacticalPositions {
                 let target_y = if direction > 0.0 { 500.0 } else { 50.0 };
                 let mid_y = (base_y + target_y) / 2.0;
                 vec![
-                    (base_x, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, mid_y),
                     (base_x + 360.0 * direction, target_y),
@@ -148,7 +140,6 @@ impl TacticalPositions {
             // Midfielders - extended path through attacking third
             PlayerPositionType::MidfielderLeft => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
                     (base_x + 360.0 * direction, base_y),
@@ -160,7 +151,6 @@ impl TacticalPositions {
             PlayerPositionType::MidfielderCenter |
             PlayerPositionType::MidfielderCenterRight => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
                     (base_x + 360.0 * direction, base_y),
@@ -170,7 +160,6 @@ impl TacticalPositions {
 
             PlayerPositionType::MidfielderRight => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 120.0 * direction, base_y),
                     (base_x + 240.0 * direction, base_y),
                     (base_x + 360.0 * direction, base_y),
@@ -185,7 +174,6 @@ impl TacticalPositions {
                 let distance_to_goal = (goal_x - base_x).abs();
                 let step = distance_to_goal / 4.0;
                 vec![
-                    (base_x, base_y),
                     (base_x + step * direction, base_y),
                     (base_x + step * 2.0 * direction, base_y),
                     (base_x + step * 3.0 * direction, base_y),
@@ -200,7 +188,6 @@ impl TacticalPositions {
                 let distance_to_goal = (goal_x - base_x).abs();
                 let step = distance_to_goal / 3.0;
                 vec![
-                    (base_x, base_y),
                     (base_x + step * direction, base_y),
                     (base_x + step * 2.0 * direction, base_y),
                     (goal_x, goal_y),
@@ -212,7 +199,6 @@ impl TacticalPositions {
                 let distance_to_goal = (goal_x - base_x).abs();
                 let step = distance_to_goal / 3.0;
                 vec![
-                    (base_x, base_y),
                     (base_x + step * direction, base_y),
                     (base_x + step * 2.0 * direction, base_y),
                     (goal_x, goal_y),
@@ -222,7 +208,6 @@ impl TacticalPositions {
             // Default - extended forward movement
             _ => {
                 vec![
-                    (base_x, base_y),
                     (base_x + 150.0 * direction, base_y),
                     (base_x + 300.0 * direction, base_y),
                 ]
