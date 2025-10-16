@@ -82,7 +82,7 @@ open chrome at http://localhost:18000
 
 Match dev looks like (cross-platform)
 
-![alt text](docs/images/match_dev.jpg "Match dev tools")
+![alt text](docs/images/match_dev.png "Match dev tools")
 
 /src/dev/neural - Dev utils for training NN for using in match, etc
 
