@@ -112,6 +112,7 @@ async fn main() {
         let elapsed = start.elapsed();
 
         draw_goals(offset_x, offset_y, &context, field_width, scale);
+        draw_waypoints(offset_x, offset_y, &field, scale);
         draw_players(offset_x, offset_y, &field, field.ball.current_owner, scale);
 
         draw_ball(offset_x, offset_y, &field.ball, scale);
@@ -328,6 +329,82 @@ fn draw_fps(offset_x: f32, offset_y: f32, fps_data: &[u128], max_fps: u128) {
         20.0,
         BLACK,
     );
+}
+
+fn draw_waypoints(offset_x: f32, offset_y: f32, field: &MatchField, scale: f32) {
+    field.players.iter().for_each(|player| {
+        let waypoints = player.get_waypoints_as_vectors();
+
+        if waypoints.is_empty() {
+            return;
+        }
+
+        // Determine color based on team
+        let waypoint_color = if player.side == Some(PlayerSide::Left) {
+            Color::from_rgba(0, 184, 186, 100) // Semi-transparent cyan for left team
+        } else {
+            Color::from_rgba(208, 139, 255, 100) // Semi-transparent purple for right team
+        };
+
+        let line_color = if player.side == Some(PlayerSide::Left) {
+            Color::from_rgba(0, 184, 186, 180) // More opaque line
+        } else {
+            Color::from_rgba(208, 139, 255, 180)
+        };
+
+        // Draw lines connecting waypoints
+        for i in 0..waypoints.len() {
+            let current = &waypoints[i];
+            let current_x = offset_x + current.x * scale;
+            let current_y = offset_y + current.y * scale;
+
+            // Draw line to next waypoint
+            if i < waypoints.len() - 1 {
+                let next = &waypoints[i + 1];
+                let next_x = offset_x + next.x * scale;
+                let next_y = offset_y + next.y * scale;
+
+                draw_line(
+                    current_x,
+                    current_y,
+                    next_x,
+                    next_y,
+                    1.5 * scale,
+                    line_color,
+                );
+            }
+
+            // Draw waypoint circle
+            let radius = 3.0 * scale;
+            draw_circle(current_x, current_y, radius, waypoint_color);
+
+            // Highlight current waypoint
+            if i == player.waypoint_manager.current_index && !player.waypoint_manager.path_completed {
+                draw_circle_lines(current_x, current_y, radius + 2.0 * scale, 2.0, RED);
+            }
+        }
+
+        // Draw line from player to current waypoint
+        if !player.waypoint_manager.path_completed {
+            let current_waypoint_idx = player.waypoint_manager.current_index;
+            if current_waypoint_idx < waypoints.len() {
+                let waypoint = &waypoints[current_waypoint_idx];
+                let waypoint_x = offset_x + waypoint.x * scale;
+                let waypoint_y = offset_y + waypoint.y * scale;
+                let player_x = offset_x + player.position.x * scale;
+                let player_y = offset_y + player.position.y * scale;
+
+                draw_line(
+                    player_x,
+                    player_y,
+                    waypoint_x,
+                    waypoint_y,
+                    1.0 * scale,
+                    Color::from_rgba(255, 100, 100, 150), // Red dashed-looking line
+                );
+            }
+        }
+    });
 }
 
 fn draw_goals(offset_x: f32, offset_y: f32, context: &MatchContext, field_width: f32, scale: f32) {
