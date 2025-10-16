@@ -1,8 +1,8 @@
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use crate::r#match::midfielders::states::MidfielderState;
 
 #[derive(Default)]
 pub struct MidfielderCrossingState {}

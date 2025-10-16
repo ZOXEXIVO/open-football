@@ -16,7 +16,7 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
-        if ctx.ball().distance() < 50.0 {
+        if ctx.ball().distance() < 30.0 {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
             ));
@@ -26,9 +26,7 @@ impl StateProcessingHandler for ForwardPressingState {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Assisting,
             ));
-        }
-
-        if ctx.ball().on_own_side() {
+        } else if ctx.ball().on_own_side() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Standing,
             ));

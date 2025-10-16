@@ -1,13 +1,12 @@
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior, MatchPlayerLite,
+    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use crate::r#match::midfielders::states::MidfielderState;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 25.0;
-const OPTIMAL_SUPPORT_DISTANCE: f32 = 40.0;
 const SPACE_CREATION_RADIUS: f32 = 20.0;
 const HALF_SPACE_WIDTH: f32 = 15.0;
 
@@ -87,7 +86,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                     .velocity;
 
                 Some(base_velocity + avoidance_vector + ctx.player().separation_velocity())
-            },
+            }
             MovementPattern::Curved => {
                 // Curved run to lose markers and find space
                 let curved_target = self.add_intelligent_curve(ctx, target_position);
@@ -99,7 +98,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                     .velocity;
 
                 Some(base_velocity + avoidance_vector * 0.8)
-            },
+            }
             MovementPattern::CheckToReceive => {
                 // Quick check toward ball then sprint to space
                 if ctx.in_state_time % 30 < 10 {
@@ -122,7 +121,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                             .velocity + avoidance_vector
                     )
                 }
-            },
+            }
             MovementPattern::OppositeRun => {
                 // New pattern: Run opposite to ball movement to find space
                 let opposite_target = self.calculate_opposite_run_target(ctx);
@@ -134,7 +133,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 1.2
                 )
-            },
+            }
         }
     }
 
@@ -162,7 +161,7 @@ impl MidfielderCreatingSpaceState {
         let mut best_position = Vector3::new(
             ball_pos.x,
             opposite_y,
-            0.0
+            0.0,
         );
 
         let mut min_congestion = f32::MAX;
@@ -177,7 +176,7 @@ impl MidfielderCreatingSpaceState {
                 let test_pos = Vector3::new(
                     (ball_pos.x + x_offset as f32).clamp(20.0, field_width - 20.0),
                     (opposite_y + y_offset as f32).clamp(20.0, field_height - 20.0),
-                    0.0
+                    0.0,
                 );
 
                 // Calculate dynamic congestion considering player velocities
@@ -429,13 +428,13 @@ impl MidfielderCreatingSpaceState {
                 } else {
                     position.y = (position.y + 15.0).min(field_height - 10.0);
                 }
-            },
+            }
             crate::TacticalStyle::Possession => {
                 // Stay more central for passing options
                 let field_height = ctx.context.field_size.height as f32;
                 let center_y = field_height / 2.0;
                 position.y = position.y * 0.8 + center_y * 0.2;
-            },
+            }
             _ => {}
         }
 
@@ -450,209 +449,6 @@ impl MidfielderCreatingSpaceState {
     /// Check if player has a close marker
     fn has_close_marker(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players().opponents().nearby(10.0).count() > 0
-    }
-    
-    /// Identify the best type of space to create
-    fn identify_best_space_type(&self, ctx: &StateProcessingContext) -> SpaceType {
-        let ball_zone = self.get_ball_zone(ctx);
-        let team_shape = self.analyze_team_shape(ctx);
-        let opponent_shape = self.analyze_opponent_shape(ctx);
-
-        // Decision logic based on game situation
-        match ball_zone {
-            BallZone::DefensiveThird => {
-                if team_shape.is_stretched() {
-                    SpaceType::DeepPocket
-                } else {
-                    SpaceType::BetweenLines
-                }
-            },
-            BallZone::MiddleThird => {
-                if opponent_shape.is_compact_central() {
-                    SpaceType::WideOverload
-                } else if opponent_shape.has_high_line() {
-                    SpaceType::ThirdManRun
-                } else {
-                    SpaceType::HalfSpace
-                }
-            },
-            BallZone::AttackingThird => {
-                if opponent_shape.is_narrow() {
-                    SpaceType::WideOverload
-                } else if self.can_exploit_half_space(ctx) {
-                    SpaceType::HalfSpace
-                } else {
-                    SpaceType::CentralOverload
-                }
-            },
-        }
-    }
-
-    /// Move into half-space (between center and wing)
-    fn move_into_half_space(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
-        let goal_pos = ctx.player().opponent_goal_position();
-
-        // Half-spaces are roughly at 1/3 and 2/3 of field width
-        let left_half_space_y = field_height * 0.33;
-        let right_half_space_y = field_height * 0.67;
-
-        // Choose half-space based on ball position and team shape
-        let target_y = if ball_pos.y < field_height / 2.0 {
-            // Ball on left, potentially move to left half-space or switch
-            if self.is_half_space_occupied(ctx, left_half_space_y) {
-                right_half_space_y // Switch to opposite half-space
-            } else {
-                left_half_space_y
-            }
-        } else {
-            if self.is_half_space_occupied(ctx, right_half_space_y) {
-                left_half_space_y
-            } else {
-                right_half_space_y
-            }
-        };
-
-        // Progressive positioning toward goal
-        let attacking_direction = match ctx.player.side {
-            Some(PlayerSide::Left) => 1.0,
-            Some(PlayerSide::Right) => -1.0,
-            None => 0.0,
-        };
-
-        let target_x = ball_pos.x + (attacking_direction * 30.0);
-
-        Vector3::new(
-            target_x.clamp(10.0, field_width - 10.0),
-            target_y,
-            0.0
-        )
-    }
-
-    /// Position between opponent's defensive and midfield lines
-    fn position_between_lines(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
-        let opponent_defenders = ctx.players().opponents().all()
-            .filter(|opp| opp.tactical_positions.is_defender())
-            .collect::<Vec<_>>();
-
-        let opponent_midfielders = ctx.players().opponents().all()
-            .filter(|opp| opp.tactical_positions.is_midfielder())
-            .collect::<Vec<_>>();
-
-        if opponent_defenders.is_empty() || opponent_midfielders.is_empty() {
-            // Fallback to progressive position
-            return self.calculate_progressive_position(ctx, field_width, field_height);
-        }
-
-        // Calculate average lines
-        let def_line_x = opponent_defenders.iter()
-            .map(|d| d.position.x)
-            .sum::<f32>() / opponent_defenders.len() as f32;
-
-        let mid_line_x = opponent_midfielders.iter()
-            .map(|m| m.position.x)
-            .sum::<f32>() / opponent_midfielders.len() as f32;
-
-        // Position between the lines
-        let between_x = (def_line_x + mid_line_x) / 2.0;
-
-        // Find lateral space
-        let target_y = self.find_lateral_space_between_lines(ctx, &opponent_defenders, &opponent_midfielders);
-
-        Vector3::new(
-            between_x.clamp(10.0, field_width - 10.0),
-            target_y.clamp(10.0, field_height - 10.0),
-            0.0
-        )
-    }
-
-    /// Create overload on the wing
-    fn create_wide_overload(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
-
-        // Determine which wing needs support
-        let left_wing_teammates = ctx.players().teammates().all()
-            .filter(|t| t.position.y < field_height * 0.25)
-            .count();
-
-        let right_wing_teammates = ctx.players().teammates().all()
-            .filter(|t| t.position.y > field_height * 0.75)
-            .count();
-
-        // Go to wing with fewer players (to balance) or with more (to overload)
-        let overload_strategy = self.determine_overload_strategy(ctx);
-
-        let target_y = match overload_strategy {
-            OverloadStrategy::CreateNumericalAdvantage => {
-                // Join the stronger wing
-                if left_wing_teammates >= right_wing_teammates {
-                    field_height * 0.15
-                } else {
-                    field_height * 0.85
-                }
-            },
-            OverloadStrategy::BalanceWidth => {
-                // Go to weaker wing
-                if left_wing_teammates <= right_wing_teammates {
-                    field_height * 0.15
-                } else {
-                    field_height * 0.85
-                }
-            },
-        };
-
-        let attacking_direction = match ctx.player.side {
-            Some(PlayerSide::Left) => 1.0,
-            Some(PlayerSide::Right) => -1.0,
-            None => 0.0,
-        };
-
-        Vector3::new(
-            ball_pos.x + (attacking_direction * 40.0),
-            target_y,
-            0.0
-        ).clamp_to_field(field_width, field_height)
-    }
-
-    /// Find deep pocket of space
-    fn find_deep_pocket(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
-        // Scan for areas with low opponent density
-        let grid_size = 30.0;
-        let mut best_position = ctx.player.position;
-        let mut min_congestion = f32::MAX;
-
-        let scan_range = 100.0;
-        let player_pos = ctx.player.position;
-
-        for x in ((player_pos.x - scan_range) as i32..=(player_pos.x + scan_range) as i32).step_by(grid_size as usize) {
-            for y in ((player_pos.y - scan_range) as i32..=(player_pos.y + scan_range) as i32).step_by(grid_size as usize) {
-                let test_pos = Vector3::new(x as f32, y as f32, 0.0);
-
-                // Skip positions outside field
-                if test_pos.x < 10.0 || test_pos.x > field_width - 10.0 ||
-                    test_pos.y < 10.0 || test_pos.y > field_height - 10.0 {
-                    continue;
-                }
-
-                let congestion = self.calculate_position_congestion(ctx, test_pos);
-
-                // Prefer progressive positions
-                let progression_bonus = if self.is_progressive_position(ctx, test_pos) {
-                    -10.0
-                } else {
-                    0.0
-                };
-
-                let adjusted_congestion = congestion + progression_bonus;
-
-                if adjusted_congestion < min_congestion {
-                    min_congestion = adjusted_congestion;
-                    best_position = test_pos;
-                }
-            }
-        }
-
-        best_position
     }
 
     /// Make a third man run (beyond the immediate play)
@@ -671,7 +467,7 @@ impl MidfielderCreatingSpaceState {
                 let beyond_position = Vector3::new(
                     next_receiver.position.x + (attacking_direction * 50.0),
                     next_receiver.position.y + self.calculate_run_angle(ctx, &next_receiver),
-                    0.0
+                    0.0,
                 );
 
                 return beyond_position.clamp_to_field(field_width, field_height);
@@ -699,7 +495,7 @@ impl MidfielderCreatingSpaceState {
         Vector3::new(
             ball_pos.x + (attacking_direction * depth_offset),
             field_center_y + self.calculate_central_lane_offset(ctx),
-            0.0
+            0.0,
         ).clamp_to_field(field_width, field_height)
     }
 
@@ -880,7 +676,7 @@ impl MidfielderCreatingSpaceState {
         &self,
         ctx: &StateProcessingContext,
         defenders: &[MatchPlayerLite],
-        midfielders: &[MatchPlayerLite]
+        midfielders: &[MatchPlayerLite],
     ) -> f32 {
         let field_height = ctx.context.field_size.height as f32;
 
@@ -918,7 +714,7 @@ impl MidfielderCreatingSpaceState {
         Vector3::new(
             ball_pos.x + (attacking_direction * 40.0),
             ctx.player.position.y,
-            0.0
+            0.0,
         ).clamp_to_field(field_width, field_height)
     }
 
@@ -970,7 +766,7 @@ impl MidfielderCreatingSpaceState {
     fn predict_next_pass_recipient(
         &self,
         ctx: &StateProcessingContext,
-        ball_holder: &MatchPlayerLite
+        ball_holder: &MatchPlayerLite,
     ) -> Option<MatchPlayerLite> {
         // Simple prediction based on positioning
         ctx.players().teammates().all()
@@ -1120,10 +916,6 @@ struct OpponentShape {
 }
 
 impl OpponentShape {
-    fn is_compact_central(&self) -> bool {
-        self.compact_central
-    }
-
     fn has_high_line(&self) -> bool {
         self.high_line
     }
@@ -1143,7 +935,7 @@ impl VectorFieldExtensions for Vector3<f32> {
         Vector3::new(
             self.x.clamp(10.0, field_width - 10.0),
             self.y.clamp(10.0, field_height - 10.0),
-            self.z
+            self.z,
         )
     }
 }

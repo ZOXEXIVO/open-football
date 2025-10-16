@@ -40,24 +40,25 @@ impl PlayerGenerator {
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
 
-        Player::new(
-            PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst),
-            FullName::with_full(
+        Player::builder()
+            .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
+            .full_name(FullName::with_full(
                 self.generate_first_name(),
                 self.generate_last_name(),
                 StringUtils::random_string(17),
-            ),
-            NaiveDate::from_ymd_opt(year as i32, month, day).unwrap(),
-            country_id,
-            Self::generate_skills(),
-            Self::generate_person_attributes(),
-            Self::generate_player_attributes(),
-            Some(PlayerClubContract::new(
+            ))
+            .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
+            .country_id(country_id)
+            .skills(Self::generate_skills())
+            .attributes(Self::generate_person_attributes())
+            .player_attributes(Self::generate_player_attributes())
+            .contract(Some(PlayerClubContract::new(
                 IntegerUtils::random(1000, 200000) as u32,
                 NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap(),
-            )),
-            Self::generate_positions(position),
-        )
+            )))
+            .positions(Self::generate_positions(position))
+            .build()
+            .expect("Failed to build Player")
     }
 
     fn generate_skills() -> PlayerSkills {

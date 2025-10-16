@@ -12,8 +12,8 @@ pub use behaviours::*;
 pub use context::*;
 use itertools::Itertools;
 pub use player::*;
-pub use strategies::*;
 pub use positions::*;
+pub use strategies::*;
 
 pub struct GameFieldContextInput<'p> {
     object_positions: &'p MatchObjectsPositions,

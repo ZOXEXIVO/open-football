@@ -58,10 +58,12 @@ impl MatchField {
 
         self.players.iter_mut().for_each(|p| {
             if let Some(side) = &p.side {
-                p.side = Some(match side {
+                let new_side = match side {
                     PlayerSide::Left => PlayerSide::Right,
                     PlayerSide::Right => PlayerSide::Left,
-                })
+                };
+                p.side = Some(new_side);
+                p.tactical_position.regenerate_waypoints(Some(new_side));
             }
         });
     }
@@ -81,6 +83,7 @@ fn setup_player_on_field(
 
         for mut player in squad.main_squad {
             player.side = Some(side);
+            player.tactical_position.regenerate_waypoints(Some(side));
             if let Some(position) = get_player_position(&player, side) {
                 player.position = position;
                 player.start_position = position;
@@ -90,6 +93,7 @@ fn setup_player_on_field(
 
         for mut player in squad.substitutes {
             player.side = Some(side);
+            player.tactical_position.regenerate_waypoints(Some(side));
             player.position = Vector3::new(1.0, 1.0, 0.0);
             subs.push(player);
         }

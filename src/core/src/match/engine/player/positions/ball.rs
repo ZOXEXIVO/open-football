@@ -1,5 +1,5 @@
-use nalgebra::Vector3;
 use crate::r#match::Ball;
+use nalgebra::Vector3;
 
 pub struct BallFieldData {
     pub position: Vector3<f32>,

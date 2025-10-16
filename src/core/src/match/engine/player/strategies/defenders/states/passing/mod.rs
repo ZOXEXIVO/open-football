@@ -1,5 +1,5 @@
-use crate::r#match::events::Event;
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
@@ -22,9 +22,8 @@ impl StateProcessingHandler for DefenderPassingState {
 
         // Under heavy pressure - make a quick decision
         if self.is_under_heavy_pressure(ctx) {
-            if let Some(safe_option) = self.find_safe_pass_option(ctx) {
-                // Execute a quick, safe pass
-                return Some(StateChangeResult::with_defender_state_and_event(
+            return if let Some(safe_option) = self.find_safe_pass_option(ctx) {
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
@@ -32,13 +31,13 @@ impl StateProcessingHandler for DefenderPassingState {
                             .with_to_player_id(safe_option.id)
                             .build(ctx),
                     )),
-                ));
+                ))
             } else {
                 // No safe option, clear the ball
-                return Some(StateChangeResult::with_defender_state(
+                Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
-                ));
-            }
+                ))
+            };
         }
 
         // Normal passing situation - evaluate options more carefully
@@ -150,7 +149,7 @@ impl DefenderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx,300.0)
+        PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 
     /// Find a safe pass option when under pressure
@@ -193,51 +192,6 @@ impl DefenderPassingState {
 
         // Return combined safety score
         pass_away_from_goal + space_factor
-    }
-
-    /// Check if a teammate is viable for receiving a pass
-    fn is_viable_pass_target(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        // Basic viability criteria
-        let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-        let not_dangerous_position = !self.is_in_dangerous_area(ctx, teammate);
-
-        has_clear_lane && not_dangerous_position
-    }
-
-    /// Check if a target is in a dangerous position near our goal
-    fn is_in_dangerous_area(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let goal_position = ctx.ball().direction_to_own_goal();
-        let distance_to_goal = (teammate.position - goal_position).magnitude();
-
-        // Consider danger zone as 20% of field width from own goal
-        let danger_threshold = ctx.context.field_size.width as f32 * 0.2;
-
-        distance_to_goal < danger_threshold
-    }
-
-    /// Check if a pass is safer (away from pressure and toward team's attacking side)
-    fn is_safer_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let player_pos = ctx.player.position;
-        let teammate_pos = teammate.position;
-        let own_goal = ctx.ball().direction_to_own_goal();
-
-        // Direction vectors
-        let to_teammate = (teammate_pos - player_pos).normalize();
-        let to_own_goal = (own_goal - player_pos).normalize();
-
-        // Passes that move away from own goal are safer
-        let moving_away_from_goal = to_teammate.dot(&to_own_goal) < -0.3;
-
-        // Passes to less pressured areas are safer
-        let teammates_pressure = ctx.players().opponents().all()
-            .filter(|o| (o.position - teammate_pos).magnitude() < 15.0)
-            .count();
-
-        let current_pressure = ctx.players().opponents().all()
-            .filter(|o| (o.position - player_pos).magnitude() < 10.0)
-            .count();
-
-        moving_away_from_goal && (teammates_pressure < current_pressure)
     }
 
     /// Check if player is under heavy pressure from opponents

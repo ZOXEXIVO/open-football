@@ -8,6 +8,7 @@ use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, Recommendat
 use log::{debug, info};
 use std::borrow::Cow;
 use std::str::FromStr;
+use crate::team::builder::TeamBuilder;
 
 #[derive(Debug, PartialEq)]
 pub enum TeamType {
@@ -42,34 +43,8 @@ pub struct Team {
 }
 
 impl Team {
-    pub fn new(
-        id: u32,
-        league_id: u32,
-        club_id: u32,
-        name: String,
-        slug: String,
-        team_type: TeamType,
-        training_schedule: TrainingSchedule,
-        reputation: TeamReputation,
-        players: PlayerCollection,
-        staffs: StaffCollection,
-    ) -> Self {
-        Team {
-            id,
-            league_id,
-            club_id,
-            name,
-            slug,
-            team_type,
-            players,
-            staffs,
-            reputation,
-            tactics: None,
-            training_schedule,
-            behaviour: TeamBehaviour::new(),
-            transfer_list: Transfers::new(),
-            match_history: MatchHistory::new(),
-        }
+    pub fn builder() -> TeamBuilder {
+        TeamBuilder::new()
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
@@ -123,25 +98,7 @@ impl Team {
     /// Enhanced get_match_squad that uses improved tactical analysis
     pub fn get_enhanced_match_squad(&self) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
-
-        let mut new_tactics: Option<Tactics> = None;
-
-        // Step 1: Analyze current squad and suggest optimal formation
-        if let Some(suggested_formation) =
-            TacticalSquadAnalyzer::suggest_optimal_formation(self, head_coach)
-        {
-            let current_formation = self.tactics.as_ref().map(|t| t.tactic_type);
-
-            // Update tactics if suggestion is significantly better
-            if current_formation != Some(suggested_formation) {
-                new_tactics = Some(Tactics::with_reason(
-                    suggested_formation,
-                    TacticSelectionReason::TeamComposition,
-                    0.95,
-                ));
-            }
-        }
-
+        
         // Step 2: Use enhanced squad selection
         let squad_result = SquadSelector::select(self, head_coach);
 

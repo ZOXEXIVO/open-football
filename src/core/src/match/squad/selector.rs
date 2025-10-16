@@ -1,8 +1,8 @@
 use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::{Player, Tactics, Team};
-use std::borrow::Borrow;
 use log::{debug, warn};
+use std::borrow::Borrow;
 
 pub struct SquadSelector;
 
@@ -242,7 +242,7 @@ impl SquadSelector {
 
     /// Find the best remaining player regardless of position
     fn find_best_remaining_player<'p>(
-        available_players: &'p[&Player],
+        available_players: &'p [&Player],
         used_players: &[u32],
         staff: &Staff,
         tactics: &Tactics,
@@ -406,27 +406,12 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         Self::select_substitutes_optimized(team_id, players, staff, tactics)
     }
-
-    /// Legacy method for backward compatibility
-    fn calculate_player_rating(
-        player: &Player,
-        staff: &Staff,
-        position: &PlayerPositionType,
-    ) -> f32 {
-        // Use a default tactics for legacy compatibility
-        let default_tactics = crate::Tactics::new(crate::MatchTacticType::T442);
-        Self::calculate_player_rating_for_position(player, staff, *position, &default_tactics)
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        IntegerUtils, PlayerCollection, PlayerGenerator, StaffCollection,
-        MatchTacticType, TeamReputation, TeamType, TrainingSchedule,
-        TACTICS_POSITIONS,
-    };
+    use crate::{IntegerUtils, MatchTacticType, PlayerCollection, PlayerGenerator, StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule};
     use chrono::{NaiveTime, Utc};
 
     #[test]
@@ -440,7 +425,7 @@ mod tests {
         assert_eq!(result.main_squad.len(), 11);
 
         // Should have substitutes
-        assert!(result.substitutes.len() > 0);
+        assert!(!result.substitutes.is_empty());
         assert!(result.substitutes.len() <= DEFAULT_BENCH_SIZE);
 
         // All positions in formation should be covered
@@ -448,7 +433,7 @@ mod tests {
         let formation_positions = tactics.positions();
         assert_eq!(result.main_squad.len(), formation_positions.len());
     }
-    
+
     #[test]
     fn test_tactical_fit_calculation() {
         let player = generate_attacking_player();
@@ -461,31 +446,33 @@ mod tests {
 
     // Helper functions for tests
     fn generate_test_team() -> Team {
-        let mut team = Team::new(
-            1,
-            1,
-            1,
-            "Test Team".to_string(),
-            "test-team".to_string(),
-            TeamType::Main,
-            TrainingSchedule::new(
+        let mut team = TeamBuilder::new()
+            .id(1)
+            .league_id(1)
+            .club_id(1)
+            .name("Test Team".to_string())
+            .slug("test-team".to_string())
+            .team_type(TeamType::Main)
+            .training_schedule(TrainingSchedule::new(
                 NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
                 NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
-            ),
-            TeamReputation::new(100, 100, 100),
-            PlayerCollection::new(generate_test_players()),
-            StaffCollection::new(Vec::new()),
-        );
+            ))
+            .reputation(TeamReputation::new(100, 100, 100))
+            .players(PlayerCollection::new(generate_test_players()))
+            .staffs(StaffCollection::new(Vec::new()))
+            .tactics(Some(Tactics::new(MatchTacticType::T442)))
+            .build()
+            .expect("Failed to build test team");
 
-        team.tactics = Some(crate::Tactics::new(MatchTacticType::T442));
+        team.tactics = Some(Tactics::new(MatchTacticType::T442));
         team
     }
 
-    fn generate_test_staff() -> crate::Staff {
+    fn generate_test_staff() -> Staff {
         crate::StaffStub::default()
     }
 
-    fn generate_test_players() -> Vec<crate::Player> {
+    fn generate_test_players() -> Vec<Player> {
         let mut players = Vec::new();
 
         // Generate players for each position

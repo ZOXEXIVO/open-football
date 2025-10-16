@@ -1,6 +1,6 @@
-use chrono::{Datelike, NaiveDate};
-use crate::Player;
 use crate::shared::CurrencyValue;
+use crate::Player;
+use chrono::{Datelike, NaiveDate};
 
 pub struct PlayerTransfer {
     pub player: Player,

@@ -6,6 +6,12 @@ pub struct MatchStorage {
     results: HashMap<String, MatchResult>,
 }
 
+impl Default for MatchStorage {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MatchStorage {
     pub fn new() -> Self {
         MatchStorage {

@@ -13,10 +13,7 @@ pub struct MidfielderTrackingRunnerState {}
 
 impl StateProcessingHandler for MidfielderTrackingRunnerState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        let nearest_forward = opponents.forwards().min_by(|a, b| {
+        let nearest_forward = ctx.players().opponents().forwards().min_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
             dist_a.partial_cmp(&dist_b).unwrap()
@@ -55,11 +52,7 @@ impl StateProcessingHandler for MidfielderTrackingRunnerState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let players = ctx.players();
-        let opponents = players.opponents();
-        let forwards = opponents.forwards();
-
-        let nearest_forward = forwards.min_by(|a, b| {
+        let nearest_forward = ctx.players().opponents().forwards().min_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
             dist_a.partial_cmp(&dist_b).unwrap()

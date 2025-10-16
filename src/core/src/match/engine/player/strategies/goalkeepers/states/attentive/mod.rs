@@ -91,11 +91,8 @@ impl GoalkeeperAttentiveState {
     }
 
     fn is_under_threat(&self, ctx: &StateProcessingContext) -> bool {
-        let players = ctx.players();
-        let opponents = players.opponents();
-
         // Check if any opponent with the ball is near
-        if let Some(opponent) = opponents.with_ball().next() {
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.position.distance_to(&ctx.player.position);
             let penalty_area_threshold = 40.0;
 

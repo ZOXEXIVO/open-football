@@ -30,18 +30,12 @@ pub struct PersonAttributes {
     pub temperament: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct PersonBehaviour {
     pub state: PersonBehaviourState,
 }
 
 impl PersonBehaviour {
-    pub fn default() -> Self {
-        PersonBehaviour {
-            state: PersonBehaviourState::Normal,
-        }
-    }
-
     pub fn try_increase(&mut self) {
         match self.state {
             PersonBehaviourState::Poor => {
@@ -64,8 +58,10 @@ impl PersonBehaviour {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
+#[derive(Default)]
 pub enum PersonBehaviourState {
     Poor,
+    #[default]
     Normal,
     Good,
 }

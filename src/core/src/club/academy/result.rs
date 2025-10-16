@@ -1,4 +1,4 @@
-use crate::{Player, PlayerCollectionResult,SimulatorData};
+use crate::{Player, PlayerCollectionResult, SimulatorData};
 
 pub struct ClubAcademyResult {
     pub players: PlayerCollectionResult

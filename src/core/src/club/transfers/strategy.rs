@@ -1,8 +1,8 @@
-use chrono::NaiveDate;
-use crate::{Person, Player, PlayerPositionType};
 use crate::shared::CurrencyValue;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::{Person, Player, PlayerPositionType};
+use chrono::NaiveDate;
 
 pub struct ClubTransferStrategy {
     pub club_id: u32,

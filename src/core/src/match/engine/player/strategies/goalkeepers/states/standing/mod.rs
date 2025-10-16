@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const DANGER_ZONE_RADIUS: f32 = 30.0;
-const OPTIMAL_DISTANCE_FROM_GOAL: f32 = 200.0; //
+const OPTIMAL_DISTANCE_FROM_GOAL: f32 = 200.0;
 
 #[derive(Default)]
 pub struct GoalkeeperStandingState {}
@@ -14,15 +14,14 @@ pub struct GoalkeeperStandingState {}
 impl StateProcessingHandler for GoalkeeperStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
-                return Some(StateChangeResult::with_goalkeeper_state(
+            return if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
+                Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Passing,
-                ));
-            }
-            else {
-                return Some(StateChangeResult::with_goalkeeper_state(
+                ))
+            } else {
+                Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::Running,
-                ));
+                ))
             }
         }
         else {
@@ -77,10 +76,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let optimal_position = self.calculate_optimal_position(ctx);
-        let direction = (optimal_position - ctx.player.position).normalize();
-        let speed = ctx.player.skills.physical.acceleration * 0.1; // Slow movement for minor adjustments
-        Some(direction * speed)
+        None
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {
@@ -90,10 +86,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 
 impl GoalkeeperStandingState {
     fn is_opponent_in_danger_zone(&self, ctx: &StateProcessingContext) -> bool {
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        if let Some(opponent_with_ball) = opponents.with_ball().next() {
+        if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let opponent_distance = ctx
                 .tick_context
                 .distances

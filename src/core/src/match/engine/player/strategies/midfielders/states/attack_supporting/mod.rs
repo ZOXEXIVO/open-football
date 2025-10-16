@@ -173,7 +173,7 @@ impl MidfielderAttackSupportingState {
                 let advanced_position = Vector3::new(
                     goal_position.x - (attacking_direction * 120.0),
                     player_position.y + self.calculate_lateral_run_adjustment(ctx),
-                    0.0
+                    0.0,
                 );
 
                 // Check offside risk and adjust
@@ -181,12 +181,12 @@ impl MidfielderAttackSupportingState {
                     Vector3::new(
                         advanced_position.x - (attacking_direction * 20.0),
                         advanced_position.y,
-                        0.0
+                        0.0,
                     ).clamp_to_field(field_width, field_height)
                 } else {
                     advanced_position.clamp_to_field(field_width, field_height)
                 }
-            },
+            }
             AttackingRunType::OverlapRun => {
                 // Wide overlapping run
                 let side_adjustment = if player_position.y < field_height / 2.0 {
@@ -198,14 +198,14 @@ impl MidfielderAttackSupportingState {
                 Vector3::new(
                     ball_position.x + (attacking_direction * 60.0),
                     field_height / 2.0 + side_adjustment,
-                    0.0
+                    0.0,
                 ).clamp_to_field(field_width, field_height)
-            },
+            }
             AttackingRunType::LateBoxRun => {
                 // Late run into the box
                 let box_entry_point = self.find_box_entry_point(ctx, goal_position);
                 box_entry_point.clamp_to_field(field_width, field_height)
-            },
+            }
             AttackingRunType::SupportRun => {
                 // Supporting run to create passing option
                 let support_angle = if player_position.y < ball_position.y {
@@ -218,17 +218,17 @@ impl MidfielderAttackSupportingState {
                 let support_offset = Vector3::new(
                     support_distance * support_angle.cos() * attacking_direction,
                     support_distance * support_angle.sin(),
-                    0.0
+                    0.0,
                 );
 
                 (ball_position + support_offset).clamp_to_field(field_width, field_height)
-            },
+            }
             AttackingRunType::DiagonalRun => {
                 // Diagonal run to exploit space between defenders
                 let diagonal_target = Vector3::new(
                     ball_position.x + (attacking_direction * 70.0),
                     player_position.y + if player_position.y < field_height / 2.0 { 40.0 } else { -40.0 },
-                    0.0
+                    0.0,
                 );
 
                 diagonal_target.clamp_to_field(field_width, field_height)
@@ -311,7 +311,6 @@ impl MidfielderAttackSupportingState {
     // Add helper to find best box entry point
     fn find_box_entry_point(&self, ctx: &StateProcessingContext, goal_position: Vector3<f32>) -> Vector3<f32> {
         let field_height = ctx.context.field_size.height as f32;
-        let player_position = ctx.player.position;
 
         // Identify gaps in the box
         let box_defenders = ctx.players().opponents().all()
@@ -327,7 +326,7 @@ impl MidfielderAttackSupportingState {
             Vector3::new(
                 goal_position.x - 100.0,
                 goal_position.y,
-                0.0
+                0.0,
             )
         } else {
             // Find gap between defenders
@@ -357,7 +356,7 @@ impl MidfielderAttackSupportingState {
             Vector3::new(
                 goal_position.x - 150.0,
                 best_gap_y,
-                0.0
+                0.0,
             )
         }
     }
@@ -419,7 +418,7 @@ impl MidfielderAttackSupportingState {
         let forward_space = Vector3::new(
             player_position.x + (attacking_direction * 40.0),
             player_position.y,
-            0.0
+            0.0,
         );
 
         // Check if forward space is clear
@@ -443,7 +442,7 @@ impl MidfielderAttackSupportingState {
                 } else {
                     player_position.y - 30.0
                 },
-                0.0
+                0.0,
             ).clamp_to_field(field_width, field_height);
 
             SteeringBehavior::Arrive {
@@ -491,7 +490,7 @@ impl MidfielderAttackSupportingState {
         ctx: &StateProcessingContext,
         attacking_direction: f32,
         field_width: f32,
-        field_height: f32
+        field_height: f32,
     ) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
@@ -515,7 +514,7 @@ impl MidfielderAttackSupportingState {
             return Vector3::new(
                 target_x + curve_factor,
                 target_y,
-                0.0
+                0.0,
             ).clamp_to_field(field_width, field_height);
         }
 
@@ -536,7 +535,7 @@ impl MidfielderAttackSupportingState {
         ctx: &StateProcessingContext,
         attacking_direction: f32,
         field_width: f32,
-        field_height: f32
+        field_height: f32,
     ) -> Vector3<f32> {
         // Check where attacking teammates are
         let attacking_players = self.get_attacking_teammates(ctx);
@@ -548,7 +547,7 @@ impl MidfielderAttackSupportingState {
                 ctx,
                 &ball_holder,
                 &attacking_players,
-                attacking_direction
+                attacking_direction,
             );
 
             if self.is_position_valuable(ctx, triangle_position) {
@@ -573,7 +572,7 @@ impl MidfielderAttackSupportingState {
         ctx: &StateProcessingContext,
         attacking_direction: f32,
         field_width: f32,
-        field_height: f32
+        field_height: f32,
     ) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
@@ -581,7 +580,7 @@ impl MidfielderAttackSupportingState {
         let progressive_position = Vector3::new(
             ball_position.x + (attacking_direction * 80.0),
             ball_position.y + self.calculate_lateral_movement(ctx),
-            0.0
+            0.0,
         );
 
         // Ensure we're not too close to other midfielders
@@ -680,7 +679,7 @@ impl MidfielderAttackSupportingState {
         ctx: &StateProcessingContext,
         ball_holder: &MatchPlayerLite,
         attacking_players: &[MatchPlayerLite],
-        attacking_direction: f32
+        attacking_direction: f32,
     ) -> Vector3<f32> {
         let ball_holder_pos = ball_holder.position;
 
@@ -698,7 +697,7 @@ impl MidfielderAttackSupportingState {
             let perpendicular = Vector3::new(
                 0.0,
                 if midpoint.y < ctx.context.field_size.height as f32 / 2.0 { 30.0 } else { -30.0 },
-                0.0
+                0.0,
             );
 
             return midpoint + perpendicular;
@@ -774,7 +773,7 @@ impl MidfielderAttackSupportingState {
         Vector3::new(
             ball_position.x + (attacking_direction * 50.0),
             target_y,
-            0.0
+            0.0,
         )
     }
 
@@ -885,7 +884,7 @@ impl MidfielderAttackSupportingState {
         &self,
         ctx: &StateProcessingContext,
         pos1: Vector3<f32>,
-        pos2: Vector3<f32>
+        pos2: Vector3<f32>,
     ) -> f32 {
         let center = (pos1 + pos2) * 0.5;
         let players_in_channel = ctx.players().opponents().all()

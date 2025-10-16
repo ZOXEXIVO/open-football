@@ -76,7 +76,7 @@ pub async fn match_get_action(
 fn to_match_player(
     player_id: u32,
     simulator_data: &SimulatorData,
-) -> Option<MatchPlayer> {
+) -> Option<MatchPlayer<'_>> {
     let player = simulator_data.player(player_id)?;
 
     Some(MatchPlayer {

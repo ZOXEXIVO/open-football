@@ -14,6 +14,7 @@ use crate::{
 use chrono::{NaiveDate, NaiveDateTime};
 use std::fmt::{Display, Formatter, Result};
 use std::ops::Index;
+use crate::player::builder::PlayerBuilder;
 
 #[derive(Debug)]
 pub struct Player {
@@ -43,38 +44,8 @@ pub struct Player {
 }
 
 impl Player {
-    pub fn new(
-        id: u32,
-        full_name: FullName,
-        birth_date: NaiveDate,
-        country_id: u32,
-        skills: PlayerSkills,
-        attributes: PersonAttributes,
-        player_attributes: PlayerAttributes,
-        contract: Option<PlayerClubContract>,
-        positions: PlayerPositions,
-    ) -> Self {
-        Player {
-            id,
-            full_name,
-            birth_date,
-            country_id,
-            behaviour: PersonBehaviour::default(),
-            happiness: PlayerHappiness::new(),
-            statuses: PlayerStatus::new(),
-            skills,
-            positions,
-            preferred_foot: PlayerPreferredFoot::Right,
-            attributes,
-            player_attributes,
-            contract,
-            training: PlayerTraining::new(),
-            training_history: PlayerTrainingHistory::new(),
-            mailbox: PlayerMailbox::new(),
-            relations: Relations::new(),
-            statistics: PlayerStatistics::default(),
-            statistics_history: PlayerStatisticsHistory::new(),
-        }
+    pub fn builder() -> PlayerBuilder {
+        PlayerBuilder::new()
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerResult {
@@ -285,7 +256,7 @@ impl Index<u32> for PlayerCollection {
             .players
             .iter()
             .find(|p| p.id == player_id)
-            .expect(format!("no player with id = {}", player_id).as_str())
+            .expect(&format!("no player with id = {}", player_id))
     }
 }
 

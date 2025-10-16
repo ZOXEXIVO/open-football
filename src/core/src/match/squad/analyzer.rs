@@ -1,8 +1,8 @@
 use crate::club::{PlayerPositionType, Staff};
-use crate::r#match::{MatchResult};
-use crate::{Player, Tactics, Team, MatchTacticType, TacticalStyle, TacticSelectionReason};
+use crate::r#match::MatchResult;
+use crate::{MatchTacticType, Player, TacticSelectionReason, TacticalStyle, Tactics, Team};
+use log::info;
 use std::collections::HashMap;
-use log::{info};
 
 /// Enhanced tactical analysis for squad selection
 pub struct TacticalSquadAnalyzer;

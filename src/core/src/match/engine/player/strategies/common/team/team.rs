@@ -1,6 +1,6 @@
-use nalgebra::Vector3;
-use crate::{PlayerFieldPositionGroup, Tactics};
 use crate::r#match::{MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext};
+use crate::{PlayerFieldPositionGroup, Tactics};
+use nalgebra::Vector3;
 
 pub struct TeamOperationsImpl<'b> {
     ctx: &'b StateProcessingContext<'b>,

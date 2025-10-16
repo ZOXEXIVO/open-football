@@ -12,7 +12,7 @@ const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance to attempt a ta
 const CLOSE_TACKLE_DISTANCE: f32 = 10.0; // Distance for immediate tackle attempt
 const FOUL_CHANCE_BASE: f32 = 0.15; // Base chance of committing a foul
 const CHASE_DISTANCE_THRESHOLD: f32 = 100.0; // Maximum distance to chase for tackle
-const PRESSURE_DISTANCE: f32 = 15.0; // Distance to apply pressure without tackling
+const PRESSURE_DISTANCE: f32 = 20.0; // Distance to apply pressure without tackling
 
 #[derive(Default)]
 pub struct ForwardTacklingState {}
@@ -24,8 +24,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        let players = ctx.players();
-        let opponents = players.opponents();
+        let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
@@ -112,9 +111,7 @@ impl StateProcessingHandler for ForwardTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // If there's an opponent with the ball, pursue them
-        let players = ctx.players();
-        let opponents = players.opponents();
+        let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
@@ -125,7 +122,7 @@ impl StateProcessingHandler for ForwardTacklingState {
                 return Some(
                     SteeringBehavior::Arrive {
                         target: opponent.position,
-                        slowing_distance: TACKLE_DISTANCE_THRESHOLD * 0.8,
+                        slowing_distance: 1.0,
                     }
                         .calculate(ctx.player)
                         .velocity,

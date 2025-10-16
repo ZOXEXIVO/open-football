@@ -1,4 +1,4 @@
-mod behaviour;
+pub mod behaviour;
 pub mod collection;
 mod context;
 mod matches;
@@ -8,6 +8,7 @@ pub mod tactics;
 mod team;
 mod training;
 mod transfers;
+pub mod builder;
 
 pub use collection::*;
 pub use context::*;
@@ -18,3 +19,4 @@ pub use tactics::*;
 pub use team::*;
 pub use training::*;
 pub use transfers::*;
+pub use builder::*;

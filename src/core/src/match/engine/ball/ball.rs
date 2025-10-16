@@ -196,77 +196,83 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
+        const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
 
+        // Check if previous owner is still within range
         if let Some(previous_owner_id) = self.previous_owner {
             let owner = context.players.by_id(previous_owner_id).unwrap();
             if owner.position.distance_to(&self.position) > BALL_DISTANCE_THRESHOLD {
                 self.previous_owner = None;
+            } else {
+                // Previous owner still in range, no need to check for new ownership
+                return;
             }
-        } else {
-            let nearby_players: Vec<&MatchPlayer> = players
-                .iter()
-                .filter(|player_position| {
-                    let dx = player_position.position.x - self.position.x;
-                    let dy = player_position.position.y - self.position.y;
+        }
 
-                    dx * dx + dy * dy < BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD
-                })
-                .collect();
+        // Find all players within ball distance threshold
+        let nearby_players: Vec<&MatchPlayer> = players
+            .iter()
+            .filter(|player| {
+                let dx = player.position.x - self.position.x;
+                let dy = player.position.y - self.position.y;
+                dx * dx + dy * dy < BALL_DISTANCE_THRESHOLD_SQUARED
+            })
+            .collect();
 
-            // Check if a teammate already has the ball - don't allow stealing from teammates
-            let is_nearby_already_has_ball = nearby_players
+        // Early exit if no nearby players
+        if nearby_players.is_empty() {
+            return;
+        }
+
+        // Check if current owner is nearby and prevent teammate takeover
+        if let Some(current_owner_id) = self.current_owner {
+            let current_owner = context.players.by_id(current_owner_id).unwrap();
+
+            // Check if current owner is still nearby
+            let current_owner_nearby = nearby_players
                 .iter()
-                .any(|player| Some(player.id) == self.current_owner);
-            if is_nearby_already_has_ball {
+                .any(|player| player.id == current_owner_id);
+
+            if current_owner_nearby {
                 return;
             }
 
-            // If a nearby player of the same team as current owner exists, don't change ownership
-            if let Some(current_owner_id) = self.current_owner {
-                let current_owner = context.players.by_id(current_owner_id).unwrap();
-                let same_team_nearby = nearby_players.iter().any(|p| p.team_id == current_owner.team_id && p.id != current_owner.id);
+            // Check if any nearby player is a teammate of the current owner
+            let same_team_nearby = nearby_players
+                .iter()
+                .any(|p| p.team_id == current_owner.team_id);
 
-                if same_team_nearby {
-                    // Don't transfer ownership to teammates - they should maintain positions
-                    return;
-                }
+            if same_team_nearby {
+                // Don't transfer ownership to teammates - they should maintain positions
+                return;
             }
+        }
 
-            let best_tackler = if nearby_players.len() == 1 {
-                nearby_players.first()
-            } else {
-                nearby_players.iter().max_by(|player_a, player_b| {
-                    let player_a = context.players.by_id(player_a.id).unwrap();
-                    let player_b = context.players.by_id(player_b.id).unwrap();
+        // Determine the best tackler from nearby players
+        let best_tackler = if nearby_players.len() == 1 {
+            nearby_players.first().copied()
+        } else {
+            nearby_players
+                .iter()
+                .max_by(|player_a, player_b| {
+                    let player_a_full = context.players.by_id(player_a.id).unwrap();
+                    let player_b_full = context.players.by_id(player_b.id).unwrap();
 
-                    let tackling_score_a = Self::calculate_tackling_score(player_a);
-                    let tackling_score_b = Self::calculate_tackling_score(player_b);
+                    let tackling_score_a = Self::calculate_tackling_score(player_a_full);
+                    let tackling_score_b = Self::calculate_tackling_score(player_b_full);
 
                     tackling_score_a
                         .partial_cmp(&tackling_score_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
-            };
+                .copied()
+        };
 
-            if let Some(player) = best_tackler {
-                // Don't allow stealing ball from teammates - check if the player is on the same team as current owner
-                if let Some(current_owner_id) = self.current_owner {
-                    let current_owner = context.players.by_id(current_owner_id).unwrap();
-                    if player.team_id == current_owner.team_id {
-                        // Don't transfer ownership between teammates
-                        return;
-                    }
-                }
-
-                self.previous_owner = self.current_owner;
-                self.current_owner = Some(player.id);
-
-                if is_nearby_already_has_ball {
-                    return;
-                }
-
-                events.add_ball_event(BallEvent::Claimed(player.id));
-            }
+        // Transfer ownership to the best tackler
+        if let Some(player) = best_tackler {
+            self.previous_owner = self.current_owner;
+            self.current_owner = Some(player.id);
+            events.add_ball_event(BallEvent::Claimed(player.id));
         }
     }
 

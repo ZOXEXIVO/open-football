@@ -85,11 +85,8 @@ impl MidfielderDistanceShootingState {
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
         // Determine if the player should pass based on the game state
 
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let mut open_teammates = teammates
-            .all()
+        let teammates = ctx.players().teammates();
+        let mut open_teammates = teammates.all()
             .filter(|teammate| self.is_teammate_open(ctx, teammate));
 
         let has_open_teammate = open_teammates.next().is_some();

@@ -700,7 +700,7 @@ impl ForwardRunningState {
         };
 
         // Vary position slightly to create unpredictability
-        let y_variation = ((ctx.in_state_time as f32 * 0.1).sin() * 20.0);
+        let y_variation = (ctx.in_state_time as f32 * 0.1).sin() * 20.0;
         let target_y = field_height / 2.0 + y_variation;
 
         Vector3::new(target_x, target_y, 0.0)

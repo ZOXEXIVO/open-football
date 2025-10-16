@@ -1,9 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-use rand::prelude::IteratorRandom;
 
 #[derive(Default)]
 pub struct GoalkeeperDistributingState {}
@@ -50,24 +49,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 
 impl GoalkeeperDistributingState {
     fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        if let Some(teammate) = ctx.players()
-            .teammates()
-            .all()
-            .filter(|p| self.is_teammate_open(ctx, p) && ctx.player().has_clear_pass(p.id))
-            .choose(&mut rand::rng())
-        {
-            return Some(teammate);
-        }
-
-        None
-    }
-
-    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 100.0;
-
-        ctx.players().opponents().all()
-            .filter(|opponent| (opponent.position - teammate.position).magnitude() <= opponent_distance_threshold)
-            .count() == 0
+        PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 
     pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {

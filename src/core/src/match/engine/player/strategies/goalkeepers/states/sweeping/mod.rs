@@ -22,10 +22,7 @@ impl StateProcessingHandler for GoalkeeperSweepingState {
         }
 
         // 2. Check if there are any opponents near the ball
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        if let Some(_) = opponents.with_ball().next() {
+        if let Some(_) = ctx.players().opponents().with_ball().next() {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));

@@ -2,7 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField};
-use log::{debug};
+use log::debug;
 use nalgebra::Vector3;
 
 #[derive(Debug)]

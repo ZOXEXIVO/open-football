@@ -40,334 +40,25 @@ impl Continent {
             self.countries.len()
         );
 
-        // Phase 1: Update Continental Rankings (monthly)
-        if ctx.simulation.date.day() == 1 {
-            self.update_continental_rankings(&ctx);
-        }
-
-        // Phase 2: Continental Competition Draws (seasonal)
-        if self.is_competition_draw_period(&ctx) {
-            self.conduct_competition_draws(&ctx);
-        }
-
-        // Phase 3: Continental Competition Matches
-        let competition_results = self.simulate_continental_competitions(&ctx);
-
-        // Phase 4: Country Simulations with Continental Context
-        let country_results = self.simulate_countries_with_context(&ctx);
-
-        // Phase 5: Continental Economic Updates (quarterly)
-        if ctx.simulation.date.month() % 3 == 0 && ctx.simulation.date.day() == 1 {
-            self.update_economic_zone(&country_results);
-        }
-
-        // Phase 6: Continental Regulatory Updates (yearly)
-        if ctx.simulation.date.month() == 1 && ctx.simulation.date.day() == 1 {
-            self.update_continental_regulations(&ctx);
-        }
-
-        // Phase 7: Continental Awards & Recognition (yearly)
-        if ctx.simulation.date.month() == 12 && ctx.simulation.date.day() == 31 {
-            self.process_continental_awards(&country_results);
-        }
+        // Simulate all child entities and accumulate results
+        let country_results = self.simulate_countries(&ctx);
 
         info!("✅ Continent {} simulation complete", continent_name);
 
-        ContinentResult::with_enhanced_data(
-            country_results,
-            competition_results,
-            self.continental_rankings.clone(),
-        )
+        ContinentResult::new(country_results)
     }
 
-    fn update_continental_rankings(&mut self, ctx: &GlobalContext<'_>) {
-        info!("📊 Updating continental rankings for {}", self.name);
-
-        // Update country coefficients based on club performances
-        for _country in &mut self.countries {
-            // let coefficient = self.calculate_country_coefficient(country);
-            // self.continental_rankings.update_country_ranking(country.id, coefficient);
-        }
-
-        // Update club rankings
-        let all_clubs = self.get_all_clubs();
-
-        for club in all_clubs {
-            let _club_points = self.calculate_club_continental_points(club);
-            //self.continental_rankings.update_club_ranking(club.id, club_points);
-        }
-
-        // Determine continental competition qualifications
-        self.determine_competition_qualifications(&ctx);
-
-        debug!(
-            "Continental rankings updated - Top country: {:?}",
-            self.continental_rankings.get_top_country()
-        );
-    }
-
-    fn is_competition_draw_period(&self, ctx: &GlobalContext<'_>) -> bool {
-        let date = ctx.simulation.date.date();
-        // Champions League draw typically in August
-        (date.month() == 8 && date.day() == 15) ||
-            // Europa League draw
-            (date.month() == 8 && date.day() == 20) ||
-            // Knockout stage draws in December
-            (date.month() == 12 && date.day() == 15)
-    }
-
-    fn conduct_competition_draws(&mut self, ctx: &GlobalContext<'_>) {
-        info!("🎲 Conducting continental competition draws");
-
-        let qualified_clubs = self.continental_rankings.get_qualified_clubs();
-
-        // Champions League draw
-        if let Some(cl_clubs) = qualified_clubs.get(&CompetitionTier::ChampionsLeague) {
-            self.continental_competitions.champions_league.conduct_draw(
-                cl_clubs,
-                &self.continental_rankings,
-                ctx.simulation.date.date(),
-            );
-        }
-
-        // Europa League draw
-        if let Some(el_clubs) = qualified_clubs.get(&CompetitionTier::EuropaLeague) {
-            self.continental_competitions.europa_league.conduct_draw(
-                el_clubs,
-                &self.continental_rankings,
-                ctx.simulation.date.date(),
-            );
-        }
-
-        // Conference League draw (if applicable)
-        if let Some(conf_clubs) = qualified_clubs.get(&CompetitionTier::ConferenceLeague) {
-            self.continental_competitions
-                .conference_league
-                .conduct_draw(
-                    conf_clubs,
-                    &self.continental_rankings,
-                    ctx.simulation.date.date(),
-                );
-        }
-    }
-
-    fn simulate_continental_competitions(
-        &mut self,
-        ctx: &GlobalContext<'_>,
-    ) -> ContinentalCompetitionResults {
-        let mut results = ContinentalCompetitionResults::new();
-
-        // Simulate Champions League matches
-        // if self.continental_competitions.champions_league.has_matches_today(ctx.simulation.date.date()) {
-        //     let cl_results = self.continental_competitions.champions_league.simulate_round(
-        //         &self.get_clubs_map(),
-        //         ctx.simulation.date.date(),
-        //     );
-        //     results.champions_league_results = Some(cl_results);
-        // }
-
-        // Simulate Europa League matches
-        // if self.continental_competitions.europa_league.has_matches_today(ctx.simulation.date.date()) {
-        //     let el_results = self.continental_competitions.europa_league.simulate_round(
-        //         &self.get_clubs_map(),
-        //         ctx.simulation.date.date(),
-        //     );
-        //     results.europa_league_results = Some(el_results);
-        // }
-
-        // Update prize money and prestige
-        self.distribute_competition_rewards(&results);
-
-        results
-    }
-
-    fn simulate_countries_with_context(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
+    fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
         self.countries
             .iter_mut()
             .map(|country| {
                 let message = &format!("simulate country: {} (Continental)", &country.name);
-                Logging::estimate_result(|| country.simulate(ctx.with_country(country.id)), message)
+                Logging::estimate_result(
+                    || country.simulate(ctx.with_country(country.id)),
+                    message,
+                )
             })
             .collect()
-    }
-
-    fn update_economic_zone(&mut self, country_results: &[CountryResult]) {
-        info!("💰 Updating continental economic zone");
-
-        // Calculate overall economic health
-        let mut total_revenue = 0.0;
-        let mut total_expenses = 0.0;
-
-        for country in &self.countries {
-            for club in &country.clubs {
-                total_revenue += club.finance.balance.income as f64;
-                total_expenses += club.finance.balance.outcome as f64;
-            }
-        }
-
-        self.economic_zone
-            .update_indicators(total_revenue, total_expenses);
-
-        // Update TV rights distribution
-        self.economic_zone
-            .recalculate_tv_rights(&self.continental_rankings);
-
-        // Update sponsorship market
-        self.economic_zone
-            .update_sponsorship_market(&self.continental_rankings);
-    }
-
-    fn update_continental_regulations(&mut self, ctx: &GlobalContext<'_>) {
-        info!("📋 Updating continental regulations");
-
-        // Financial Fair Play adjustments
-        self.regulations.update_ffp_thresholds(&self.economic_zone);
-
-        // Foreign player regulations
-        self.regulations
-            .review_foreign_player_rules(&self.continental_rankings);
-
-        // Youth development requirements
-        self.regulations.update_youth_requirements();
-
-        debug!(
-            "Continental regulations updated for year {}",
-            ctx.simulation.date.year()
-        );
-    }
-
-    fn process_continental_awards(&self, country_results: &[CountryResult]) {
-        info!("🏆 Processing continental awards for {}", self.name);
-
-        // Player of the Year
-        let _player_of_year = self.determine_player_of_year();
-
-        // Team of the Year
-        let _team_of_year = self.determine_team_of_year();
-
-        // Coach of the Year
-        let _coach_of_year = self.determine_coach_of_year();
-
-        // Young Player Award
-        let _young_player = self.determine_young_player_award();
-
-        debug!("Continental awards distributed");
-    }
-
-    // Helper methods
-
-    fn calculate_country_coefficient(&self, country: &Country) -> f32 {
-        // Based on club performances in continental competitions
-        let mut coefficient = 0.0;
-
-        for club in &country.clubs {
-            coefficient += self.continental_competitions.get_club_points(club.id);
-        }
-
-        // Average over number of clubs
-        if !country.clubs.is_empty() {
-            coefficient /= country.clubs.len() as f32;
-        }
-
-        coefficient
-    }
-
-    fn calculate_club_continental_points(&self, club: &Club) -> f32 {
-        // Points from continental competition performance
-        let competition_points = self.continental_competitions.get_club_points(club.id);
-
-        // Bonus for domestic success
-        let domestic_bonus = 0.0; // Would need league standings
-
-        competition_points + domestic_bonus
-    }
-
-    fn determine_competition_qualifications(&mut self, ctx: &GlobalContext<'_>) {
-        // Allocate spots based on country coefficients
-        // let country_rankings = self.continental_rankings.get_country_rankings();
-        //
-        // for (rank, (country_id, _coefficient)) in country_rankings.iter().enumerate() {
-        //     let cl_spots = match rank {
-        //         0..=3 => 4,  // Top 4 countries get 4 CL spots
-        //         4..=5 => 3,  // Next 2 get 3 spots
-        //         6..=14 => 2, // Next 9 get 2 spots
-        //         _ => 1,      // Rest get 1 spot
-        //     };
-        //
-        //     let el_spots = match rank {
-        //         0..=5 => 2,  // Top 6 get 2 EL spots
-        //         _ => 1,      // Rest get 1 spot
-        //     };
-        //
-        //     self.continental_rankings.set_qualification_spots(
-        //         *country_id,
-        //         cl_spots,
-        //         el_spots,
-        //     );
-        // }
-    }
-
-    fn get_all_clubs(&self) -> Vec<&Club> {
-        self.countries.iter().flat_map(|c| &c.clubs).collect()
-    }
-
-    fn get_clubs_map(&self) -> HashMap<u32, &Club> {
-        self.countries
-            .iter()
-            .flat_map(|c| &c.clubs)
-            .map(|club| (club.id, club))
-            .collect()
-    }
-
-    fn distribute_competition_rewards(&mut self, results: &ContinentalCompetitionResults) {
-        // Distribute prize money based on competition results
-        // This would update club finances
-    }
-
-    fn get_open_transfer_windows(&self, date: NaiveDate) -> Vec<u32> {
-        self.countries
-            .iter()
-            .filter(|c| {
-                // Check if transfer window is open for this country
-                use crate::transfers::window::TransferWindowManager;
-                let manager = TransferWindowManager::new();
-                manager.is_window_open(c.id, date)
-            })
-            .map(|c| c.id)
-            .collect()
-    }
-
-    fn analyze_cross_border_interests(
-        &self,
-        club: &Club,
-        market: &crate::transfers::market::TransferMarket,
-    ) -> Vec<TransferInterest> {
-        // Analyze which players from other countries this club might want
-        Vec::new() // Simplified
-    }
-
-    fn calculate_total_prize_pool(&self) -> f64 {
-        self.continental_competitions.get_total_prize_pool()
-    }
-
-    fn determine_player_of_year(&self) -> Option<u32> {
-        // Logic to determine best player
-        None
-    }
-
-    fn determine_team_of_year(&self) -> Option<Vec<u32>> {
-        // Logic to determine best XI
-        None
-    }
-
-    fn determine_coach_of_year(&self) -> Option<u32> {
-        // Logic to determine best coach
-        None
-    }
-
-    fn determine_young_player_award(&self) -> Option<u32> {
-        // Logic for best young player
-        None
     }
 }
 
@@ -379,6 +70,12 @@ pub struct ContinentalCompetitions {
     pub europa_league: EuropaLeague,
     pub conference_league: ConferenceLeague,
     pub super_cup: SuperCup,
+}
+
+impl Default for ContinentalCompetitions {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ContinentalCompetitions {
@@ -417,6 +114,12 @@ pub struct ChampionsLeague {
     pub prize_pool: f64,
 }
 
+impl Default for ChampionsLeague {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ChampionsLeague {
     pub fn new() -> Self {
         ChampionsLeague {
@@ -427,7 +130,7 @@ impl ChampionsLeague {
         }
     }
 
-    pub fn conduct_draw(&mut self, clubs: &[u32], rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, _date: NaiveDate) {
         // Implement draw logic with seeding based on rankings
         debug!("Champions League draw conducted with {} clubs", clubs.len());
     }
@@ -792,7 +495,7 @@ impl EconomicZone {
     pub fn recalculate_tv_rights(&mut self, rankings: &ContinentalRankings) {
         // Adjust TV rights based on competitive balance
         let competitive_balance = self.calculate_competitive_balance(rankings);
-        self.tv_rights_pool *= (1.0 + competitive_balance as f64 * 0.1);
+        self.tv_rights_pool *= 1.0 + competitive_balance as f64 * 0.1;
     }
 
     pub fn update_sponsorship_market(&mut self, rankings: &ContinentalRankings) {

@@ -3,7 +3,7 @@ use crate::club::academy::result::ClubAcademyResult;
 use crate::club::academy::settings::AcademySettings;
 use crate::context::GlobalContext;
 use crate::utils::IntegerUtils;
-use crate::{PlayerCollection, StaffCollection, PlayerGenerator, PlayerPositionType, Player, Person};
+use crate::{Person, Player, PlayerCollection, PlayerGenerator, PlayerPositionType, StaffCollection};
 use chrono::Datelike;
 use log::debug;
 

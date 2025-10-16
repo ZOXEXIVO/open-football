@@ -1,5 +1,5 @@
-use nalgebra::Vector3;
 use crate::r#match::StateProcessingContext;
+use nalgebra::Vector3;
 
 #[derive(Debug)]
 pub struct ShootingEventContext {

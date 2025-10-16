@@ -1,8 +1,8 @@
-use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
-use nalgebra::Vector3;
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 300.0;
 
@@ -24,7 +24,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            if self.is_under_pressure(ctx) || self.can_passing(ctx)  {
+            // Enhanced passing decision based on skills and pressing
+            if self.should_pass(ctx) {
                 if let Some(target_teammate) = self.find_best_pass_option(ctx) {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Running,
@@ -46,12 +47,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             // Check every 10 ticks for less critical states
-            if ctx.in_state_time % 10 == 0 {
-                if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
-                    ));
-                }
+            if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
             }
         }
 
@@ -97,49 +96,7 @@ impl MidfielderRunningState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let vision_range = ctx.player.skills.mental.vision * 10.0;
-
-        let open_teammates: Vec<MatchPlayerLite> = ctx
-            .players()
-            .teammates()
-            .nearby(vision_range)
-            .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))
-            .collect();
-
-        if !open_teammates.is_empty() {
-            open_teammates
-                .iter()
-                .min_by(|a, b| {
-                    let risk_a = self.estimate_interception_risk(ctx, a);
-                    let risk_b = self.estimate_interception_risk(ctx, b);
-                    risk_a
-                        .partial_cmp(&risk_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .cloned()
-        } else {
-            None
-        }
-    }
-
-    fn estimate_interception_risk(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
-        let max_interception_distance = 20.0;
-        let player_position = ctx.player.position;
-        let pass_direction = (teammate.position - player_position).normalize();
-
-        ctx.players().opponents().all()
-            .filter(|o| (o.position - player_position).dot(&pass_direction) > 0.0)
-            .map(|o| (o.position - player_position).magnitude())
-            .filter(|d| *d <= max_interception_distance)
-            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(max_interception_distance)
-    }
-
-    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        let opponent_distance_threshold = 20.0;
-        ctx.players().opponents().all()
-            .filter(|o| (o.position - teammate.position).magnitude() <= opponent_distance_threshold)
-            .count() == 0
+        PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 
     /// Simplified ball carrying movement
@@ -182,7 +139,7 @@ impl MidfielderRunningState {
         let support_offset = Vector3::new(
             angle.cos() * 30.0,
             angle.sin() * 30.0,
-            0.0
+            0.0,
         );
 
         let target = ball_pos + support_offset;
@@ -211,11 +168,121 @@ impl MidfielderRunningState {
             .velocity + ctx.player().separation_velocity()
     }
 
-    fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(50.0)
+    /// Enhanced passing decision that considers player skills and pressing intensity
+    fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
+        // Get player skills
+        let vision = ctx.player.skills.mental.vision / 20.0;
+        let passing = ctx.player.skills.technical.passing / 20.0;
+        let decisions = ctx.player.skills.mental.decisions / 20.0;
+        let composure = ctx.player.skills.mental.composure / 20.0;
+        let teamwork = ctx.player.skills.mental.teamwork / 20.0;
+
+        // Assess pressing situation
+        let pressing_intensity = self.calculate_pressing_intensity(ctx);
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+
+        // 1. MUST PASS: Heavy pressing (multiple opponents very close)
+        if pressing_intensity > 0.7 {
+            // Even low-skilled players should pass under heavy pressure
+            return passing > 0.3 || composure < 0.5;
+        }
+
+        // 2. FORCED PASS: Under moderate pressure with limited skills
+        if pressing_intensity > 0.5 && (passing < 0.6 || composure < 0.6) {
+            return true;
+        }
+
+        // 3. TACTICAL PASS: Skilled players looking for opportunities
+        // Players with high vision and passing can spot good passes even without pressure
+        if vision > 0.7 && passing > 0.7 {
+            // Check if there's a better-positioned teammate
+            if self.has_better_positioned_teammate(ctx, distance_to_goal) {
+                return true;
+            }
+        }
+
+        // 4. TEAM PLAY: High teamwork players distribute more
+        if teamwork > 0.7 && decisions > 0.6 && pressing_intensity > 0.3 {
+            // Midfielders with good teamwork pass to maintain possession and tempo
+            return self.find_best_pass_option(ctx).is_some();
+        }
+
+        // 5. UNDER LIGHT PRESSURE: Decide based on skills and options
+        if pressing_intensity > 0.3 {
+            // Better decision-makers are more likely to pass when slightly pressed
+            let pass_likelihood = (decisions * 0.4) + (vision * 0.3) + (passing * 0.3);
+            return pass_likelihood > 0.6;
+        }
+
+        // 6. NO PRESSURE: Continue running unless very close to goal
+        // Very skilled passers might still look for a pass if in midfield
+        if distance_to_goal > 300.0 && vision > 0.8 && passing > 0.8 {
+            return self.has_teammate_in_dangerous_position(ctx);
+        }
+
+        false
     }
 
-    fn can_passing(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.player.skills.technical.passing > 10.0
+    /// Calculate pressing intensity based on number and proximity of opponents
+    fn calculate_pressing_intensity(&self, ctx: &StateProcessingContext) -> f32 {
+        let very_close = ctx.players().opponents().nearby(15.0).count() as f32;
+        let close = ctx.players().opponents().nearby(30.0).count() as f32;
+        let medium = ctx.players().opponents().nearby(50.0).count() as f32;
+
+        // Weight closer opponents more heavily
+        let weighted_pressure = (very_close * 0.5) + (close * 0.3) + (medium * 0.1);
+
+        // Normalize to 0-1 range (assuming max 5 opponents can reasonably press)
+        (weighted_pressure / 2.0).min(1.0)
+    }
+
+    /// Check if there's a teammate in a better position
+    fn has_better_positioned_teammate(&self, ctx: &StateProcessingContext, current_distance: f32) -> bool {
+        ctx.players()
+            .teammates()
+            .nearby(300.0)
+            .any(|teammate| {
+                let teammate_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                let is_closer = teammate_distance < current_distance * 0.8;
+                let has_space = ctx.players().opponents().all()
+                    .filter(|opp| (opp.position - teammate.position).magnitude() < 15.0)
+                    .count() < 2;
+                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+
+                is_closer && has_space && has_clear_pass
+            })
+    }
+
+    /// Check if there's a teammate in a dangerous attacking position
+    fn has_teammate_in_dangerous_position(&self, ctx: &StateProcessingContext) -> bool {
+        ctx.players()
+            .teammates()
+            .nearby(350.0)
+            .any(|teammate| {
+                // Prefer forwards and attacking midfielders
+                let is_attacker = teammate.tactical_positions.is_forward() ||
+                                 teammate.tactical_positions.is_midfielder();
+
+                // Check if in attacking third
+                let teammate_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                let field_width = ctx.context.field_size.width as f32;
+                let in_attacking_third = teammate_distance < field_width * 0.4;
+
+                // Check if in free space
+                let in_free_space = ctx.players().opponents().all()
+                    .filter(|opp| (opp.position - teammate.position).magnitude() < 12.0)
+                    .count() < 2;
+
+                // Check if making a forward run
+                let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
+                let making_run = teammate_velocity.magnitude() > 1.5 && {
+                    let to_goal = ctx.player().opponent_goal_position() - teammate.position;
+                    teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
+                };
+
+                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+
+                is_attacker && in_attacking_third && (in_free_space || making_run) && has_clear_pass
+            })
     }
 }

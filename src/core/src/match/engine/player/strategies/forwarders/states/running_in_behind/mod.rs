@@ -76,10 +76,8 @@ impl ForwardRunningInBehindState {
 
     fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
         let space_threshold = 10.0;
-        let players = ctx.players();
-        let opponents = players.opponents();
 
-        !opponents.exists(space_threshold)
+        !ctx.players().opponents().exists(space_threshold)
     }
 
     fn in_passing_lane(&self, ctx: &StateProcessingContext) -> bool {

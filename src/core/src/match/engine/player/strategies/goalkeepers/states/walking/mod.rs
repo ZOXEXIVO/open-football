@@ -116,10 +116,7 @@ impl GoalkeeperWalkingState {
         let concentration_factor = ctx.player.skills.mental.concentration / 20.0;
 
         // Check for opponents with ball
-        let players = ctx.players();
-
-        let opponents = players.opponents();
-        if let Some(opponent_with_ball) = opponents.with_ball().next() {
+        if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent_with_ball.position.distance_to(&ctx.player.position);
 
             // Better concentration means better threat assessment
@@ -172,9 +169,7 @@ impl GoalkeeperWalkingState {
                 goalkeeper_skills.physical.agility) / 40.0;
 
             // Check if any opponent is closer
-            let players = ctx.players();
-            let opponents = players.opponents().nearby(150.0);
-            for opponent in opponents {
+            for opponent in ctx.players().opponents().nearby(150.0) {
                 let opp_distance_to_ball = (opponent.position - ctx.tick_context.positions.ball.position).magnitude();
                 let keeper_distance_to_ball = ball_distance;
 
@@ -232,7 +227,7 @@ impl GoalkeeperWalkingState {
             optimal_distance += (15.0 - threat_factor * 10.0) * command_of_area;
 
             // Better positioning = more accurate placement
-            optimal_distance *= (0.8 + positioning_skill * 0.4);
+            optimal_distance *= 0.8 + positioning_skill * 0.4;
 
             // If ball is wide, adjust position laterally
             let ball_y_offset = ball_position.y - goal_position.y;

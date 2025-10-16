@@ -1,5 +1,5 @@
-use chrono::NaiveDate;
 use crate::transfers::offer::TransferOffer;
+use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
 pub struct TransferNegotiation {

@@ -1,12 +1,8 @@
-use crate::r#match::events::EventCollection;
+use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
-use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
-
-const THROW_DISTANCE_THRESHOLD: f32 = 30.0; // Minimum distance to consider for throwing
 
 #[derive(Default)]
 pub struct GoalkeeperThrowingState {}
@@ -20,37 +16,19 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
             ));
         }
 
-        // 2. Find the best teammate to throw the ball to
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let teammates = teammates.all();
-        let best_teammate = teammates
-            .filter(|teammate| {
-                let distance = (teammate.position - ctx.player.position).magnitude();
-                distance >= THROW_DISTANCE_THRESHOLD
-            })
-            .max_by(|a, b| {
-                let dist_a = (a.position - ctx.player.position).magnitude();
-                let dist_b = (b.position - ctx.player.position).magnitude();
-                dist_a
-                    .partial_cmp(&dist_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
-
-        if let Some(teammate) = best_teammate {
-            let mut events = EventCollection::new();
-
-            events.add_player_event(PlayerEvent::PassTo(
-                PassingEventContext::new()
-                    .with_from_player_id(ctx.player.id)
-                    .with_to_player_id(teammate.id)
-                    .build(ctx)
+        // 2. Find the best teammate to kick the ball to
+        if let Some(teammate) = self.find_best_pass_option(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state_and_event(
+                GoalkeeperState::Standing,
+                Event::PlayerEvent(PlayerEvent::PassTo(
+                    PassingEventContext::new()
+                        .with_from_player_id(ctx.player.id)
+                        .with_to_player_id(teammate.id)
+                        .build(ctx),
+                )),
             ));
-
-            return Some(StateChangeResult::with_events(events));
-        }
-
+        }      
+        
         None
     }
 
@@ -66,5 +44,14 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
 
     fn process_conditions(&self, _ctx: ConditionContext) {
         // No additional conditions to process in this state
+    }
+}
+
+impl GoalkeeperThrowingState {
+    fn find_best_pass_option<'a>(
+        &self,
+        ctx: &StateProcessingContext<'a>,
+    ) -> Option<MatchPlayerLite> {
+        PassEvaluator::find_best_pass_option(ctx, 100.0)
     }
 }

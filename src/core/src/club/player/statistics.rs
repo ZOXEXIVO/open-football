@@ -30,6 +30,12 @@ pub struct PlayerStatisticsHistoryItem {
     pub statistics: PlayerStatistics,
 }
 
+impl Default for PlayerStatisticsHistory {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl PlayerStatisticsHistory {
     pub fn new() -> Self {
         PlayerStatisticsHistory { items: Vec::new() }

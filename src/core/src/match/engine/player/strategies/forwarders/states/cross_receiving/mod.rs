@@ -1,10 +1,10 @@
+use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use crate::r#match::events::Event;
 
 #[derive(Default)]
 pub struct ForwardCrossReceivingState {}

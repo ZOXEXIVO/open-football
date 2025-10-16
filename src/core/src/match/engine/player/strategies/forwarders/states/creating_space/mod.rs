@@ -491,7 +491,6 @@ impl ForwardCreatingSpaceState {
 
     // Helper methods
     fn get_forward_search_center(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let field_width = ctx.context.field_size.width as f32;
         let ball_pos = ctx.tick_context.positions.ball.position;
         let attacking_direction = self.get_attacking_direction(ctx);
 

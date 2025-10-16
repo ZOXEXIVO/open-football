@@ -35,13 +35,10 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing
                 ))
-            }
+            };
         }
 
-        let players= ctx.players();
-        let teammates = players.teammates();
-
-        if let Some(_) = teammates
+        if let Some(_) = ctx.players().teammates()
             .nearby(300.0)
             .filter(|teammate| self.is_teammate_open(ctx, teammate)).next() {
             // If there is an open teammate, transition to the passing state
@@ -64,8 +61,8 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
                 target: ctx.player().opponent_goal_position(),
                 slowing_distance: 30.0,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 

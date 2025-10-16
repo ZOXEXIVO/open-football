@@ -13,6 +13,7 @@ pub mod statistics;
 pub mod status;
 pub mod training;
 pub mod utils;
+pub mod builder;
 
 pub use attributes::*;
 pub use calculators::*;

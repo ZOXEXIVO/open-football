@@ -26,8 +26,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
                     GoalkeeperState::Diving,
                 ));
             }
-        }
-        else {
+        } else {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));
@@ -45,8 +44,8 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 
@@ -63,13 +62,5 @@ impl GoalkeeperPreparingForSaveState {
 
         // Check if the ball is moving fast towards the goal
         ball_velocity.dot(&(ctx.ball().direction_to_own_goal() - ctx.player.position)) > 0.0
-    }
-
-    fn is_ball_catchable(&self, ctx: &StateProcessingContext) -> bool {
-        let ball_distance = ctx.ball().distance();
-        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        let goalkeeper_reach = ctx.player.skills.physical.jumping * 0.5 + 2.0; // Adjust as needed
-
-        ball_distance < goalkeeper_reach && ball_speed < 10.0
     }
 }
