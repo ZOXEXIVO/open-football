@@ -42,8 +42,7 @@ impl StateProcessingHandler for MidfielderTacklingState {
             };
         }
 
-        let players = ctx.players();
-        let opponents = players.opponents();
+        let opponents = ctx.players().opponents();
         let mut opponents_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponents_with_ball.next() {

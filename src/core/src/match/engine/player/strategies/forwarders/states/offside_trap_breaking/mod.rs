@@ -69,10 +69,7 @@ impl ForwardOffsideTrapBreakingState {
     fn find_best_position(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        let players = ctx.players();
-        let opponents = players.opponents();
-
-        let offside_line = opponents
+        let offside_line = ctx.players().opponents()
             .all()
             .into_iter()
             .map(|opponent| opponent.position.x)

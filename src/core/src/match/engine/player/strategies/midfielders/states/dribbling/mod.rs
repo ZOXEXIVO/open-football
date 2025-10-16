@@ -80,10 +80,7 @@ impl StateProcessingHandler for MidfielderDribblingState {
 impl MidfielderDribblingState {
     fn find_open_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<u32> {
         // Find an open teammate to pass to
-        let players = ctx.players();
-        let teammates = players.teammates();
-
-        let teammates = teammates.nearby_ids(150.0);
+        let teammates = ctx.players().teammates().nearby_ids(150.0);
 
         if let Some((teammate_id, _)) = teammates.choose(&mut rand::rng()) {
             return Some(teammate_id);

@@ -65,9 +65,8 @@ impl StateProcessingHandler for ForwardDribblingState {
 impl ForwardDribblingState {
     fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
         let dribble_distance = 10.0;
-        let players = ctx.players();
 
-        !players.opponents().exists(dribble_distance)
+        !ctx.players().opponents().exists(dribble_distance)
     }
 
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {

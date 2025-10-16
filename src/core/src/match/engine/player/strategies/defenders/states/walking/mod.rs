@@ -155,9 +155,7 @@ impl DefenderWalkingState {
     }
 
     fn calculate_team_center(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-        let all_teammates: Vec<MatchPlayerLite> = teammates.all().collect();
+        let all_teammates: Vec<MatchPlayerLite> = ctx.players().teammates().all().collect();
 
         let sum: Vector3<f32> = all_teammates.iter().map(|p| p.position).sum();
         sum / all_teammates.len() as f32

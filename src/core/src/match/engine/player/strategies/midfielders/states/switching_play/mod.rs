@@ -68,11 +68,8 @@ impl MidfielderSwitchingPlayState {
         let forward_direction = (ball_position - player_position).normalize();
         let perpendicular_direction = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
 
-        let players = ctx.players();
-        let teammates = players.teammates();
-
         // Find teammates on the opposite side of the field
-        let opposite_side_teammates: Vec<MatchPlayerLite> = teammates
+        let opposite_side_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
             .all()
             .filter(|teammate| {
                 let teammate_to_player = player_position - teammate.position;

@@ -20,7 +20,7 @@ impl<'p> PlayersOperationsImpl<'p> {
     }
 
     // Opponents
-    pub fn opponents(&'p self) -> PlayerOpponentsOperationsImpl<'p> {
+    pub fn opponents(&self) -> PlayerOpponentsOperationsImpl<'p> {
         PlayerOpponentsOperationsImpl::new(self.ctx)
     }
 }

@@ -44,12 +44,9 @@ impl MidfielderDistributingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
         let vision_range = ctx.player.skills.mental.vision * 10.0; // Adjust the factor as needed
 
-        let open_teammates: Vec<MatchPlayerLite> = teammates
+        let open_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
             .nearby(vision_range)
             .filter(|t| !t.tactical_positions.is_goalkeeper())
             .filter(|t| self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id))

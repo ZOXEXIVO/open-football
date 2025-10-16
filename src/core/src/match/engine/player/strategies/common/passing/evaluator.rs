@@ -400,13 +400,10 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         max_distance: f32,
     ) -> Option<MatchPlayerLite> {
-        let players = ctx.players();
-        let teammates = players.teammates();
-
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        for teammate in teammates.nearby(max_distance) {
+        for teammate in ctx.players().teammates().nearby(max_distance) {
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
             let interception_risk = Self::calculate_interception_risk(ctx, ctx.player, &teammate);
 

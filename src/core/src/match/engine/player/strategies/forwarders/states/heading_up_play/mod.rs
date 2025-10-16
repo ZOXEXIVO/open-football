@@ -39,10 +39,8 @@ impl StateProcessingHandler for ForwardHeadingUpPlayState {
 
 impl ForwardHeadingUpPlayState {
     fn has_support(&self, ctx: &StateProcessingContext) -> bool {
-        let players = ctx.players();
-
         let min_support_distance = 10.0;
 
-        players.teammates().exists(min_support_distance)
+        ctx.players().teammates().exists(min_support_distance)
     }
 }

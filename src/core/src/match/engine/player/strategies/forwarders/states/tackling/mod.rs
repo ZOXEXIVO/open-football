@@ -24,8 +24,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        let players = ctx.players();
-        let opponents = players.opponents();
+        let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
@@ -112,8 +111,7 @@ impl StateProcessingHandler for ForwardTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let players = ctx.players();
-        let opponents = players.opponents();
+        let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
