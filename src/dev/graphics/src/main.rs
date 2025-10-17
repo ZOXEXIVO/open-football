@@ -548,16 +548,26 @@ fn draw_ball(offset_x: f32, offset_y: f32, ball: &Ball, scale: f32) {
     let translated_x = offset_x + ball.position.x * scale;
     let translated_y = offset_y + ball.position.y * scale;
 
-    draw_circle(translated_x, translated_y, 7.0 * scale, ORANGE);
+    // Calculate visual scale based on height (perspective effect)
+    // The higher the ball, the larger it appears (simulating it being closer to camera)
+    let height_scale = 1.0 + (ball.position.z / 15.0).min(0.4);
+    let ball_radius = (7.0 / 1.5) * scale * height_scale;
 
-    if ball.flags.running_for_ball {
-        draw_circle(translated_x, translated_y, 3.0, BLACK);
-    }
+    // Draw the ball at its elevated position
+    // Adjust y-position to simulate 3D height (isometric-like projection)
+    let visual_y_offset = ball.position.z * scale * 0.5; // Scale z-height for visual effect
+    let ball_visual_y = translated_y - visual_y_offset;
+
+    // Draw simple white ball with black border
+    draw_circle(translated_x, ball_visual_y, ball_radius, WHITE);
+    draw_circle_lines(translated_x, ball_visual_y, ball_radius, 2.0, BLACK);
 
     draw_text(
         &format!(
-            "BALL POSITION, {:?}, IS_OUTSIDE: {:?}, IS_STANDS_OUTSIDE: {:?}, NOTIFIED_PLAYER: {:?}",
-            ball.position,
+            "BALL POS: x:{:.1}, y:{:.1}, z:{:.1}, IS_OUTSIDE: {:?}, IS_STANDS_OUTSIDE: {:?}, NOTIFIED: {:?}",
+            ball.position.x,
+            ball.position.y,
+            ball.position.z,
             ball.is_ball_outside(),
             ball.is_stands_outside(),
             ball.take_ball_notified_player
@@ -569,7 +579,7 @@ fn draw_ball(offset_x: f32, offset_y: f32, ball: &Ball, scale: f32) {
     );
 
     draw_text(
-        &format!("BALL VELOCITY: {:?}", ball.velocity),
+        &format!("BALL VEL: x:{:.1}, y:{:.1}, z:{:.1}", ball.velocity.x, ball.velocity.y, ball.velocity.z),
         20.0,
         30.0,
         15.0,

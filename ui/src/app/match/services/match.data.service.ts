@@ -34,10 +34,20 @@ export class MatchDataService {
 
         // update ball position
         if (lastData.ball) {
-            let ballPosition = this.translateToField(lastData.ball.position[0], lastData.ball.position[1]);
+            const z = lastData.ball.position[2] || 0; // Get z-coordinate, default to 0
+            let ballPosition = this.translateToField(lastData.ball.position[0], lastData.ball.position[1], z);
 
             this.match!.ball!.obj!.x = ballPosition.x;
             this.match!.ball!.obj!.y = ballPosition.y;
+
+            // Apply z-coordinate visual effects
+            // Scale ball based on height (perspective)
+            const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
+            this.match!.ball!.obj!.scale.set(heightScale);
+
+            // Adjust y-position for 3D height (isometric-like projection)
+            const visualYOffset = z * 0.5;
+            this.match!.ball!.obj!.y = ballPosition.y - visualYOffset;
         }
 
         // update players position
@@ -53,7 +63,7 @@ export class MatchDataService {
         });
     }
 
-    translateToField(x: number, y: number) {
+    translateToField(x: number, y: number, z: number = 0) {
         const real_field_width = this.width - 100;
         const real_field_height = this.height;
 
@@ -71,7 +81,8 @@ export class MatchDataService {
         // Apply the scaling and offsets to translate coordinates
         return {
             x: offsetX + 42 + x * scale_x,
-            y: offsetY + y * scale_y - 10
+            y: offsetY + y * scale_y - 10,
+            z: z
         };
     }
 

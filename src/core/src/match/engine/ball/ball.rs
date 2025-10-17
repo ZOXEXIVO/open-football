@@ -99,6 +99,19 @@ impl Ball {
             if let Some(notified_player) = self.notify_nearest_player(players, events) {
                 self.take_ball_notified_player = Some(notified_player);
             }
+        } else if let Some(notified_player_id) = self.take_ball_notified_player {
+            // Check if the notified player reached the ball
+            if let Some(player) = players.iter().find(|p| p.id == notified_player_id) {
+                const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
+                let distance = player.position.distance_to(&self.position);
+
+                if distance < CLAIM_DISTANCE && self.current_owner.is_none() {
+                    // Player reached the ball, give them ownership
+                    self.current_owner = Some(notified_player_id);
+                    self.take_ball_notified_player = None;
+                    events.add_ball_event(BallEvent::Claimed(notified_player_id));
+                }
+            }
         }
     }
 
@@ -197,6 +210,13 @@ impl Ball {
     ) {
         const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
+        const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
+        const BALL_HEIGHT_THRESHOLD: f32 = PLAYER_HEIGHT * 1.2; // Ball must be within reachable height
+
+        // Ball is too high to be claimed by players (flying over their heads)
+        if self.position.z > BALL_HEIGHT_THRESHOLD {
+            return;
+        }
 
         // Check if previous owner is still within range
         if let Some(previous_owner_id) = self.previous_owner {
@@ -209,13 +229,17 @@ impl Ball {
             }
         }
 
-        // Find all players within ball distance threshold
+        // Find all players within ball distance threshold (2D distance on ground)
         let nearby_players: Vec<&MatchPlayer> = players
             .iter()
             .filter(|player| {
                 let dx = player.position.x - self.position.x;
                 let dy = player.position.y - self.position.y;
-                dx * dx + dy * dy < BALL_DISTANCE_THRESHOLD_SQUARED
+                let horizontal_distance_squared = dx * dx + dy * dy;
+
+                // Check if ball is within horizontal range and at reachable height
+                horizontal_distance_squared < BALL_DISTANCE_THRESHOLD_SQUARED
+                    && self.position.z <= BALL_HEIGHT_THRESHOLD
             })
             .collect();
 
@@ -324,21 +348,47 @@ impl Ball {
         const ROLLING_RESISTANCE_COEFFICIENT: f32 = 0.02;
         const STOPPING_THRESHOLD: f32 = 0.1;
         const TIME_STEP: f32 = 0.01;
+        const BOUNCE_COEFFICIENT: f32 = 0.6; // Ball keeps 60% of velocity when bouncing
 
         let velocity_norm = self.velocity.norm();
 
         if velocity_norm > STOPPING_THRESHOLD {
+            // Apply air drag when ball is in the air or rolling
             let drag_force =
                 -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
-            let rolling_resistance_force =
-                -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.normalize();
 
-            let total_force = drag_force + rolling_resistance_force;
+            // Apply rolling resistance only when ball is on the ground (z ~= 0)
+            let rolling_resistance_force = if self.position.z <= 0.1 {
+                Vector3::new(
+                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.x.signum(),
+                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.y.signum(),
+                    0.0
+                )
+            } else {
+                Vector3::zeros()
+            };
+
+            // Apply gravity force in z-direction (downward)
+            let gravity_force = Vector3::new(0.0, 0.0, -BALL_MASS * GRAVITY);
+
+            let total_force = drag_force + rolling_resistance_force + gravity_force;
             let acceleration = total_force / BALL_MASS;
 
             self.velocity += acceleration * TIME_STEP;
         } else {
             self.velocity = Vector3::zeros();
+        }
+
+        // Check ground collision and bounce
+        if self.position.z <= 0.0 && self.velocity.z < 0.0 {
+            // Ball hit the ground
+            self.position.z = 0.0;
+            self.velocity.z = -self.velocity.z * BOUNCE_COEFFICIENT;
+
+            // If bounce is too small, stop vertical movement
+            if self.velocity.z.abs() < 0.5 {
+                self.velocity.z = 0.0;
+            }
         }
     }
 
@@ -349,9 +399,17 @@ impl Ball {
 
         if let Some(owner_player_id) = self.current_owner {
             self.position = tick_context.positions.players.position(owner_player_id);
+            // When player has the ball, it should be at ground level (or slightly above for dribbling)
+            self.position.z = 0.0;
         } else {
             self.position.x += self.velocity.x;
             self.position.y += self.velocity.y;
+            self.position.z += self.velocity.z;
+
+            // Ensure ball doesn't go below ground
+            if self.position.z < 0.0 {
+                self.position.z = 0.0;
+            }
         }
     }
 

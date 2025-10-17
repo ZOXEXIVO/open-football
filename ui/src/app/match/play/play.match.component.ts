@@ -1,13 +1,16 @@
 ﻿import {
     AfterViewInit,
     Component,
-    ElementRef, HostListener, Input,
+    ElementRef,
+    HostListener,
+    Input,
     NgZone,
-    OnDestroy, OnInit,
+    OnDestroy,
+    OnInit,
     ViewChild
 } from '@angular/core';
 import * as PIXI from 'pixi.js';
-import {Assets, Container, Graphics, Sprite, TextStyle} from "pixi.js";
+import {Assets, Container, Graphics, TextStyle} from 'pixi.js';
 import {UntilDestroy} from "@ngneat/until-destroy";
 import {MatchPlayService} from "../services/match.play.service";
 import {MatchDataService} from "../services/match.data.service";
@@ -24,28 +27,20 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     isDisposed = false;
 
     @ViewChild('matchContainer') matchContainer!: ElementRef;
-
-    private background: PIXI.Sprite | null = null;
-    private gameContainer: PIXI.Container | null = null;
-
     application: PIXI.Application | null = null;
-
     dataLoaded = false;
-
     matchTimeMs: number = -1;
-
     currentTime = 0;
-
     isFullscreen: boolean = false;
-
-    private aspectRatio: number = 16 / 10;
-    private maxWidth: number = 1400;
-    private maxHeight: number = 950;
-
     @Input()
     leagueSlug: string = '';
     @Input()
     matchId: string = '';
+    private background: PIXI.Sprite | null = null;
+    private gameContainer: PIXI.Container | null = null;
+    private aspectRatio: number = 16 / 10;
+    private maxWidth: number = 1400;
+    private maxHeight: number = 950;
 
     constructor(private zone: NgZone,
                 public matchPlayService: MatchPlayService,
@@ -118,7 +113,7 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         Object.entries(data.players).forEach(([key, value]: [string, ObjectPositionDto[]]) => {
             let player = this.getPlayer(Number(key));
 
-            if(player) {
+            if (player) {
                 const playerObj = this.createPlayer(value[0].position[0], value[0].position[1], player);
 
                 this.matchDataService.setPlayerGraphicsObject(Number(key), playerObj);
@@ -137,7 +132,7 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         this.matchPlayService.startMatch();
     }
 
-    getPlayer(playerId: number): MatchPlayerDto{
+    getPlayer(playerId: number): MatchPlayerDto {
         return this.matchDataService.match!.players.find((player) => player.id == playerId)!;
     }
 
@@ -235,7 +230,7 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
             align: 'center'
         });
 
-        const numberText = new PIXI.Text({text:  player.shirt_number.toString(), style: numberStyle});
+        const numberText = new PIXI.Text({text: player.shirt_number.toString(), style: numberStyle});
 
         numberText.anchor.set(0.5);
         numberText.position.set(6, 6); // Center of the circle
@@ -283,9 +278,9 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
 
 
     getBorderColor(color: number): number {
-       if (color == 0xf7e300){
-           return 0x000000;
-       }
+        if (color == 0xf7e300) {
+            return 0x000000;
+        }
 
         return 0xffffff;
     }
@@ -300,21 +295,34 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         return background;
     }
 
-    async createBall(data: MatchDataDto): Promise<Sprite> {
-        const texture = await Assets.load('assets/images/match/ball.png');
-        const ball: PIXI.Sprite = new Sprite(texture);
+    async createBall(data: MatchDataDto): Promise<Container> {
+        const container = new Container();
 
-        ball.width = 20;
-        ball.height = 20;
+        // Create white circle with black border for ball
+        const ballCircle = new Graphics();
+        const ballRadius = 6;
 
+        // Draw white fill
+        ballCircle.circle(0, 0, ballRadius).fill(0xFFFFFF);
+
+        // Draw black border
+        ballCircle.circle(0, 0, ballRadius).stroke({width: 2, color: 0x000000});
+
+        container.addChild(ballCircle);
+
+        const z = data.ball[0].position[2] || 0;
         const translatedBallCoods = this.matchDataService.translateToField(
-            data.ball[0].position[0], data.ball[0].position[1]
+            data.ball[0].position[0], data.ball[0].position[1], z
         );
 
-        ball.position.x = translatedBallCoods.x;
-        ball.position.y = translatedBallCoods.y;
+        container.position.x = translatedBallCoods.x;
+        container.position.y = translatedBallCoods.y;
 
-        return ball;
+        // Apply initial z-coordinate scaling
+        const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
+        container.scale.set(heightScale);
+
+        return container;
     }
 
     toggleFullscreen() {

@@ -90,7 +90,7 @@ impl SquadSelector {
                required_positions);
 
         // For each required position, find the best available player
-        for (position_index, &required_position) in required_positions.iter().enumerate() {
+        for (_, &required_position) in required_positions.iter().enumerate() {
             if let Some(best_player) = Self::find_best_player_for_position(
                 available_players,
                 &used_players,
@@ -102,7 +102,7 @@ impl SquadSelector {
                     team_id,
                     best_player,
                     required_position,
-                    position_index < DEFAULT_SQUAD_SIZE,
+                    false,
                 ));
                 used_players.push(best_player.id);
 
@@ -130,7 +130,7 @@ impl SquadSelector {
                     team_id,
                     best_remaining,
                     best_position,
-                    true,
+                    false,
                 ));
                 used_players.push(best_remaining.id);
             } else {
