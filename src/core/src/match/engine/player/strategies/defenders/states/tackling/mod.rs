@@ -59,6 +59,26 @@ impl StateProcessingHandler for DefenderTacklingState {
             ));
         }
 
+        // Fallback: if ball is loose and very close, try to claim it
+        let ball_distance = ctx.ball().distance();
+        if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
+            return Some(StateChangeResult::with_defender_state_and_event(
+                DefenderState::Running,
+                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+            ));
+        }
+
+        // Timeout fallback: if stuck in tackling state too long, transition out
+        if ctx.in_state_time > 30 {
+            return Some(StateChangeResult::with_defender_state(
+                if ball_distance < 50.0 {
+                    DefenderState::Pressing
+                } else {
+                    DefenderState::Returning
+                }
+            ));
+        }
+
         None
     }
 

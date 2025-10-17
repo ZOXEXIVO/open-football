@@ -562,6 +562,10 @@ fn draw_ball(offset_x: f32, offset_y: f32, ball: &Ball, scale: f32) {
     draw_circle(translated_x, ball_visual_y, ball_radius, WHITE);
     draw_circle_lines(translated_x, ball_visual_y, ball_radius, 2.0, BLACK);
 
+    // Draw black filled circle in the center
+    let center_circle_radius = ball_radius * 0.3;
+    draw_circle(translated_x, ball_visual_y, center_circle_radius, BLACK);
+
     draw_text(
         &format!(
             "BALL POS: x:{:.1}, y:{:.1}, z:{:.1}, IS_OUTSIDE: {:?}, IS_STANDS_OUTSIDE: {:?}, NOTIFIED: {:?}",

@@ -103,9 +103,14 @@ impl Ball {
             // Check if the notified player reached the ball
             if let Some(player) = players.iter().find(|p| p.id == notified_player_id) {
                 const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
-                let distance = player.position.distance_to(&self.position);
 
-                if distance < CLAIM_DISTANCE && self.current_owner.is_none() {
+                // Calculate proper 3D distance
+                let dx = player.position.x - self.position.x;
+                let dy = player.position.y - self.position.y;
+                let dz = self.position.z;
+                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+
+                if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
                     // Player reached the ball, give them ownership
                     self.current_owner = Some(notified_player_id);
                     self.take_ball_notified_player = None;
@@ -138,12 +143,20 @@ impl Ball {
     ) -> Option<u32> {
         let ball_position = self.position;
 
-        // Find the nearest player to the ball
+        // Find the nearest player to the ball (use horizontal distance only)
+        // We use 2D distance because we want to notify based on field position,
+        // not 3D distance (ball might be high but we still want closest player on ground)
         let nearest_player = players.iter().min_by(|a, b| {
-            let dist_a = a.position.distance_to(&ball_position);
-            let dist_b = b.position.distance_to(&ball_position);
-            dist_a
-                .partial_cmp(&dist_b)
+            let dx_a = a.position.x - ball_position.x;
+            let dy_a = a.position.y - ball_position.y;
+            let dist_a_squared = dx_a * dx_a + dy_a * dy_a;
+
+            let dx_b = b.position.x - ball_position.x;
+            let dy_b = b.position.y - ball_position.y;
+            let dist_b_squared = dx_b * dx_b + dy_b * dy_b;
+
+            dist_a_squared
+                .partial_cmp(&dist_b_squared)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
@@ -211,17 +224,26 @@ impl Ball {
         const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
-        const BALL_HEIGHT_THRESHOLD: f32 = PLAYER_HEIGHT * 1.2; // Ball must be within reachable height
+        const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
+        const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.0; // Player can reach ~2.8m when jumping
+        const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
 
-        // Ball is too high to be claimed by players (flying over their heads)
-        if self.position.z > BALL_HEIGHT_THRESHOLD {
+        // Ball is too high to be claimed by any player (flying over everyone's heads)
+        if self.position.z > MAX_BALL_HEIGHT {
             return;
         }
 
-        // Check if previous owner is still within range
+        // Check if previous owner is still within range (use 3D distance)
         if let Some(previous_owner_id) = self.previous_owner {
             let owner = context.players.by_id(previous_owner_id).unwrap();
-            if owner.position.distance_to(&self.position) > BALL_DISTANCE_THRESHOLD {
+
+            // Calculate proper 3D distance
+            let dx = owner.position.x - self.position.x;
+            let dy = owner.position.y - self.position.y;
+            let dz = self.position.z; // Ball height from ground (player is at z=0)
+            let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+
+            if distance_3d > BALL_DISTANCE_THRESHOLD {
                 self.previous_owner = None;
             } else {
                 // Previous owner still in range, no need to check for new ownership
@@ -229,17 +251,36 @@ impl Ball {
             }
         }
 
-        // Find all players within ball distance threshold (2D distance on ground)
+        // Find all players within ball distance threshold with proper 3D collision detection
         let nearby_players: Vec<&MatchPlayer> = players
             .iter()
             .filter(|player| {
                 let dx = player.position.x - self.position.x;
                 let dy = player.position.y - self.position.y;
                 let horizontal_distance_squared = dx * dx + dy * dy;
+                let horizontal_distance = horizontal_distance_squared.sqrt();
 
-                // Check if ball is within horizontal range and at reachable height
-                horizontal_distance_squared < BALL_DISTANCE_THRESHOLD_SQUARED
-                    && self.position.z <= BALL_HEIGHT_THRESHOLD
+                // Early exit if horizontally too far
+                if horizontal_distance_squared > BALL_DISTANCE_THRESHOLD_SQUARED {
+                    return false;
+                }
+
+                // Calculate reachable height based on horizontal distance
+                // Closer = easier to reach higher balls (can jump)
+                // Further = harder to reach higher balls
+                let effective_reach_height = if horizontal_distance < 1.5 {
+                    // Very close - can jump and reach high
+                    PLAYER_JUMP_REACH
+                } else if horizontal_distance < 3.0 {
+                    // Medium distance - can reach with feet/body
+                    PLAYER_REACH_HEIGHT
+                } else {
+                    // Far distance - only low balls (sliding tackle range)
+                    PLAYER_HEIGHT * 0.6
+                };
+
+                // Check if ball is at reachable height for this horizontal distance
+                self.position.z <= effective_reach_height
             })
             .collect();
 

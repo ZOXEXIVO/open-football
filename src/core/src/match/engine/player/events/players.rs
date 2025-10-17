@@ -152,62 +152,72 @@ impl PlayerEventDispatcher {
 
         // Get player for skill-based variation
         let player = field.get_player_mut(event_model.from_player_id).unwrap();
-        let technique_variation = (player.skills.technical.technique / 20.0).clamp(0.5, 1.5);
+        let passing_skill = (player.skills.technical.passing / 20.0).clamp(0.4, 1.0);
+        let technique_skill = (player.skills.technical.technique / 20.0).clamp(0.4, 1.0);
 
-        // Much more random height variation - each pass is different
-        let random_height_multiplier: f32 = rng.gen_range(0.3..1.8);
         let pass_style_random: f32 = rng.gen_range(0.0..1.0);
 
-        // Calculate z-velocity with much more variety
-        let base_z_velocity = if horizontal_distance > 50.0 {
-            // Long pass - varied trajectories
-            let gravity = 9.81;
-            let time_to_target = horizontal_distance / horizontal_velocity.norm();
-            let calculated_height = 0.5 * gravity * time_to_target / 3.0; // Divided by 3
-
-            // Different pass styles for long passes
-            if pass_style_random < 0.3 {
-                // Low driven pass (30% chance)
-                calculated_height * 0.4
-            } else if pass_style_random < 0.7 {
-                // Normal lofted pass (40% chance)
-                calculated_height
+        // Calculate z-velocity with realistic variety - emphasize ground passes
+        let z_velocity = if horizontal_distance > 60.0 {
+            // Long pass - mix of driven and lofted passes
+            if pass_style_random < 0.35 {
+                // Driven ground pass - completely horizontal (35% chance)
+                0.0
+            } else if pass_style_random < 0.60 {
+                // Low driven pass with slight lift (25% chance)
+                rng.gen_range(0.05..0.25) * passing_skill
+            } else if pass_style_random < 0.88 {
+                // Normal lofted pass (28% chance)
+                let gravity = 9.81;
+                let time_to_target = horizontal_distance / horizontal_velocity.norm();
+                let calculated_height = 0.5 * gravity * time_to_target / 5.0;
+                calculated_height * rng.gen_range(0.6..1.0) * technique_skill
             } else {
-                // High lofted pass (30% chance)
-                calculated_height * 1.5
+                // High lofted pass for switching play (12% chance)
+                let gravity = 9.81;
+                let time_to_target = horizontal_distance / horizontal_velocity.norm();
+                let calculated_height = 0.5 * gravity * time_to_target / 3.0;
+                calculated_height * rng.gen_range(1.2..1.8) * technique_skill
             }
-        } else if horizontal_distance > 20.0 {
-            // Medium pass - lots of variation
-            if pass_style_random < 0.5 {
-                // Ground pass (50% chance)
-                rng.gen_range(0.0..0.5) // Divided by 3
-            } else if pass_style_random < 0.8 {
-                // Low pass (30% chance)
-                rng.gen_range(0.5..1.3) // Divided by 3
+        } else if horizontal_distance > 25.0 {
+            // Medium pass - mostly horizontal and low
+            if pass_style_random < 0.50 {
+                // Perfect ground pass - horizontal line (50% chance)
+                0.0
+            } else if pass_style_random < 0.78 {
+                // Rolling ground pass with minimal height (28% chance)
+                rng.gen_range(0.0..0.12) * technique_skill
+            } else if pass_style_random < 0.93 {
+                // Low pass with small arc (15% chance)
+                rng.gen_range(0.2..0.5) * passing_skill
             } else {
-                // Chip pass (20% chance)
-                rng.gen_range(1.3..2.3) // Divided by 3
+                // Chip pass over defender (7% chance)
+                rng.gen_range(1.0..1.6) * technique_skill
             }
         } else {
-            // Short pass - mostly ground with occasional variety
-            if pass_style_random < 0.75 {
-                // Ground pass (75% chance)
-                rng.gen_range(0.0..0.17) // Divided by 3
+            // Short pass - almost all ground passes
+            if pass_style_random < 0.70 {
+                // Pure horizontal ground pass (70% chance)
+                0.0
             } else if pass_style_random < 0.92 {
-                // Small lift (17% chance)
-                rng.gen_range(0.17..0.83) // Divided by 3
+                // Ground pass with tiny bounce (22% chance)
+                rng.gen_range(0.0..0.08) * technique_skill
+            } else if pass_style_random < 0.97 {
+                // Small lift pass (5% chance)
+                rng.gen_range(0.15..0.4) * passing_skill
             } else {
-                // Chip (8% chance)
-                rng.gen_range(0.83..1.67) // Divided by 3
+                // Delicate chip (3% chance)
+                rng.gen_range(0.8..1.3) * technique_skill
             }
         };
 
-        let z_velocity = (base_z_velocity * random_height_multiplier * technique_variation).min(4.0);
+        // Clamp final z-velocity to realistic range
+        let final_z_velocity = z_velocity.min(2.4);
 
         field.ball.velocity = Vector3::new(
             horizontal_velocity.x,
             horizontal_velocity.y,
-            z_velocity
+            final_z_velocity
         );
 
         field.ball.previous_owner = field.ball.current_owner;
