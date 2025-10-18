@@ -84,21 +84,30 @@ impl PassEvaluator {
 
     /// Calculate how distance affects pass success
     fn calculate_distance_factor(distance: f32, passer: &MatchPlayer) -> f32 {
-        let optimal_range = passer.skills.technical.passing * 2.5;
-        let max_effective_range = passer.skills.technical.passing * 5.0;
+        let passing_skill = passer.skills.technical.passing;
+        let vision_skill = passer.skills.mental.vision;
+
+        // Vision extends effective passing range
+        let vision_bonus = (vision_skill / 20.0) * 1.5;
+        let optimal_range = passing_skill * (2.5 + vision_bonus);
+        let max_effective_range = passing_skill * (5.0 + vision_bonus * 2.0);
 
         if distance <= optimal_range {
             // Short to medium passes - very high success
             1.0 - (distance / optimal_range * 0.1)
         } else if distance <= max_effective_range {
-            // Long passes - declining success
+            // Long passes - declining success (less penalty with high vision)
             let excess = distance - optimal_range;
             let range = max_effective_range - optimal_range;
-            0.9 - (excess / range * 0.5)
+            let base_decline = 0.9 - (excess / range * 0.5);
+            // Vision reduces the decline penalty
+            base_decline + (vision_skill / 20.0 * 0.1)
         } else {
-            // Very long passes - poor success rate
+            // Very long passes - poor success rate (vision helps)
             let excess = distance - max_effective_range;
-            (0.4 - (excess / 100.0).min(0.3)).max(0.1)
+            let base_factor = (0.4 - (excess / 100.0).min(0.3)).max(0.1);
+            // High vision players maintain better accuracy on very long passes
+            (base_factor + vision_skill / 20.0 * 0.15).min(0.8)
         }
     }
 
@@ -289,6 +298,7 @@ impl PassEvaluator {
     ) -> f32 {
         let ball_position = ctx.tick_context.positions.ball.position;
         let receiver_position = receiver.position;
+        let passer_position = ctx.player.position;
 
         // Value increases as we move toward opponent's goal
         let field_width = ctx.context.field_size.width as f32;
@@ -298,8 +308,21 @@ impl PassEvaluator {
         let forward_progress = (receiver_position.x - ball_position.x) / field_width;
         let forward_value = forward_progress.max(0.0) * 0.5;
 
-        // Passes to advanced positions are more valuable
+        // Long cross-field passes - reward vision players for switching play
+        let pass_distance = (receiver_position - passer_position).norm();
+        let vision_skill = ctx.player.skills.mental.vision / 20.0;
 
+        let long_pass_bonus = if pass_distance > 100.0 {
+            // Very long cross-field switch - valuable for high vision players
+            vision_skill * 0.3
+        } else if pass_distance > 60.0 {
+            // Long pass - some bonus for vision
+            vision_skill * 0.15
+        } else {
+            0.0
+        };
+
+        // Passes to advanced positions are more valuable
         let position_value = match receiver.tactical_positions.position_group() {
             crate::PlayerFieldPositionGroup::Forward => 1.0,
             crate::PlayerFieldPositionGroup::Midfielder => 0.7,
@@ -307,13 +330,14 @@ impl PassEvaluator {
             crate::PlayerFieldPositionGroup::Goalkeeper => 0.2,
         };
 
-        // Weighted combination
+        // Weighted combination - long passes get bonus value
         let tactical_value =
-            progress_value * 0.3 +
-                forward_value * 0.4 +
-                position_value * 0.3;
+            progress_value * 0.25 +
+                forward_value * 0.35 +
+                position_value * 0.25 +
+                long_pass_bonus * 0.15;
 
-        tactical_value.clamp(0.2, 1.0)
+        tactical_value.clamp(0.2, 1.2) // Allow higher values for good long passes
     }
 
     /// Calculate overall success probability from factors
@@ -395,7 +419,7 @@ impl PassEvaluator {
         }
     }
 
-    /// Find the best pass option from available teammates
+    /// Find the best pass option from available teammates with skill-based personality
     pub fn find_best_pass_option(
         ctx: &StateProcessingContext,
         max_distance: f32,
@@ -403,37 +427,169 @@ impl PassEvaluator {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
+        // Determine player's passing personality based on skills
+        let pass_skill = ctx.player.skills.technical.passing / 20.0;
+        let vision_skill = ctx.player.skills.mental.vision / 20.0;
+        let flair_skill = ctx.player.skills.mental.flair / 20.0;
+        let decision_skill = ctx.player.skills.mental.decisions / 20.0;
+        let composure_skill = ctx.player.skills.mental.composure / 20.0;
+        let teamwork_skill = ctx.player.skills.mental.teamwork / 20.0;
+        let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
+
+        // Define passing personalities
+        let is_playmaker = vision_skill > 0.75 && flair_skill > 0.65; // Creative, through balls
+        let is_direct = flair_skill > 0.7 && pass_skill > 0.65; // Risky, aggressive forward passes
+        let is_conservative = decision_skill < 0.5 || composure_skill < 0.5; // Safe, sideways passes
+        let is_team_player = teamwork_skill > 0.75 && pass_skill > 0.65; // Finds best positioned teammates
+        let is_pragmatic = decision_skill > 0.75 && pass_skill > 0.6; // Smart, calculated passes
+
         for teammate in ctx.players().teammates().nearby(max_distance) {
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
             let interception_risk = Self::calculate_interception_risk(ctx, ctx.player, &teammate);
+            let pass_distance = (teammate.position - ctx.player.position).norm();
 
-            // Comprehensive scoring that heavily favors free players
-            let positioning_bonus = evaluation.factors.receiver_positioning * 2.0;  // Double bonus for good positioning
-            let space_quality = if evaluation.factors.receiver_positioning > 0.8 {
-                // Heavily reward completely free players
-                1.5
-            } else if evaluation.factors.receiver_positioning > 0.6 {
-                1.2
-            } else if evaluation.factors.receiver_positioning > 0.4 {
+            // Base positioning bonus
+            let positioning_bonus = evaluation.factors.receiver_positioning * 2.0;
+
+            // Skill-based space quality evaluation
+            let space_quality = if is_conservative {
+                // Conservative players HEAVILY penalize any crowding
+                if evaluation.factors.receiver_positioning > 0.9 {
+                    2.0 // Only completely free players
+                } else if evaluation.factors.receiver_positioning > 0.7 {
+                    1.2
+                } else {
+                    0.3 // Avoid any pressure
+                }
+            } else if is_playmaker {
+                // Playmakers trust teammates to handle some pressure
+                if evaluation.factors.receiver_positioning > 0.8 {
+                    1.6
+                } else if evaluation.factors.receiver_positioning > 0.5 {
+                    1.3 // Still okay with moderate space
+                } else {
+                    0.8
+                }
+            } else if is_direct {
+                // Direct players less concerned about space, more about attacking position
+                if evaluation.factors.receiver_positioning > 0.6 {
+                    1.5
+                } else {
+                    1.0 // Will attempt tighter passes
+                }
+            } else {
+                // Standard space evaluation
+                if evaluation.factors.receiver_positioning > 0.8 {
+                    1.5
+                } else if evaluation.factors.receiver_positioning > 0.6 {
+                    1.2
+                } else if evaluation.factors.receiver_positioning > 0.4 {
+                    1.0
+                } else {
+                    0.6
+                }
+            };
+
+            // Skill-based interception risk tolerance
+            let risk_tolerance = if is_direct {
+                0.3 // Willing to take risks
+            } else if is_conservative {
+                0.8 // Avoid any risk
+            } else if is_playmaker {
+                0.4 // Moderate risk for creative passes
+            } else {
+                0.5 // Standard risk avoidance
+            };
+
+            let interception_penalty = 1.0 - (interception_risk * risk_tolerance);
+
+            // Distance preference based on personality
+            let distance_preference = if is_playmaker {
+                // Playmakers love long through balls
+                if pass_distance > 80.0 {
+                    1.4
+                } else if pass_distance > 50.0 {
+                    1.2
+                } else {
+                    1.0
+                }
+            } else if is_direct {
+                // Direct players prefer forward passes of any length
+                let forward_progress = teammate.position.x - ctx.player.position.x;
+                if forward_progress > 0.0 {
+                    1.3
+                } else {
+                    0.6 // Avoid backward passes
+                }
+            } else if is_conservative {
+                // Conservative players prefer short, safe passes
+                if pass_distance < 30.0 {
+                    1.4
+                } else if pass_distance < 50.0 {
+                    1.0
+                } else {
+                    0.7 // Avoid long passes
+                }
+            } else if is_team_player {
+                // Team players maximize teammate positioning
+                1.0 + (evaluation.factors.receiver_positioning * 0.3)
+            } else if is_pragmatic {
+                // Pragmatic players balance all factors
+                if evaluation.expected_value > 0.6 {
+                    1.3 // Good tactical value
+                } else {
+                    1.0
+                }
+            } else {
                 1.0
-            } else {
-                // Penalize crowded receivers
-                0.6
             };
 
-            let interception_penalty = 1.0 - (interception_risk * 0.5);  // Penalize risky pass lanes
-
+            // Calculate final score with personality-based weighting
             let score = if evaluation.factors.pressure_factor < 0.5 {
-                // Under heavy pressure - prioritize safety AND space
-                (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3
+                // Under heavy pressure - personality affects decision
+                if is_conservative {
+                    // Conservative: safety is paramount
+                    (evaluation.success_probability * 2.0 + positioning_bonus) * interception_penalty * space_quality
+                } else if is_direct {
+                    // Direct: still look for forward options
+                    (evaluation.expected_value * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference
+                } else {
+                    // Others: prioritize safety AND space
+                    (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3
+                }
             } else {
-                // Normal situation - balance expected value with space quality
-                (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality
+                // Normal situation - personality-based preferences apply
+                if is_playmaker {
+                    // Playmakers prioritize tactical value and vision
+                    (evaluation.expected_value * 1.3 + positioning_bonus * 0.4) * interception_penalty * space_quality * distance_preference
+                } else if is_direct {
+                    // Direct players maximize attack
+                    (evaluation.expected_value * 1.4 + evaluation.factors.tactical_value * 0.5) * interception_penalty * space_quality * distance_preference
+                } else if is_team_player {
+                    // Team players maximize receiver's situation
+                    (evaluation.success_probability + positioning_bonus * 0.8) * interception_penalty * space_quality * distance_preference
+                } else if is_conservative {
+                    // Conservative: success probability is key
+                    (evaluation.success_probability * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference
+                } else if is_pragmatic {
+                    // Pragmatic: balanced approach
+                    (evaluation.expected_value * 1.2 + positioning_bonus * 0.5) * interception_penalty * space_quality * distance_preference
+                } else {
+                    // Standard scoring
+                    (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality
+                }
             };
 
-            // Lower threshold for recommended passes - allow more options if they're in good space
-            let is_acceptable = evaluation.is_recommended ||
-                (evaluation.factors.receiver_positioning > 0.7 && evaluation.success_probability > 0.5);
+            // Personality-based acceptance threshold
+            let is_acceptable = if is_conservative {
+                evaluation.success_probability > 0.7 && evaluation.factors.receiver_positioning > 0.75
+            } else if is_direct {
+                evaluation.success_probability > 0.5 && evaluation.factors.tactical_value > 0.5
+            } else if is_playmaker {
+                evaluation.success_probability > 0.55 || (evaluation.factors.tactical_value > 0.7 && pass_distance > 60.0)
+            } else {
+                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.7 && evaluation.success_probability > 0.5)
+            };
 
             if score > best_score && is_acceptable {
                 best_score = score;

@@ -76,7 +76,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     }
 
     pub fn nearby(&'b self, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        const MIN_DISTANCE: f32 = 50.0;
+        const MIN_DISTANCE: f32 = 1.0; // Changed from 50.0 to allow closer teammates
 
         self.ctx
             .tick_context
@@ -108,7 +108,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     }
 
     pub fn nearby_ids(&self, max_distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {
-        const MIN_DISTANCE: f32 = 50.0;
+        const MIN_DISTANCE: f32 = 1.0; // Changed from 50.0 to allow closer teammates
 
         self.ctx
             .tick_context

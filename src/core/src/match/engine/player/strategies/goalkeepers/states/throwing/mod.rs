@@ -52,6 +52,7 @@ impl GoalkeeperThrowingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx, 100.0)
+        // Throwing has limited range, but still prefer longer throws
+        PassEvaluator::find_best_pass_option(ctx, 150.0)
     }
 }

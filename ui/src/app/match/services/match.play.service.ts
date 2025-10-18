@@ -17,14 +17,20 @@ export class MatchPlayService {
     currentTime = 0;
     private lastFrameTime = 0;
     private playbackSpeed = 0.7;
+    private matchDurationMs: number = 0;
 
     constructor(private matchDataService: MatchDataService) {
+    }
+
+    setMatchDuration(durationMs: number) {
+        this.matchDurationMs = durationMs;
     }
 
     tick(currentTime: number) {
         if (this.currentState === MatchEvent.InProcess) {
             if (this.lastFrameTime === 0) {
                 this.lastFrameTime = currentTime;
+                return; // Skip first frame to avoid large delta
             }
 
             const deltaTime = (currentTime - this.lastFrameTime) * this.playbackSpeed;
@@ -37,6 +43,14 @@ export class MatchPlayService {
 
     incrementTime(deltaTime: number) {
         this.currentTime += deltaTime;
+
+        // Check if match has ended
+        if (this.matchDurationMs > 0 && this.currentTime >= this.matchDurationMs) {
+            this.currentTime = this.matchDurationMs;
+            this.stop();
+            console.log('Match ended at', this.currentTime, 'ms');
+        }
+
         this.timeChanged.next(this.currentTime);
     }
 
@@ -46,10 +60,12 @@ export class MatchPlayService {
     }
 
     pause() {
+        this.currentState = MatchEvent.Paused;
         this.matchEvents.next(MatchEvent.Paused);
     }
 
     stop() {
+        this.currentState = MatchEvent.Ended;
         this.matchEvents.next(MatchEvent.Ended);
     }
 
@@ -60,6 +76,22 @@ export class MatchPlayService {
 
     setPlaybackSpeed(speed: number) {
         this.playbackSpeed = speed;
+    }
+
+    seekToTime(timeMs: number) {
+        // Allow restarting from any state except Paused (user explicitly paused)
+        const shouldPlay = this.currentState !== MatchEvent.Paused;
+
+        this.currentTime = timeMs;
+        this.lastFrameTime = 0; // Reset frame time to continue smooth playback
+        this.timeChanged.next(this.currentTime);
+        this.matchDataService.refreshData(this.currentTime);
+
+        // Start or maintain playback state after seeking (except when paused)
+        if (shouldPlay) {
+            this.currentState = MatchEvent.InProcess;
+            this.matchEvents.next(MatchEvent.InProcess);
+        }
     }
 }
 

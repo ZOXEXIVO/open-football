@@ -1,5 +1,6 @@
 ﻿import {
     AfterViewInit,
+    ChangeDetectorRef,
     Component,
     ElementRef,
     HostListener,
@@ -27,6 +28,7 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     isDisposed = false;
 
     @ViewChild('matchContainer') matchContainer!: ElementRef;
+    @ViewChild('timeScrollbar') timeScrollbar!: ElementRef;
     application: PIXI.Application | null = null;
     dataLoaded = false;
     matchTimeMs: number = -1;
@@ -41,8 +43,10 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     private aspectRatio: number = 16 / 10;
     private maxWidth: number = 1400;
     private maxHeight: number = 950;
+    private isDraggingSlider = false;
 
     constructor(private zone: NgZone,
+                private cdr: ChangeDetectorRef,
                 public matchPlayService: MatchPlayService,
                 public matchService: MatchService,
                 public matchDataService: MatchDataService) {
@@ -52,6 +56,10 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     ngOnInit(): void {
         this.matchPlayService.timeChanged$.subscribe(time => {
             this.currentTime = time;
+            // Trigger change detection to update slider position
+            if (!this.isDraggingSlider) {
+                this.cdr.detectChanges();
+            }
         });
 
         document.addEventListener('fullscreenchange', this.onFullscreenChange.bind(this));
@@ -143,6 +151,13 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
             this.dataLoaded = true;
 
             this.matchDataService.setMatchData(matchData);
+
+            // Calculate match duration from ball position data
+            if (matchData.ball && matchData.ball.length > 0) {
+                const lastBallPosition = matchData.ball[matchData.ball.length - 1];
+                this.matchTimeMs = lastBallPosition.timestamp;
+                console.log('Match duration:', this.matchTimeMs, 'ms');
+            }
 
             await this.initGraphics();
             await this.setupGraphics(matchData);
@@ -372,6 +387,54 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         if (this.application) {
             this.application.resize();
         }
+    }
+
+    // Time scrollbar methods
+    getSliderPosition(): number {
+        if (this.matchTimeMs <= 0) return 0;
+        return (this.currentTime / this.matchTimeMs) * 100;
+    }
+
+    formatTime(ms: number): string {
+        const totalSeconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    onTimeBarMouseDown(event: MouseEvent): void {
+        this.seekToPosition(event);
+    }
+
+    onSliderMouseDown(event: MouseEvent): void {
+        event.stopPropagation();
+        this.isDraggingSlider = true;
+
+        const onMouseMove = (e: MouseEvent) => {
+            if (this.isDraggingSlider) {
+                this.seekToPosition(e);
+            }
+        };
+
+        const onMouseUp = () => {
+            this.isDraggingSlider = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }
+
+    private seekToPosition(event: MouseEvent): void {
+        if (!this.timeScrollbar || this.matchTimeMs <= 0) return;
+
+        const rect = this.timeScrollbar.nativeElement.getBoundingClientRect();
+        const x = event.clientX - rect.left;
+        const percentage = Math.max(0, Math.min(1, x / rect.width));
+        const newTime = percentage * this.matchTimeMs;
+
+        this.matchPlayService.seekToTime(newTime);
     }
 
     ngOnDestroy(): void {

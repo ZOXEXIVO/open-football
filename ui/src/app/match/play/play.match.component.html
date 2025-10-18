@@ -1,19 +1,27 @@
 <div class="container-fluid">
-    <div class="row">
-        <hr />
-<!--        <div class="range">-->
-<!--            <input type="range" class="form-range" min="0" [max]="matchTimeMs"-->
-<!--                   [value]="currentTime"/>-->
-<!--            {{ currentTime / 1000 }}-->
-<!--        </div>-->
-    </div>
     <div class="row text-center">
         <div class="col-12">
+            <!-- Time scrollbar positioned above the field -->
+            <div class="time-scrollbar-wrapper" *ngIf="dataLoaded && matchTimeMs > 0">
+                <div class="time-scrollbar-container">
+                    <div class="time-scrollbar-track"
+                         (mousedown)="onTimeBarMouseDown($event)"
+                         #timeScrollbar>
+                        <div class="time-scrollbar-slider"
+                             [style.left.%]="getSliderPosition()"
+                             (mousedown)="onSliderMouseDown($event)">
+                            <div class="time-display">{{ formatTime(currentTime) }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div id="match-container">
                 <div *ngIf="!dataLoaded" class="loading-spinner">
                     <i class="fas fa-spinner fa-spin fa-2x"></i>
                     <p>Loading match data...</p>
                 </div>
+
                 <div #matchContainer class="match-container"></div>
             </div>
         </div>

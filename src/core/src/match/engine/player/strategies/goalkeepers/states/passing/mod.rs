@@ -49,6 +49,8 @@ impl StateProcessingHandler for GoalkeeperPassingState {
 
 impl GoalkeeperPassingState {
     fn find_best_pass_option(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx, 400.0)
+        // Passing allows for long passes - search entire field
+        let max_distance = ctx.context.field_size.width as f32 * 1.5;
+        PassEvaluator::find_best_pass_option(ctx, max_distance)
     }
 }

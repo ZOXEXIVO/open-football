@@ -87,47 +87,88 @@ export class MatchDataService {
     }
 
     getData(timestamp: number): MatchResultData | null {
+        // Ensure ball index is within bounds
+        if (this.match!.ball.currentCoordIdx >= this.matchData!.ball.length) {
+            this.match!.ball.currentCoordIdx = this.matchData!.ball.length - 1;
+        }
+        if (this.match!.ball.currentCoordIdx < 0) {
+            this.match!.ball.currentCoordIdx = 0;
+        }
+
         // ball
         let ballData = this.matchData!.ball[this.match!.ball.currentCoordIdx];
         if(!ballData) {
+            console.error('No ball data at index', this.match!.ball.currentCoordIdx);
             return null;
         }
 
         let ts = ballData.timestamp;
 
-        while (ts < timestamp && this.match!.ball.currentCoordIdx < this.matchData!.ball.length) {
-            const data = this.matchData!.ball[this.match!.ball.currentCoordIdx];
-            if(!data) {
-                return null;
-            }
-            ts = data.timestamp;
-            this.match!.ball.currentCoordIdx++;
+        // If seeking backward, reset to beginning and search forward
+        if (ts > timestamp) {
+            console.log('Seeking backward: resetting ball index from', this.match!.ball.currentCoordIdx, 'to 0');
+            this.match!.ball.currentCoordIdx = 0;
+            ballData = this.matchData!.ball[0];
+            ts = ballData.timestamp;
         }
 
-        const ballResult = this.matchData!.ball[this.match!.ball.currentCoordIdx - 1];
+        // Move forward to find the correct timestamp
+        while (ts < timestamp && this.match!.ball.currentCoordIdx < this.matchData!.ball.length - 1) {
+            this.match!.ball.currentCoordIdx++;
+            const data = this.matchData!.ball[this.match!.ball.currentCoordIdx];
+            if(!data) {
+                break;
+            }
+            ts = data.timestamp;
+        }
+
+        // Use current index, but ensure it's valid
+        const ballIndex = Math.min(this.match!.ball.currentCoordIdx, this.matchData!.ball.length - 1);
+        const ballResult = this.matchData!.ball[ballIndex];
 
         let players_results: PlayerDataResultModel[] = [];
 
         Object.entries(this.matchData?.players!).forEach(([key, value]: [string, ObjectPositionDto[]]) => {
             const player = this.match!.players.find((player) => player.id == Number(key))!;
 
-            if(player){
-                let dt = value![player.currentCoordIdx];
+            if(player && value && value.length > 0){
+                // Ensure player index is within bounds
+                if (player.currentCoordIdx >= value.length) {
+                    player.currentCoordIdx = value.length - 1;
+                }
+                if (player.currentCoordIdx < 0) {
+                    player.currentCoordIdx = 0;
+                }
+
+                let dt = value[player.currentCoordIdx];
                 if(dt) {
                     let pts = dt.timestamp;
 
-                    while (pts < timestamp && player.currentCoordIdx < value!.length) {
-                        dt = value![player.currentCoordIdx];
+                    // If seeking backward, reset to beginning and search forward
+                    if (pts > timestamp) {
+                        console.log('Seeking backward: resetting player', player.id, 'index from', player.currentCoordIdx, 'to 0');
+                        player.currentCoordIdx = 0;
+                        dt = value[0];
+                        pts = dt.timestamp;
+                    }
+
+                    // Move forward to find the correct timestamp
+                    while (pts < timestamp && player.currentCoordIdx < value.length - 1) {
+                        player.currentCoordIdx++;
+                        dt = value[player.currentCoordIdx];
 
                         if(dt) {
                             pts = dt.timestamp;
-                            player.currentCoordIdx++;
                         }
                     }
 
-                    const playerPosition = value![player.currentCoordIdx];
+                    // Use current index, but ensure it's valid
+                    const playerIndex = Math.min(player.currentCoordIdx, value.length - 1);
+                    const playerPosition = value[playerIndex];
 
-                    players_results.push(new PlayerDataResultModel(player.id, playerPosition));
+                    if(playerPosition) {
+                        players_results.push(new PlayerDataResultModel(player.id, playerPosition));
+                    }
                 }
             }
         });

@@ -139,41 +139,72 @@ impl League {
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
     ) -> Vec<MatchResult> {
-        scheduled_matches
-            .iter_mut()
+        use rayon::iter::ParallelIterator;
+        use rayon::iter::IndexedParallelIterator;
+
+        // Play all matches in parallel
+        let match_results: Vec<MatchResult> = scheduled_matches
+            .par_iter_mut()
             .map(|scheduled_match| {
-                self.play_single_match(scheduled_match, clubs, ctx)
+                Self::play_single_match_static(
+                    scheduled_match,
+                    clubs,
+                    ctx,
+                    &self.dynamics,
+                    &self.table,
+                )
             })
-            .collect()
+            .collect();
+
+        // Update momentum sequentially after all matches are played
+        for result in &match_results {
+            self.dynamics.update_team_momentum_after_match(
+                result.home_team_id,
+                result.away_team_id,
+                result,
+            );
+        }
+
+        match_results
     }
 
-    fn play_single_match(
-        &mut self,
+    fn play_single_match_static(
         scheduled_match: &mut LeagueMatch,
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
+        dynamics: &LeagueDynamics,
+        table: &LeagueTable,
     ) -> MatchResult {
-        let home_team = self.get_team(clubs, scheduled_match.home_team_id);
-        let away_team = self.get_team(clubs, scheduled_match.away_team_id);
+        let home_team = clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .find(|team| team.id == scheduled_match.home_team_id)
+            .expect("Home team not found");
+
+        let away_team = clubs
+            .iter()
+            .flat_map(|c| &c.teams.teams)
+            .find(|team| team.id == scheduled_match.away_team_id)
+            .expect("Away team not found");
 
         // Get psychological factors
-        let (home_momentum, away_momentum) = self.get_team_momentums(
-            scheduled_match.home_team_id,
-            scheduled_match.away_team_id,
-        );
+        let home_momentum = dynamics.get_team_momentum(scheduled_match.home_team_id);
+        let away_momentum = dynamics.get_team_momentum(scheduled_match.away_team_id);
 
-        let (home_pressure, away_pressure) = self.calculate_match_pressures(
+        let (home_pressure, away_pressure) = Self::calculate_match_pressures_static(
             home_team,
             away_team,
             ctx.simulation.date.date(),
+            dynamics,
+            table,
         );
 
         // Prepare squads with psychological modifiers
         let mut home_squad = home_team.get_enhanced_match_squad();
         let mut away_squad = away_team.get_enhanced_match_squad();
 
-        self.apply_psychological_factors(&mut home_squad, home_momentum, home_pressure);
-        self.apply_psychological_factors(&mut away_squad, away_momentum, away_pressure);
+        Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
+        Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
 
         // Create and play match
         let match_to_play = Match::make(
@@ -196,13 +227,6 @@ impl League {
 
         // Update match result in schedule
         scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
-
-        // Update momentum after match
-        self.dynamics.update_team_momentum_after_match(
-            scheduled_match.home_team_id,
-            scheduled_match.away_team_id,
-            &match_result,
-        );
 
         match_result
     }
@@ -263,6 +287,57 @@ impl League {
     ) {
         debug!("Team {} - Momentum: {:.2}, Pressure: {:.2}",
                squad.team_name, momentum, pressure);
+    }
+
+    fn apply_psychological_factors_static(
+        squad: &mut crate::r#match::MatchSquad,
+        momentum: f32,
+        pressure: f32,
+    ) {
+        debug!("Team {} - Momentum: {:.2}, Pressure: {:.2}",
+               squad.team_name, momentum, pressure);
+    }
+
+    fn calculate_match_pressures_static(
+        home_team: &Team,
+        away_team: &Team,
+        current_date: NaiveDate,
+        dynamics: &LeagueDynamics,
+        table: &LeagueTable,
+    ) -> (f32, f32) {
+        let home = Self::calculate_match_pressure_static(home_team, table, current_date, dynamics);
+        let away = Self::calculate_match_pressure_static(away_team, table, current_date, dynamics);
+        (home, away)
+    }
+
+    fn calculate_match_pressure_static(
+        team: &Team,
+        table: &LeagueTable,
+        _current_date: NaiveDate,
+        dynamics: &LeagueDynamics,
+    ) -> f32 {
+        let position = table.rows.iter().position(|r| r.team_id == team.id).unwrap_or(0);
+        let total_teams = table.rows.len();
+
+        let mut pressure: f32 = 0.5; // Base pressure
+
+        // Title race pressure
+        if position < 3 {
+            pressure += 0.3;
+        }
+
+        // Relegation battle pressure
+        if position >= total_teams - 3 {
+            pressure += 0.4;
+        }
+
+        // Manager under pressure
+        let losing_streak = dynamics.get_team_losing_streak(team.id);
+        if losing_streak > 3 {
+            pressure += 0.2;
+        }
+
+        pressure.min(1.0)
     }
 
     fn calculate_matches_remaining(&self, team_id: u32) -> usize {

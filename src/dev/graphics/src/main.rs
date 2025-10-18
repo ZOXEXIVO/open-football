@@ -301,7 +301,7 @@ const WINDOW_HEIGHT: i32 = 1521;
 
 fn window_conf() -> Conf {
     Conf {
-        window_title: "FootballSimulatorTesting".to_owned(),
+        window_title: "OpenFootball Match Development".to_owned(),
         window_width: WINDOW_WIDTH,
         window_height: WINDOW_HEIGHT,
         window_resizable: false,

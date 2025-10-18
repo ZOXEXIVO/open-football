@@ -169,23 +169,34 @@ impl<'p> PlayerOperationsImpl<'p> {
         // Calculate the base shooting power based on the player's relevant skills
         let shooting_technique = self.ctx.player.skills.technical.technique;
         let shooting_power = self.ctx.player.skills.technical.long_shots;
+        let finishing_skill = self.ctx.player.skills.technical.finishing;
         let player_strength = self.ctx.player.skills.physical.strength;
 
-        // Normalize the skill values to a range of 0.5 to 1.5
-        let technique_factor = 0.7 + (shooting_technique - 1.0) / 19.0;
-        let power_factor = 0.9 + (shooting_power - 1.0) / 19.0;
-        let strength_factor = 0.2 + (player_strength - 1.0) / 19.0;
+        // Normalize the skill values to a range between 0.5 and 1.5
+        let technique_factor = 0.5 + (shooting_technique / 20.0);
+        let power_factor = 0.5 + (shooting_power / 20.0);
+        let finishing_factor = 0.5 + (finishing_skill / 20.0);
+        let strength_factor = 0.3 + (player_strength / 20.0) * 0.7;
 
-        // Calculate the shooting power based on the normalized skill values and goal distance
-        let base_power = 10.0; // Adjust this value to control the overall shooting power
-        let distance_factor = (self.ctx.context.field_size.width as f32 / 2.0 - goal_distance)
-            / (self.ctx.context.field_size.width as f32 / 2.0);
-        let shooting_power =
-            base_power * technique_factor * power_factor * strength_factor * distance_factor;
+        // Calculate distance factor that increases power for longer distances
+        // Close shots: ~1.0, Long shots: ~1.5
+        let max_field_distance = self.ctx.context.field_size.width as f32;
+        let distance_factor = 1.0 + (goal_distance / max_field_distance).min(1.0) * 0.5;
+
+        // Calculate the shooting power - skills have impact now
+        // Reduced base power significantly to keep speeds reasonable (20% above original)
+        let base_power = 2.4; // Reduced from 8.0 to get closer to original speeds with 20% increase
+        let skill_multiplier = (technique_factor * 0.3)
+            + (power_factor * 0.35)
+            + (finishing_factor * 0.2)
+            + (strength_factor * 0.15);
+
+        let shooting_power = base_power * skill_multiplier * distance_factor;
 
         // Ensure the shooting power is within a reasonable range
-        let min_power = 0.5;
-        let max_power = 2.5;
+        // Target: original was ~0.5-2.5, now aiming for ~0.6-3.0 (20% increase)
+        let min_power = 0.6;
+        let max_power = 3.0;
 
         shooting_power.clamp(min_power, max_power) as f64
     }

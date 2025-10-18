@@ -92,7 +92,10 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        if self.is_stands_outside()
+        // Check if ball is stopped (either outside or inside field) and no one owns it
+        let is_ball_stopped = self.is_stands_outside() || self.is_ball_stopped_on_field();
+
+        if is_ball_stopped
             && self.take_ball_notified_player.is_none()
             && self.current_owner.is_none()
         {
@@ -129,6 +132,15 @@ impl Ball {
             && self.current_owner.is_none()
     }
 
+    pub fn is_ball_stopped_on_field(&self) -> bool {
+        // Ball has stopped moving inside the field (loose ball situation)
+        !self.is_ball_outside()
+            && self.velocity.norm() < 0.1 // Nearly zero velocity (stopped or rolling very slowly)
+            && self.position.z < 0.5 // Ball is on or near the ground
+            && self.current_owner.is_none()
+            && self.flags.in_flight_state == 0 // Not in flight from a pass/shot
+    }
+
     pub fn is_ball_outside(&self) -> bool {
         self.position.x == 0.0
             || self.position.x >= self.field_width
@@ -143,30 +155,40 @@ impl Ball {
     ) -> Option<u32> {
         let ball_position = self.position;
 
-        // Find the nearest player to the ball (use horizontal distance only)
-        // We use 2D distance because we want to notify based on field position,
-        // not 3D distance (ball might be high but we still want closest player on ground)
-        let nearest_player = players.iter().min_by(|a, b| {
-            let dx_a = a.position.x - ball_position.x;
-            let dy_a = a.position.y - ball_position.y;
-            let dist_a_squared = dx_a * dx_a + dy_a * dy_a;
+        // Notify multiple nearby players to create competition for the ball
+        const NOTIFICATION_RADIUS: f32 = 30.0; // Players within this range will be notified
+        const MAX_NOTIFY_PLAYERS: usize = 4; // Notify up to 4 nearest players
 
-            let dx_b = b.position.x - ball_position.x;
-            let dy_b = b.position.y - ball_position.y;
-            let dist_b_squared = dx_b * dx_b + dy_b * dy_b;
+        // Find players within notification radius and sort by distance
+        let mut nearby_players: Vec<(&MatchPlayer, f32)> = players
+            .iter()
+            .map(|player| {
+                let dx = player.position.x - ball_position.x;
+                let dy = player.position.y - ball_position.y;
+                let distance_squared = dx * dx + dy * dy;
+                (player, distance_squared)
+            })
+            .filter(|(_, dist_sq)| *dist_sq < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS)
+            .collect();
 
-            dist_a_squared
-                .partial_cmp(&dist_b_squared)
+        // Sort by distance (closest first)
+        nearby_players.sort_by(|a, b| {
+            a.1.partial_cmp(&b.1)
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        if let Some(player) = nearest_player {
+        // Notify up to MAX_NOTIFY_PLAYERS nearest players
+        let mut notified_player_id = None;
+        for (player, _) in nearby_players.iter().take(MAX_NOTIFY_PLAYERS) {
             events.add_ball_event(BallEvent::TakeMe(player.id));
 
-            return Some(player.id);
+            // Return the closest player as the primary notified player
+            if notified_player_id.is_none() {
+                notified_player_id = Some(player.id);
+            }
         }
 
-        None
+        notified_player_id
     }
 
     fn check_boundary_collision(&mut self, context: &MatchContext) {
