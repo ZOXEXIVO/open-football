@@ -35,14 +35,14 @@ impl StateProcessingHandler for DefenderStandingState {
                     ));
                 }
 
-                if !team_ops.is_control_ball() && ball_ops.distance() < 150.0 {
+                if !team_ops.is_control_ball() && ball_ops.distance() < 250.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,
                     ));
                 }
             }
         }
-        if ball_ops.distance() < 200.0 {
+        if ball_ops.distance() < 250.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));
