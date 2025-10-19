@@ -438,7 +438,9 @@ impl Ball {
 
             self.velocity += acceleration * TIME_STEP;
         } else {
+            // Ball has stopped - zero velocity and settle on ground
             self.velocity = Vector3::zeros();
+            self.position.z = 0.0;
         }
 
         // Check ground collision and bounce

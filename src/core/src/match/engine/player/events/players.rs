@@ -165,10 +165,28 @@ impl PlayerEventDispatcher {
         let player = field.get_player_mut(event_model.from_player_id).unwrap();
         let skills = PassSkills::from_player(player);
 
-        // Calculate horizontal velocity
+        // Add directional inaccuracy based on passing skill (worse players = more error)
+        let accuracy_factor = skills.passing * skills.technique;
+        let angle_error = rng.random_range(-0.15..0.15) * (1.2 - accuracy_factor); // Up to ±8.6° for poor passers
+
+        // Rotate the pass vector slightly for error
+        let cos_angle = angle_error.cos();
+        let sin_angle = angle_error.sin();
+        let adjusted_vector = Vector3::new(
+            ball_pass_vector.x * cos_angle - ball_pass_vector.y * sin_angle,
+            ball_pass_vector.x * sin_angle + ball_pass_vector.y * cos_angle,
+            0.0,
+        );
+
+        // Add power variation based on technique (inconsistent power application)
+        let power_consistency = 0.95 + (skills.technique * 0.1); // 0.95 to 1.05
+        let power_variation = rng.random_range(power_consistency - 0.05..power_consistency + 0.05);
+        let adjusted_force = event_model.pass_force * power_variation;
+
+        // Calculate horizontal velocity with randomness applied
         let horizontal_velocity = Self::calculate_horizontal_velocity(
-            &ball_pass_vector,
-            event_model.pass_force,
+            &adjusted_vector,
+            adjusted_force,
         );
 
         // Determine pass trajectory based on distance and skills
@@ -179,8 +197,12 @@ impl PlayerEventDispatcher {
             &mut rng,
         );
 
+        // Add slight vertical variation (spin, wind, grass conditions)
+        let vertical_variation = rng.random_range(0.92..1.08);
+        let adjusted_z_velocity = z_velocity * vertical_variation;
+
         let max_z_velocity = Self::calculate_max_z_velocity(horizontal_distance, skills.vision);
-        let final_z_velocity = z_velocity.min(max_z_velocity);
+        let final_z_velocity = adjusted_z_velocity.min(max_z_velocity);
 
         // Apply ball physics
         field.ball.velocity = Vector3::new(
@@ -216,6 +238,20 @@ impl PlayerEventDispatcher {
         let pass_style_random: f32 = rng.random_range(0.0..1.0);
 
         match horizontal_distance {
+            d if d > 300.0 => Self::calculate_extreme_long_pass_trajectory(
+                horizontal_distance,
+                horizontal_velocity,
+                skills,
+                pass_style_random,
+                rng,
+            ),
+            d if d > 200.0 => Self::calculate_ultra_long_pass_trajectory(
+                horizontal_distance,
+                horizontal_velocity,
+                skills,
+                pass_style_random,
+                rng,
+            ),
             d if d > 100.0 => Self::calculate_very_long_pass_trajectory(
                 horizontal_distance,
                 horizontal_velocity,
@@ -243,6 +279,62 @@ impl PlayerEventDispatcher {
         }
     }
 
+    fn calculate_extreme_long_pass_trajectory(
+        horizontal_distance: f32,
+        horizontal_velocity: &Vector3<f32>,
+        skills: &PassSkills,
+        pass_style_random: f32,
+        rng: &mut impl Rng,
+    ) -> f32 {
+        // Extreme distance pass (300m+) - goalkeeper goal kicks, desperate clearances
+        // MUST be very high to reach - almost always aerial
+
+        if pass_style_random < 0.05 {
+            // Ultra-low missile (2% chance - extremely rare, only elite technique)
+            rng.random_range(1.5..2.5) * skills.technique * skills.vision
+        } else if pass_style_random < 0.20 {
+            // High punt (15% chance)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.2);
+            base_height * rng.random_range(1.1..1.5) * (0.85 + skills.vision * 0.15)
+        } else if pass_style_random < 0.65 {
+            // Very high clearance (45% chance - most common for extreme distance)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 0.9);
+            base_height * rng.random_range(1.2..1.6) * (0.9 + skills.technique * 0.1)
+        } else {
+            // Extreme height clearance (35% chance - safety first)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 0.7);
+            base_height * rng.random_range(1.3..1.7) * (0.95 + skills.passing * 0.05)
+        }
+    }
+
+    fn calculate_ultra_long_pass_trajectory(
+        horizontal_distance: f32,
+        horizontal_velocity: &Vector3<f32>,
+        skills: &PassSkills,
+        pass_style_random: f32,
+        rng: &mut impl Rng,
+    ) -> f32 {
+        // Ultra-long pass (200-300m) - long goal kicks, diagonal switches
+        // Needs significant height to cover distance
+
+        if pass_style_random < 0.08 {
+            // Driven long ball (8% chance - requires exceptional technique)
+            rng.random_range(1.0..1.8) * skills.technique * (0.8 + skills.vision * 0.2)
+        } else if pass_style_random < 0.25 {
+            // Medium-high lofted pass (17% chance)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 2.0);
+            base_height * rng.random_range(0.95..1.3) * (0.75 + skills.technique * 0.25)
+        } else if pass_style_random < 0.70 {
+            // High lofted diagonal (45% chance - standard for this distance)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.5);
+            base_height * rng.random_range(1.05..1.4) * (0.85 + skills.vision * 0.15)
+        } else {
+            // Very high switching pass (30% chance - maximum elevation)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.2);
+            base_height * rng.random_range(1.15..1.5) * (0.9 + skills.vision * 0.1)
+        }
+    }
+
     fn calculate_very_long_pass_trajectory(
         horizontal_distance: f32,
         horizontal_velocity: &Vector3<f32>,
@@ -250,7 +342,7 @@ impl PlayerEventDispatcher {
         pass_style_random: f32,
         rng: &mut impl Rng,
     ) -> f32 {
-        // Very long cross-field pass - requires high vision
+        // Very long cross-field pass (100-200m) - requires high vision
         let vision_bonus = skills.vision * 0.5;
 
         if pass_style_random < 0.10 * (1.0 - vision_bonus) {
@@ -349,12 +441,21 @@ impl PlayerEventDispatcher {
     }
 
     fn calculate_max_z_velocity(horizontal_distance: f32, vision_skill: f32) -> f32 {
-        if horizontal_distance > 100.0 {
-            5.5 + (vision_skill * 2.5) // Up to 8.0 for high vision players
+        if horizontal_distance > 300.0 {
+            // Extreme distance - goalkeeper goal kicks, desperate clearances
+            12.0 + (vision_skill * 3.0) // Up to 15.0 m/s for extreme passes
+        } else if horizontal_distance > 200.0 {
+            // Ultra-long diagonal switches
+            9.0 + (vision_skill * 2.5) // Up to 11.5 m/s
+        } else if horizontal_distance > 100.0 {
+            // Very long cross-field passes
+            5.5 + (vision_skill * 2.5) // Up to 8.0 m/s for high vision players
         } else if horizontal_distance > 60.0 {
-            3.5 + (vision_skill * 0.8) // Up to 4.3
+            // Long passes
+            3.5 + (vision_skill * 0.8) // Up to 4.3 m/s
         } else {
-            2.4 // Keep medium/short passes low
+            // Medium/short passes - keep low
+            2.4
         }
     }
 
@@ -387,27 +488,48 @@ impl PlayerEventDispatcher {
 
         // Get player skills for power and accuracy calculations
         let player = field.get_player_mut(shoot_event_model.from_player_id).unwrap();
+
         let finishing_skill = (player.skills.technical.finishing / 20.0).clamp(0.5, 1.0);
         let technique_skill = (player.skills.technical.technique / 20.0).clamp(0.5, 1.0);
         let long_shot_skill = (player.skills.technical.long_shots / 20.0).clamp(0.5, 1.0);
+        let composure_skill = (player.skills.mental.composure / 20.0).clamp(0.4, 1.0);
+
+        // Add directional inaccuracy (shooting error)
+        // Better finishers have less angular error
+        let accuracy_factor = finishing_skill * composure_skill;
+        let max_angle_error = if horizontal_distance > 50.0 {
+            0.25 * (1.5 - accuracy_factor) // Long shots: up to ±14.3° for poor shooters
+        } else {
+            0.15 * (1.3 - accuracy_factor) // Close shots: up to ±8.6° for poor shooters
+        };
+
+        let angle_error = rng.random_range(-max_angle_error..max_angle_error);
+
+        // Rotate shot vector for directional error
+        let cos_angle = angle_error.cos();
+        let sin_angle = angle_error.sin();
+        let adjusted_shot_vector = Vector3::new(
+            ball_shot_vector.x * cos_angle - ball_shot_vector.y * sin_angle,
+            ball_shot_vector.x * sin_angle + ball_shot_vector.y * cos_angle,
+            0.0,
+        );
 
         // Calculate skill-based power multiplier (better players shoot harder)
-        // Reduced multiplier range to keep speeds closer to original + 20%
         let power_skill_factor = (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.3);
-        let power_multiplier = 0.97 + (power_skill_factor * 0.3); // Range: 0.95 to 1.25 (reduced from 0.7-1.3)
+        let power_multiplier = 0.97 + (power_skill_factor * 0.3); // Range: 0.95 to 1.25
 
         // Calculate horizontal velocity with skill-based power
-        let horizontal_direction = Vector3::new(ball_shot_vector.x, ball_shot_vector.y, 0.0).normalize();
+        let horizontal_direction = Vector3::new(adjusted_shot_vector.x, adjusted_shot_vector.y, 0.0).normalize();
         let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier;
 
-        // Add slight randomness to power (better players have more consistent power)
-        let power_consistency = 0.98 + (technique_skill * 0.04); // 0.98 to 1.02 (reduced randomness)
-        let power_random = rng.random_range(power_consistency - 0.02..power_consistency + 0.02);
+        // Add power randomness (better players have more consistent power)
+        let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04
+        let power_random = rng.random_range(power_consistency - 0.04..power_consistency + 0.04);
         let horizontal_velocity = horizontal_direction * base_horizontal_velocity * power_random;
 
         // Calculate z-velocity based on shot style and player skills
         let shot_style: f32 = rng.random_range(0.0..1.0);
-        let height_variation: f32 = rng.random_range(0.8..1.2);
+        let height_variation: f32 = rng.random_range(0.85..1.15);
 
         let base_z_velocity = if horizontal_distance > 100.0 {
             // Long-range shot - varied heights (technique matters more)
@@ -438,7 +560,9 @@ impl PlayerEventDispatcher {
             }
         };
 
-        let z_velocity = (base_z_velocity * height_variation).min(3.0);
+        // Add spin/environmental variation to height
+        let vertical_spin_variation = rng.random_range(0.94..1.06);
+        let z_velocity = (base_z_velocity * height_variation * vertical_spin_variation).min(3.0);
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);
         field.ball.current_owner = None;

@@ -16,6 +16,12 @@ impl StateProcessingHandler for DefenderReturningState {
             ));
         }
 
+        if ctx.player().distance_from_start_position() < 10.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+        
         if ctx.team().is_control_ball() {
             if ctx.player().distance_from_start_position() < 5.0 {
                 return Some(StateChangeResult::with_defender_state(

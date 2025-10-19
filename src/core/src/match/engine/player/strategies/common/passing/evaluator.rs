@@ -86,28 +86,62 @@ impl PassEvaluator {
     fn calculate_distance_factor(distance: f32, passer: &MatchPlayer) -> f32 {
         let passing_skill = passer.skills.technical.passing;
         let vision_skill = passer.skills.mental.vision;
+        let technique_skill = passer.skills.technical.technique;
 
-        // Vision extends effective passing range
+        // Vision and technique extend effective passing range
         let vision_bonus = (vision_skill / 20.0) * 1.5;
+        let technique_bonus = (technique_skill / 20.0) * 0.5;
+
         let optimal_range = passing_skill * (2.5 + vision_bonus);
         let max_effective_range = passing_skill * (5.0 + vision_bonus * 2.0);
+        let ultra_long_threshold = 200.0;
+        let extreme_long_threshold = 300.0;
 
         if distance <= optimal_range {
             // Short to medium passes - very high success
             1.0 - (distance / optimal_range * 0.1)
         } else if distance <= max_effective_range {
-            // Long passes - declining success (less penalty with high vision)
+            // Long passes (60-100m) - declining success (less penalty with high vision)
             let excess = distance - optimal_range;
             let range = max_effective_range - optimal_range;
             let base_decline = 0.9 - (excess / range * 0.5);
             // Vision reduces the decline penalty
             base_decline + (vision_skill / 20.0 * 0.1)
-        } else {
-            // Very long passes - poor success rate (vision helps)
+        } else if distance <= ultra_long_threshold {
+            // Very long passes (100-200m) - vision and technique critical
             let excess = distance - max_effective_range;
-            let base_factor = (0.4 - (excess / 100.0).min(0.3)).max(0.1);
-            // High vision players maintain better accuracy on very long passes
-            (base_factor + vision_skill / 20.0 * 0.15).min(0.8)
+            let range = ultra_long_threshold - max_effective_range;
+            let skill_factor = (vision_skill / 20.0 * 0.6) + (technique_skill / 20.0 * 0.3);
+
+            let base_factor = 0.5 - (excess / range * 0.25);
+            (base_factor + skill_factor * 0.3).clamp(0.2, 0.7)
+        } else if distance <= extreme_long_threshold {
+            // Ultra-long passes (200-300m) - only elite players can execute
+            let skill_factor = (vision_skill / 20.0 * 0.7) + (technique_skill / 20.0 * 0.3);
+
+            // Require high skills for these passes
+            if skill_factor > 0.7 {
+                // Elite passer - can attempt with decent success
+                (0.4 + skill_factor * 0.2).clamp(0.3, 0.6)
+            } else if skill_factor > 0.5 {
+                // Good passer - risky but possible
+                (0.3 + skill_factor * 0.15).clamp(0.2, 0.45)
+            } else {
+                // Average/poor passer - very low success
+                0.15
+            }
+        } else {
+            // Extreme long passes (300m+) - goalkeeper clearances, desperate plays
+            let skill_factor = (vision_skill / 20.0 * 0.5) + (technique_skill / 20.0 * 0.35) + (passing_skill / 20.0 * 0.15);
+
+            // Only world-class passers have reasonable success
+            if skill_factor > 0.8 {
+                0.5 // Elite - still challenging
+            } else if skill_factor > 0.6 {
+                0.35 // Good - very risky
+            } else {
+                0.2 // Poor - mostly luck
+            }
         }
     }
 
@@ -311,13 +345,22 @@ impl PassEvaluator {
         // Long cross-field passes - reward vision players for switching play
         let pass_distance = (receiver_position - passer_position).norm();
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
+        let technique_skill = ctx.player.skills.technical.technique / 20.0;
 
-        let long_pass_bonus = if pass_distance > 100.0 {
-            // Very long cross-field switch - valuable for high vision players
-            vision_skill * 0.3
+        let long_pass_bonus = if pass_distance > 300.0 {
+            // Extreme distance (300m+) - goalkeeper goal kicks, desperate clearances
+            // Highly valuable if successful - can completely change game state
+            (vision_skill * 0.5 + technique_skill * 0.3) * 0.8
+        } else if pass_distance > 200.0 {
+            // Ultra-long diagonal (200-300m) - switches play across entire field
+            // Very valuable for counter-attacks and relieving pressure
+            (vision_skill * 0.45 + technique_skill * 0.25) * 0.6
+        } else if pass_distance > 100.0 {
+            // Very long cross-field switch (100-200m) - valuable for high vision players
+            vision_skill * 0.4
         } else if pass_distance > 60.0 {
-            // Long pass - some bonus for vision
-            vision_skill * 0.15
+            // Long pass (60-100m) - some bonus for vision
+            vision_skill * 0.2
         } else {
             0.0
         };
@@ -505,8 +548,24 @@ impl PassEvaluator {
 
             // Distance preference based on personality
             let distance_preference = if is_playmaker {
-                // Playmakers love long through balls
-                if pass_distance > 80.0 {
+                // Playmakers love long through balls and switches
+                if pass_distance > 300.0 {
+                    // Extreme passes - only if vision is elite
+                    if vision_skill > 0.85 {
+                        1.8 // World-class playmaker - go for spectacular passes
+                    } else {
+                        0.8 // Too risky for most
+                    }
+                } else if pass_distance > 200.0 {
+                    // Ultra-long switches - playmaker specialty
+                    if vision_skill > 0.75 {
+                        1.6 // High vision - loves these passes
+                    } else {
+                        1.1
+                    }
+                } else if pass_distance > 100.0 {
+                    1.5 // Very long passes - excellent for playmakers
+                } else if pass_distance > 80.0 {
                     1.4
                 } else if pass_distance > 50.0 {
                     1.2
