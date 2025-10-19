@@ -12,3 +12,10 @@ log = { version = "0.4.28", features = ["release_max_level_info"] }
 env_logger = "0.11.8"
 color-eyre = "0.6.5"
 tokio = { version = "1.48.0", features = ["full"] }
+
+[profile.release]
+opt-level = 3          # Highest optimization for speed (default in release, but explicit is fine).
+lto = "fat"            # Enables full link-time optimization for better inlining and dead code elimination across crates.
+codegen-units = 1      # Reduces parallelism in codegen to allow more aggressive optimizations (increases compile time).
+panic = "abort"        # Aborts on panic instead of unwinding, reducing overhead and binary size.
+strip = "symbols"      # Strips debug symbols and unused code for a leaner binary.
