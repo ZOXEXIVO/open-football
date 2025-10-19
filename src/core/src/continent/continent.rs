@@ -1,9 +1,9 @@
 use crate::context::GlobalContext;
-use crate::continent::{ContinentResult, ContinentalCompetitionResults};
+use crate::continent::ContinentResult;
 use crate::country::CountryResult;
 use crate::utils::Logging;
 use crate::{Club, Country};
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use log::{debug, info};
 use std::collections::HashMap;
 

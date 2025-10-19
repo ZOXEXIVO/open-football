@@ -155,7 +155,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         // Calculate pass trajectory parameters
         let ball_pass_vector = event_model.pass_target - field.ball.position;
@@ -258,20 +258,16 @@ impl PlayerEventDispatcher {
             rng.random_range(0.5..1.2) * skills.technique
         } else if pass_style_random < 0.25 {
             // Medium height long ball (15% chance)
-            Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 2.8)
-                * rng.random_range(1.5..2.2)
-                * (skills.technique + vision_bonus)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 2.8);
+            base_height * rng.random_range(0.8..1.1) * (0.7 + skills.technique * 0.3)
         } else if pass_style_random < 0.70 {
             // High lofted cross-field pass (45% chance)
-            Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.8)
-                * rng.random_range(2.0..2.8)
-                * (skills.technique + skills.vision * 0.4)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.8);
+            base_height * rng.random_range(0.9..1.3) * (0.8 + skills.vision * 0.2)
         } else {
             // Very high switching pass (30% chance - spectacular passes)
-            Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.4)
-                * rng.random_range(2.5..3.5)
-                * skills.vision
-                * skills.technique
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 1.4);
+            base_height * rng.random_range(1.0..1.4) * (0.85 + skills.vision * 0.15)
         }
     }
 
@@ -291,14 +287,12 @@ impl PlayerEventDispatcher {
             rng.random_range(0.05..0.3) * skills.passing
         } else if pass_style_random < 0.80 {
             // Normal lofted pass (30% chance)
-            Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 4.0)
-                * rng.random_range(0.8..1.3)
-                * (skills.technique + skills.vision * 0.2)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 4.0);
+            base_height * rng.random_range(0.7..1.0) * (0.7 + skills.technique * 0.3)
         } else {
             // High lofted pass for switching play (20% chance)
-            Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 2.8)
-                * rng.random_range(1.3..2.0)
-                * (skills.technique + skills.vision * 0.3)
+            let base_height = Self::calculate_lofted_trajectory(horizontal_distance, horizontal_velocity, 2.8);
+            base_height * rng.random_range(0.9..1.2) * (0.75 + skills.vision * 0.25)
         }
     }
 
@@ -386,7 +380,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
 
         let ball_shot_vector = shoot_event_model.target - field.ball.position;
         let horizontal_distance = (ball_shot_vector.x * ball_shot_vector.x + ball_shot_vector.y * ball_shot_vector.y).sqrt();

@@ -5,7 +5,7 @@ use crate::utils::Logging;
 use crate::{Club, Team};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -140,7 +140,6 @@ impl League {
         ctx: &GlobalContext<'_>,
     ) -> Vec<MatchResult> {
         use rayon::iter::ParallelIterator;
-        use rayon::iter::IndexedParallelIterator;
 
         // Play all matches in parallel
         let match_results: Vec<MatchResult> = scheduled_matches

@@ -202,7 +202,7 @@ const PHYSICAL_FOCUSES: &[PhysicalFocusType] = &[
 ];
 
 fn get_random_technical(count: usize) -> Vec<TechnicalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
@@ -219,7 +219,7 @@ fn get_random_technical(count: usize) -> Vec<TechnicalFocusType> {
 }
 
 fn get_random_mental(count: usize) -> Vec<MentalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
@@ -236,7 +236,7 @@ fn get_random_mental(count: usize) -> Vec<MentalFocusType> {
 }
 
 fn get_random_physical(count: usize) -> Vec<PhysicalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
