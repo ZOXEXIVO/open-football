@@ -1,4 +1,4 @@
-use crate::training::result::PlayerTrainingResult;
+use crate::club::player::training::result::PlayerTrainingResult;
 use crate::SimulatorData;
 
 pub struct TeamTrainingResult {

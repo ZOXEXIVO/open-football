@@ -1,6 +1,6 @@
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
-use crate::r#match::statistics::MatchStatisticType;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer};
 use log::debug;
 use nalgebra::Vector3;

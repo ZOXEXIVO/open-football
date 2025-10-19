@@ -8,7 +8,7 @@ use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, Recommendat
 use log::{debug, info};
 use std::borrow::Cow;
 use std::str::FromStr;
-use crate::team::builder::TeamBuilder;
+use crate::club::team::builder::TeamBuilder;
 
 #[derive(Debug, PartialEq)]
 pub enum TeamType {

@@ -1,7 +1,8 @@
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::strategies::processor::StateChangeResult;
+use crate::r#match::player::strategies::processor::StateChangeResult;
+use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, PlayerSide, SteeringBehavior,
     VectorExtensions,
 };
 use crate::IntegerUtils;

@@ -7,7 +7,7 @@ use core::league::ScheduleTour;
 use itertools::*;
 use serde::{Deserialize, Serialize};
 use core::r#match::Score;
-use core::r#match::statistics::MatchStatisticType;
+use core::r#match::player::statistics::MatchStatisticType;
 use core::r#match::GoalDetail;
 
 #[derive(Deserialize)]

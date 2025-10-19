@@ -1,4 +1,4 @@
-use crate::training::result::PlayerTrainingResult;
+use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{Player, PlayerPositionType, PlayerTraining, Staff, Team, TeamTrainingResult};
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;

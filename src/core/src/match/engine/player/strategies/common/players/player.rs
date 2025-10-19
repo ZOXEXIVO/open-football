@@ -290,7 +290,7 @@ impl<'p> PlayerOperationsImpl<'p> {
             if distance > 0.0 && distance < SEPARATION_RADIUS {
                 // Using quartic falloff for stronger close-range separation
                 let direction = -to_other.normalize();
-                let strength = SEPARATION_STRENGTH * (1.0 - distance / SEPARATION_RADIUS).powf(4.0);
+                let strength = SEPARATION_STRENGTH * (1.0f32 - distance / SEPARATION_RADIUS).powf(4.0);
                 separation += direction * strength;
 
                 // Extra strong separation when very close
@@ -308,7 +308,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
             if distance > 0.0 && distance < SEPARATION_RADIUS * 0.8 {
                 let direction = -to_other.normalize();
-                let strength = SEPARATION_STRENGTH * 0.8 * (1.0 - distance / (SEPARATION_RADIUS * 0.8)).powf(3.0);
+                let strength = SEPARATION_STRENGTH * 0.8 * (1.0f32 - distance / (SEPARATION_RADIUS * 0.8)).powf(3.0);
                 separation += direction * strength;
 
                 // Extra strong separation when very close

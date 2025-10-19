@@ -16,6 +16,7 @@ pub mod utils;
 pub mod builder;
 
 pub use attributes::*;
+pub use builder::*;
 pub use calculators::*;
 pub use context::*;
 pub use contract::*;
@@ -29,3 +30,4 @@ pub use skills::*;
 pub use statistics::*;
 pub use status::*;
 pub use training::*;
+pub use utils::*;

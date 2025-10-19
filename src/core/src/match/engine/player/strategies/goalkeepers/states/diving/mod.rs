@@ -90,7 +90,7 @@ impl GoalkeeperDivingState {
         let distance_to_goal = (ball_position - ctx.player().opponent_goal_position()).magnitude();
         let velocity_towards_goal = ball_velocity.dot(&(ctx.player().opponent_goal_position() - ball_position)).max(0.0);
 
-        let urgency = (1.0 - distance_to_goal / 100.0) * (1.0 + velocity_towards_goal / 10.0);
+        let urgency: f32 = (1.0 - distance_to_goal / 100.0) * (1.0 + velocity_towards_goal / 10.0);
         urgency.clamp(1.0, 2.0)
     }
 

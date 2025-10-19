@@ -200,7 +200,7 @@ impl MidfielderPassingState {
             .count();
 
         // Calculate weighted score
-        let space_score = 1.0
+        let space_score: f32 = 1.0
             - (very_close_opponents as f32 * 0.5)
             - (close_opponents as f32 * 0.3)
             - (medium_opponents as f32 * 0.1);

@@ -6,9 +6,12 @@ use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies}
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::{
-    BallOperationsImpl, CommonInjuredState, GameTickContext, MatchContext, MatchPlayer,
-    PlayerOperationsImpl, PlayersOperationsImpl, TeamOperationsImpl,
+    BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer,
 };
+use crate::r#match::common_states::CommonInjuredState;
+use crate::r#match::player::strategies::common::PlayerOperationsImpl;
+use crate::r#match::player::strategies::common::PlayersOperationsImpl;
+use crate::r#match::team::TeamOperationsImpl;
 use crate::PlayerFieldPositionGroup;
 use log::debug;
 use nalgebra::Vector3;
