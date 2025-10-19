@@ -204,14 +204,6 @@ impl TacticalPositions {
                     (goal_x, goal_y),
                 ]
             }
-
-            // Default - extended forward movement
-            _ => {
-                vec![
-                    (base_x + 150.0 * direction, base_y),
-                    (base_x + 300.0 * direction, base_y),
-                ]
-            }
         }
     }
 

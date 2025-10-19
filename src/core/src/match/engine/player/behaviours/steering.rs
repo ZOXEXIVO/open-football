@@ -159,9 +159,9 @@ impl SteeringBehavior {
                 }
             }
             SteeringBehavior::Wander {
-                target,
+                target: _,
                 radius,
-                jitter,
+                jitter: _,
                 distance,
                 angle
             } => {

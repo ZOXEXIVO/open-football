@@ -90,7 +90,7 @@ impl PassEvaluator {
 
         // Vision and technique extend effective passing range
         let vision_bonus = (vision_skill / 20.0) * 1.5;
-        let technique_bonus = (technique_skill / 20.0) * 0.5;
+        let _technique_bonus = (technique_skill / 20.0) * 0.5;
 
         let optimal_range = passing_skill * (2.5 + vision_bonus);
         let max_effective_range = passing_skill * (5.0 + vision_bonus * 2.0);
@@ -477,7 +477,7 @@ impl PassEvaluator {
         let decision_skill = ctx.player.skills.mental.decisions / 20.0;
         let composure_skill = ctx.player.skills.mental.composure / 20.0;
         let teamwork_skill = ctx.player.skills.mental.teamwork / 20.0;
-        let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
+        let _anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
 
         // Define passing personalities
         let is_playmaker = vision_skill > 0.75 && flair_skill > 0.65; // Creative, through balls

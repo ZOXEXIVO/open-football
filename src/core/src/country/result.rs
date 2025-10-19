@@ -27,7 +27,7 @@ impl CountryResult {
         }
 
         // Phase 4: Transfer Market Activities
-        let transfer_activities = self.simulate_transfer_market(data, country_id, current_date);
+        let _transfer_activities = self.simulate_transfer_market(data, country_id, current_date);
 
         // Phase 5: International Competitions
         self.simulate_international_competitions(data, country_id, current_date);
@@ -57,10 +57,10 @@ impl CountryResult {
 
     // Helper methods
 
-    fn get_country_id(&self, data: &SimulatorData) -> u32 {
+    fn get_country_id(&self, _data: &SimulatorData) -> u32 {
         // Get country ID from first club or league result
         // Adjust based on your actual data structure
-        if let Some(club_result) = self.clubs.first() {
+        if let Some(_club_result) = self.clubs.first() {
             // Get club from data and return its country_id
             // This is a placeholder
             0
@@ -328,8 +328,8 @@ impl CountryResult {
         &self,
         data: &mut SimulatorData,
         country_id: u32,
-        league_results: &[crate::league::LeagueResult],
-        club_results: &[ClubResult],
+        _league_results: &[crate::league::LeagueResult],
+        _club_results: &[ClubResult],
     ) {
         if let Some(country) = data.country_mut(country_id) {
             // Base reputation change
@@ -371,7 +371,7 @@ impl CountryResult {
 
     // Helper methods
 
-    fn analyze_squad_needs(club: &Club) -> SquadAnalysis {
+    fn analyze_squad_needs(_club: &Club) -> SquadAnalysis {
         SquadAnalysis {
             surplus_positions: vec![],
             needed_positions: vec![],
@@ -381,9 +381,9 @@ impl CountryResult {
     }
 
     fn should_list_player(
-        player: &crate::Player,
-        analysis: &SquadAnalysis,
-        club: &Club,
+        _player: &crate::Player,
+        _analysis: &SquadAnalysis,
+        _club: &Club,
     ) -> bool {
         false // Simplified for now
     }
@@ -409,11 +409,11 @@ impl CountryResult {
         }
     }
 
-    fn calculate_buying_aggressiveness(club: &Club) -> f32 {
+    fn calculate_buying_aggressiveness(_club: &Club) -> f32 {
         0.6 // Simplified
     }
 
-    fn identify_target_positions(club: &Club) -> Vec<crate::PlayerPositionType> {
+    fn identify_target_positions(_club: &Club) -> Vec<crate::PlayerPositionType> {
         vec![] // Simplified
     }
 
@@ -429,59 +429,59 @@ impl CountryResult {
     }
 
     fn simulate_negotiation_outcome(
-        negotiation_id: u32,
-        selling_club: u32,
-        buying_club: u32,
+        _negotiation_id: u32,
+        _selling_club: u32,
+        _buying_club: u32,
     ) -> bool {
         use crate::utils::IntegerUtils;
         IntegerUtils::random(0, 100) > 60 // 40% success rate
     }
 
-    fn schedule_friendly_matches(country: &mut Country, date: NaiveDate) {
+    fn schedule_friendly_matches(_country: &mut Country, _date: NaiveDate) {
         debug!("Scheduling preseason friendlies");
     }
 
-    fn organize_training_camps(country: &mut Country) {
+    fn organize_training_camps(_country: &mut Country) {
         debug!("Organizing training camps");
     }
 
-    fn organize_preseason_tournaments(country: &mut Country) {
+    fn organize_preseason_tournaments(_country: &mut Country) {
         debug!("Organizing preseason tournaments");
     }
 
-    fn process_loan_deals(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
+    fn process_loan_deals(_country: &mut Country, _date: NaiveDate, _summary: &mut TransferActivitySummary) {
         debug!("Processing loan deals");
     }
 
-    fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
+    fn handle_free_agents(_country: &mut Country, _date: NaiveDate, _summary: &mut TransferActivitySummary) {
         debug!("Handling free agents");
     }
 
-    fn calculate_league_competitiveness(league: &crate::league::League) -> f32 {
+    fn calculate_league_competitiveness(_league: &crate::league::League) -> f32 {
         0.5 // Simplified
     }
 
-    fn calculate_international_success(country: &Country) -> i16 {
+    fn calculate_international_success(_country: &Country) -> i16 {
         0 // Simplified
     }
 
-    fn calculate_transfer_market_reputation(country: &Country) -> i16 {
+    fn calculate_transfer_market_reputation(_country: &Country) -> i16 {
         0 // Simplified
     }
 
-    fn process_season_awards(country: &mut Country, club_results: &[ClubResult]) {
+    fn process_season_awards(_country: &mut Country, _club_results: &[ClubResult]) {
         debug!("Processing season awards");
     }
 
-    fn process_contract_expirations(country: &mut Country) {
+    fn process_contract_expirations(_country: &mut Country) {
         debug!("Processing contract expirations");
     }
 
-    fn process_player_retirements(country: &mut Country, date: NaiveDate) {
+    fn process_player_retirements(_country: &mut Country, _date: NaiveDate) {
         debug!("Processing player retirements");
     }
 
-    fn process_year_end_finances(country: &mut Country) {
+    fn process_year_end_finances(_country: &mut Country) {
         debug!("Processing year-end finances");
     }
 }

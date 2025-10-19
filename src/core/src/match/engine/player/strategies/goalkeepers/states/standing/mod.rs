@@ -75,7 +75,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         None
     }
 
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         None
     }
 

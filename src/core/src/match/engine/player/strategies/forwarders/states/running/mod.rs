@@ -643,7 +643,7 @@ impl ForwardRunningState {
         holder_pos: Vector3<f32>,
     ) -> Vector3<f32> {
         let player_pos = ctx.player.position;
-        let field_width = ctx.context.field_size.width as f32;
+        let _field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
         // Determine player's role based on position
@@ -869,7 +869,7 @@ impl ForwardRunningState {
     fn is_teammate_heavily_marked(
         &self,
         ctx: &StateProcessingContext,
-        teammate: &MatchPlayerLite,
+        _teammate: &MatchPlayerLite,
     ) -> bool {
         let marking_distance = 8.0;
         let markers = ctx.players().opponents().nearby(marking_distance).count();

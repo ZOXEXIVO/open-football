@@ -141,7 +141,7 @@ impl ChampionsLeague {
 
     pub fn simulate_round(
         &mut self,
-        clubs: &HashMap<u32, &Club>,
+        _clubs: &HashMap<u32, &Club>,
         date: NaiveDate,
     ) -> Vec<ContinentalMatchResult> {
         let mut results = Vec::new();
@@ -191,7 +191,7 @@ impl EuropaLeague {
         }
     }
 
-    pub fn conduct_draw(&mut self, clubs: &[u32], rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, _date: NaiveDate) {
         debug!("Europa League draw conducted with {} clubs", clubs.len());
     }
 
@@ -201,8 +201,8 @@ impl EuropaLeague {
 
     pub fn simulate_round(
         &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
+        _clubs: &HashMap<u32, &Club>,
+        _date: NaiveDate,
     ) -> Vec<ContinentalMatchResult> {
         Vec::new() // Simplified
     }
@@ -233,21 +233,21 @@ impl ConferenceLeague {
         }
     }
 
-    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, date: NaiveDate) {
+    pub fn conduct_draw(&mut self, clubs: &[u32], _rankings: &ContinentalRankings, _date: NaiveDate) {
         debug!(
             "Conference League draw conducted with {} clubs",
             clubs.len()
         );
     }
 
-    pub fn has_matches_today(&self, date: NaiveDate) -> bool {
+    pub fn has_matches_today(&self, _date: NaiveDate) -> bool {
         false // Simplified
     }
 
     pub fn simulate_round(
         &mut self,
-        clubs: &HashMap<u32, &Club>,
-        date: NaiveDate,
+        _clubs: &HashMap<u32, &Club>,
+        _date: NaiveDate,
     ) -> Vec<ContinentalMatchResult> {
         Vec::new() // Simplified
     }
@@ -399,7 +399,7 @@ impl ContinentalRegulations {
             .update_thresholds(economic_zone.get_overall_health());
     }
 
-    pub fn review_foreign_player_rules(&mut self, rankings: &ContinentalRankings) {
+    pub fn review_foreign_player_rules(&mut self, _rankings: &ContinentalRankings) {
         // Potentially adjust foreign player rules
     }
 
@@ -498,12 +498,12 @@ impl EconomicZone {
         self.tv_rights_pool *= 1.0 + competitive_balance as f64 * 0.1;
     }
 
-    pub fn update_sponsorship_market(&mut self, rankings: &ContinentalRankings) {
+    pub fn update_sponsorship_market(&mut self, _rankings: &ContinentalRankings) {
         // Update based on top clubs' performance
         self.sponsorship_value *= 1.02; // Simplified growth
     }
 
-    fn calculate_competitive_balance(&self, rankings: &ContinentalRankings) -> f32 {
+    fn calculate_competitive_balance(&self, _rankings: &ContinentalRankings) -> f32 {
         // Measure how competitive the continent is
         0.5 // Simplified
     }

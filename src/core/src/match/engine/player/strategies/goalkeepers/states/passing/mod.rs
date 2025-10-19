@@ -55,7 +55,7 @@ impl GoalkeeperPassingState {
         // Get goalkeeper's vision and kicking skills
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let kicking_skill = ctx.player.skills.technical.long_throws / 20.0;
-        let pass_skill = ctx.player.skills.technical.passing / 20.0;
+        let _pass_skill = ctx.player.skills.technical.passing / 20.0;
         let technique_skill = ctx.player.skills.technical.technique / 20.0;
 
         // Calculate ultra-long pass capability

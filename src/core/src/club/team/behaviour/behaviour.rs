@@ -501,7 +501,7 @@ impl TeamBehaviour {
         }
     }
 
-    fn calculate_injury_sympathy(injured_player: &Player, other_player: &Player) -> f32 {
+    fn calculate_injury_sympathy(_injured_player: &Player, other_player: &Player) -> f32 {
         // More empathetic players show more sympathy
         let empathy = other_player.attributes.sportsmanship / 20.0;
 

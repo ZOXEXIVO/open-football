@@ -70,7 +70,7 @@ impl ContinentResult {
         }
     }
 
-    fn update_continental_rankings(&self, data: &mut SimulatorData, result: &mut SimulationResult) {
+    fn update_continental_rankings(&self, data: &mut SimulatorData, _result: &mut SimulationResult) {
         info!("📊 Updating continental rankings");
 
         // Get continent from data
@@ -225,7 +225,7 @@ impl ContinentResult {
         &self,
         match_result: ContinentalMatchResult,
         data: &mut SimulatorData,
-        result: &mut SimulationResult,
+        _result: &mut SimulationResult,
     ) {
         debug!(
             "Processing match: {} vs {} ({}-{})",
@@ -242,7 +242,7 @@ impl ContinentResult {
         self.update_club_continental_stats(match_result.away_team, &match_result, false, data);
 
         // Store match in simulation result for output/history
-        // result.continental_matches.push(match_result);
+        // _result.continental_matches.push(match_result);
     }
 
     fn update_club_continental_stats(
@@ -262,7 +262,7 @@ impl ContinentResult {
 
             let won = goals_for > goals_against;
             let drawn = goals_for == goals_against;
-            let lost = goals_for < goals_against;
+            let _lost = goals_for < goals_against;
 
             // Update continental record (would need to add this to Club struct)
             // club.continental_record.matches_played += 1;
@@ -345,16 +345,16 @@ impl ContinentResult {
 
     fn update_players_after_match(&self, club: &mut Club, won: bool, _drawn: bool) {
         // Update player morale and form after continental match
-        let morale_change = if won { 5 } else { -3 };
+        let _morale_change = if won { 5 } else { -3 };
 
         for team in &mut club.teams.teams {
-            for player in &mut team.players.players {
+            for _player in &mut team.players.players {
                 // Morale change (would need morale field in Player)
-                // player.morale = (player.morale as i32 + morale_change).clamp(0, 100) as u8;
+                // _player.morale = (_player.morale as i32 + _morale_change).clamp(0, 100) as u8;
 
                 // Form change based on performance (simplified)
                 // if won {
-                //     player.form = (player.form + 2).min(100);
+                //     _player.form = (_player.form + 2).min(100);
                 // }
             }
         }
@@ -428,7 +428,7 @@ impl ContinentResult {
         // based on how far each team progressed in the competition
     }
 
-    fn update_economic_zone(&self, data: &mut SimulatorData, country_results: &[CountryResult]) {
+    fn update_economic_zone(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
         info!("💰 Updating continental economic zone");
 
         let continent_id = self.get_continent_id(data);
@@ -474,7 +474,7 @@ impl ContinentResult {
         }
     }
 
-    fn process_continental_awards(&self, data: &mut SimulatorData, country_results: &[CountryResult]) {
+    fn process_continental_awards(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
         info!("🏆 Processing continental awards");
 
         let continent_id = self.get_continent_id(data);
@@ -498,10 +498,10 @@ impl ContinentResult {
 
     // Helper methods
 
-    fn get_continent_id(&self, data: &SimulatorData) -> u32 {
+    fn get_continent_id(&self, _data: &SimulatorData) -> u32 {
         // Assuming we can get continent ID from the first country
         // You might want to store this in ContinentResult
-        if let Some(first_country) = self.countries.first() {
+        if let Some(_first_country) = self.countries.first() {
             // Get country from data and return its continent_id
             // This is a placeholder - adjust based on your actual data structure
             0 // Replace with actual logic
@@ -564,19 +564,19 @@ impl ContinentResult {
             .collect()
     }
 
-    fn determine_player_of_year(continent: &Continent) -> Option<u32> {
+    fn determine_player_of_year(_continent: &Continent) -> Option<u32> {
         None
     }
 
-    fn determine_team_of_year(continent: &Continent) -> Option<Vec<u32>> {
+    fn determine_team_of_year(_continent: &Continent) -> Option<Vec<u32>> {
         None
     }
 
-    fn determine_coach_of_year(continent: &Continent) -> Option<u32> {
+    fn determine_coach_of_year(_continent: &Continent) -> Option<u32> {
         None
     }
 
-    fn determine_young_player_award(continent: &Continent) -> Option<u32> {
+    fn determine_young_player_award(_continent: &Continent) -> Option<u32> {
         None
     }
 }
