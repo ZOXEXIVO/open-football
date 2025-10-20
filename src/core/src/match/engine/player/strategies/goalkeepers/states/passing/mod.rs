@@ -43,13 +43,10 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         // Execute the appropriate distribution
         match distribution_type {
             GoalkeeperDistributionType::Clearance => {
-                // Emergency clearance - just boot it away
-                if let Some(event) = self.execute_clearance(ctx) {
-                    return Some(StateChangeResult::with_goalkeeper_state_and_event(
-                        GoalkeeperState::Standing,
-                        event,
-                    ));
-                }
+                // Emergency clearance - transition to clearing state
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Clearing,
+                ));
             }
             GoalkeeperDistributionType::ShortPass => {
                 if let Some(teammate) = self.find_short_pass_target(ctx) {
@@ -106,15 +103,8 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         // Timeout - just do something
         if ctx.in_state_time > 20 {
             // Default to clearance after waiting too long
-            if let Some(event) = self.execute_clearance(ctx) {
-                return Some(StateChangeResult::with_goalkeeper_state_and_event(
-                    GoalkeeperState::Standing,
-                    event,
-                ));
-            }
-
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Running,
+                GoalkeeperState::Clearing,
             ));
         }
 
@@ -397,46 +387,9 @@ impl GoalkeeperPassingState {
                     .build(ctx)
             )))
         } else {
-            // No good target - kick it to a general area upfield
-            self.execute_clearance(ctx)
+            // No good target - will need to clear from a different state
+            None
         }
-    }
-
-    /// Execute a clearance - just boot the ball away from danger
-    fn execute_clearance(&self, ctx: &StateProcessingContext) -> Option<Event> {
-        let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
-
-        // Calculate clearance target - aim for sideline or upfield
-        let field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        let keeper_pos = ctx.player.position;
-
-        // Determine which direction to clear based on position
-        let mut rng = rand::rng();
-        let random_factor: f32 = rng.random_range(-0.3..0.3);
-
-        // Aim for a moderate distance upfield and toward sideline (reduced from 60%)
-        let target_x = keeper_pos.x + (field_width * 0.4); // 40% of field upfield
-        let target_y = if keeper_pos.y > 0.0 {
-            field_height * 0.35 + random_factor * 15.0 // Toward top sideline
-        } else {
-            -field_height * 0.35 + random_factor * 15.0 // Toward bottom sideline
-        };
-
-        let clearance_target = Vector3::new(target_x, target_y, 0.0);
-
-        // Moderate power clearance (reduced from 7.0-9.0)
-        let kick_force = 5.0 + (kicking_power * 1.5); // 5.0-6.5 range
-
-        // Use MoveBall event for clearance (reduced multiplier from 4.0 to 2.5)
-        let ball_direction = (clearance_target - keeper_pos).normalize();
-        let ball_velocity = ball_direction * kick_force * 2.5;
-
-        Some(Event::PlayerEvent(PlayerEvent::MoveBall(
-            ctx.player.id,
-            ball_velocity,
-        )))
     }
 
     /// Count teammates in safe positions within range

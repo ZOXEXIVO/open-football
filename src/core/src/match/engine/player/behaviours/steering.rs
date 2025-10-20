@@ -60,43 +60,86 @@ impl SteeringBehavior {
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
 
+                // CRITICAL FIX: Larger deadzone to prevent oscillation
+                const ARRIVAL_DEADZONE: f32 = 2.0; // Stop within 2.0 units of target
+
+                if distance < ARRIVAL_DEADZONE {
+                    // Very close to target - stop completely to prevent jittering
+                    // Apply strong braking force to counteract existing velocity
+                    let braking_force = -player.velocity * 0.95;
+                    return SteeringOutput {
+                        velocity: braking_force,
+                        rotation: 0.0,
+                    };
+                }
+
                 // Normalize skill values to a range of 0.5 to 1.5
                 let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
                 let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
+                // Ensure slowing_distance is never zero to prevent division by zero
+                let safe_slowing_distance = slowing_distance.max(2.0);
+
                 let desired_velocity = if distance > 0.0 {
                     let speed_factor = acceleration_normalized * pace_normalized;
-                    let speed = (distance / *slowing_distance).clamp(0.0, 1.0) * player.skills.max_speed() * speed_factor;
+
+                    // Calculate speed based on distance with proper slowing
+                    let speed = if distance < safe_slowing_distance {
+                        // Within slowing distance - gradually reduce speed
+                        let speed_ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
+
+                        // Apply cubic easing for even smoother deceleration
+                        let eased_ratio = speed_ratio * speed_ratio * speed_ratio;
+
+                        // Add velocity damping when slowing to prevent overshoot
+                        let damping_factor = 1.0 - (1.0 - speed_ratio) * 0.5;
+
+                        player.skills.max_speed() * speed_factor * eased_ratio * damping_factor
+                    } else {
+                        // Beyond slowing distance - full speed
+                        player.skills.max_speed() * speed_factor
+                    };
+
                     to_target.normalize() * speed
                 } else {
                     Vector3::zeros()
                 };
 
-                let steering = desired_velocity - player.velocity;
-                let max_acceleration = player.skills.max_speed() * agility_normalized;
-                let steering_length = steering.norm();
+                // CRITICAL FIX: When slowing down, directly use desired velocity instead of accumulating
+                // This prevents the snake/zigzag pattern from momentum buildup
+                let current_speed = player.velocity.norm();
+                let desired_speed = desired_velocity.norm();
 
-                let limited_steering = if steering_length > 0.0 {
-                    let steering_ratio = max_acceleration / steering_length;
-                    steering * steering_ratio.min(1.0)
+                let final_velocity = if distance < safe_slowing_distance {
+                    // In slowing zone - directly set to desired velocity to prevent oscillation
+                    // Apply smooth transition to avoid jerky movement
+                    let blend_factor = (distance / safe_slowing_distance).clamp(0.0, 1.0);
+
+                    if desired_speed < current_speed {
+                        // Slowing down - blend heavily toward desired velocity
+                        desired_velocity * (1.0 - blend_factor * 0.3) + player.velocity * (blend_factor * 0.3)
+                    } else {
+                        // Speeding up - use normal steering
+                        let steering = desired_velocity - player.velocity;
+                        let max_acceleration = player.skills.max_speed() * agility_normalized;
+                        let limited_steering = Self::limit_magnitude(steering, max_acceleration);
+                        player.velocity + limited_steering
+                    }
                 } else {
-                    Vector3::zeros()
-                };
+                    // Outside slowing zone - use normal steering behavior
+                    let steering = desired_velocity - player.velocity;
+                    let max_acceleration = player.skills.max_speed() * agility_normalized;
+                    let limited_steering = Self::limit_magnitude(steering, max_acceleration);
 
-                // Update player's move velocity based on the steering output
-                let move_velocity = player.velocity + limited_steering;
-                let max_speed = player.skills.max_speed() * pace_normalized;
-                let move_velocity_length = move_velocity.norm();
+                    let move_velocity = player.velocity + limited_steering;
+                    let max_speed = player.skills.max_speed() * pace_normalized;
 
-                let final_move_velocity = if move_velocity_length > max_speed {
-                    move_velocity.normalize() * max_speed
-                } else {
-                    move_velocity
+                    Self::limit_magnitude(move_velocity, max_speed)
                 };
 
                 SteeringOutput {
-                    velocity: final_move_velocity,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }

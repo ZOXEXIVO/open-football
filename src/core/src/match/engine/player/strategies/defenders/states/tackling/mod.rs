@@ -3,7 +3,7 @@ use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions,
 };
 use nalgebra::Vector3;
 use rand::Rng;
@@ -106,10 +106,30 @@ impl StateProcessingHandler for DefenderTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_distance = (ball_position - ctx.player.position).magnitude();
+
+        // Use larger slowing distance to prevent zigzag movement
+        // More agile players can use tighter control
+        let agility = ctx.player.skills.physical.agility / 20.0;
+        let base_slowing = 8.0 + (agility * 4.0); // 8.0-12.0 range (increased from 3.0-5.0)
+
+        // Adjust based on how close we are
+        let adjusted_slowing = if ball_distance < 10.0 {
+            // Very close - use moderate slowing for precision
+            base_slowing * 0.6
+        } else if ball_distance < 20.0 {
+            // Medium range - use normal slowing
+            base_slowing * 0.8
+        } else {
+            // Far away - use full slowing distance
+            base_slowing
+        };
+
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 0.0,
+                target: ball_position,
+                slowing_distance: adjusted_slowing,
             }
             .calculate(ctx.player)
             .velocity,

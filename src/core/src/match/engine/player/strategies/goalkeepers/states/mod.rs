@@ -1,4 +1,6 @@
+pub mod attentive;
 pub mod catching;
+pub mod clearing;
 pub mod comingout;
 pub mod distributing;
 pub mod diving;
@@ -13,6 +15,7 @@ pub mod pressure;
 pub mod punching;
 pub mod resting;
 pub mod returning_goal;
+pub mod running;
 pub mod shooting;
 pub mod standing;
 pub mod state;
@@ -21,11 +24,10 @@ pub mod tackling;
 pub mod takeball;
 pub mod throwing;
 pub mod walking;
-pub mod attentive;
-pub mod running;
 
 pub use attentive::*;
 pub use catching::*;
+pub use clearing::*;
 pub use comingout::*;
 pub use distributing::*;
 pub use diving::*;
