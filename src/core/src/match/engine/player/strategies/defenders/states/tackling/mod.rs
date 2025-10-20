@@ -10,49 +10,67 @@ use rand::Rng;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 3.0;
 const FOUL_CHANCE_BASE: f32 = 0.2;
+const PRESSING_DISTANCE: f32 = 50.0;
+const RETURN_DISTANCE: f32 = 100.0;
 
 #[derive(Default)]
 pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // If we have the ball or our team controls it, transition to running
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball(){
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
         }
 
-        if ctx.ball().distance() > 200.0 && !ctx.ball().is_towards_player_with_angle(0.8){
+        // If ball is too far away and not coming toward us, return to position
+        if ctx.ball().distance() > RETURN_DISTANCE && !ctx.ball().is_towards_player_with_angle(0.8){
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,
             ));
         }
-        
+
+        // Check if there's an opponent with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            if opponent.distance(ctx) > TACKLE_DISTANCE_THRESHOLD {
+            let distance_to_opponent = opponent.distance(ctx);
+
+            // If opponent is too far for tackling, press instead
+            if distance_to_opponent > PRESSING_DISTANCE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
             }
 
+            // If opponent is close but not in tackle range, keep pressing
+            if distance_to_opponent > TACKLE_DISTANCE_THRESHOLD {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+
+            // We're close enough to tackle!
             let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
-                return Some(StateChangeResult::with_defender_state_and_event(
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
-                ));
+                ))
             } else if committed_foul {
-                return Some(StateChangeResult::with_defender_state_and_event(
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::CommitFoul),
-                ));
+                ))
             } else {
+                // Failed tackle, continue pressing
                 Some(StateChangeResult::with_defender_state(
-                    DefenderState::Standing,
+                    DefenderState::Pressing,
                 ))
             };
         } else if self.can_intercept_ball(ctx) {
+            // Ball is loose and we can intercept it
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Running,
                 Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
@@ -71,7 +89,7 @@ impl StateProcessingHandler for DefenderTacklingState {
         // Timeout fallback: if stuck in tackling state too long, transition out
         if ctx.in_state_time > 30 {
             return Some(StateChangeResult::with_defender_state(
-                if ball_distance < 50.0 {
+                if ball_distance < PRESSING_DISTANCE {
                     DefenderState::Pressing
                 } else {
                     DefenderState::Returning
