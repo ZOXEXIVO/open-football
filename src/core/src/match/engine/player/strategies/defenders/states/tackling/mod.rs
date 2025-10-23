@@ -3,7 +3,7 @@ use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult,
-    StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 use rand::Rng;
@@ -22,13 +22,6 @@ impl StateProcessingHandler for DefenderTacklingState {
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball(){
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
-            ));
-        }
-
-        // If ball is too far away and not coming toward us, return to position
-        if ctx.ball().distance() > RETURN_DISTANCE && !ctx.ball().is_towards_player_with_angle(0.8){
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
             ));
         }
 
@@ -69,25 +62,45 @@ impl StateProcessingHandler for DefenderTacklingState {
                     DefenderState::Pressing,
                 ))
             };
-        } else if self.can_intercept_ball(ctx) {
-            // Ball is loose and we can intercept it
-            return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Running,
-                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-            ));
-        }
+        } else {
+            // Ball is loose - check for interception
+            if self.can_intercept_ball(ctx) {
+                // Ball is loose and we can intercept it
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                ));
+            }
 
-        // Fallback: if ball is loose and very close, try to claim it
-        let ball_distance = ctx.ball().distance();
-        if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
-            return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Running,
-                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-            ));
+            // If ball is too far away and not coming toward us, return to position
+            let ball_distance = ctx.ball().distance();
+            if ball_distance > RETURN_DISTANCE && !ctx.ball().is_towards_player_with_angle(0.8) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
+
+            // Fallback: if ball is loose and very close, try to claim it
+            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                ));
+            }
+            
+            // If opponent is near the player but doesn't have the ball, maybe it's better to transition to pressing
+            if let Some(close_opponent) = ctx.players().opponents().nearby(15.0).next() {
+                if close_opponent.distance(ctx) < 10.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+            }
         }
 
         // Timeout fallback: if stuck in tackling state too long, transition out
         if ctx.in_state_time > 30 {
+            let ball_distance = ctx.ball().distance();
             return Some(StateChangeResult::with_defender_state(
                 if ball_distance < PRESSING_DISTANCE {
                     DefenderState::Pressing
@@ -106,33 +119,13 @@ impl StateProcessingHandler for DefenderTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_distance = (ball_position - ctx.player.position).magnitude();
-
-        // Use larger slowing distance to prevent zigzag movement
-        // More agile players can use tighter control
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let base_slowing = 8.0 + (agility * 4.0); // 8.0-12.0 range (increased from 3.0-5.0)
-
-        // Adjust based on how close we are
-        let adjusted_slowing = if ball_distance < 10.0 {
-            // Very close - use moderate slowing for precision
-            base_slowing * 0.6
-        } else if ball_distance < 20.0 {
-            // Medium range - use normal slowing
-            base_slowing * 0.8
-        } else {
-            // Far away - use full slowing distance
-            base_slowing
-        };
-
         Some(
-            SteeringBehavior::Arrive {
-                target: ball_position,
-                slowing_distance: adjusted_slowing,
+            SteeringBehavior::Pursuit {
+                target: ctx.tick_context.positions.ball.position,
             }
             .calculate(ctx.player)
-            .velocity,
+            .velocity
+                + ctx.player().separation_velocity(),
         )
     }
 

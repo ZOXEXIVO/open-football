@@ -6,36 +6,87 @@ use log::debug;
 use nalgebra::Vector3;
 use rand::Rng;
 
-/// Helper struct to encapsulate player passing skills
+/// Helper struct to encapsulate player passing skills and condition
 struct PassSkills {
     passing: f32,
     technique: f32,
     vision: f32,
+    composure: f32,
+    decisions: f32,
+    concentration: f32,
+    flair: f32,
+    long_shots: f32,
+    crossing: f32,
+    stamina: f32,
+    match_readiness: f32,
+    condition_factor: f32,
 }
 
 impl PassSkills {
     fn from_player(player: &MatchPlayer) -> Self {
+        // Normalize skills to 0.0-1.0 range
+        let passing = (player.skills.technical.passing / 20.0).clamp(0.4, 1.0);
+        let technique = (player.skills.technical.technique / 20.0).clamp(0.4, 1.0);
+        let vision = (player.skills.mental.vision / 20.0).clamp(0.3, 1.0);
+        let composure = (player.skills.mental.composure / 20.0).clamp(0.3, 1.0);
+        let decisions = (player.skills.mental.decisions / 20.0).clamp(0.3, 1.0);
+        let concentration = (player.skills.mental.concentration / 20.0).clamp(0.3, 1.0);
+        let flair = (player.skills.mental.flair / 20.0).clamp(0.0, 1.0);
+        let long_shots = (player.skills.technical.long_shots / 20.0).clamp(0.3, 1.0);
+        let crossing = (player.skills.technical.crossing / 20.0).clamp(0.3, 1.0);
+        let stamina = (player.skills.physical.stamina / 20.0).clamp(0.3, 1.0);
+        let match_readiness = (player.skills.physical.match_readiness / 20.0).clamp(0.3, 1.0);
+
+        // Calculate condition factor (0.5 to 1.0 based on player condition)
+        let condition_percentage = player.player_attributes.condition as f32 / 10000.0;
+        let fitness_factor = (player.player_attributes.fitness as f32 / 10000.0).clamp(0.5, 1.0);
+        let jadedness_penalty = (player.player_attributes.jadedness as f32 / 10000.0) * 0.3;
+
+        let condition_factor = (condition_percentage * fitness_factor - jadedness_penalty).clamp(0.5, 1.0);
+
         Self {
-            passing: (player.skills.technical.passing / 20.0).clamp(0.4, 1.0),
-            technique: (player.skills.technical.technique / 20.0).clamp(0.4, 1.0),
-            vision: (player.skills.mental.vision / 20.0).clamp(0.3, 1.0),
+            passing,
+            technique,
+            vision,
+            composure,
+            decisions,
+            concentration,
+            flair,
+            long_shots,
+            crossing,
+            stamina,
+            match_readiness,
+            condition_factor,
         }
+    }
+
+    /// Calculate overall passing quality (affected by condition)
+    fn overall_quality(&self) -> f32 {
+        let base_quality = (self.passing * 0.4 + self.technique * 0.3 + self.vision * 0.3);
+        base_quality * self.condition_factor * self.match_readiness
+    }
+
+    /// Calculate decision-making quality for trajectory selection
+    fn decision_quality(&self) -> f32 {
+        (self.decisions * 0.4 + self.vision * 0.3 + self.concentration * 0.2 + self.composure * 0.1)
+            * self.condition_factor
     }
 }
 
 /// Different trajectory styles for passes
+/// Each type represents a different flight time and arc height to reach the same target
 #[derive(Debug, Clone, Copy)]
-enum PassTrajectoryType {
-    /// Ground pass - rolling along the surface
+enum TrajectoryType {
+    /// Ground pass - minimal flight time, almost zero arc (fastest)
     Ground,
-    /// Low driven pass - slight lift, fast and direct
+    /// Low driven pass - short flight time, low arc (fast and direct)
     LowDriven,
-    /// Parabolic loft - classic smooth arc, high peak
-    ParabolicLoft,
-    /// Chip/Scoop - quick rise with steep descent
+    /// Medium arc - moderate flight time, balanced trajectory
+    MediumArc,
+    /// High arc - longer flight time, high parabolic arc (for distance/obstacles)
+    HighArc,
+    /// Chip - very high arc over short distance (for beating defenders)
     Chip,
-    /// Simple loft - moderate height, less arc than parabolic
-    SimpleLoft,
 }
 
 #[derive(Debug)]
@@ -172,52 +223,73 @@ impl PlayerEventDispatcher {
     fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
         let mut rng = rand::rng();
 
-        // Calculate pass trajectory parameters
-        let ball_pass_vector = event_model.pass_target - field.ball.position;
-        let horizontal_distance = Self::calculate_horizontal_distance(&ball_pass_vector);
-
-        // Extract player skills
+        // Extract player skills and condition
         let player = field.get_player_mut(event_model.from_player_id).unwrap();
         let skills = PassSkills::from_player(player);
 
-        // Add directional inaccuracy based on passing skill (worse players = more error)
-        let accuracy_factor = skills.passing * skills.technique;
-        let angle_error = rng.random_range(-0.15..0.15) * (1.2 - accuracy_factor); // Up to ±8.6° for poor passers
+        // Calculate overall quality for accuracy - affected by condition
+        let overall_quality = skills.overall_quality();
 
-        // Rotate the pass vector slightly for error
-        let cos_angle = angle_error.cos();
-        let sin_angle = angle_error.sin();
-        let adjusted_vector = Vector3::new(
-            ball_pass_vector.x * cos_angle - ball_pass_vector.y * sin_angle,
-            ball_pass_vector.x * sin_angle + ball_pass_vector.y * cos_angle,
+        // Calculate ideal target position
+        let ideal_target = event_model.pass_target;
+        let ball_position = field.ball.position;
+        let ideal_pass_vector = ideal_target - ball_position;
+        let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
+
+        // Apply skill-based targeting error
+        // Better players are more accurate with their intended target
+        let accuracy_factor = overall_quality * skills.concentration;
+
+        // Distance-based error: longer passes have more positional error
+        let distance_error_factor = (horizontal_distance / 100.0).min(3.0);
+        let max_position_error = 5.0 * (1.5 - accuracy_factor) * distance_error_factor;
+
+        // Add random targeting error
+        let target_error_x = rng.random_range(-max_position_error..max_position_error);
+        let target_error_y = rng.random_range(-max_position_error..max_position_error);
+
+        // Calculate actual target with error
+        let actual_target = Vector3::new(
+            ideal_target.x + target_error_x,
+            ideal_target.y + target_error_y,
             0.0,
         );
 
-        // Add power variation based on technique (inconsistent power application)
-        let power_consistency = 0.95 + (skills.technique * 0.1); // 0.95 to 1.05
-        let power_variation = rng.random_range(power_consistency - 0.05..power_consistency + 0.05);
+        let actual_pass_vector = actual_target - ball_position;
+        let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
+
+        // Calculate pass force with power variation
+        let power_consistency = 0.96 + (skills.technique * skills.stamina * 0.08);
+        let power_variation_range = (1.0 - overall_quality) * 0.08;
+        let power_variation = rng.random_range(
+            power_consistency - power_variation_range..power_consistency + power_variation_range
+        );
         let adjusted_force = event_model.pass_force * power_variation;
 
-        // Calculate horizontal velocity with randomness applied
+        // Calculate horizontal velocity to reach target
         let horizontal_velocity = Self::calculate_horizontal_velocity(
-            &adjusted_vector,
+            &actual_pass_vector,
             adjusted_force,
         );
 
-        // Determine pass trajectory based on distance and skills
-        let z_velocity = Self::calculate_pass_trajectory(
-            horizontal_distance,
-            &horizontal_velocity,
+        // Determine trajectory type based on distance, skills, and decision-making
+        let trajectory_type = Self::select_trajectory_type(
+            actual_horizontal_distance,
             &skills,
             &mut rng,
         );
 
-        // Add slight vertical variation (spin, wind, grass conditions)
-        let vertical_variation = rng.random_range(0.92..1.08);
-        let adjusted_z_velocity = z_velocity * vertical_variation;
+        // Calculate z-velocity to reach target with chosen trajectory type
+        let z_velocity = Self::calculate_trajectory_to_target(
+            actual_horizontal_distance,
+            &horizontal_velocity,
+            trajectory_type,
+            &skills,
+            &mut rng,
+        );
 
-        let max_z_velocity = Self::calculate_max_z_velocity(horizontal_distance, skills.vision);
-        let final_z_velocity = adjusted_z_velocity.min(max_z_velocity);
+        let max_z_velocity = Self::calculate_max_z_velocity(actual_horizontal_distance, &skills);
+        let final_z_velocity = z_velocity.min(max_z_velocity);
 
         // Apply ball physics
         field.ball.velocity = Vector3::new(
@@ -244,300 +316,210 @@ impl PlayerEventDispatcher {
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
 
-    fn calculate_pass_trajectory(
+    /// Select trajectory type based on distance and player skills
+    /// In real football, 85-90% of passes are ground passes!
+    fn select_trajectory_type(
         horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
         skills: &PassSkills,
         rng: &mut impl Rng,
-    ) -> f32 {
-        let pass_style_random: f32 = rng.random_range(0.0..1.0);
+    ) -> TrajectoryType {
+        // Calculate decision quality - determines how well player chooses trajectory
+        let decision_quality = skills.decision_quality();
 
+        // Better decision makers make more appropriate choices
+        let skill_influenced_random = {
+            let pure_random = rng.random_range(0.0..1.0);
+            let randomness_factor = 1.0 - (decision_quality * 0.6);
+            let skill_bias = decision_quality * 0.5;
+            (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
+        };
+
+        // Distance-based trajectory selection - heavily favor ground passes
         match horizontal_distance {
-            d if d > 300.0 => Self::calculate_extreme_long_pass_trajectory(
-                horizontal_distance,
-                horizontal_velocity,
-                skills,
-                pass_style_random,
-                rng,
-            ),
-            d if d > 200.0 => Self::calculate_ultra_long_pass_trajectory(
-                horizontal_distance,
-                horizontal_velocity,
-                skills,
-                pass_style_random,
-                rng,
-            ),
-            d if d > 100.0 => Self::calculate_very_long_pass_trajectory(
-                horizontal_distance,
-                horizontal_velocity,
-                skills,
-                pass_style_random,
-                rng,
-            ),
-            d if d > 60.0 => Self::calculate_long_pass_trajectory(
-                horizontal_distance,
-                horizontal_velocity,
-                skills,
-                pass_style_random,
-                rng,
-            ),
-            d if d > 25.0 => Self::calculate_medium_pass_trajectory(
-                horizontal_distance,
-                skills,
-                pass_style_random,
-                rng,
-            ),
-            _ => Self::calculate_short_pass_trajectory(
-                skills,
-                pass_style_random,
-                rng,
-            ),
+            // Short passes (0-20m) - almost always ground
+            d if d <= 20.0 => {
+                let ground_preference = skills.passing * skills.composure;
+                let chip_skill = skills.flair * skills.technique;
+
+                // 90-98% ground passes for short distances
+                let ground_threshold = 0.90 + (ground_preference * 0.08);
+
+                if skill_influenced_random < ground_threshold {
+                    TrajectoryType::Ground
+                } else if chip_skill > 0.75 {
+                    TrajectoryType::Chip // Very rare, only for highly skilled
+                } else {
+                    TrajectoryType::Ground // Default to ground if chip fails
+                }
+            }
+            // Medium passes (20-45m) - mostly ground
+            d if d <= 45.0 => {
+                let ground_preference = skills.passing * skills.technique;
+
+                // 75-85% ground passes for medium distances
+                let ground_threshold = 0.75 + (ground_preference * 0.10);
+                let low_threshold = ground_threshold + 0.15;
+
+                if skill_influenced_random < ground_threshold {
+                    TrajectoryType::Ground
+                } else if skill_influenced_random < low_threshold {
+                    TrajectoryType::LowDriven
+                } else {
+                    TrajectoryType::MediumArc // Rare, only 5-10%
+                }
+            }
+            // Long passes (45-80m) - still prefer ground when possible
+            d if d <= 80.0 => {
+                let driven_preference = skills.technique * skills.stamina;
+                let lofted_preference = skills.vision * skills.crossing;
+
+                // 40-55% ground for long passes
+                let ground_threshold = 0.40 + (driven_preference * 0.15);
+                let low_threshold = ground_threshold + 0.30;
+                let medium_threshold = low_threshold + (lofted_preference * 0.20);
+
+                if skill_influenced_random < ground_threshold {
+                    TrajectoryType::Ground
+                } else if skill_influenced_random < low_threshold {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < medium_threshold {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            }
+            // Very long passes (80-150m) - need lofted passes
+            d if d <= 150.0 => {
+                let long_pass_ability = skills.long_shots * skills.vision;
+
+                // Can still attempt driven for powerful players
+                if long_pass_ability > 0.70 && skill_influenced_random < 0.25 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.60 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            }
+            // Extreme long passes (150m+) - must be aerial
+            _ => {
+                if skill_influenced_random < 0.35 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            }
         }
     }
 
-    fn calculate_extreme_long_pass_trajectory(
+    /// Calculate z-velocity to reach target with chosen trajectory type
+    /// Ground passes stay on the ground, aerial passes use physics
+    fn calculate_trajectory_to_target(
         horizontal_distance: f32,
         horizontal_velocity: &Vector3<f32>,
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Extreme distance pass (300m+) - goalkeeper kicks, clearances
-        // MUST be very high - almost always aerial
-
-        if pass_style_random < 0.03 {
-            // Ultra-low missile (3% chance - extremely rare)
-            Self::calculate_low_driven_trajectory(horizontal_distance, skills, rng) * 3.0
-        } else if pass_style_random < 0.20 {
-            // High simple loft (17% chance)
-            Self::calculate_simple_loft_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.8
-        } else if pass_style_random < 0.60 {
-            // High parabolic clearance (40% chance - most common)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.5
-        } else {
-            // Extreme parabolic (40% chance - maximum height/distance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.8
-        }
-    }
-
-    fn calculate_ultra_long_pass_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Ultra-long pass (200-300m) - goal kicks, long diagonals
-        // Must be high to reach
-
-        if pass_style_random < 0.05 {
-            // Driven missile (5% chance - exceptional technique required)
-            Self::calculate_low_driven_trajectory(horizontal_distance, skills, rng) * 2.5
-        } else if pass_style_random < 0.25 {
-            // Simple high loft (20% chance)
-            Self::calculate_simple_loft_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.5
-        } else if pass_style_random < 0.65 {
-            // Parabolic arc - standard for distance (40% chance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.15
-        } else {
-            // Very high parabolic (35% chance - maximum elevation)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.45
-        }
-    }
-
-    fn calculate_very_long_pass_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Very long cross-field pass (100-200m) - needs significant height
-        let vision_bonus = skills.vision * 0.5;
-
-        if pass_style_random < 0.08 * (1.0 - vision_bonus) {
-            // Low driven long ball (very rare, ~4% for high vision)
-            Self::calculate_low_driven_trajectory(horizontal_distance, skills, rng) * 1.5
-        } else if pass_style_random < 0.30 {
-            // Simple loft - moderate arc (22% chance)
-            Self::calculate_simple_loft_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.2
-        } else if pass_style_random < 0.70 {
-            // Parabolic loft - smooth high arc (40% chance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 0.95
-        } else {
-            // High parabolic - spectacular switching pass (30% chance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.25
-        }
-    }
-
-    fn calculate_long_pass_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Long pass - varied mix of driven, lofted, and parabolic passes
-        if pass_style_random < 0.25 {
-            // Driven ground pass (25% chance)
-            Self::calculate_ground_trajectory(skills, rng)
-        } else if pass_style_random < 0.45 {
-            // Low driven pass (20% chance)
-            Self::calculate_low_driven_trajectory(horizontal_distance, skills, rng)
-        } else if pass_style_random < 0.65 {
-            // Simple loft (20% chance)
-            Self::calculate_simple_loft_trajectory(horizontal_distance, horizontal_velocity, skills, rng)
-        } else if pass_style_random < 0.85 {
-            // Parabolic loft - classic high arc (20% chance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 0.7
-        } else {
-            // High parabolic for switching play (15% chance)
-            Self::calculate_parabolic_trajectory(horizontal_distance, horizontal_velocity, skills, rng) * 1.1
-        }
-    }
-
-    fn calculate_medium_pass_trajectory(
-        horizontal_distance: f32,
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Medium pass - mix of ground and low passes
-        if pass_style_random < 0.55 {
-            // Pure ground pass (55% chance)
-            Self::calculate_ground_trajectory(skills, rng)
-        } else if pass_style_random < 0.80 {
-            // Low driven pass (25% chance)
-            Self::calculate_low_driven_trajectory(horizontal_distance, skills, rng) * 0.7
-        } else if pass_style_random < 0.95 {
-            // Simple loft (15% chance)
-            rng.random_range(0.3..0.7) * skills.passing
-        } else {
-            // Chip over defender (5% chance)
-            Self::calculate_chip_trajectory(horizontal_distance, skills, rng) * 0.8
-        }
-    }
-
-    fn calculate_short_pass_trajectory(
-        skills: &PassSkills,
-        pass_style_random: f32,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Short pass - almost all ground passes with occasional chips
-        if pass_style_random < 0.75 {
-            // Pure ground pass (75% chance)
-            Self::calculate_ground_trajectory(skills, rng)
-        } else if pass_style_random < 0.95 {
-            // Low driven with tiny lift (20% chance)
-            rng.random_range(0.05..0.15) * skills.technique
-        } else {
-            // Delicate chip over defender (5% chance)
-            let horizontal_distance = 15.0; // Approximate short distance
-            Self::calculate_chip_trajectory(horizontal_distance, skills, rng) * 0.6
-        }
-    }
-
-    /// Calculate z-velocity for ground passes (minimal to no lift)
-    fn calculate_ground_trajectory(skills: &PassSkills, rng: &mut impl Rng) -> f32 {
-        // Pure ground pass with very minimal variance
-        rng.random_range(0.0..0.05) * skills.technique
-    }
-
-    /// Calculate z-velocity for low driven passes (slight lift, fast)
-    fn calculate_low_driven_trajectory(
-        horizontal_distance: f32,
-        skills: &PassSkills,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Low trajectory with minimal lift - stays close to ground
-        let base_height = (horizontal_distance / 100.0).clamp(0.2, 1.5);
-        base_height * rng.random_range(0.8..1.2) * (0.6 + skills.technique * 0.4)
-    }
-
-    /// Calculate z-velocity for classic parabolic lofted passes (smooth high arc)
-    fn calculate_parabolic_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
+        trajectory_type: TrajectoryType,
         skills: &PassSkills,
         rng: &mut impl Rng,
     ) -> f32 {
         const GRAVITY: f32 = 9.81;
 
-        // Classic physics-based parabolic arc
-        let time_to_target = horizontal_distance / horizontal_velocity.norm();
+        let horizontal_speed = horizontal_velocity.norm();
+        if horizontal_speed < 0.1 {
+            return 0.0; // Avoid division by zero
+        }
 
-        // Calculate initial z-velocity for a smooth parabolic arc
-        // The peak height occurs at half the flight time
-        let base_z_velocity = 0.5 * GRAVITY * time_to_target;
+        match trajectory_type {
+            // Ground pass - minimal to zero lift (rolling on the ground)
+            TrajectoryType::Ground => {
+                // Very minimal bounce/lift based on technique and surface
+                let base_lift = 0.05 * skills.technique * skills.condition_factor;
+                let random_bounce = rng.random_range(0.0..0.3);
+                base_lift * random_bounce // 0.0 to ~0.015 m/s (essentially ground)
+            }
 
-        // Add skill-based variation for arc height
-        let arc_multiplier = rng.random_range(0.85..1.25) * (0.8 + skills.vision * 0.2);
+            // Low driven - stays very close to ground, minimal arc
+            TrajectoryType::LowDriven => {
+                // Slight lift for speed, but stays low (max height ~0.5-1m)
+                let distance_factor = (horizontal_distance / 100.0).clamp(0.3, 1.0);
+                let skill_factor = skills.technique * skills.condition_factor;
 
-        base_z_velocity * arc_multiplier
+                let base_z = 0.5 + (distance_factor * 0.8); // 0.5 to 1.3 m/s
+                let variation = rng.random_range(0.85..1.15);
+
+                base_z * skill_factor * variation
+            }
+
+            // Medium arc - moderate parabolic trajectory (height ~2-4m)
+            TrajectoryType::MediumArc => {
+                let base_flight_time = horizontal_distance / horizontal_speed;
+                let flight_time = base_flight_time * 0.8; // Moderate arc
+
+                let ideal_z = 0.5 * GRAVITY * flight_time;
+
+                // Skill affects consistency
+                let execution_quality = skills.overall_quality();
+                let error_range = (1.0 - execution_quality) * 0.12;
+                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+
+                ideal_z * error
+            }
+
+            // High arc - high parabolic trajectory (height ~4-8m)
+            TrajectoryType::HighArc => {
+                let base_flight_time = horizontal_distance / horizontal_speed;
+                let flight_time = base_flight_time * 1.3; // High arc
+
+                let ideal_z = 0.5 * GRAVITY * flight_time;
+
+                // Requires good long passing ability
+                let execution_quality = (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
+                let error_range = (1.0 - execution_quality) * 0.18;
+                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+
+                ideal_z * error
+            }
+
+            // Chip - very high arc over short distance (height ~3-6m)
+            TrajectoryType::Chip => {
+                // Chips are based on technique, not distance
+                let chip_ability = (skills.technique * 0.5 + skills.flair * 0.3 + skills.passing * 0.2)
+                    * skills.condition_factor;
+
+                // Base height for chip regardless of distance
+                let base_chip_height = 2.5 + (chip_ability * 2.0); // 2.5 to 4.5 m/s
+
+                // Execution error for this difficult skill
+                let error_range = (1.0 - chip_ability) * 0.25;
+                let error = rng.random_range(1.0 - error_range..1.0 + error_range);
+
+                base_chip_height * error
+            }
+        }
     }
 
-    /// Calculate z-velocity for chip/scoop passes (quick rise, steep descent)
-    fn calculate_chip_trajectory(
-        horizontal_distance: f32,
-        skills: &PassSkills,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        // Chip has a steeper initial velocity for quick rise
-        // Height is less dependent on distance, more on technique
-        let base_height = (horizontal_distance / 30.0).clamp(1.5, 4.5);
+    fn calculate_max_z_velocity(horizontal_distance: f32, skills: &PassSkills) -> f32 {
+        // Combine vision and long_shots for long pass capability
+        let long_pass_ability = (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.condition_factor;
 
-        // Chips require good technique - higher multiplier for skilled players
-        let technique_factor = 0.7 + skills.technique * 0.6;
-
-        base_height * rng.random_range(1.0..1.4) * technique_factor
-    }
-
-    /// Calculate z-velocity for simple loft passes (moderate arc, less than parabolic)
-    fn calculate_simple_loft_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
-        skills: &PassSkills,
-        rng: &mut impl Rng,
-    ) -> f32 {
-        const GRAVITY: f32 = 9.81;
-
-        // Similar to parabolic but with lower arc
-        let time_to_target = horizontal_distance / horizontal_velocity.norm();
-        let base_z_velocity = 0.35 * GRAVITY * time_to_target;
-
-        // Less variation than parabolic, more consistent
-        let arc_multiplier = rng.random_range(0.9..1.15) * (0.75 + skills.passing * 0.25);
-
-        base_z_velocity * arc_multiplier
-    }
-
-    /// Helper function for legacy compatibility - delegates to parabolic
-    fn calculate_lofted_trajectory(
-        horizontal_distance: f32,
-        horizontal_velocity: &Vector3<f32>,
-        time_divisor: f32,
-    ) -> f32 {
-        const GRAVITY: f32 = 9.81;
-        let time_to_target = horizontal_distance / horizontal_velocity.norm();
-        0.5 * GRAVITY * time_to_target / time_divisor
-    }
-
-    fn calculate_max_z_velocity(horizontal_distance: f32, vision_skill: f32) -> f32 {
-        if horizontal_distance > 300.0 {
-            // Extreme distance - goalkeeper goal kicks, desperate clearances
-            12.0 + (vision_skill * 3.0) // Up to 15.0 m/s for extreme passes
-        } else if horizontal_distance > 200.0 {
+        // Much stricter limits - most passes should stay low
+        if horizontal_distance <= 20.0 {
+            // Short passes - almost no lift allowed (ground passes)
+            0.3 // Maximum 0.3 m/s vertical
+        } else if horizontal_distance <= 45.0 {
+            // Medium passes - keep very low
+            1.0 + (long_pass_ability * 0.3) // 1.0 to 1.3 m/s
+        } else if horizontal_distance <= 80.0 {
+            // Long passes - moderate lift allowed
+            2.5 + (long_pass_ability * 1.5) // 2.5 to 4.0 m/s
+        } else if horizontal_distance <= 150.0 {
+            // Very long passes - significant lift needed
+            4.5 + (long_pass_ability * 2.5) // 4.5 to 7.0 m/s
+        } else if horizontal_distance <= 250.0 {
             // Ultra-long diagonal switches
-            9.0 + (vision_skill * 2.5) // Up to 11.5 m/s
-        } else if horizontal_distance > 100.0 {
-            // Very long cross-field passes
-            5.5 + (vision_skill * 2.5) // Up to 8.0 m/s for high vision players
-        } else if horizontal_distance > 60.0 {
-            // Long passes
-            3.5 + (vision_skill * 0.8) // Up to 4.3 m/s
+            7.0 + (long_pass_ability * 3.0) // 7.0 to 10.0 m/s
         } else {
-            // Medium/short passes - keep low
-            2.4
+            // Extreme distance - goalkeeper goal kicks, clearances
+            10.0 + (long_pass_ability * 4.0) // 10.0 to 14.0 m/s
         }
     }
 

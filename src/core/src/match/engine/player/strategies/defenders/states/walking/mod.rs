@@ -8,6 +8,7 @@ const INTERCEPTION_DISTANCE: f32 = 150.0;
 const MARKING_DISTANCE: f32 = 50.0;
 const PRESSING_DISTANCE: f32 = 80.0;
 const TACKLE_DISTANCE: f32 = 25.0;
+const RUNNING_TO_THE_BALL_DISTANCE: f32 = 150.0;
 
 #[derive(Default)]
 pub struct DefenderWalkingState {}
@@ -15,6 +16,12 @@ pub struct DefenderWalkingState {}
 impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
+
+        if ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall
+            ));
+        }
 
         // Priority 1: Check for opponents with the ball nearby - be aggressive!
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
