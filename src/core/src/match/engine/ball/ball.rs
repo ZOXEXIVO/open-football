@@ -17,6 +17,8 @@ pub struct Ball {
     pub previous_owner: Option<u32>,
     pub current_owner: Option<u32>,
     pub take_ball_notified_player: Option<u32>,
+    pub notification_cooldown: u32,
+    pub last_boundary_position: Option<Vector3<f32>>,
 }
 
 #[derive(Default)]
@@ -48,6 +50,8 @@ impl Ball {
             previous_owner: None,
             current_owner: None,
             take_ball_notified_player: None,
+            notification_cooldown: 0,
+            last_boundary_position: None,
         }
     }
 
@@ -91,38 +95,111 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // Decrement cooldown timer
+        if self.notification_cooldown > 0 {
+            self.notification_cooldown -= 1;
+        }
+
         // Check if ball is stopped (either outside or inside field) and no one owns it
         let is_ball_stopped = self.is_stands_outside() || self.is_ball_stopped_on_field();
 
-        if is_ball_stopped
+        // Also check if ball is aerial and needs interception
+        let is_ball_aerial = self.is_aerial() && self.current_owner.is_none();
+
+        // Check if ball has moved significantly from last boundary position
+        let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
+            let distance_from_boundary = (self.position - last_pos).magnitude();
+            distance_from_boundary > 15.0 // Must move at least 15 units away from boundary
+        } else {
+            true // No previous boundary position recorded
+        };
+
+        if (is_ball_stopped || is_ball_aerial)
             && self.take_ball_notified_player.is_none()
             && self.current_owner.is_none()
+            && self.notification_cooldown == 0 // Only notify if cooldown expired
+            && has_escaped_boundary // Only notify if ball escaped from previous boundary loop
         {
             if let Some(notified_player) = self.notify_nearest_player(players, events) {
                 self.take_ball_notified_player = Some(notified_player);
+
+                // If ball is at boundary, set cooldown and record position
+                if self.is_ball_outside() {
+                    self.notification_cooldown = 30; // 30 tick cooldown (~0.5 seconds)
+                    self.last_boundary_position = Some(self.position);
+                }
             }
         } else if let Some(notified_player_id) = self.take_ball_notified_player {
             // Check if the notified player reached the ball
             if let Some(player) = players.iter().find(|p| p.id == notified_player_id) {
                 const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
 
+                // For aerial balls, check distance to landing position
+                let target_position = if self.is_aerial() {
+                    self.calculate_landing_position()
+                } else {
+                    self.position
+                };
+
                 // Calculate proper 3D distance
-                let dx = player.position.x - self.position.x;
-                let dy = player.position.y - self.position.y;
-                let dz = self.position.z;
+                let dx = player.position.x - target_position.x;
+                let dy = player.position.y - target_position.y;
+                let dz = target_position.z;
                 let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
                 if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
-                    // Player reached the ball, give them ownership
-                    self.current_owner = Some(notified_player_id);
-                    self.take_ball_notified_player = None;
-                    events.add_ball_event(BallEvent::Claimed(notified_player_id));
+                    // Player reached the ball (or landing position), give them ownership when ball arrives
+                    // For aerial balls, only claim when ball is low enough
+                    if !self.is_aerial() || self.position.z < 2.5 {
+                        self.current_owner = Some(notified_player_id);
+                        self.take_ball_notified_player = None;
+                        events.add_ball_event(BallEvent::Claimed(notified_player_id));
+
+                        // Reset boundary tracking when ball is claimed
+                        if has_escaped_boundary {
+                            self.last_boundary_position = None;
+                        }
+                    }
                 }
             }
         }
     }
 
     pub fn try_intercept(&mut self, _players: &[MatchPlayer], _events: &mut EventCollection) {}
+
+    /// Calculate where an aerial ball will land (when z reaches 0)
+    /// Returns the predicted landing position using simple projection
+    pub fn calculate_landing_position(&self) -> Vector3<f32> {
+        // If ball is already on ground or owned, return current position
+        if self.position.z <= 0.1 || self.current_owner.is_some() {
+            return self.position;
+        }
+
+        // If ball is moving up or not moving vertically, estimate it will land near current position
+        if self.velocity.z >= 0.0 {
+            return Vector3::new(self.position.x, self.position.y, 0.0);
+        }
+
+        // Simple projection: calculate time until ball reaches ground (z = 0)
+        // time = current_height / vertical_speed
+        let time_to_ground = self.position.z / self.velocity.z.abs();
+
+        // Project horizontal position
+        let landing_x = self.position.x + self.velocity.x * time_to_ground;
+        let landing_y = self.position.y + self.velocity.y * time_to_ground;
+
+        // Clamp to field boundaries
+        let clamped_x = landing_x.clamp(0.0, self.field_width);
+        let clamped_y = landing_y.clamp(0.0, self.field_height);
+
+        Vector3::new(clamped_x, clamped_y, 0.0)
+    }
+
+    /// Check if the ball is aerial (in the air above player reach)
+    pub fn is_aerial(&self) -> bool {
+        const PLAYER_REACH_HEIGHT: f32 = 2.3;
+        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > 0.1
+    }
 
     pub fn is_stands_outside(&self) -> bool {
         self.is_ball_outside()

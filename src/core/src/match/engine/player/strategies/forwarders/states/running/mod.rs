@@ -35,6 +35,13 @@ impl StateProcessingHandler for ForwardRunningState {
                         ForwardState::Shooting,
                     ));
                 }
+                // In shooting range - don't pass backward
+                // Only consider passing forward to better positioned teammates
+                if self.should_pass_in_shooting_zone(ctx) {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                // Stay with ball and keep running toward goal
+                return None;
             }
 
             // Priority 3: Under pressure - quick decision needed
@@ -244,6 +251,52 @@ impl ForwardRunningState {
         });
 
         !better_positioned_teammate && has_clear_shot
+    }
+
+    /// Special passing logic when in shooting zone - only forward passes to much better positioned players
+    fn should_pass_in_shooting_zone(&self, ctx: &StateProcessingContext) -> bool {
+        let distance = ctx.ball().distance_to_opponent_goal();
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+
+        // Get teammates
+        let teammates: Vec<MatchPlayerLite> = ctx.players().teammates().nearby(200.0).collect();
+
+        if teammates.is_empty() {
+            return false;
+        }
+
+        // Only pass if there's a teammate in a MUCH better position
+        // AND the pass is forward (toward goal, not backward)
+        teammates.iter().any(|teammate| {
+            // Must be a forward pass (closer to goal direction)
+            let is_forward_pass = match ctx.player.side {
+                Some(PlayerSide::Left) => teammate.position.x > player_pos.x,
+                Some(PlayerSide::Right) => teammate.position.x < player_pos.x,
+                None => false,
+            };
+
+            if !is_forward_pass {
+                return false; // Never pass backward in shooting zone
+            }
+
+            // Teammate must be SIGNIFICANTLY closer to goal (50% closer)
+            let teammate_distance = (teammate.position - goal_pos).magnitude();
+            let is_much_closer = teammate_distance < distance * 0.5;
+
+            // Must have clear pass lane
+            let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+
+            // Teammate should be unmarked or lightly marked
+            let not_heavily_marked = ctx
+                .players()
+                .opponents()
+                .all()
+                .filter(|opp| (opp.position - teammate.position).magnitude() < 8.0)
+                .count() < 2;
+
+            is_much_closer && has_clear_pass && not_heavily_marked
+        })
     }
 
     /// Check if under immediate pressure
@@ -752,10 +805,11 @@ impl ForwardRunningState {
             return self.has_safe_passing_option(ctx, &teammates);
         }
 
-        // 2. PREFER TO RUN: Very close to goal with space
+        // 2. PREFER TO RUN/SHOOT: Very close to goal with space
         if distance_to_goal < 150.0 && !under_pressure {
-            // Only pass if teammate is in significantly better position
-            return self.has_better_positioned_teammate(ctx, &teammates, distance_to_goal);
+            // Don't pass backward when close to goal!
+            // Only pass forward to teammate in significantly better position
+            return self.has_forward_pass_to_better_teammate(ctx, &teammates, distance_to_goal);
         }
 
         // 3. LOOK FOR QUALITY OPPORTUNITIES: Good vision/passing players find better passes
@@ -797,6 +851,38 @@ impl ForwardRunningState {
         current_distance: f32,
     ) -> bool {
         teammates.iter().any(|teammate| {
+            let teammate_distance =
+                (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+            let is_much_closer = teammate_distance < current_distance * 0.6;
+            let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
+            let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
+
+            is_much_closer && not_heavily_marked && has_clear_lane
+        })
+    }
+
+    /// Check for forward passes to better positioned teammates (prevents backward passes near goal)
+    fn has_forward_pass_to_better_teammate(
+        &self,
+        ctx: &StateProcessingContext,
+        teammates: &[MatchPlayerLite],
+        current_distance: f32,
+    ) -> bool {
+        let player_pos = ctx.player.position;
+
+        teammates.iter().any(|teammate| {
+            // Must be a forward pass direction
+            let is_forward_pass = match ctx.player.side {
+                Some(PlayerSide::Left) => teammate.position.x > player_pos.x,
+                Some(PlayerSide::Right) => teammate.position.x < player_pos.x,
+                None => false,
+            };
+
+            if !is_forward_pass {
+                return false; // Reject backward passes
+            }
+
+            // Teammate must be much closer to goal
             let teammate_distance =
                 (teammate.position - ctx.player().opponent_goal_position()).magnitude();
             let is_much_closer = teammate_distance < current_distance * 0.6;

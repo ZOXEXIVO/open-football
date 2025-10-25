@@ -17,26 +17,68 @@ impl StateProcessingHandler for DefenderClearingState {
         let player_position = ctx.player.position;
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        // Determine the target position for clearing (opposite side of the field)
         let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let field_center_x = field_width / 2.0;
+        let field_center_y = field_height / 2.0;
 
-        // If the player is on the left side, clear to the right, and vice versa
-        let target_position = if player_position.x < field_width / 2.0 {
-            // Clear to the right side of the field
-            Vector3::new(field_width, ball_position.y, 0.0)
+        // Check if ball is at or near a boundary
+        const BOUNDARY_THRESHOLD: f32 = 5.0;
+        let at_left_boundary = ball_position.x <= BOUNDARY_THRESHOLD;
+        let at_right_boundary = ball_position.x >= field_width - BOUNDARY_THRESHOLD;
+        let at_top_boundary = ball_position.y >= field_height - BOUNDARY_THRESHOLD;
+        let at_bottom_boundary = ball_position.y <= BOUNDARY_THRESHOLD;
+        let at_boundary = at_left_boundary || at_right_boundary || at_top_boundary || at_bottom_boundary;
+
+        // Determine the target position for clearing
+        let target_position = if at_boundary {
+            // If at boundary, clear toward center of field to escape the corner/edge
+            // Add variation to avoid predictability
+            let offset_x = if at_left_boundary {
+                field_width * 0.3
+            } else if at_right_boundary {
+                field_width * 0.7
+            } else {
+                field_center_x
+            };
+
+            let offset_y = if at_top_boundary {
+                field_height * 0.7
+            } else if at_bottom_boundary {
+                field_height * 0.3
+            } else {
+                field_center_y
+            };
+
+            Vector3::new(offset_x, offset_y, 0.0)
         } else {
-            // Clear to the left side of the field
-            Vector3::new(0.0, ball_position.y, 0.0)
+            // Normal clear: opposite side of field
+            if player_position.x < field_center_x {
+                Vector3::new(field_width * 0.8, ball_position.y, 0.0)
+            } else {
+                Vector3::new(field_width * 0.2, ball_position.y, 0.0)
+            }
         };
 
         // Calculate the direction vector to the target position
         let direction_to_target = (target_position - ball_position).normalize();
 
-        // Define a speed for clearing the ball, you can adjust this value as needed
-        let clear_speed = 30.0;
+        // Use higher clearing speed - especially critical when stuck at boundary
+        let clear_speed = if at_boundary { 80.0 } else { 50.0 };
 
-        // Calculate the velocity vector by scaling the direction vector by the clearing speed
-        let ball_velocity = direction_to_target * clear_speed;
+        // Calculate horizontal velocity
+        let horizontal_velocity = direction_to_target * clear_speed;
+
+        // Add upward velocity for aerial clearance
+        // Higher lift when at boundary to ensure ball escapes
+        let z_velocity = if at_boundary { 15.0 } else { 8.0 };
+
+        // Combine horizontal and vertical components
+        let ball_velocity = Vector3::new(
+            horizontal_velocity.x,
+            horizontal_velocity.y,
+            z_velocity,
+        );
 
         // Add the clear ball event with the calculated velocity
         state

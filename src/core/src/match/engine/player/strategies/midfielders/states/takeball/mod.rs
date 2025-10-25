@@ -24,9 +24,12 @@ impl StateProcessingHandler for MidfielderTakeBallState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // If ball is aerial, target the landing position instead of current position
+        let target = ctx.tick_context.positions.ball.landing_position;
+
         Some(
             SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
+                target,
                 slowing_distance: 0.0,
             }
             .calculate(ctx.player)

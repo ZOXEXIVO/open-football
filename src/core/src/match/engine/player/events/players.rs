@@ -167,6 +167,9 @@ impl PlayerEventDispatcher {
             PlayerEvent::TakeBall(player_id) => {
                 Self::handle_take_ball_event(player_id, field);
             }
+            PlayerEvent::ClearBall(velocity) => {
+                Self::handle_clear_ball_event(velocity, field);
+            }
             _ => {} // Ignore unsupported events
         }
 
@@ -272,11 +275,19 @@ impl PlayerEventDispatcher {
             adjusted_force,
         );
 
-        // Determine trajectory type based on distance, skills, and decision-making
-        let trajectory_type = Self::select_trajectory_type(
+        // Determine trajectory type based on context, not just distance
+        let passer = field.get_player_mut(event_model.from_player_id).unwrap();
+        let passer_position = passer.position;
+        let passer_team_id = passer.team_id;
+
+        let trajectory_type = Self::select_trajectory_type_contextual(
             actual_horizontal_distance,
             &skills,
             &mut rng,
+            &passer_position,
+            &actual_target,
+            passer_team_id,
+            &field.players,
         );
 
         // Calculate z-velocity to reach target with chosen trajectory type
@@ -316,8 +327,203 @@ impl PlayerEventDispatcher {
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
 
+    /// Select trajectory type based on game context (obstacles, pressure, tactical situation)
+    /// In real football, trajectory depends on what's between you and the target!
+    fn select_trajectory_type_contextual(
+        horizontal_distance: f32,
+        skills: &PassSkills,
+        rng: &mut impl Rng,
+        from_position: &Vector3<f32>,
+        to_position: &Vector3<f32>,
+        passer_team_id: u32,
+        players: &[MatchPlayer],
+    ) -> TrajectoryType {
+        // Check for obstacles in the passing lane
+        let obstacles_in_lane = Self::count_obstacles_in_passing_lane(
+            from_position,
+            to_position,
+            passer_team_id,
+            players,
+        );
+
+        // Calculate decision quality - determines how well player chooses trajectory
+        let decision_quality = skills.decision_quality();
+        let vision_quality = skills.vision;
+
+        // Better decision makers make more appropriate choices
+        let skill_influenced_random = {
+            let pure_random = rng.random_range(0.0..1.0);
+            let randomness_factor = 1.0 - (decision_quality * 0.6);
+            let skill_bias = decision_quality * 0.5;
+            (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
+        };
+
+        // Context factors
+        let has_obstacles = obstacles_in_lane > 0;
+        let many_obstacles = obstacles_in_lane >= 2;
+        let clear_lane = obstacles_in_lane == 0;
+
+        // Distance categories
+        let is_short = horizontal_distance <= 20.0;
+        let is_medium = horizontal_distance > 20.0 && horizontal_distance <= 45.0;
+        let is_long = horizontal_distance > 45.0 && horizontal_distance <= 80.0;
+        let is_very_long = horizontal_distance > 80.0;
+
+        // SHORT PASSES (0-20m) - context matters most
+        if is_short {
+            if clear_lane {
+                // Clear lane - almost always ground pass
+                if skill_influenced_random < 0.95 {
+                    TrajectoryType::Ground
+                } else if skills.flair * skills.technique > 0.75 {
+                    TrajectoryType::Chip // Rare skillful chip
+                } else {
+                    TrajectoryType::Ground
+                }
+            } else if has_obstacles {
+                // Obstacles nearby - need to lift it slightly or chip
+                if skill_influenced_random < 0.6 {
+                    TrajectoryType::Ground // Try to thread through
+                } else if vision_quality > 0.7 && skill_influenced_random < 0.85 {
+                    TrajectoryType::Chip // Smart chip over defender
+                } else {
+                    TrajectoryType::LowDriven // Lift it slightly
+                }
+            } else {
+                TrajectoryType::Ground
+            }
+        }
+        // MEDIUM PASSES (20-45m) - balance between ground and aerial
+        else if is_medium {
+            if clear_lane {
+                // Clear lane - prefer ground/driven passes
+                if skill_influenced_random < 0.85 {
+                    TrajectoryType::Ground
+                } else {
+                    TrajectoryType::LowDriven
+                }
+            } else if many_obstacles {
+                // Multiple obstacles - need to go over them
+                if skill_influenced_random < 0.4 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.75 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            } else if has_obstacles {
+                // One obstacle - can drive it or loft it
+                if skill_influenced_random < 0.5 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.8 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::Ground // Try to thread through
+                }
+            } else {
+                // Default - mostly ground/driven
+                if skill_influenced_random < 0.7 {
+                    TrajectoryType::Ground
+                } else {
+                    TrajectoryType::LowDriven
+                }
+            }
+        }
+        // LONG PASSES (45-80m) - context determines ground vs aerial
+        else if is_long {
+            if clear_lane && skills.technique > 0.7 {
+                // Clear lane and good technique - can try driven pass
+                if skill_influenced_random < 0.3 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.6 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            } else if many_obstacles {
+                // Many obstacles - must go high
+                if skill_influenced_random < 0.25 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            } else {
+                // Default - mix of driven and aerial
+                if skill_influenced_random < 0.3 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.65 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            }
+        }
+        // VERY LONG PASSES (80m+) - almost always aerial, but height varies
+        else if is_very_long {
+            let long_pass_ability = skills.long_shots * skills.vision * skills.crossing;
+
+            if long_pass_ability > 0.7 && skill_influenced_random < 0.3 {
+                TrajectoryType::LowDriven // Powerful driven pass
+            } else if skill_influenced_random < 0.5 {
+                TrajectoryType::MediumArc
+            } else {
+                TrajectoryType::HighArc
+            }
+        }
+        // EXTREME DISTANCES (fallback)
+        else {
+            if skill_influenced_random < 0.4 {
+                TrajectoryType::MediumArc
+            } else {
+                TrajectoryType::HighArc
+            }
+        }
+    }
+
+    /// Count how many opponent players are in the passing lane (obstacles)
+    fn count_obstacles_in_passing_lane(
+        from_position: &Vector3<f32>,
+        to_position: &Vector3<f32>,
+        passer_team_id: u32,
+        players: &[MatchPlayer],
+    ) -> usize {
+        const LANE_WIDTH: f32 = 5.0; // Width of the passing lane corridor
+
+        let pass_direction = (*to_position - *from_position).normalize();
+        let pass_distance = (*to_position - *from_position).magnitude();
+
+        players
+            .iter()
+            .filter(|player| {
+                // Only count opponents
+                if player.team_id == passer_team_id {
+                    return false;
+                }
+
+                // Vector from passer to player
+                let to_player = player.position - *from_position;
+
+                // Project player onto pass line to find closest point
+                let projection_length = to_player.dot(&pass_direction);
+
+                // Player must be between passer and target
+                if projection_length < 0.0 || projection_length > pass_distance {
+                    return false;
+                }
+
+                // Calculate perpendicular distance to pass line
+                let projection_point = *from_position + pass_direction * projection_length;
+                let perpendicular_distance = (player.position - projection_point).magnitude();
+
+                // Player is an obstacle if within lane width
+                perpendicular_distance < LANE_WIDTH
+            })
+            .count()
+    }
+
     /// Select trajectory type based on distance and player skills
     /// In real football, 85-90% of passes are ground passes!
+    /// DEPRECATED: Use select_trajectory_type_contextual instead
     fn select_trajectory_type(
         horizontal_distance: f32,
         skills: &PassSkills,
@@ -429,12 +635,13 @@ impl PlayerEventDispatcher {
         }
 
         match trajectory_type {
-            // Ground pass - minimal to zero lift (rolling on the ground)
+            // Ground pass - truly on the ground (rolling)
             TrajectoryType::Ground => {
-                // Very minimal bounce/lift based on technique and surface
-                let base_lift = 0.05 * skills.technique * skills.condition_factor;
-                let random_bounce = rng.random_range(0.0..0.3);
-                base_lift * random_bounce // 0.0 to ~0.015 m/s (essentially ground)
+                // Almost no lift - just enough to handle slight bumps
+                // This keeps the ball rolling along the ground
+                let base_lift = 0.02 * skills.technique;
+                let random_variation = rng.random_range(0.0..0.1);
+                base_lift * random_variation // 0.0 to ~0.002 m/s (truly ground)
             }
 
             // Low driven - stays very close to ground, minimal arc
@@ -653,5 +860,17 @@ impl PlayerEventDispatcher {
     fn handle_take_ball_event(player_id: u32, field: &mut MatchField) {
         let player = field.get_player_mut(player_id).unwrap();
         player.run_for_ball();
+    }
+
+    fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
+        // Apply the clearing velocity to the ball
+        field.ball.velocity = velocity;
+
+        // Clear ownership - ball is now loose
+        field.ball.previous_owner = field.ball.current_owner;
+        field.ball.current_owner = None;
+
+        // Set in-flight state to prevent immediate tackling
+        field.ball.flags.in_flight_state = 10;
     }
 }

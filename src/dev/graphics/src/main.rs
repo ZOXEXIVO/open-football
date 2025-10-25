@@ -1,32 +1,60 @@
-use core::r#match::MatchSquad;
-use core::r#match::ball::Ball;
-use core::r#match::player::MatchPlayer;
-use core::r#match::player::strategies::MatchBallLogic;
-use core::r#match::FootballEngine;
-use core::r#match::MatchContext;
-use core::r#match::MatchField;
-use core::r#match::VectorExtensions;
-use macroquad::prelude::*;
-use std::thread;
-use std::time::Duration;
 //tactics
 use core::club::player::Player;
 use core::club::player::PlayerPositionType;
 use core::club::team::tactics::{MatchTacticType, Tactics};
+use core::r#match::ball::Ball;
+use core::r#match::player::strategies::MatchBallLogic;
+use core::r#match::player::MatchPlayer;
+use core::r#match::FootballEngine;
+use core::r#match::MatchContext;
+use core::r#match::MatchField;
 use core::r#match::MatchPlayerCollection;
+use core::r#match::MatchSquad;
 use core::r#match::ResultMatchPositionData;
+use core::r#match::VectorExtensions;
 use core::Vector3;
 use env_logger::Env;
+use macroquad::prelude::*;
+use std::thread;
+use std::time::Duration;
 use std::time::Instant;
 
 use core::r#match::PlayerSide;
 use core::r#match::Score;
 use core::r#match::GOAL_WIDTH;
-use core::PlayerGenerator;
 use core::staff_contract_mod::NaiveDate;
+use core::PlayerGenerator;
 
 const INNER_FIELD_WIDTH: f32 = 840.0;
 const INNER_FIELD_HEIGHT: f32 = 545.0;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MatchSpeed {
+    Percent100 = 1,
+    Percent50 = 2,
+    Percent10 = 10,
+    Percent1 = 100,
+}
+
+impl MatchSpeed {
+    fn label(&self) -> &'static str {
+        match self {
+            MatchSpeed::Percent100 => "100%",
+            MatchSpeed::Percent50 => "50%",
+            MatchSpeed::Percent10 => "10%",
+            MatchSpeed::Percent1 => "1%",
+        }
+    }
+
+    fn all() -> [MatchSpeed; 4] {
+        [
+            MatchSpeed::Percent100,
+            MatchSpeed::Percent50,
+            MatchSpeed::Percent10,
+            MatchSpeed::Percent1,
+        ]
+    }
+}
 
 #[macroquad::main(window_conf)]
 async fn main() {
@@ -66,10 +94,12 @@ async fn main() {
     let mut context = MatchContext::new(&field, players, score);
 
     let mut current_frame = 0u64;
+    let mut tick_frame = 0u64;
 
     let mut match_data = ResultMatchPositionData::new();
 
     let mut left_mouse_pressed;
+    let mut selected_speed = MatchSpeed::Percent100;
 
     loop {
         current_frame += 1;
@@ -105,9 +135,18 @@ async fn main() {
             },
         );
 
+        // Speed control UI at the top right corner
+        draw_speed_control(offset_x, offset_y, field_width, &mut selected_speed);
+
         let start = Instant::now();
 
-        FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+        // Only execute game tick based on selected speed
+        let should_tick = tick_frame % (selected_speed as u64) == 0;
+        tick_frame += 1;
+
+        if should_tick {
+            FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+        }
 
         let elapsed = start.elapsed();
 
@@ -329,6 +368,69 @@ fn draw_fps(offset_x: f32, offset_y: f32, fps_data: &[u128], max_fps: u128) {
         20.0,
         BLACK,
     );
+}
+
+fn draw_speed_control(offset_x: f32, offset_y: f32, field_width: f32, selected_speed: &mut MatchSpeed) {
+    // All sizes reduced by 50%, then widths reduced by additional 40%
+    let label_width = 36.0;  // Was 60.0 (60% of 60.0)
+    let button_width = 24.0; // Was 40.0 (60% of 40.0)
+    let button_height = 15.0; // Was 30.0 (height unchanged)
+    let button_spacing = 3.0; // Was 5.0 (60% of 5.0)
+    let font_size = 10.0; // Was 20.0 (unchanged)
+
+    let speeds = MatchSpeed::all();
+    let num_buttons = speeds.len() as f32;
+
+    // Calculate total width of the control
+    let total_width = label_width + (button_width * num_buttons) + (button_spacing * (num_buttons - 1.0));
+
+    // Position at top right corner
+    let x = offset_x + field_width - total_width - 10.0; // 10.0 padding from right edge
+    let y = offset_y - 25.0; // Position above the field
+
+    let mut current_x = x + label_width;
+
+    for speed in &speeds {
+        let is_selected = *selected_speed == *speed;
+
+        // Draw radio button background
+        let bg_color = if is_selected {
+            Color::from_rgba(100, 200, 100, 255) // Green when selected
+        } else {
+            Color::from_rgba(200, 200, 200, 255) // Gray when not selected
+        };
+
+        draw_rectangle(current_x, y, button_width, button_height, bg_color);
+
+        // Draw button border
+        let border_color = if is_selected {
+            Color::from_rgba(50, 150, 50, 255)
+        } else {
+            Color::from_rgba(100, 100, 100, 255)
+        };
+        draw_rectangle_lines(current_x, y, button_width, button_height, 1.0, border_color);
+
+        // Draw button text (centered)
+        let text = speed.label();
+        let text_width = 15.0; // Approximate width for smaller font
+        let text_x = current_x + (button_width - text_width) / 2.0;
+        let text_y = y + button_height / 2.0 + 3.0;
+        draw_text(text, text_x, text_y, font_size, BLACK);
+
+        // Check if button is clicked
+        if is_mouse_button_pressed(MouseButton::Left) {
+            let (mouse_x, mouse_y) = mouse_position();
+            if mouse_x >= current_x
+                && mouse_x <= current_x + button_width
+                && mouse_y >= y
+                && mouse_y <= y + button_height
+            {
+                *selected_speed = *speed;
+            }
+        }
+
+        current_x += button_width + button_spacing;
+    }
 }
 
 fn draw_waypoints(offset_x: f32, offset_y: f32, field: &MatchField, scale: f32) {
