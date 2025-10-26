@@ -87,12 +87,25 @@ impl MatchPlayer {
         let field_width = context.field_size.width as f32 + 1.0;
         let field_height = context.field_size.height as f32 + 1.0;
 
-        // Check if ball hits the boundary and reverse its velocity if it does
-        if self.position.x <= 0.0 || self.position.x >= field_width {
+        // Clamp position to field boundaries
+        self.position.x = self.position.x.clamp(0.0, field_width);
+        self.position.y = self.position.y.clamp(0.0, field_height);
+
+        // Only stop velocity if player is trying to move OUT of bounds
+        // Allow velocity that moves them back into the field
+        if self.position.x <= 0.0 && self.velocity.x < 0.0 {
+            // At left boundary, trying to move further left
+            self.velocity.x = 0.0;
+        } else if self.position.x >= field_width && self.velocity.x > 0.0 {
+            // At right boundary, trying to move further right
             self.velocity.x = 0.0;
         }
 
-        if self.position.y <= 0.0 || self.position.y >= field_height {
+        if self.position.y <= 0.0 && self.velocity.y < 0.0 {
+            // At bottom boundary, trying to move further down
+            self.velocity.y = 0.0;
+        } else if self.position.y >= field_height && self.velocity.y > 0.0 {
+            // At top boundary, trying to move further up
             self.velocity.y = 0.0;
         }
     }

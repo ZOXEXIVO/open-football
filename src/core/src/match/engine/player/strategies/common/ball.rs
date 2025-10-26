@@ -43,6 +43,12 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     #[inline]
+    pub fn stopped(&self) -> bool {
+        let velocity = self.ctx.tick_context.positions.ball.velocity;
+        velocity.x == 0.0 && velocity.y == 0.0
+    }
+
+    #[inline]
     pub fn is_owned(&self) -> bool {
         self.ctx.tick_context.ball.is_owned
     }

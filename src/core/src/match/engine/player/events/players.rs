@@ -363,13 +363,13 @@ impl PlayerEventDispatcher {
         let many_obstacles = obstacles_in_lane >= 2;
         let clear_lane = obstacles_in_lane == 0;
 
-        // Distance categories
-        let is_short = horizontal_distance <= 20.0;
-        let is_medium = horizontal_distance > 20.0 && horizontal_distance <= 45.0;
-        let is_long = horizontal_distance > 45.0 && horizontal_distance <= 80.0;
-        let is_very_long = horizontal_distance > 80.0;
+        // Distance categories (adjusted for more realistic football passing)
+        let is_short = horizontal_distance <= 25.0;
+        let is_medium = horizontal_distance > 25.0 && horizontal_distance <= 55.0;
+        let is_long = horizontal_distance > 55.0 && horizontal_distance <= 90.0;
+        let is_very_long = horizontal_distance > 90.0;
 
-        // SHORT PASSES (0-20m) - context matters most
+        // SHORT PASSES (0-25m) - context matters most
         if is_short {
             if clear_lane {
                 // Clear lane - almost always ground pass
@@ -393,14 +393,16 @@ impl PlayerEventDispatcher {
                 TrajectoryType::Ground
             }
         }
-        // MEDIUM PASSES (20-45m) - balance between ground and aerial
+        // MEDIUM PASSES (25-55m) - balance between ground and aerial
         else if is_medium {
             if clear_lane {
-                // Clear lane - prefer ground/driven passes
-                if skill_influenced_random < 0.85 {
+                // Clear lane - strongly prefer ground/driven passes
+                if skill_influenced_random < 0.75 {
                     TrajectoryType::Ground
-                } else {
+                } else if skill_influenced_random < 0.95 {
                     TrajectoryType::LowDriven
+                } else {
+                    TrajectoryType::MediumArc  // Occasional variation
                 }
             } else if many_obstacles {
                 // Multiple obstacles - need to go over them
@@ -429,42 +431,61 @@ impl PlayerEventDispatcher {
                 }
             }
         }
-        // LONG PASSES (45-80m) - context determines ground vs aerial
+        // LONG PASSES (55-90m) - prefer ground/driven when possible
         else if is_long {
-            if clear_lane && skills.technique > 0.7 {
-                // Clear lane and good technique - can try driven pass
-                if skill_influenced_random < 0.3 {
-                    TrajectoryType::LowDriven
-                } else if skill_influenced_random < 0.6 {
-                    TrajectoryType::MediumArc
+            if clear_lane {
+                // Clear lane - heavily favor ground/driven passes
+                if skills.technique > 0.7 {
+                    // Good technique - can execute long driven passes
+                    if skill_influenced_random < 0.60 {
+                        TrajectoryType::LowDriven
+                    } else if skill_influenced_random < 0.80 {
+                        TrajectoryType::MediumArc
+                    } else {
+                        TrajectoryType::HighArc
+                    }
                 } else {
-                    TrajectoryType::HighArc
+                    // Average technique - still prefer driven but mix more
+                    if skill_influenced_random < 0.45 {
+                        TrajectoryType::LowDriven
+                    } else if skill_influenced_random < 0.70 {
+                        TrajectoryType::MediumArc
+                    } else {
+                        TrajectoryType::HighArc
+                    }
                 }
             } else if many_obstacles {
-                // Many obstacles - must go high
-                if skill_influenced_random < 0.25 {
+                // Many obstacles - must go aerial
+                if skill_influenced_random < 0.30 {
                     TrajectoryType::MediumArc
                 } else {
                     TrajectoryType::HighArc
                 }
             } else {
-                // Default - mix of driven and aerial
-                if skill_influenced_random < 0.3 {
+                // One obstacle - prefer driven but can go aerial
+                if skill_influenced_random < 0.40 {
                     TrajectoryType::LowDriven
-                } else if skill_influenced_random < 0.65 {
+                } else if skill_influenced_random < 0.70 {
                     TrajectoryType::MediumArc
                 } else {
                     TrajectoryType::HighArc
                 }
             }
         }
-        // VERY LONG PASSES (80m+) - almost always aerial, but height varies
+        // VERY LONG PASSES (90m+) - usually aerial, but elite players can drive it
         else if is_very_long {
             let long_pass_ability = skills.long_shots * skills.vision * skills.crossing;
 
-            if long_pass_ability > 0.7 && skill_influenced_random < 0.3 {
-                TrajectoryType::LowDriven // Powerful driven pass
-            } else if skill_influenced_random < 0.5 {
+            if long_pass_ability > 0.75 && clear_lane {
+                // Elite long passer with clear lane - can try powerful driven pass
+                if skill_influenced_random < 0.40 {
+                    TrajectoryType::LowDriven // Powerful driven pass
+                } else if skill_influenced_random < 0.70 {
+                    TrajectoryType::MediumArc
+                } else {
+                    TrajectoryType::HighArc
+                }
+            } else if skill_influenced_random < 0.35 {
                 TrajectoryType::MediumArc
             } else {
                 TrajectoryType::HighArc
@@ -487,7 +508,7 @@ impl PlayerEventDispatcher {
         passer_team_id: u32,
         players: &[MatchPlayer],
     ) -> usize {
-        const LANE_WIDTH: f32 = 5.0; // Width of the passing lane corridor
+        const LANE_WIDTH: f32 = 8.0; // Width of the passing lane corridor (wider for realistic obstacle detection)
 
         let pass_direction = (*to_position - *from_position).normalize();
         let pass_distance = (*to_position - *from_position).magnitude();
@@ -520,104 +541,7 @@ impl PlayerEventDispatcher {
             })
             .count()
     }
-
-    /// Select trajectory type based on distance and player skills
-    /// In real football, 85-90% of passes are ground passes!
-    /// DEPRECATED: Use select_trajectory_type_contextual instead
-    fn select_trajectory_type(
-        horizontal_distance: f32,
-        skills: &PassSkills,
-        rng: &mut impl Rng,
-    ) -> TrajectoryType {
-        // Calculate decision quality - determines how well player chooses trajectory
-        let decision_quality = skills.decision_quality();
-
-        // Better decision makers make more appropriate choices
-        let skill_influenced_random = {
-            let pure_random = rng.random_range(0.0..1.0);
-            let randomness_factor = 1.0 - (decision_quality * 0.6);
-            let skill_bias = decision_quality * 0.5;
-            (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
-        };
-
-        // Distance-based trajectory selection - heavily favor ground passes
-        match horizontal_distance {
-            // Short passes (0-20m) - almost always ground
-            d if d <= 20.0 => {
-                let ground_preference = skills.passing * skills.composure;
-                let chip_skill = skills.flair * skills.technique;
-
-                // 90-98% ground passes for short distances
-                let ground_threshold = 0.90 + (ground_preference * 0.08);
-
-                if skill_influenced_random < ground_threshold {
-                    TrajectoryType::Ground
-                } else if chip_skill > 0.75 {
-                    TrajectoryType::Chip // Very rare, only for highly skilled
-                } else {
-                    TrajectoryType::Ground // Default to ground if chip fails
-                }
-            }
-            // Medium passes (20-45m) - mostly ground
-            d if d <= 45.0 => {
-                let ground_preference = skills.passing * skills.technique;
-
-                // 75-85% ground passes for medium distances
-                let ground_threshold = 0.75 + (ground_preference * 0.10);
-                let low_threshold = ground_threshold + 0.15;
-
-                if skill_influenced_random < ground_threshold {
-                    TrajectoryType::Ground
-                } else if skill_influenced_random < low_threshold {
-                    TrajectoryType::LowDriven
-                } else {
-                    TrajectoryType::MediumArc // Rare, only 5-10%
-                }
-            }
-            // Long passes (45-80m) - still prefer ground when possible
-            d if d <= 80.0 => {
-                let driven_preference = skills.technique * skills.stamina;
-                let lofted_preference = skills.vision * skills.crossing;
-
-                // 40-55% ground for long passes
-                let ground_threshold = 0.40 + (driven_preference * 0.15);
-                let low_threshold = ground_threshold + 0.30;
-                let medium_threshold = low_threshold + (lofted_preference * 0.20);
-
-                if skill_influenced_random < ground_threshold {
-                    TrajectoryType::Ground
-                } else if skill_influenced_random < low_threshold {
-                    TrajectoryType::LowDriven
-                } else if skill_influenced_random < medium_threshold {
-                    TrajectoryType::MediumArc
-                } else {
-                    TrajectoryType::HighArc
-                }
-            }
-            // Very long passes (80-150m) - need lofted passes
-            d if d <= 150.0 => {
-                let long_pass_ability = skills.long_shots * skills.vision;
-
-                // Can still attempt driven for powerful players
-                if long_pass_ability > 0.70 && skill_influenced_random < 0.25 {
-                    TrajectoryType::LowDriven
-                } else if skill_influenced_random < 0.60 {
-                    TrajectoryType::MediumArc
-                } else {
-                    TrajectoryType::HighArc
-                }
-            }
-            // Extreme long passes (150m+) - must be aerial
-            _ => {
-                if skill_influenced_random < 0.35 {
-                    TrajectoryType::MediumArc
-                } else {
-                    TrajectoryType::HighArc
-                }
-            }
-        }
-    }
-
+    
     /// Calculate z-velocity to reach target with chosen trajectory type
     /// Ground passes stay on the ground, aerial passes use physics
     fn calculate_trajectory_to_target(

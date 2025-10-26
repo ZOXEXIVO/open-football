@@ -36,6 +36,12 @@ enum MatchSpeed {
     Percent1 = 100,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlayMode {
+    Live,   // Running simulation in real-time
+    Replay, // Playing back recorded positions
+}
+
 impl MatchSpeed {
     fn label(&self) -> &'static str {
         match self {
@@ -100,6 +106,10 @@ async fn main() {
 
     let mut left_mouse_pressed;
     let mut selected_speed = MatchSpeed::Percent100;
+    let mut play_mode = PlayMode::Live;
+    let mut is_paused = false;
+    let mut replay_time: u64 = 0;
+    let mut max_live_time: u64 = 0;  // Track maximum time reached in Live mode
 
     loop {
         current_frame += 1;
@@ -138,14 +148,70 @@ async fn main() {
         // Speed control UI at the top right corner
         draw_speed_control(offset_x, offset_y, field_width, &mut selected_speed);
 
+        // Time slider and play/pause controls (at the bottom)
+        let slider_y = screen_height() - 50.0;
+        draw_time_slider(
+            20.0,  // Start from left edge with padding
+            slider_y,
+            screen_width() - 40.0,  // Full width with padding
+            &match_data,
+            &mut play_mode,
+            &mut is_paused,
+            &mut replay_time,
+            max_live_time,
+        );
+
         let start = Instant::now();
 
-        // Only execute game tick based on selected speed
-        let should_tick = tick_frame % (selected_speed as u64) == 0;
-        tick_frame += 1;
+        // Execute game tick or update replay based on mode
+        match play_mode {
+            PlayMode::Live if !is_paused => {
+                // Only execute game tick based on selected speed
+                let should_tick = tick_frame % (selected_speed as u64) == 0;
+                tick_frame += 1;
 
-        if should_tick {
-            FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+                if should_tick {
+                    // Increment time before game tick (like the engine does)
+                    context.increment_time();
+                    FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+                }
+
+                // Update replay_time to current match time for slider display
+                replay_time = context.time.time;
+                // Track the maximum time reached in live mode
+                max_live_time = max_live_time.max(replay_time);
+            }
+            PlayMode::Live if is_paused => {
+                // Paused in live mode - keep current time
+                replay_time = context.time.time;
+                // Track the maximum time reached in live mode
+                max_live_time = max_live_time.max(replay_time);
+            }
+            PlayMode::Replay if !is_paused => {
+                // Auto-advance replay time using same speed as live mode
+                let should_advance = tick_frame % (selected_speed as u64) == 0;
+                tick_frame += 1;
+
+                if should_advance {
+                    // Increment by 10ms to match live mode speed (MATCH_TIME_INCREMENT_MS)
+                    replay_time += 10;
+                    // Use max_live_time as the limit (highest time reached in Live mode)
+                    if replay_time > max_live_time {
+                        replay_time = max_live_time;
+                        is_paused = true;
+                    }
+                }
+
+                // Update field positions from recorded data
+                update_positions_from_replay(&mut field, &match_data, replay_time);
+            }
+            _ => {
+                // Paused in replay mode
+                if play_mode == PlayMode::Replay {
+                    // Make sure positions are set to current replay time
+                    update_positions_from_replay(&mut field, &match_data, replay_time);
+                }
+            }
         }
 
         let elapsed = start.elapsed();
@@ -326,7 +392,7 @@ pub fn is_towards_player(
 #[cfg(target_os = "macos")]
 const WINDOW_WIDTH: i32 = 1040;
 #[cfg(target_os = "macos")]
-const WINDOW_HEIGHT: i32 = 800;
+const WINDOW_HEIGHT: i32 = 900;
 
 #[cfg(target_os = "linux")]
 const WINDOW_WIDTH: i32 = 1948;
@@ -676,7 +742,7 @@ fn draw_ball(offset_x: f32, offset_y: f32, ball: &Ball, scale: f32) {
             ball.position.z,
             ball.is_ball_outside(),
             ball.is_stands_outside(),
-            ball.take_ball_notified_player
+            ball.take_ball_notified_players
         ),
         20.0,
         15.0,
@@ -761,4 +827,142 @@ fn draw_player_list(
             BLACK,
         );
     });
+}
+
+/// Update field positions from replay data at a specific timestamp
+fn update_positions_from_replay(field: &mut MatchField, match_data: &ResultMatchPositionData, timestamp: u64) {
+    // Update ball position
+    if let Some(ball_pos) = match_data.get_ball_position_at(timestamp) {
+        field.ball.position = ball_pos;
+    }
+
+    // Update all player positions
+    for player in field.players.iter_mut() {
+        if let Some(player_pos) = match_data.get_player_position_at(player.id, timestamp) {
+            player.position = player_pos;
+        }
+    }
+}
+
+/// Draw time slider and playback controls (simple design)
+fn draw_time_slider(
+    offset_x: f32,
+    offset_y: f32,
+    total_width: f32,
+    match_data: &ResultMatchPositionData,
+    play_mode: &mut PlayMode,
+    is_paused: &mut bool,
+    replay_time: &mut u64,
+    max_live_time: u64,
+) {
+    // Use max_live_time as the maximum time for the slider
+    // This represents the furthest point the simulation has reached
+    let max_time = max_live_time;
+
+    // Play/Pause button on the left
+    let button_size = 30.0;
+    let button_x = offset_x;
+    let button_y = offset_y;
+
+    // Get mouse position once
+    let (mouse_x, mouse_y) = mouse_position();
+
+    let button_color = Color::from_rgba(100, 200, 100, 255);
+
+    // Draw button circle
+    let button_center_x = button_x + button_size / 2.0;
+    let button_center_y = button_y + button_size / 2.0;
+    draw_circle(button_center_x, button_center_y, button_size / 2.0, button_color);
+    draw_circle_lines(button_center_x, button_center_y, button_size / 2.0, 2.0, BLACK);
+
+    // Draw play/pause icon
+    if *is_paused {
+        // Play triangle
+        let size = 8.0;
+        draw_triangle(
+            Vec2::new(button_center_x - size / 2.0, button_center_y - size),
+            Vec2::new(button_center_x - size / 2.0, button_center_y + size),
+            Vec2::new(button_center_x + size, button_center_y),
+            BLACK,
+        );
+    } else {
+        // Pause bars
+        let bar_width = 3.0;
+        let bar_height = 10.0;
+        let bar_spacing = 4.0;
+        draw_rectangle(button_center_x - bar_spacing - bar_width, button_center_y - bar_height / 2.0, bar_width, bar_height, BLACK);
+        draw_rectangle(button_center_x + bar_spacing, button_center_y - bar_height / 2.0, bar_width, bar_height, BLACK);
+    }
+
+    // Only check button click when mouse is actually pressed
+    if is_mouse_button_pressed(MouseButton::Left) {
+        let button_rect = Rect::new(button_x, button_y, button_size, button_size);
+        if button_rect.contains(Vec2::new(mouse_x, mouse_y)) {
+            *is_paused = !*is_paused;
+        }
+    }
+
+    // Slider bar
+    let slider_padding = 10.0;
+    let slider_x = offset_x + button_size + slider_padding;
+    let slider_width = total_width - button_size - slider_padding - 100.0; // Leave space for time text
+    let slider_height = 4.0;
+    let slider_y = offset_y + button_size / 2.0 - slider_height / 2.0;
+
+    // Draw background bar (gray)
+    draw_rectangle(slider_x, slider_y, slider_width, slider_height, GRAY);
+
+    // Draw progress bar (blue)
+    if max_time > 0 {
+        let progress = (*replay_time as f32 / max_time as f32).clamp(0.0, 1.0);
+        draw_rectangle(
+            slider_x,
+            slider_y,
+            slider_width * progress,
+            slider_height,
+            BLUE,
+        );
+
+        // Draw circle handle
+        let handle_x = slider_x + slider_width * progress;
+        let handle_y = slider_y + slider_height / 2.0;
+        let handle_radius = 8.0;
+
+        draw_circle(handle_x, handle_y, handle_radius, WHITE);
+        draw_circle_lines(handle_x, handle_y, handle_radius, 2.0, BLUE);
+    }
+
+    // Handle mouse interaction with slider (only when mouse is pressed)
+    if max_time > 0 && is_mouse_button_down(MouseButton::Left) {
+        let mouse_on_slider = mouse_x >= slider_x - 10.0
+            && mouse_x <= slider_x + slider_width + 10.0
+            && mouse_y >= slider_y - 15.0
+            && mouse_y <= slider_y + slider_height + 15.0;
+
+        if mouse_on_slider {
+            // User is dragging the slider
+            let relative_x = (mouse_x - slider_x).clamp(0.0, slider_width);
+            let new_progress = relative_x / slider_width;
+            *replay_time = (new_progress * max_time as f32) as u64;
+
+            // Switch to replay mode when dragging
+            if *play_mode == PlayMode::Live {
+                *play_mode = PlayMode::Replay;
+            }
+        }
+    }
+
+    // Draw time text on the right
+    let time_text = format!("{} / {}", format_time(*replay_time), format_time(max_time));
+    let time_x = slider_x + slider_width + 15.0;
+    let time_y = offset_y + button_size / 2.0 + 5.0;
+    draw_text(&time_text, time_x, time_y, 16.0, BLACK);
+}
+
+/// Format timestamp (milliseconds) to mm:ss format
+fn format_time(timestamp: u64) -> String {
+    let total_seconds = timestamp / 1000;
+    let minutes = total_seconds / 60;
+    let seconds = total_seconds % 60;
+    format!("{:02}:{:02}", minutes, seconds)
 }

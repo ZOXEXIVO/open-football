@@ -16,7 +16,7 @@ pub struct Ball {
 
     pub previous_owner: Option<u32>,
     pub current_owner: Option<u32>,
-    pub take_ball_notified_player: Option<u32>,
+    pub take_ball_notified_players: Vec<u32>,
     pub notification_cooldown: u32,
     pub last_boundary_position: Option<Vector3<f32>>,
 }
@@ -49,7 +49,7 @@ impl Ball {
             flags: BallFlags::default(),
             previous_owner: None,
             current_owner: None,
-            take_ball_notified_player: None,
+            take_ball_notified_players: Vec::new(),
             notification_cooldown: 0,
             last_boundary_position: None,
         }
@@ -115,13 +115,14 @@ impl Ball {
         };
 
         if (is_ball_stopped || is_ball_aerial)
-            && self.take_ball_notified_player.is_none()
+            && self.take_ball_notified_players.is_empty()
             && self.current_owner.is_none()
             && self.notification_cooldown == 0 // Only notify if cooldown expired
             && has_escaped_boundary // Only notify if ball escaped from previous boundary loop
         {
-            if let Some(notified_player) = self.notify_nearest_player(players, events) {
-                self.take_ball_notified_player = Some(notified_player);
+            let notified_players = self.notify_nearest_player(players, events);
+            if !notified_players.is_empty() {
+                self.take_ball_notified_players = notified_players;
 
                 // If ball is at boundary, set cooldown and record position
                 if self.is_ball_outside() {
@@ -129,37 +130,48 @@ impl Ball {
                     self.last_boundary_position = Some(self.position);
                 }
             }
-        } else if let Some(notified_player_id) = self.take_ball_notified_player {
-            // Check if the notified player reached the ball
-            if let Some(player) = players.iter().find(|p| p.id == notified_player_id) {
-                const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
+        } else if !self.take_ball_notified_players.is_empty() {
+            // Check if any notified player reached the ball
+            const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
 
-                // For aerial balls, check distance to landing position
-                let target_position = if self.is_aerial() {
-                    self.calculate_landing_position()
-                } else {
-                    self.position
-                };
+            // For aerial balls, check distance to landing position
+            let target_position = if self.is_aerial() {
+                self.calculate_landing_position()
+            } else {
+                self.position
+            };
 
-                // Calculate proper 3D distance
-                let dx = player.position.x - target_position.x;
-                let dy = player.position.y - target_position.y;
-                let dz = target_position.z;
-                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+            // Find the first player who reached the ball
+            let mut claiming_player_id: Option<u32> = None;
 
-                if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
-                    // Player reached the ball (or landing position), give them ownership when ball arrives
-                    // For aerial balls, only claim when ball is low enough
-                    if !self.is_aerial() || self.position.z < 2.5 {
-                        self.current_owner = Some(notified_player_id);
-                        self.take_ball_notified_player = None;
-                        events.add_ball_event(BallEvent::Claimed(notified_player_id));
+            for notified_player_id in &self.take_ball_notified_players {
+                if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
+                    // Calculate proper 3D distance
+                    let dx = player.position.x - target_position.x;
+                    let dy = player.position.y - target_position.y;
+                    let dz = target_position.z;
+                    let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
-                        // Reset boundary tracking when ball is claimed
-                        if has_escaped_boundary {
-                            self.last_boundary_position = None;
+                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
+                        // Player reached the ball (or landing position), give them ownership when ball arrives
+                        // For aerial balls, only claim when ball is low enough
+                        if !self.is_aerial() || self.position.z < 2.5 {
+                            claiming_player_id = Some(*notified_player_id);
+                            break; // Ball claimed, no need to check other players
                         }
                     }
+                }
+            }
+
+            // Process the claim after iteration to avoid borrow checker issues
+            if let Some(player_id) = claiming_player_id {
+                self.current_owner = Some(player_id);
+                self.take_ball_notified_players.clear();
+                events.add_ball_event(BallEvent::Claimed(player_id));
+
+                // Reset boundary tracking when ball is claimed
+                if has_escaped_boundary {
+                    self.last_boundary_position = None;
                 }
             }
         }
@@ -228,43 +240,41 @@ impl Ball {
         &self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
-    ) -> Option<u32> {
+    ) -> Vec<u32> {
         let ball_position = self.position;
-
-        // Notify multiple nearby players to create competition for the ball
         const NOTIFICATION_RADIUS: f32 = 30.0; // Players within this range will be notified
-        const MAX_NOTIFY_PLAYERS: usize = 4; // Notify up to 4 nearest players
 
-        // Find players within notification radius and sort by distance
-        let mut nearby_players: Vec<(&MatchPlayer, f32)> = players
-            .iter()
-            .map(|player| {
-                let dx = player.position.x - ball_position.x;
-                let dy = player.position.y - ball_position.y;
-                let distance_squared = dx * dx + dy * dy;
-                (player, distance_squared)
-            })
-            .filter(|(_, dist_sq)| *dist_sq < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS)
-            .collect();
+        // Group players by team and find nearest from each team
+        use std::collections::HashMap;
+        let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();
 
-        // Sort by distance (closest first)
-        nearby_players.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        for player in players {
+            let dx = player.position.x - ball_position.x;
+            let dy = player.position.y - ball_position.y;
+            let distance_squared = dx * dx + dy * dy;
 
-        // Notify up to MAX_NOTIFY_PLAYERS nearest players
-        let mut notified_player_id = None;
-        for (player, _) in nearby_players.iter().take(MAX_NOTIFY_PLAYERS) {
-            events.add_ball_event(BallEvent::TakeMe(player.id));
-
-            // Return the closest player as the primary notified player
-            if notified_player_id.is_none() {
-                notified_player_id = Some(player.id);
+            // Only consider players within notification radius
+            if distance_squared < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS {
+                // Check if this is the nearest player for their team
+                team_nearest
+                    .entry(player.team_id)
+                    .and_modify(|current| {
+                        if distance_squared < current.1 {
+                            *current = (player, distance_squared);
+                        }
+                    })
+                    .or_insert((player, distance_squared));
             }
         }
 
-        notified_player_id
+        // Notify one player from each team and collect their IDs
+        let mut notified_players = Vec::new();
+        for (player, _) in team_nearest.values() {
+            events.add_ball_event(BallEvent::TakeMe(player.id));
+            notified_players.push(player.id);
+        }
+
+        notified_players
     }
 
     fn check_boundary_collision(&mut self, context: &MatchContext) {
@@ -535,7 +545,7 @@ impl Ball {
 
     fn move_to(&mut self, tick_context: &GameTickContext) {
         if !self.is_stands_outside() {
-            self.take_ball_notified_player = None;
+            self.take_ball_notified_players.clear();
         }
 
         if let Some(owner_player_id) = self.current_owner {

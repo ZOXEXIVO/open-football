@@ -66,6 +66,74 @@ impl ResultMatchPositionData {
             self.ball.push(position);
         }
     }
+
+    /// Get the maximum timestamp in the recorded data
+    pub fn max_timestamp(&self) -> u64 {
+        self.ball.last().map(|item| item.timestamp).unwrap_or(0)
+    }
+
+    /// Get ball position at a specific timestamp (uses nearest neighbor)
+    pub fn get_ball_position_at(&self, timestamp: u64) -> Option<Vector3<f32>> {
+        if self.ball.is_empty() {
+            return None;
+        }
+
+        // Binary search for the closest timestamp
+        let idx = self.ball.binary_search_by_key(&timestamp, |item| item.timestamp)
+            .unwrap_or_else(|idx| {
+                if idx == 0 {
+                    0
+                } else if idx >= self.ball.len() {
+                    self.ball.len() - 1
+                } else {
+                    // Choose nearest between idx-1 and idx
+                    let before = &self.ball[idx - 1];
+                    let after = &self.ball[idx];
+                    if timestamp - before.timestamp < after.timestamp - timestamp {
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+            });
+
+        Some(self.ball[idx].position)
+    }
+
+    /// Get player position at a specific timestamp (uses nearest neighbor)
+    pub fn get_player_position_at(&self, player_id: u32, timestamp: u64) -> Option<Vector3<f32>> {
+        let player_data = self.players.get(&player_id)?;
+
+        if player_data.is_empty() {
+            return None;
+        }
+
+        // Binary search for the closest timestamp
+        let idx = player_data.binary_search_by_key(&timestamp, |item| item.timestamp)
+            .unwrap_or_else(|idx| {
+                if idx == 0 {
+                    0
+                } else if idx >= player_data.len() {
+                    player_data.len() - 1
+                } else {
+                    // Choose nearest between idx-1 and idx
+                    let before = &player_data[idx - 1];
+                    let after = &player_data[idx];
+                    if timestamp - before.timestamp < after.timestamp - timestamp {
+                        idx - 1
+                    } else {
+                        idx
+                    }
+                }
+            });
+
+        Some(player_data[idx].position)
+    }
+
+    /// Get all player IDs that have recorded positions
+    pub fn get_player_ids(&self) -> Vec<u32> {
+        self.players.keys().copied().collect()
+    }
 }
 
 pub trait VectorExtensions {

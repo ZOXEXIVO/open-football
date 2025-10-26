@@ -24,6 +24,12 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 ));
             }
         } else {
+            if ctx.ball().distance() < 200.0 && ctx.ball().stopped() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Running,
+                ));
+            }
+
             if ctx.ball().is_towards_player_with_angle(0.8) {
                 if ctx.ball().distance() < 100.0 {
                     return Some(StateChangeResult::with_midfielder_state(
