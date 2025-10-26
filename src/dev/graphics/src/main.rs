@@ -397,7 +397,7 @@ const WINDOW_HEIGHT: i32 = 900;
 #[cfg(target_os = "linux")]
 const WINDOW_WIDTH: i32 = 1948;
 #[cfg(target_os = "linux")]
-const WINDOW_HEIGHT: i32 = 1521;
+const WINDOW_HEIGHT: i32 = 1721;
 
 #[cfg(target_os = "windows")]
 const WINDOW_WIDTH: i32 = 1948;
