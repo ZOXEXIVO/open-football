@@ -47,7 +47,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // 7. Remain in HoldingLine state
         None
     }
 

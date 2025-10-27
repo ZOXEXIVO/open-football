@@ -18,6 +18,7 @@ pub struct Ball {
     pub current_owner: Option<u32>,
     pub take_ball_notified_players: Vec<u32>,
     pub notification_cooldown: u32,
+    pub notification_timeout: u32,  // Ticks since players were notified
     pub last_boundary_position: Option<Vector3<f32>>,
 }
 
@@ -51,6 +52,7 @@ impl Ball {
             current_owner: None,
             take_ball_notified_players: Vec::new(),
             notification_cooldown: 0,
+            notification_timeout: 0,
             last_boundary_position: None,
         }
     }
@@ -123,6 +125,7 @@ impl Ball {
             let notified_players = self.notify_nearest_player(players, events);
             if !notified_players.is_empty() {
                 self.take_ball_notified_players = notified_players;
+                self.notification_timeout = 0; // Reset timeout when new players are notified
 
                 // If ball is at boundary, set cooldown and record position
                 if self.is_ball_outside() {
@@ -131,6 +134,16 @@ impl Ball {
                 }
             }
         } else if !self.take_ball_notified_players.is_empty() {
+            // Increment timeout counter
+            self.notification_timeout += 1;
+
+            // If players haven't claimed the ball within reasonable time, reset and try again
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 20; // ~0.33 seconds
+            if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
+                self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
+                return; // Will re-notify on next tick
+            }
             // Check if any notified player reached the ball
             const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
 
@@ -143,9 +156,12 @@ impl Ball {
 
             // Find the first player who reached the ball
             let mut claiming_player_id: Option<u32> = None;
+            let mut all_players_missing = true;
 
             for notified_player_id in &self.take_ball_notified_players {
                 if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
+                    all_players_missing = false;
+
                     // Calculate proper 3D distance
                     let dx = player.position.x - target_position.x;
                     let dy = player.position.y - target_position.y;
@@ -163,10 +179,17 @@ impl Ball {
                 }
             }
 
+            // If all notified players are missing from the players slice, clear the list
+            // This can happen if players were substituted or if there's a data inconsistency
+            if all_players_missing {
+                self.take_ball_notified_players.clear();
+            }
+
             // Process the claim after iteration to avoid borrow checker issues
             if let Some(player_id) = claiming_player_id {
                 self.current_owner = Some(player_id);
                 self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
                 events.add_ball_event(BallEvent::Claimed(player_id));
 
                 // Reset boundary tracking when ball is claimed
@@ -397,28 +420,26 @@ impl Ball {
             return;
         }
 
-        // Check if current owner is nearby and prevent teammate takeover
+        // Check if current owner is nearby
         if let Some(current_owner_id) = self.current_owner {
-            let current_owner = context.players.by_id(current_owner_id).unwrap();
-
             // Check if current owner is still nearby
             let current_owner_nearby = nearby_players
                 .iter()
                 .any(|player| player.id == current_owner_id);
 
             if current_owner_nearby {
+                // Current owner is still close to the ball - maintain ownership
                 return;
             }
 
-            // Check if any nearby player is a teammate of the current owner
-            let same_team_nearby = nearby_players
-                .iter()
-                .any(|p| p.team_id == current_owner.team_id);
+            // Current owner is NOT nearby - clear ownership so ball can be claimed
+            // This prevents the ball from being "owned" by a player who is far away
+            self.previous_owner = self.current_owner;
+            self.current_owner = None;
 
-            if same_team_nearby {
-                // Don't transfer ownership to teammates - they should maintain positions
-                return;
-            }
+            // If only teammates are nearby, they can now claim the ball
+            // If opponents are nearby, they compete for it
+            // This prevents the rapid position changes caused by inconsistent ownership state
         }
 
         // Determine the best tackler from nearby players
@@ -544,7 +565,16 @@ impl Ball {
     }
 
     fn move_to(&mut self, tick_context: &GameTickContext) {
-        if !self.is_stands_outside() {
+        // Clear notified players only when ball state changes significantly:
+        // 1. Ball starts moving (not stopped anymore)
+        // 2. Ball has an owner (claimed)
+        const MOVEMENT_THRESHOLD: f32 = 0.5; // Ball is considered moving above this velocity
+
+        let is_moving = self.velocity.norm() > MOVEMENT_THRESHOLD;
+        let has_owner = self.current_owner.is_some();
+
+        // Clear notifications when ball is no longer in a "take ball" scenario
+        if (is_moving || has_owner) && !self.take_ball_notified_players.is_empty() {
             self.take_ball_notified_players.clear();
         }
 

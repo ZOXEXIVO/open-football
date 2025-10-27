@@ -177,6 +177,12 @@ pub struct StateProcessingResult {
     pub events: EventCollection,
 }
 
+impl Default for StateProcessingResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateProcessingResult {
     pub fn new() -> Self {
         StateProcessingResult {
@@ -192,6 +198,12 @@ pub struct StateChangeResult {
     pub velocity: Option<Vector3<f32>>,
 
     pub events: EventCollection,
+}
+
+impl Default for StateChangeResult {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StateChangeResult {

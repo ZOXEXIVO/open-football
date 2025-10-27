@@ -111,10 +111,19 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         // More skilled players can hit passes at more appropriate power levels
         let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.8;
-        let distance_factor = (distance / max_pass_distance).clamp(0.2, 1.0);
 
-        // Calculate base power
-        let min_power = 0.5;
+        // Use distance-scaled power with proper minimum for very short passes
+        // Very short passes (< 10m) should use proportionally less power
+        let distance_factor = if distance < 10.0 {
+            // For very short passes, scale linearly from 0.05 to 0.125
+            (0.05 + (distance / 10.0) * 0.075).clamp(0.05, 0.125)
+        } else {
+            // For longer passes, use the normal scaling with lower minimum
+            (distance / max_pass_distance).clamp(0.125, 1.0)
+        };
+
+        // Calculate base power with adjusted ranges for better control
+        let min_power = 0.3;
         let max_power = 2.5;
         let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
@@ -327,6 +336,14 @@ impl<'p> PlayerOperationsImpl<'p> {
                 0.0,
             );
             separation += jitter;
+        }
+
+        // Clamp separation force to reasonable limits to prevent excessive velocities
+        // Separation should add to steering, not dominate it
+        const MAX_SEPARATION_FORCE: f32 = 15.0;
+        let separation_magnitude = separation.magnitude();
+        if separation_magnitude > MAX_SEPARATION_FORCE {
+            separation = separation * (MAX_SEPARATION_FORCE / separation_magnitude);
         }
 
         separation

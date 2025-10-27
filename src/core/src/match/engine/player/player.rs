@@ -15,6 +15,9 @@ use crate::{
 use nalgebra::Vector3;
 use std::fmt::*;
 
+#[cfg(debug_assertions)]
+use log::warn;
+
 #[derive(Debug, Clone)]
 pub struct MatchPlayer {
     pub id: u32,
@@ -141,12 +144,42 @@ impl MatchPlayer {
     }
 
     fn move_to(&mut self) {
+        #[cfg(debug_assertions)]
+        let old_position = self.position;
+
         if !self.velocity.x.is_nan() {
             self.position.x += self.velocity.x;
         }
 
         if !self.velocity.y.is_nan() {
             self.position.y += self.velocity.y;
+        }
+
+        #[cfg(debug_assertions)]
+        {
+            // Check for abnormally large position changes
+            let position_delta = self.position - old_position;
+            let position_change = position_delta.norm();
+
+            // Thresholds for detecting issues
+            const MAX_REASONABLE_POSITION_CHANGE: f32 = 20.0; // Max reasonable position change per tick
+
+            if position_change > MAX_REASONABLE_POSITION_CHANGE {
+                warn!(
+                    "Player {:?} position jumped abnormally! {} from: ({:.2}, {:.2}) to: ({:.2}, {:.2}), delta: ({:.2}, {:.2}), distance: {:.2}, velocity: ({:.2}, {:.2})",
+                    self.state,
+                    self.id,
+                    old_position.x,
+                    old_position.y,
+                    self.position.x,
+                    self.position.y,
+                    position_delta.x,
+                    position_delta.y,
+                    position_change,
+                    self.velocity.x,
+                    self.velocity.y
+                );
+            }
         }
     }
 

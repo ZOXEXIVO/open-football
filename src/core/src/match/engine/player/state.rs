@@ -6,6 +6,10 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use crate::PlayerFieldPositionGroup;
 use log::error;
+
+#[cfg(debug_assertions)]
+use log::warn;
+
 use std::fmt::{Display, Formatter};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -59,7 +63,27 @@ impl PlayerMatchState {
         }
 
         if let Some(velocity) = state_change_result.velocity {
-            player.velocity = velocity;
+            // Safety clamp: ensure velocity never exceeds player's max speed
+            let max_speed = player.skills.max_speed();
+            let velocity_magnitude = velocity.norm();
+
+            if velocity_magnitude > max_speed && velocity_magnitude > 0.0 {
+                // Velocity is too high, clamp it to max_speed
+                player.velocity = velocity * (max_speed / velocity_magnitude);
+
+                #[cfg(debug_assertions)]
+                {
+                    warn!(
+                        "Player {:?} velocity clamped from {:.2} to {:.2} (max_speed: {:.2})",
+                        player.state,
+                        velocity_magnitude,
+                        player.velocity.norm(),
+                        max_speed
+                    );
+                }
+            } else {
+                player.velocity = velocity;
+            }
         }
 
         state_change_result.events
