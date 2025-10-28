@@ -228,6 +228,7 @@ impl PlayerEventDispatcher {
 
         // Extract player skills and condition
         let player = field.get_player_mut(event_model.from_player_id).unwrap();
+        let passer_position = player.position;
         let skills = PassSkills::from_player(player);
 
         // Calculate overall quality for accuracy - affected by condition
@@ -235,7 +236,16 @@ impl PlayerEventDispatcher {
 
         // Calculate ideal target position
         let ideal_target = event_model.pass_target;
-        let ball_position = field.ball.position;
+
+        // Use passer's position as starting point if ball is very close (within 5m)
+        // This handles cases where ball ownership just changed
+        let ball_position = if (field.ball.position - passer_position).magnitude() > 5.0 {
+            // Ball is far from passer - use actual ball position
+            field.ball.position
+        } else {
+            // Ball is with passer - use passer position for more accurate direction
+            passer_position
+        };
         let ideal_pass_vector = ideal_target - ball_position;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
@@ -244,8 +254,9 @@ impl PlayerEventDispatcher {
         let accuracy_factor = overall_quality * skills.concentration;
 
         // Distance-based error: longer passes have more positional error
-        let distance_error_factor = (horizontal_distance / 100.0).min(3.0);
-        let max_position_error = 5.0 * (1.5 - accuracy_factor) * distance_error_factor;
+        // Realistic values: professional players accurate to ~0.5-2m depending on distance
+        let distance_error_factor = (horizontal_distance / 200.0).min(1.5);
+        let max_position_error = 1.2 * (1.0 - accuracy_factor) * distance_error_factor;
 
         // Add random targeting error
         let target_error_x = rng.random_range(-max_position_error..max_position_error);
@@ -262,8 +273,9 @@ impl PlayerEventDispatcher {
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
 
         // Calculate pass force with power variation
-        let power_consistency = 0.96 + (skills.technique * skills.stamina * 0.08);
-        let power_variation_range = (1.0 - overall_quality) * 0.08;
+        // Reduced variation to make passes more consistent
+        let power_consistency = 0.98 + (skills.technique * skills.stamina * 0.04);
+        let power_variation_range = (1.0 - overall_quality) * 0.04;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
         );
@@ -277,7 +289,6 @@ impl PlayerEventDispatcher {
 
         // Determine trajectory type based on context, not just distance
         let passer = field.get_player_mut(event_model.from_player_id).unwrap();
-        let passer_position = passer.position;
         let passer_team_id = passer.team_id;
 
         let trajectory_type = Self::select_trajectory_type_contextual(

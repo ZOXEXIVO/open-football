@@ -70,17 +70,6 @@ impl PlayerMatchState {
             if velocity_magnitude > max_speed && velocity_magnitude > 0.0 {
                 // Velocity is too high, clamp it to max_speed
                 player.velocity = velocity * (max_speed / velocity_magnitude);
-
-                #[cfg(debug_assertions)]
-                {
-                    warn!(
-                        "Player {:?} velocity clamped from {:.2} to {:.2} (max_speed: {:.2})",
-                        player.state,
-                        velocity_magnitude,
-                        player.velocity.norm(),
-                        max_speed
-                    );
-                }
             } else {
                 player.velocity = velocity;
             }

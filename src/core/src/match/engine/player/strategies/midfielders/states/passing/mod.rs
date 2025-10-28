@@ -93,7 +93,7 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // Periodic small movements to avoid looking stuck
-        if ctx.in_state_time % 10 == 0 {
+        if ctx.in_state_time.is_multiple_of(10) {
             let jitter = Vector3::new(
                 (rand::random::<f32>() - 0.5) * 0.8,
                 (rand::random::<f32>() - 0.5) * 0.8,
@@ -171,7 +171,7 @@ impl MidfielderPassingState {
         &self,
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx, 350.0)
+        PassEvaluator::find_best_pass_option(ctx, 400.0)
     }
 
     /// Improved space calculation around player
@@ -188,14 +188,14 @@ impl MidfielderPassingState {
         let close_opponents = ctx.players().opponents().all()
             .filter(|opp| {
                 let dist = (opp.position - teammate.position).magnitude();
-                dist >= 5.0 && dist < 10.0
+                (5.0..10.0).contains(&dist)
             })
             .count();
 
         let medium_opponents = ctx.players().opponents().all()
             .filter(|opp| {
                 let dist = (opp.position - teammate.position).magnitude();
-                dist >= 10.0 && dist < 15.0
+                (10.0..15.0).contains(&dist)
             })
             .count();
 
