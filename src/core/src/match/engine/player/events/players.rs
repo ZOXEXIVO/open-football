@@ -62,7 +62,7 @@ impl PassSkills {
 
     /// Calculate overall passing quality (affected by condition)
     fn overall_quality(&self) -> f32 {
-        let base_quality = (self.passing * 0.4 + self.technique * 0.3 + self.vision * 0.3);
+        let base_quality = self.passing * 0.4 + self.technique * 0.3 + self.vision * 0.3;
         base_quality * self.condition_factor * self.match_readiness
     }
 
