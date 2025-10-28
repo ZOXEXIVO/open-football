@@ -25,6 +25,13 @@ use core::r#match::GOAL_WIDTH;
 use core::staff_contract_mod::NaiveDate;
 use core::PlayerGenerator;
 
+/// Tracks pass target for visualization
+#[derive(Debug, Clone)]
+struct PassTargetInfo {
+    target_player_id: u32,
+    timestamp: u64,
+}
+
 const INNER_FIELD_WIDTH: f32 = 840.0;
 const INNER_FIELD_HEIGHT: f32 = 545.0;
 
@@ -110,6 +117,7 @@ async fn main() {
     let mut is_paused = false;
     let mut replay_time: u64 = 0;
     let mut max_live_time: u64 = 0;  // Track maximum time reached in Live mode
+    let mut pass_target: Option<PassTargetInfo> = None;  // Track current pass target
 
     loop {
         current_frame += 1;
@@ -216,9 +224,24 @@ async fn main() {
 
         let elapsed = start.elapsed();
 
+        // Get recent pass event from match data (show for 2 seconds)
+        if let Some(recent_pass) = match_data.get_recent_pass_at(context.time.time) {
+            // Only show passes from last 2 seconds
+            if context.time.time - recent_pass.timestamp <= 2000 {
+                pass_target = Some(PassTargetInfo {
+                    target_player_id: recent_pass.to_player_id,
+                    timestamp: recent_pass.timestamp,
+                });
+            } else {
+                pass_target = None;
+            }
+        } else {
+            pass_target = None;
+        }
+
         draw_goals(offset_x, offset_y, &context, field_width, scale);
         draw_waypoints(offset_x, offset_y, &field, scale);
-        draw_players(offset_x, offset_y, &field, field.ball.current_owner, scale);
+        draw_players(offset_x, offset_y, &field, field.ball.current_owner, pass_target.as_ref(), scale);
 
         draw_ball(offset_x, offset_y, &field.ball, scale);
 
@@ -602,6 +625,7 @@ fn draw_players(
     offset_y: f32,
     field: &MatchField,
     ball_owner_id: Option<u32>,
+    pass_target: Option<&PassTargetInfo>,
     scale: f32,
 ) {
     field.players.iter().for_each(|player| {
@@ -622,6 +646,19 @@ fn draw_players(
 
         // Draw the player circle
         draw_circle(translated_x, translated_y, circle_radius, color);
+
+        // Draw red circle around pass target player
+        if let Some(target_info) = pass_target {
+            if player.id == target_info.target_player_id {
+                draw_circle_lines(
+                    translated_x,
+                    translated_y,
+                    circle_radius + 8.0 * scale,
+                    4.0,
+                    RED,
+                );
+            }
+        }
 
         if Some(player.id) == ball_owner_id {
             draw_circle_lines(

@@ -122,6 +122,7 @@ impl PlayerEventDispatcher {
         event: PlayerEvent,
         field: &mut MatchField,
         context: &mut MatchContext,
+        match_data: &mut crate::r#match::ResultMatchPositionData,
     ) -> Vec<Event> {
         let remaining_events = Vec::new();
 
@@ -144,6 +145,12 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
+                // Record the pass event
+                match_data.add_pass_event(
+                    context.time.time,
+                    pass_event_model.from_player_id,
+                    pass_event_model.to_player_id,
+                );
                 Self::handle_pass_to_event(pass_event_model, field);
             }
             PlayerEvent::ClaimBall(player_id) => {

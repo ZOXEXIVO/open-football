@@ -3,6 +3,23 @@ use serde::Serialize;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone, Serialize)]
+pub struct PassEventData {
+    pub timestamp: u64,
+    pub from_player_id: u32,
+    pub to_player_id: u32,
+}
+
+impl PassEventData {
+    pub fn new(timestamp: u64, from_player_id: u32, to_player_id: u32) -> Self {
+        PassEventData {
+            timestamp,
+            from_player_id,
+            to_player_id,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ResultPositionDataItem {
     pub timestamp: u64,
     pub position: Vector3<f32>,
@@ -27,6 +44,7 @@ impl PartialEq<ResultPositionDataItem> for ResultPositionDataItem {
 pub struct ResultMatchPositionData {
     ball: Vec<ResultPositionDataItem>,
     players: HashMap<u32, Vec<ResultPositionDataItem>>,
+    passes: Vec<PassEventData>,
 }
 
 impl ResultMatchPositionData {
@@ -34,6 +52,7 @@ impl ResultMatchPositionData {
         ResultMatchPositionData {
             ball: Vec::new(),
             players: HashMap::with_capacity(22 * 2 * 9000),
+            passes: Vec::new(),
         }
     }
 
@@ -133,6 +152,29 @@ impl ResultMatchPositionData {
     /// Get all player IDs that have recorded positions
     pub fn get_player_ids(&self) -> Vec<u32> {
         self.players.keys().copied().collect()
+    }
+
+    /// Add a pass event
+    pub fn add_pass_event(&mut self, timestamp: u64, from_player_id: u32, to_player_id: u32) {
+        self.passes.push(PassEventData::new(timestamp, from_player_id, to_player_id));
+    }
+
+    /// Get the most recent pass event at or before a timestamp
+    pub fn get_recent_pass_at(&self, timestamp: u64) -> Option<&PassEventData> {
+        // Find most recent pass that occurred at or before this timestamp
+        self.passes.iter()
+            .rev()  // Search from most recent
+            .find(|pass| pass.timestamp <= timestamp)
+    }
+
+    /// Get all passes that occurred within a time window around the timestamp
+    pub fn get_passes_in_window(&self, timestamp: u64, window_ms: u64) -> Vec<&PassEventData> {
+        let start = timestamp.saturating_sub(window_ms);
+        let end = timestamp + window_ms;
+
+        self.passes.iter()
+            .filter(|pass| pass.timestamp >= start && pass.timestamp <= end)
+            .collect()
     }
 }
 

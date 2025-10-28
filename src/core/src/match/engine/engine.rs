@@ -78,7 +78,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::play_players(field, context, &game_tick_context, &mut events);
 
         // dispatch events
-        EventDispatcher::dispatch(events.to_vec(), field, context, true);
+        EventDispatcher::dispatch(events.to_vec(), field, context, match_data, true);
 
         Self::write_match_positions(field, context.time.time, match_data);
     }
