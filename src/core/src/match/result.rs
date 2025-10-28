@@ -45,6 +45,8 @@ pub struct ResultMatchPositionData {
     ball: Vec<ResultPositionDataItem>,
     players: HashMap<u32, Vec<ResultPositionDataItem>>,
     passes: Vec<PassEventData>,
+    #[serde(skip)]
+    track_events: bool,
 }
 
 impl ResultMatchPositionData {
@@ -53,10 +55,26 @@ impl ResultMatchPositionData {
             ball: Vec::new(),
             players: HashMap::with_capacity(22 * 2 * 9000),
             passes: Vec::new(),
+            track_events: false,
+        }
+    }
+
+    pub fn new_with_tracking() -> Self {
+        ResultMatchPositionData {
+            ball: Vec::new(),
+            players: HashMap::with_capacity(22 * 2 * 9000),
+            passes: Vec::new(),
+            track_events: true,
         }
     }
 
     pub fn compress(&mut self) {}
+
+    /// Check if event tracking is enabled
+    #[inline]
+    pub fn is_tracking_events(&self) -> bool {
+        self.track_events
+    }
 
     pub fn add_player_positions(&mut self, player_id: u32, timestamp: u64, position: Vector3<f32>) {
         if let Some(player_data) = self.players.get_mut(&player_id) {
@@ -154,9 +172,11 @@ impl ResultMatchPositionData {
         self.players.keys().copied().collect()
     }
 
-    /// Add a pass event
+    /// Add a pass event (only if event tracking is enabled)
     pub fn add_pass_event(&mut self, timestamp: u64, from_player_id: u32, to_player_id: u32) {
-        self.passes.push(PassEventData::new(timestamp, from_player_id, to_player_id));
+        if self.track_events {
+            self.passes.push(PassEventData::new(timestamp, from_player_id, to_player_id));
+        }
     }
 
     /// Get the most recent pass event at or before a timestamp

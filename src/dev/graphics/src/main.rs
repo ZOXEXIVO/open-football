@@ -109,7 +109,8 @@ async fn main() {
     let mut current_frame = 0u64;
     let mut tick_frame = 0u64;
 
-    let mut match_data = ResultMatchPositionData::new();
+    // Use new_with_tracking() to enable pass event tracking for visualization
+    let mut match_data = ResultMatchPositionData::new_with_tracking();
 
     let mut left_mouse_pressed;
     let mut selected_speed = MatchSpeed::Percent100;
