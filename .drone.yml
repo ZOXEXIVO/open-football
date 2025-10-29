@@ -1,5 +1,7 @@
 kind: pipeline
 name: default
+platform:
+  arch: arm64
 
 steps: 
   - name: build
