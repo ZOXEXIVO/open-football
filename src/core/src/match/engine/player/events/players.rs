@@ -118,7 +118,7 @@ pub enum PlayerEvent {
 pub struct PlayerEventDispatcher;
 
 impl PlayerEventDispatcher {
-    pub fn dispatch<'a>(
+    pub fn dispatch(
         event: PlayerEvent,
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -126,7 +126,9 @@ impl PlayerEventDispatcher {
     ) -> Vec<Event> {
         let remaining_events = Vec::new();
 
-        debug!("Player event: {:?}", event);
+        if context.logging_enabled {
+            debug!("Player event: {:?}", event);
+        }       
 
         match event {
             PlayerEvent::Goal(player_id, is_auto_goal) => {
@@ -236,7 +238,7 @@ impl PlayerEventDispatcher {
         let mut rng = rand::rng();
 
         // Extract player skills and condition
-        let player = field.get_player_mut(event_model.from_player_id).unwrap();
+        let player = field.get_player(event_model.from_player_id).unwrap();
         let passer_position = player.position;
         let skills = PassSkills::from_player(player);
 
@@ -248,13 +250,7 @@ impl PlayerEventDispatcher {
 
         // Use passer's position as starting point if ball is very close (within 5m)
         // This handles cases where ball ownership just changed
-        let ball_position = if (field.ball.position - passer_position).magnitude() > 5.0 {
-            // Ball is far from passer - use actual ball position
-            field.ball.position
-        } else {
-            // Ball is with passer - use passer position for more accurate direction
-            passer_position
-        };
+        let ball_position = field.ball.position;
         let ideal_pass_vector = ideal_target - ball_position;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
@@ -283,8 +279,8 @@ impl PlayerEventDispatcher {
 
         // Calculate pass force with power variation
         // Reduced variation to make passes more consistent
-        let power_consistency = 0.98 + (skills.technique * skills.stamina * 0.04);
-        let power_variation_range = (1.0 - overall_quality) * 0.04;
+        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.07);
+        let power_variation_range = (1.0 - overall_quality) * 0.08;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
         );

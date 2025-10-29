@@ -503,9 +503,6 @@ impl PassEvaluator {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        // Get previous ball owner to prevent ping-pong passes
-        let previous_owner_id = ctx.ball().previous_owner_id();
-
         // Determine player's passing personality based on skills
         let pass_skill = ctx.player.skills.technical.passing / 20.0;
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
@@ -533,6 +530,9 @@ impl PassEvaluator {
             // Not under pressure, prefer passes with some distance
             12.0
         };
+
+        // Get previous ball owner to prevent ping-pong passes
+        let previous_owner_id = ctx.ball().previous_owner_id();
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
             // PING-PONG PREVENTION: Don't pass back to the player who just passed to you

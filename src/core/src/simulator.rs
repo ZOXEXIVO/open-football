@@ -47,6 +47,8 @@ pub struct SimulatorData {
     pub transfer_pool: TransferPool<Player>,
 
     pub indexes: Option<SimulatorDataIndexes>,
+
+    pub match_played: bool
 }
 
 impl SimulatorData {
@@ -56,6 +58,7 @@ impl SimulatorData {
             date,
             transfer_pool: TransferPool::new(),
             indexes: None,
+            match_played: false
         };
 
         let mut indexes = SimulatorDataIndexes::new();

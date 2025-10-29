@@ -68,6 +68,10 @@ impl MatchField {
         });
     }
 
+    pub fn get_player(&mut self, id: u32) -> Option<&MatchPlayer> {
+        self.players.iter().find(|p| p.id == id)
+    }
+
     pub fn get_player_mut(&mut self, id: u32) -> Option<&mut MatchPlayer> {
         self.players.iter_mut().find(|p| p.id == id)
     }

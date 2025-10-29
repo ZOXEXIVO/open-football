@@ -15,9 +15,9 @@ use core::r#match::VectorExtensions;
 use core::Vector3;
 use env_logger::Env;
 use macroquad::prelude::*;
-use std::thread;
 use std::time::Duration;
 use std::time::Instant;
+use tokio::time::sleep;
 
 use core::r#match::PlayerSide;
 use core::r#match::Score;
@@ -105,6 +105,8 @@ async fn main() {
     let score = Score::new(1, 2);
 
     let mut context = MatchContext::new(&field, players, score);
+
+    context.enable_logging();
 
     let mut current_frame = 0u64;
     let mut tick_frame = 0u64;
@@ -283,7 +285,7 @@ async fn main() {
         left_mouse_pressed = is_mouse_button_down(MouseButton::Left);
 
         if left_mouse_pressed {
-            thread::sleep(Duration::from_millis(500));
+            sleep(Duration::from_millis(500)).await;
         }
 
         next_frame().await;

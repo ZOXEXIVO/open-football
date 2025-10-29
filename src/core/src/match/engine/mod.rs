@@ -7,6 +7,7 @@ pub mod raycast;
 pub mod result;
 pub mod state;
 pub mod tactics;
+pub mod context;
 
 pub use ball::*;
 pub use engine::*;
@@ -14,6 +15,7 @@ pub use field::*;
 pub use raycast::*;
 pub use result::*;
 pub use state::*;
+pub use context::*;
 
 // Re-export player items except conflicting ones
 pub use player::{

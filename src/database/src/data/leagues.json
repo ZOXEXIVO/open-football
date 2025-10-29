@@ -1,94 +1,10 @@
 [
   {
-    "id": 0,
-    "slug": "russian-premier-league",
-    "name": "Russian Premier league",
-    "country_id": 791,
-    "reputation": 6000,
-    "settings": {
-      "season_starting_half": {
-        "from_day": 1,
-        "from_month": 7,
-        "to_day": 5,
-        "to_month": 12
-      },
-      "season_ending_half": {
-        "from_day": 1,
-        "from_month": 3,
-        "to_day": 31,
-        "to_month": 5
-      }
-    }
-  },
-  {
-    "id": 1,
-    "slug": "russian-first-division",
-    "name": "Russian First Division",
-    "country_id": 791,
-    "reputation": 2000,
-    "settings": {
-      "season_starting_half": {
-        "from_day": 1,
-        "from_month": 7,
-        "to_day": 5,
-        "to_month": 12
-      },
-      "season_ending_half": {
-        "from_day": 1,
-        "from_month": 3,
-        "to_day": 31,
-        "to_month": 5
-      }
-    }
-  },
-  {
     "id": 2,
     "slug": "italian-serie-a",
     "name": "Italian Serie A",
     "country_id": 776,
     "reputation": 8000,
-    "settings": {
-      "season_starting_half": {
-        "from_day": 1,
-        "from_month": 7,
-        "to_day": 5,
-        "to_month": 12
-      },
-      "season_ending_half": {
-        "from_day": 1,
-        "from_month": 3,
-        "to_day": 31,
-        "to_month": 5
-      }
-    }
-  },
-  {
-    "id": 3,
-    "slug": "italian-serie-b",
-    "name": "Italian Serie B",
-    "country_id": 776,
-    "reputation": 6000,
-    "settings": {
-      "season_starting_half": {
-        "from_day": 1,
-        "from_month": 7,
-        "to_day": 5,
-        "to_month": 12
-      },
-      "season_ending_half": {
-        "from_day": 1,
-        "from_month": 3,
-        "to_day": 31,
-        "to_month": 5
-      }
-    }
-  },
-  {
-    "id": 7,
-    "slug": "english-premier-league",
-    "name": "English Premier League",
-    "country_id": 765,
-    "reputation": 9000,
     "settings": {
       "season_starting_half": {
         "from_day": 1,
