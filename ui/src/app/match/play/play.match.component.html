@@ -4,13 +4,31 @@
             <!-- Time scrollbar positioned above the field -->
             <div class="time-scrollbar-wrapper" *ngIf="dataLoaded && matchTimeMs > 0">
                 <div class="time-scrollbar-container">
+                    <!-- Half labels -->
+                    <div class="half-labels">
+                        <span class="half-label first-half">1st Half</span>
+                        <span class="half-label second-half">2nd Half</span>
+                    </div>
+
                     <div class="time-scrollbar-track"
                          (mousedown)="onTimeBarMouseDown($event)"
                          #timeScrollbar>
+                        <!-- Half-time delimiter -->
+                        <div class="halftime-delimiter"
+                             [style.left.%]="getHalfTimePosition()">
+                            <div class="delimiter-line"></div>
+                            <div class="delimiter-label">HT</div>
+                        </div>
+
+                        <!-- Progress bar showing elapsed time -->
+                        <div class="time-progress"
+                             [style.width.%]="getSliderPosition()">
+                        </div>
+
                         <div class="time-scrollbar-slider"
                              [style.left.%]="getSliderPosition()"
                              (mousedown)="onSliderMouseDown($event)">
-                            <div class="time-display">{{ formatTime(currentTime) }}</div>
+                            <div class="time-display">{{ formatMatchTime(currentTime) }}</div>
                         </div>
                     </div>
                 </div>

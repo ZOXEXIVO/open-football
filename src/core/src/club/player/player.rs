@@ -14,7 +14,7 @@ use crate::{
 use chrono::{NaiveDate, NaiveDateTime};
 use std::fmt::{Display, Formatter, Result};
 use std::ops::Index;
-use crate::player::builder::PlayerBuilder;
+use crate::club::player::builder::PlayerBuilder;
 
 #[derive(Debug)]
 pub struct Player {

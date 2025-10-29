@@ -34,7 +34,9 @@ impl BallEventDispatcher {
     ) -> Vec<Event> {
         let mut remaining_events = Vec::new();
 
-        debug!("Ball event: {:?}", event);
+        if context.logging_enabled {
+            debug!("Ball event: {:?}", event);
+        }
 
         match event {
             BallEvent::Goal(metadata) => {

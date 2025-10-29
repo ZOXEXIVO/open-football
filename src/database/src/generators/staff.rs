@@ -1,11 +1,12 @@
+use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::FloatUtils;
 use core::utils::{IntegerUtils, StringUtils};
 use core::{
-    CoachFocus, Datelike, MentalFocusType, NaiveDate, PeopleNameGeneratorData, PersonAttributes,
+    CoachFocus, MentalFocusType, PeopleNameGeneratorData, PersonAttributes,
     PhysicalFocusType, Staff, StaffAttributes, StaffClubContract, StaffCoaching, StaffDataAnalysis,
     StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
-    StaffPosition, StaffStatus, TechnicalFocusType, Utc,
+    StaffPosition, StaffStatus, TechnicalFocusType,
 };
 use rand::Rng;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -202,12 +203,12 @@ const PHYSICAL_FOCUSES: &[PhysicalFocusType] = &[
 ];
 
 fn get_random_technical(count: usize) -> Vec<TechnicalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
     while random_values.len() < count {
-        let random_index = rng.gen_range(0..TECHNICAL_FOCUSES.len() - 1);
+        let random_index = rng.random_range(0..TECHNICAL_FOCUSES.len() - 1);
         let random_value = TECHNICAL_FOCUSES[random_index];
 
         if !random_values.contains(&random_value) {
@@ -219,12 +220,12 @@ fn get_random_technical(count: usize) -> Vec<TechnicalFocusType> {
 }
 
 fn get_random_mental(count: usize) -> Vec<MentalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
     while random_values.len() < count {
-        let random_index = rng.gen_range(0..MENTAL_FOCUSES.len() - 1);
+        let random_index = rng.random_range(0..MENTAL_FOCUSES.len() - 1);
         let random_value = MENTAL_FOCUSES[random_index];
 
         if !random_values.contains(&random_value) {
@@ -236,12 +237,12 @@ fn get_random_mental(count: usize) -> Vec<MentalFocusType> {
 }
 
 fn get_random_physical(count: usize) -> Vec<PhysicalFocusType> {
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
 
     let mut random_values = Vec::with_capacity(count);
 
     while random_values.len() < count {
-        let random_index = rng.gen_range(0..PHYSICAL_FOCUSES.len() - 1);
+        let random_index = rng.random_range(0..PHYSICAL_FOCUSES.len() - 1);
         let random_value = PHYSICAL_FOCUSES[random_index];
 
         if !random_values.contains(&random_value) {

@@ -1,7 +1,8 @@
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::strategies::processor::StateChangeResult;
+use crate::r#match::player::strategies::processor::StateChangeResult;
+use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, PlayerSide, SteeringBehavior,
     VectorExtensions,
 };
 use nalgebra::Vector3;
@@ -70,14 +71,46 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 50.0,
-            }
-            .calculate(ctx.player)
-            .velocity,
-        )
+        // Calculate optimal position based on ball and goal geometry
+        let optimal_position = self.calculate_optimal_position(ctx);
+        let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
+
+        // Use positioning skill for movement decisions
+        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
+        let agility = ctx.player.skills.physical.agility / 20.0;
+
+        // Movement speed based on how far from optimal position
+        if distance_to_optimal < 3.0 {
+            // Very close to optimal - make micro-adjustments while staying alert
+            Some(
+                SteeringBehavior::Arrive {
+                    target: optimal_position,
+                    slowing_distance: 2.0,
+                }
+                .calculate(ctx.player)
+                .velocity * (0.2 + positioning_skill * 0.1), // Very slow, precise movements
+            )
+        } else if distance_to_optimal < 10.0 {
+            // Close - smooth repositioning
+            Some(
+                SteeringBehavior::Arrive {
+                    target: optimal_position,
+                    slowing_distance: 5.0,
+                }
+                .calculate(ctx.player)
+                .velocity * (0.4 + agility * 0.2), // Moderate speed
+            )
+        } else {
+            // Need to reposition more urgently
+            Some(
+                SteeringBehavior::Arrive {
+                    target: optimal_position,
+                    slowing_distance: 8.0,
+                }
+                .calculate(ctx.player)
+                .velocity * (0.6 + positioning_skill * 0.2), // Faster movement
+            )
+        }
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}

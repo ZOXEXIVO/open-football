@@ -1,4 +1,4 @@
-use crate::training::result::PlayerTrainingResult;
+use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects, TrainingIntensity, TrainingSession, TrainingType};
 use chrono::NaiveDateTime;
 

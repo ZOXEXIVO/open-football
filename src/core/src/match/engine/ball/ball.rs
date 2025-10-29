@@ -1,6 +1,5 @@
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
-use crate::r#match::result::VectorExtensions;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
 use nalgebra::Vector3;
 
@@ -17,7 +16,10 @@ pub struct Ball {
 
     pub previous_owner: Option<u32>,
     pub current_owner: Option<u32>,
-    pub take_ball_notified_player: Option<u32>,
+    pub take_ball_notified_players: Vec<u32>,
+    pub notification_cooldown: u32,
+    pub notification_timeout: u32,  // Ticks since players were notified
+    pub last_boundary_position: Option<Vector3<f32>>,
 }
 
 #[derive(Default)]
@@ -48,7 +50,10 @@ impl Ball {
             flags: BallFlags::default(),
             previous_owner: None,
             current_owner: None,
-            take_ball_notified_player: None,
+            take_ball_notified_players: Vec::new(),
+            notification_cooldown: 0,
+            notification_timeout: 0,
+            last_boundary_position: None,
         }
     }
 
@@ -92,38 +97,144 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // Decrement cooldown timer
+        if self.notification_cooldown > 0 {
+            self.notification_cooldown -= 1;
+        }
+
         // Check if ball is stopped (either outside or inside field) and no one owns it
         let is_ball_stopped = self.is_stands_outside() || self.is_ball_stopped_on_field();
 
-        if is_ball_stopped
-            && self.take_ball_notified_player.is_none()
+        // Also check if ball is aerial and needs interception
+        let is_ball_aerial = self.is_aerial() && self.current_owner.is_none();
+
+        // Check if ball has moved significantly from last boundary position
+        let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
+            let distance_from_boundary = (self.position - last_pos).magnitude();
+            distance_from_boundary > 15.0 // Must move at least 15 units away from boundary
+        } else {
+            true // No previous boundary position recorded
+        };
+
+        if (is_ball_stopped || is_ball_aerial)
+            && self.take_ball_notified_players.is_empty()
             && self.current_owner.is_none()
+            && self.notification_cooldown == 0 // Only notify if cooldown expired
+            && has_escaped_boundary // Only notify if ball escaped from previous boundary loop
         {
-            if let Some(notified_player) = self.notify_nearest_player(players, events) {
-                self.take_ball_notified_player = Some(notified_player);
+            let notified_players = self.notify_nearest_player(players, events);
+            if !notified_players.is_empty() {
+                self.take_ball_notified_players = notified_players;
+                self.notification_timeout = 0; // Reset timeout when new players are notified
+
+                // If ball is at boundary, set cooldown and record position
+                if self.is_ball_outside() {
+                    self.notification_cooldown = 30; // 30 tick cooldown (~0.5 seconds)
+                    self.last_boundary_position = Some(self.position);
+                }
             }
-        } else if let Some(notified_player_id) = self.take_ball_notified_player {
-            // Check if the notified player reached the ball
-            if let Some(player) = players.iter().find(|p| p.id == notified_player_id) {
-                const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
+        } else if !self.take_ball_notified_players.is_empty() {
+            // Increment timeout counter
+            self.notification_timeout += 1;
 
-                // Calculate proper 3D distance
-                let dx = player.position.x - self.position.x;
-                let dy = player.position.y - self.position.y;
-                let dz = self.position.z;
-                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+            // If players haven't claimed the ball within reasonable time, reset and try again
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 20; // ~0.33 seconds
+            if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
+                self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
+                return; // Will re-notify on next tick
+            }
+            // Check if any notified player reached the ball
+            const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
 
-                if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
-                    // Player reached the ball, give them ownership
-                    self.current_owner = Some(notified_player_id);
-                    self.take_ball_notified_player = None;
-                    events.add_ball_event(BallEvent::Claimed(notified_player_id));
+            // For aerial balls, check distance to landing position
+            let target_position = if self.is_aerial() {
+                self.calculate_landing_position()
+            } else {
+                self.position
+            };
+
+            // Find the first player who reached the ball
+            let mut claiming_player_id: Option<u32> = None;
+            let mut all_players_missing = true;
+
+            for notified_player_id in &self.take_ball_notified_players {
+                if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
+                    all_players_missing = false;
+
+                    // Calculate proper 3D distance
+                    let dx = player.position.x - target_position.x;
+                    let dy = player.position.y - target_position.y;
+                    let dz = target_position.z;
+                    let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+
+                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
+                        // Player reached the ball (or landing position), give them ownership when ball arrives
+                        // For aerial balls, only claim when ball is low enough
+                        if !self.is_aerial() || self.position.z < 2.5 {
+                            claiming_player_id = Some(*notified_player_id);
+                            break; // Ball claimed, no need to check other players
+                        }
+                    }
+                }
+            }
+
+            // If all notified players are missing from the players slice, clear the list
+            // This can happen if players were substituted or if there's a data inconsistency
+            if all_players_missing {
+                self.take_ball_notified_players.clear();
+            }
+
+            // Process the claim after iteration to avoid borrow checker issues
+            if let Some(player_id) = claiming_player_id {
+                self.current_owner = Some(player_id);
+                self.take_ball_notified_players.clear();
+                self.notification_timeout = 0;
+                events.add_ball_event(BallEvent::Claimed(player_id));
+
+                // Reset boundary tracking when ball is claimed
+                if has_escaped_boundary {
+                    self.last_boundary_position = None;
                 }
             }
         }
     }
 
     pub fn try_intercept(&mut self, _players: &[MatchPlayer], _events: &mut EventCollection) {}
+
+    /// Calculate where an aerial ball will land (when z reaches 0)
+    /// Returns the predicted landing position using simple projection
+    pub fn calculate_landing_position(&self) -> Vector3<f32> {
+        // If ball is already on ground or owned, return current position
+        if self.position.z <= 0.1 || self.current_owner.is_some() {
+            return self.position;
+        }
+
+        // If ball is moving up or not moving vertically, estimate it will land near current position
+        if self.velocity.z >= 0.0 {
+            return Vector3::new(self.position.x, self.position.y, 0.0);
+        }
+
+        // Simple projection: calculate time until ball reaches ground (z = 0)
+        // time = current_height / vertical_speed
+        let time_to_ground = self.position.z / self.velocity.z.abs();
+
+        // Project horizontal position
+        let landing_x = self.position.x + self.velocity.x * time_to_ground;
+        let landing_y = self.position.y + self.velocity.y * time_to_ground;
+
+        // Clamp to field boundaries
+        let clamped_x = landing_x.clamp(0.0, self.field_width);
+        let clamped_y = landing_y.clamp(0.0, self.field_height);
+
+        Vector3::new(clamped_x, clamped_y, 0.0)
+    }
+
+    /// Check if the ball is aerial (in the air above player reach)
+    pub fn is_aerial(&self) -> bool {
+        const PLAYER_REACH_HEIGHT: f32 = 2.3;
+        self.position.z > PLAYER_REACH_HEIGHT && self.velocity.z.abs() > 0.1
+    }
 
     pub fn is_stands_outside(&self) -> bool {
         self.is_ball_outside()
@@ -152,43 +263,41 @@ impl Ball {
         &self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
-    ) -> Option<u32> {
+    ) -> Vec<u32> {
         let ball_position = self.position;
-
-        // Notify multiple nearby players to create competition for the ball
         const NOTIFICATION_RADIUS: f32 = 30.0; // Players within this range will be notified
-        const MAX_NOTIFY_PLAYERS: usize = 4; // Notify up to 4 nearest players
 
-        // Find players within notification radius and sort by distance
-        let mut nearby_players: Vec<(&MatchPlayer, f32)> = players
-            .iter()
-            .map(|player| {
-                let dx = player.position.x - ball_position.x;
-                let dy = player.position.y - ball_position.y;
-                let distance_squared = dx * dx + dy * dy;
-                (player, distance_squared)
-            })
-            .filter(|(_, dist_sq)| *dist_sq < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS)
-            .collect();
+        // Group players by team and find nearest from each team
+        use std::collections::HashMap;
+        let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();
 
-        // Sort by distance (closest first)
-        nearby_players.sort_by(|a, b| {
-            a.1.partial_cmp(&b.1)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        });
+        for player in players {
+            let dx = player.position.x - ball_position.x;
+            let dy = player.position.y - ball_position.y;
+            let distance_squared = dx * dx + dy * dy;
 
-        // Notify up to MAX_NOTIFY_PLAYERS nearest players
-        let mut notified_player_id = None;
-        for (player, _) in nearby_players.iter().take(MAX_NOTIFY_PLAYERS) {
-            events.add_ball_event(BallEvent::TakeMe(player.id));
-
-            // Return the closest player as the primary notified player
-            if notified_player_id.is_none() {
-                notified_player_id = Some(player.id);
+            // Only consider players within notification radius
+            if distance_squared < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS {
+                // Check if this is the nearest player for their team
+                team_nearest
+                    .entry(player.team_id)
+                    .and_modify(|current| {
+                        if distance_squared < current.1 {
+                            *current = (player, distance_squared);
+                        }
+                    })
+                    .or_insert((player, distance_squared));
             }
         }
 
-        notified_player_id
+        // Notify one player from each team and collect their IDs
+        let mut notified_players = Vec::new();
+        for (player, _) in team_nearest.values() {
+            events.add_ball_event(BallEvent::TakeMe(player.id));
+            notified_players.push(player.id);
+        }
+
+        notified_players
     }
 
     fn check_boundary_collision(&mut self, context: &MatchContext) {
@@ -311,28 +420,26 @@ impl Ball {
             return;
         }
 
-        // Check if current owner is nearby and prevent teammate takeover
+        // Check if current owner is nearby
         if let Some(current_owner_id) = self.current_owner {
-            let current_owner = context.players.by_id(current_owner_id).unwrap();
-
             // Check if current owner is still nearby
             let current_owner_nearby = nearby_players
                 .iter()
                 .any(|player| player.id == current_owner_id);
 
             if current_owner_nearby {
+                // Current owner is still close to the ball - maintain ownership
                 return;
             }
 
-            // Check if any nearby player is a teammate of the current owner
-            let same_team_nearby = nearby_players
-                .iter()
-                .any(|p| p.team_id == current_owner.team_id);
+            // Current owner is NOT nearby - clear ownership so ball can be claimed
+            // This prevents the ball from being "owned" by a player who is far away
+            self.previous_owner = self.current_owner;
+            self.current_owner = None;
 
-            if same_team_nearby {
-                // Don't transfer ownership to teammates - they should maintain positions
-                return;
-            }
+            // If only teammates are nearby, they can now claim the ball
+            // If opponents are nearby, they compete for it
+            // This prevents the rapid position changes caused by inconsistent ownership state
         }
 
         // Determine the best tackler from nearby players
@@ -439,7 +546,9 @@ impl Ball {
 
             self.velocity += acceleration * TIME_STEP;
         } else {
+            // Ball has stopped - zero velocity and settle on ground
             self.velocity = Vector3::zeros();
+            self.position.z = 0.0;
         }
 
         // Check ground collision and bounce
@@ -456,8 +565,17 @@ impl Ball {
     }
 
     fn move_to(&mut self, tick_context: &GameTickContext) {
-        if !self.is_stands_outside() {
-            self.take_ball_notified_player = None;
+        // Clear notified players only when ball state changes significantly:
+        // 1. Ball starts moving (not stopped anymore)
+        // 2. Ball has an owner (claimed)
+        const MOVEMENT_THRESHOLD: f32 = 0.5; // Ball is considered moving above this velocity
+
+        let is_moving = self.velocity.norm() > MOVEMENT_THRESHOLD;
+        let has_owner = self.current_owner.is_some();
+
+        // Clear notifications when ball is no longer in a "take ball" scenario
+        if (is_moving || has_owner) && !self.take_ball_notified_players.is_empty() {
+            self.take_ball_notified_players.clear();
         }
 
         if let Some(owner_player_id) = self.current_owner {

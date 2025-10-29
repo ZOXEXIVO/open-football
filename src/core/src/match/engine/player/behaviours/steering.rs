@@ -1,6 +1,5 @@
 ﻿use crate::r#match::MatchPlayer;
 use nalgebra::Vector3;
-use rand::Rng;
 
 pub enum SteeringBehavior {
     Seek {
@@ -49,8 +48,12 @@ impl SteeringBehavior {
                 let max_force = player.skills.physical.acceleration / 20.0;
                 let steering = Self::limit_magnitude(steering, max_force);
 
+                // Apply steering force to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+                let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed());
+
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }
@@ -61,81 +64,120 @@ impl SteeringBehavior {
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
 
-                // Normalize skill values to a range of 0.5 to 1.5
-                let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                // Stop if very close to target
+                const ARRIVAL_DEADZONE: f32 = 0.5;
+                if distance < ARRIVAL_DEADZONE {
+                    // Apply gentle braking
+                    let braking_force = -player.velocity * 0.3;
+                    let new_velocity = player.velocity + braking_force;
+                    return SteeringOutput {
+                        velocity: new_velocity,
+                        rotation: 0.0,
+                    };
+                }
+
+                // Normalize skill values
                 let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                let desired_velocity = if distance > 0.0 {
-                    let speed_factor = acceleration_normalized * pace_normalized;
-                    let speed = (distance / *slowing_distance).clamp(0.0, 1.0) * player.skills.max_speed() * speed_factor;
-                    to_target.normalize() * speed
-                } else {
-                    Vector3::zeros()
-                };
+                // Ensure slowing_distance is never zero
+                let safe_slowing_distance = slowing_distance.max(5.0);
 
-                let steering = desired_velocity - player.velocity;
-                let max_acceleration = player.skills.max_speed() * agility_normalized;
-                let steering_length = steering.norm();
-
-                let limited_steering = if steering_length > 0.0 {
-                    let steering_ratio = max_acceleration / steering_length;
-                    steering * steering_ratio.min(1.0)
-                } else {
-                    Vector3::zeros()
-                };
-
-                // Update player's move velocity based on the steering output
-                let move_velocity = player.velocity + limited_steering;
+                // Calculate desired speed based on distance
                 let max_speed = player.skills.max_speed() * pace_normalized;
-                let move_velocity_length = move_velocity.norm();
-
-                let final_move_velocity = if move_velocity_length > max_speed {
-                    move_velocity.normalize() * max_speed
+                let desired_speed = if distance < safe_slowing_distance {
+                    // Smooth quadratic deceleration as we approach target
+                    let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
+                    max_speed * ratio * ratio
                 } else {
-                    move_velocity
+                    max_speed
                 };
+
+                // Calculate desired velocity direction
+                let desired_velocity = if distance > 0.0 {
+                    to_target.normalize() * desired_speed
+                } else {
+                    Vector3::zeros()
+                };
+
+                // Calculate steering force (the change in velocity needed)
+                let steering = desired_velocity - player.velocity;
+
+                // Limit steering force based on agility
+                let max_force = player.skills.max_speed() * agility_normalized * 0.7;
+                let steering = Self::limit_magnitude(steering, max_force);
+
+                // Apply steering force to current velocity to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+
+                // Clamp to max speed
+                let final_velocity = Self::limit_magnitude(new_velocity, max_speed);
 
                 SteeringOutput {
-                    velocity: final_move_velocity,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }
             SteeringBehavior::Pursuit { target } => {
                 let to_target = *target - player.position;
+                let distance = to_target.norm();
+
+                // Deadzone to prevent oscillation when very close
+                const PURSUIT_DEADZONE: f32 = 1.5;
+                const SLOWING_DISTANCE: f32 = 10.0;
+
+                if distance < PURSUIT_DEADZONE {
+                    // Very close to target - apply strong braking
+                    let braking_force = -player.velocity * 0.9;
+                    let new_velocity = player.velocity + braking_force;
+                    return SteeringOutput {
+                        velocity: new_velocity,
+                        rotation: 0.0,
+                    };
+                }
 
                 // Normalize skill values to a range of 0.5 to 1.5
                 let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
                 let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                let target_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
+                let max_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
 
-                let desired_velocity = to_target.normalize() * target_speed;
+                // Calculate desired speed based on distance - slow down when approaching
+                let desired_speed = if distance < SLOWING_DISTANCE {
+                    // Within slowing distance - reduce speed proportionally
+                    let speed_ratio = (distance / SLOWING_DISTANCE).clamp(0.2, 1.0);
+                    max_speed * speed_ratio
+                } else {
+                    // Full speed when far away
+                    max_speed
+                };
 
-                let steering = desired_velocity - player.velocity;
-                let max_acceleration = player.skills.max_speed() * agility_normalized * acceleration_normalized;
-                let steering_length = steering.norm();
-
-                let limited_steering = if steering_length > 0.0 {
-                    let steering_ratio = max_acceleration / steering_length;
-                    steering * steering_ratio.min(1.0)
+                let desired_velocity = if distance > 0.0 {
+                    to_target.normalize() * desired_speed
                 } else {
                     Vector3::zeros()
                 };
 
-                let move_velocity = player.velocity + limited_steering;
-                let max_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
-                let move_velocity_length = move_velocity.norm();
+                // Use direct velocity blending when close to prevent oscillation
+                let final_velocity = if distance < SLOWING_DISTANCE {
+                    // Close to target - blend toward desired velocity to prevent overshoot
+                    let blend_factor = (distance / SLOWING_DISTANCE).clamp(0.0, 1.0);
+                    let damping = 0.7 - (blend_factor * 0.3); // More damping when closer
 
-                let final_move_velocity = if move_velocity_length > max_speed {
-                    move_velocity.normalize() * max_speed
+                    desired_velocity * (1.0 - damping) + player.velocity * damping
                 } else {
-                    move_velocity
+                    // Far from target - use normal steering accumulation
+                    let steering = desired_velocity - player.velocity;
+                    let max_acceleration = player.skills.max_speed() * agility_normalized * acceleration_normalized;
+                    let limited_steering = Self::limit_magnitude(steering, max_acceleration);
+
+                    let move_velocity = player.velocity + limited_steering;
+                    Self::limit_magnitude(move_velocity, max_speed)
                 };
 
                 SteeringOutput {
-                    velocity: final_move_velocity,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }
@@ -154,15 +196,19 @@ impl SteeringBehavior {
                 let max_force = player.skills.physical.acceleration / 20.0;
                 let steering = Self::limit_magnitude(steering, max_force);
 
+                // Apply steering force to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+                let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed());
+
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }
             SteeringBehavior::Wander {
-                target,
+                target: _,
                 radius,
-                jitter,
+                jitter: _,
                 distance,
                 angle
             } => {
@@ -193,14 +239,19 @@ impl SteeringBehavior {
                 let max_force = player.skills.physical.acceleration / 30.0; // Gentler force
                 let steering = Self::limit_magnitude(steering, max_force);
 
-                let rotation = if steering.x != 0.0 || steering.y != 0.0 {
-                    steering.y.atan2(steering.x)
+                // Apply steering force to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+                let wander_max_speed = player.skills.max_speed() * 0.3; // Wandering is slower
+                let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
+
+                let rotation = if final_velocity.x != 0.0 || final_velocity.y != 0.0 {
+                    final_velocity.y.atan2(final_velocity.x)
                 } else {
                     0.0
                 };
 
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_velocity,
                     rotation,
                 }
             }
@@ -213,9 +264,15 @@ impl SteeringBehavior {
                 };
 
                 let steering = desired_velocity - player.velocity;
+                let max_force = player.skills.physical.acceleration / 20.0;
+                let steering = Self::limit_magnitude(steering, max_force);
+
+                // Apply steering force to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+                let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed());
 
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }
@@ -264,8 +321,12 @@ impl SteeringBehavior {
                 let max_force = player.skills.physical.acceleration / 20.0;
                 let steering = Self::limit_magnitude(steering, max_force);
 
+                // Apply steering force to get new absolute velocity
+                let new_velocity = player.velocity + steering;
+                let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed());
+
                 SteeringOutput {
-                    velocity: steering,
+                    velocity: final_velocity,
                     rotation: 0.0,
                 }
             }

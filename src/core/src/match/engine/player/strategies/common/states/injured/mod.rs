@@ -1,5 +1,6 @@
-use crate::r#match::strategies::processor::StateChangeResult;
-use crate::r#match::{ConditionContext, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::player::strategies::processor::StateChangeResult;
+use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext};
 use nalgebra::Vector3;
 
 #[derive(Default)]

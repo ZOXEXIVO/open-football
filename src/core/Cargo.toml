@@ -13,3 +13,10 @@ serde = { version = "1.0.228", features = ["derive"] }
 log = "0.4.28"
 itertools = "0.14.0"
 nalgebra = { version = "0.34.1", features = ["serde-serialize", "rand"] }
+
+[profile.release]
+opt-level = 3          # Highest optimization for speed (default in release, but explicit is fine).
+lto = "fat"            # Enables full link-time optimization for better inlining and dead code elimination across crates.
+codegen-units = 1      # Reduces parallelism in codegen to allow more aggressive optimizations (increases compile time).
+panic = "abort"        # Aborts on panic instead of unwinding, reducing overhead and binary size.
+strip = "symbols"      # Strips debug symbols and unused code for a leaner binary.

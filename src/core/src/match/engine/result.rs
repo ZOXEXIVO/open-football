@@ -1,5 +1,5 @@
 ﻿use crate::league::LeagueMatch;
-use crate::r#match::statistics::MatchStatisticType;
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
 use std::sync::atomic::{AtomicU8, Ordering};
 

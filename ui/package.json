@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "scripts": {
     "ng": "ng",
-    "start": "ng build --watch --output-path=./dist",
+    "start:debug": "ng build --watch --output-path=./dist",
+    "start:release": "ng build --watch --output-path=../dist",
     "publish": "ng build --configuration production --output-path=./dist",
     "watch": "ng build --watch --configuration development",
     "test": "ng test"

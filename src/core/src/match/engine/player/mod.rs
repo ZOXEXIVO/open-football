@@ -1,4 +1,6 @@
-﻿pub mod behaviours;
+﻿use crate::r#match::{MatchObjectsPositions, StateProcessingContext};
+
+pub mod behaviours;
 pub mod context;
 pub mod player;
 pub mod state;
@@ -12,8 +14,20 @@ pub use behaviours::*;
 pub use context::*;
 use itertools::Itertools;
 pub use player::*;
-pub use positions::*;
-pub use strategies::*;
+
+// Re-export positions items except conflicting ones
+pub use positions::{closure, objects};
+pub use positions::ball as position_ball;
+pub use positions::players as position_players;
+
+// Re-export strategies items except conflicting ones
+pub use strategies::{
+    BallOperationsImpl, decision, passing, team,
+    common_states, defender_states, processor,
+    defenders, forwarders, goalkeepers, midfielders,
+};
+// Note: strategies re-exports players and ball from common, which conflicts with positions
+// We'll use the position_ prefixed versions as the primary ones
 
 pub struct GameFieldContextInput<'p> {
     object_positions: &'p MatchObjectsPositions,

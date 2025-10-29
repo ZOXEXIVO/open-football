@@ -457,7 +457,7 @@ impl MidfielderAttackSupportingState {
     /// Calculate the optimal position to support the attack
     fn calculate_optimal_support_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
-        let player_position = ctx.player.position;
+        let _player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
@@ -492,7 +492,7 @@ impl MidfielderAttackSupportingState {
         field_width: f32,
         field_height: f32,
     ) -> Vector3<f32> {
-        let ball_position = ctx.tick_context.positions.ball.position;
+        let _ball_position = ctx.tick_context.positions.ball.position;
         let player_position = ctx.player.position;
         let goal_position = ctx.player().opponent_goal_position();
 

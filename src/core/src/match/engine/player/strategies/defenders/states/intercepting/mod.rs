@@ -86,22 +86,31 @@ impl DefenderInterceptingState {
 
     /// Calculates the interception point of the ball
     fn calculate_interception_point(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Get ball position and velocity
+        // For aerial balls, use the precalculated landing position
         let ball_position = ctx.tick_context.positions.ball.position;
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let landing_position = ctx.tick_context.positions.ball.landing_position;
 
-        // Defender's speed
-        let defender_speed = ctx.player.skills.physical.pace.max(0.1);
+        // Check if ball is aerial (high enough that landing position differs significantly)
+        let is_aerial = (ball_position - landing_position).magnitude() > 5.0;
 
-        // Relative position and velocity
-        let relative_position = ball_position - ctx.player.position;
-        let relative_velocity = ball_velocity;
+        if is_aerial {
+            // For aerial balls, target the landing position
+            landing_position
+        } else {
+            // For ground balls, do normal interception calculation
+            let ball_velocity = ctx.tick_context.positions.ball.velocity;
+            let defender_speed = ctx.player.skills.physical.pace.max(0.1);
 
-        // Time to intercept
-        let time_to_intercept = relative_position.magnitude()
-            / (defender_speed + relative_velocity.magnitude()).max(0.1);
+            // Relative position and velocity
+            let relative_position = ball_position - ctx.player.position;
+            let relative_velocity = ball_velocity;
 
-        // Predict ball position after time_to_intercept
-        ball_position + ball_velocity * time_to_intercept
+            // Time to intercept
+            let time_to_intercept = relative_position.magnitude()
+                / (defender_speed + relative_velocity.magnitude()).max(0.1);
+
+            // Predict ball position after time_to_intercept
+            ball_position + ball_velocity * time_to_intercept
+        }
     }
 }

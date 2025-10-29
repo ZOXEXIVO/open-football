@@ -1,4 +1,5 @@
-use crate::r#match::{BallFieldData, MatchField, PlayerFieldData};
+use crate::r#match::player_positions::{BallFieldData, PlayerFieldData};
+use crate::r#match::{MatchField};
 
 pub struct MatchObjectsPositions {
     pub ball: BallFieldData,

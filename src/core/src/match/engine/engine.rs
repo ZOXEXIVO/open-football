@@ -3,12 +3,18 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
-use crate::r#match::{GameState, GameTickContext, GoalDetail, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
 use crate::Tactics;
 use nalgebra::Vector3;
 use std::collections::HashMap;
 
 pub struct FootballEngine<const W: usize, const H: usize> {}
+
+impl<const W: usize, const H: usize> Default for FootballEngine<W, H> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl<const W: usize, const H: usize> FootballEngine<W, H> {
     pub fn new() -> Self {
@@ -37,7 +43,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
         }
 
-        let mut result = MatchResultRaw::with_match_time(MATCH_HALF_TIME_MS);
+        let mut result = MatchResultRaw::with_match_time(context.total_match_time);
 
         context.fill_details();
 
@@ -78,9 +84,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::play_players(field, context, &game_tick_context, &mut events);
 
         // dispatch events
-        EventDispatcher::dispatch(events.to_vec(), field, context, true);
+        EventDispatcher::dispatch(events.to_vec(), field, context, match_data, true);
 
-        Self::write_match_positions(field, context.time.time, match_data);
+        // Use total cumulative match time for positions
+        Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
     pub fn write_match_positions(
@@ -132,105 +139,6 @@ pub enum MatchEvent {
     Goal(u32),
     Assist(u32),
     Injury(u32),
-}
-
-pub struct MatchContext {
-    pub state: GameState,
-    pub time: MatchTime,
-    pub score: Score,
-    pub field_size: MatchFieldSize,
-    pub players: MatchPlayerCollection,
-    pub goal_positions: GoalPosition,
-
-    pub tactics: TeamsTactics,
-}
-
-impl MatchContext {
-    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score) -> Self {
-        MatchContext {
-            state: GameState::new(),
-            time: MatchTime::new(),
-            score,
-            field_size: MatchFieldSize::clone(&field.size),
-            players,
-            goal_positions: GoalPosition::from(&field.size),
-            tactics: TeamsTactics::from_field(field),
-        }
-    }
-
-    pub fn increment_time(&mut self) -> bool {
-        self.time.increment(MATCH_TIME_INCREMENT_MS) < MATCH_HALF_TIME_MS
-    }
-
-    pub fn add_time(&mut self, time: u64) {
-        self.time.increment(time);
-    }
-
-    pub fn fill_details(&mut self) {
-        for player in self
-            .players
-            .raw_players()
-            .iter()
-            .filter(|p| !p.statistics.is_empty())
-        {
-            for stat in &player.statistics.items {
-                let detail = GoalDetail {
-                    player_id: player.id,
-                    time: stat.match_second,
-                    stat_type: stat.stat_type,
-                    is_auto_goal: stat.is_auto_goal,
-                };
-
-                self.score.add_goal_detail(detail);
-            }
-        }
-    }
-
-    pub fn penalty_area(&self, is_home_team: bool) -> PenaltyArea {
-        let field_width = self.field_size.width as f32;
-        let field_height = self.field_size.height as f32;
-        let penalty_area_width = 16.5; // Standard width of penalty area
-        let penalty_area_depth = 40.3; // Standard depth of penalty area
-
-        if is_home_team {
-            PenaltyArea::new(
-                Vector3::new(0.0, (field_height - penalty_area_width) / 2.0, 0.0),
-                Vector3::new(
-                    penalty_area_depth,
-                    (field_height + penalty_area_width) / 2.0,
-                    0.0,
-                ),
-            )
-        } else {
-            PenaltyArea::new(
-                Vector3::new(
-                    field_width - penalty_area_depth,
-                    (field_height - penalty_area_width) / 2.0,
-                    0.0,
-                ),
-                Vector3::new(field_width, (field_height + penalty_area_width) / 2.0, 0.0),
-            )
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct PenaltyArea {
-    pub min: Vector3<f32>,
-    pub max: Vector3<f32>,
-}
-
-impl PenaltyArea {
-    pub fn new(min: Vector3<f32>, max: Vector3<f32>) -> Self {
-        PenaltyArea { min, max }
-    }
-
-    pub fn contains(&self, point: &Vector3<f32>) -> bool {
-        point.x >= self.min.x
-            && point.x <= self.max.x
-            && point.y >= self.min.y
-            && point.y <= self.max.y
-    }
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
@@ -369,8 +277,6 @@ impl MatchPlayerCollection {
         self.players.values().collect()
     }
 }
-
-const MATCH_TIME_INCREMENT_MS: u64 = 10;
 
 #[cfg(debug_assertions)]
 pub const MATCH_HALF_TIME_MS: u64 = 5 * 60 * 1000;

@@ -5,7 +5,7 @@ use crate::utils::Logging;
 use crate::{Club, Team};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
+use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 
 #[derive(Debug)]
@@ -140,7 +140,6 @@ impl League {
         ctx: &GlobalContext<'_>,
     ) -> Vec<MatchResult> {
         use rayon::iter::ParallelIterator;
-        use rayon::iter::IndexedParallelIterator;
 
         // Play all matches in parallel
         let match_results: Vec<MatchResult> = scheduled_matches
@@ -252,7 +251,7 @@ impl League {
         &self,
         team: &Team,
         table: &LeagueTable,
-        current_date: NaiveDate,
+        _current_date: NaiveDate,
     ) -> f32 {
         let position = table.rows.iter().position(|r| r.team_id == team.id).unwrap_or(0);
         let total_teams = table.rows.len();
@@ -409,8 +408,8 @@ impl League {
     fn check_manager_pressure(
         &self,
         result: &MatchResult,
-        clubs: &[Club],
-        current_date: NaiveDate,
+        _clubs: &[Club],
+        _current_date: NaiveDate,
     ) {
         // Check home team
         let home_losing_streak = self.dynamics.get_team_losing_streak(result.score.home_team.team_id);
@@ -429,9 +428,9 @@ impl League {
 
     fn update_league_dynamics(
         &mut self,
-        results: &[MatchResult],
+        _results: &[MatchResult],
         clubs: &[Club],
-        current_date: NaiveDate,
+        _current_date: NaiveDate,
     ) {
         let total_teams = self.table.rows.len();
         let matches_played = self.table.rows.first().map(|r| r.played).unwrap_or(0);
@@ -460,7 +459,7 @@ impl League {
         self.update_league_reputation(clubs, season_progress);
     }
 
-    fn update_league_reputation(&mut self, clubs: &[Club], season_progress: f32) {
+    fn update_league_reputation(&mut self, _clubs: &[Club], season_progress: f32) {
         if season_progress < 0.1 {
             return; // Too early in season
         }
@@ -484,7 +483,7 @@ impl League {
 
     // ========== MILESTONES & EVENTS ==========
 
-    fn check_milestones_and_events(&mut self, clubs: &[Club], current_date: NaiveDate) {
+    fn check_milestones_and_events(&mut self, _clubs: &[Club], current_date: NaiveDate) {
         // Check for record-breaking performances
         self.milestones.check_records(&self.statistics, &self.table);
 
@@ -553,7 +552,7 @@ impl League {
             (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
     }
 
-    fn process_season_end(&mut self, clubs: &[Club]) {
+    fn process_season_end(&mut self, _clubs: &[Club]) {
         info!("🏆 Season ended for league: {}", self.name);
 
         let champion_id = self.table.rows.first().map(|r| r.team_id);
@@ -566,7 +565,7 @@ impl League {
         self.statistics.archive_season_stats();
     }
 
-    fn process_winter_break(&mut self, clubs: &[Club]) {
+    fn process_winter_break(&mut self, _clubs: &[Club]) {
         debug!("❄️ Winter break for league: {}", self.name);
     }
 
@@ -807,7 +806,7 @@ impl LeagueRegulations {
         }
     }
 
-    pub fn process_disciplinary_actions(&mut self, result: &MatchResult) {
+    pub fn process_disciplinary_actions(&mut self, _result: &MatchResult) {
         // Process cards and suspensions from match
         // This would need match details with card information
     }

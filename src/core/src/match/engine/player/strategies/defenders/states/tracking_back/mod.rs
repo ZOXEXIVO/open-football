@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, MATCH_HALF_TIME_MS,
+    StateProcessingHandler, MATCH_TIME_MS,
 };
 use nalgebra::Vector3;
 
@@ -28,7 +28,7 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         }
 
         // If the team is losing and there's little time left, consider a more aggressive stance
-        if ctx.team().is_loosing() && ctx.context.time.time > (MATCH_HALF_TIME_MS - 300) {
+        if ctx.team().is_loosing() && ctx.context.total_match_time > (MATCH_TIME_MS - 300) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Pressing,
             ));

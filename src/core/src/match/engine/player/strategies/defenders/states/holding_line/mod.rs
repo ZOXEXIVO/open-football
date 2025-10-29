@@ -3,7 +3,7 @@ use nalgebra::Vector3;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 100.0;
+const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 50.0;  // Maximum distance from line before switching to Running
 const BALL_PROXIMITY_THRESHOLD: f32 = 100.0;
 const MARKING_DISTANCE_THRESHOLD: f32 = 30.0;
 
@@ -25,7 +25,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.9) {
+        if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting
             ));
@@ -47,7 +47,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // 7. Remain in HoldingLine state
         None
     }
 
@@ -66,17 +65,27 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         let distance = (target_position - current_position).magnitude();
 
         // Define a minimum distance threshold to prevent oscillation
-        const MIN_DISTANCE_THRESHOLD: f32 = 150.0;
+        const MIN_DISTANCE_THRESHOLD: f32 = 2.0;  // Small threshold for smooth positioning
+        const SLOWING_DISTANCE: f32 = 15.0;       // Start slowing down within this distance
 
         if distance > MIN_DISTANCE_THRESHOLD {
             // Calculate the direction from the current position to the target position
             let direction = (target_position - current_position).normalize();
 
-            // Define a smooth speed factor based on the distance
-            let speed_factor = (distance / MAX_DEFENSIVE_LINE_DEVIATION).clamp(0.1, 1.0);
+            // Smooth speed factor based on distance - slows down as approaching target
+            let speed_factor = if distance > SLOWING_DISTANCE {
+                1.0  // Full speed when far from line
+            } else {
+                // Gradual slowdown as approaching the line
+                (distance / SLOWING_DISTANCE).clamp(0.2, 1.0)
+            };
 
-            // Calculate the velocity based on the direction and speed factor
-            let velocity = direction * speed_factor * ctx.player.skills.physical.pace;
+            // Base speed for holding line (slower, more controlled movement)
+            let base_speed = 1.5;
+            let pace_influence = (ctx.player.skills.physical.pace / 20.0).clamp(0.5, 1.5);
+
+            // Calculate the velocity with controlled speed
+            let velocity = direction * base_speed * speed_factor * pace_influence;
 
             Some(velocity)
         } else {
@@ -94,7 +103,7 @@ impl DefenderHoldingLineState {
         let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
 
         // Calculate the average y-position of defenders to determine the defensive line
-        let sum_y_positions: f32 = defenders.iter().map(|p| p.position.x).sum();
+        let sum_y_positions: f32 = defenders.iter().map(|p| p.position.y).sum();
         sum_y_positions / defenders.len() as f32
     }
 

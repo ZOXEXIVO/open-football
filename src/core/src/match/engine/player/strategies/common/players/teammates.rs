@@ -65,8 +65,19 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
             .players
             .values()
             .filter(move |player| {
-                player.id != player_id && player.team_id == team_id
-                    && (has_ball.is_none()  || (self.ctx.ball().owner_id() == Some(self.ctx.player.id)))
+                // Check if player matches team criteria
+                if player.id == player_id || player.team_id != team_id {
+                    return false;
+                }
+
+                // Check if player matches has_ball criteria
+                let matches_ball_filter = match has_ball {
+                    None => true,  // No filter, include all teammates
+                    Some(true) => self.ctx.ball().owner_id() == Some(player.id),  // Only teammates with ball
+                    Some(false) => self.ctx.ball().owner_id() != Some(player.id)  // Only teammates without ball
+                };
+
+                matches_ball_filter
             })
             .map(|player| MatchPlayerLite {
                 id: player.id,

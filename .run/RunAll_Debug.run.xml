@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="RunAll:Debug" type="CompoundRunConfigurationType">
+    <toRun name="Backend:Debug" type="CargoCommandRunConfiguration" />
+    <toRun name="Frontend:Debug" type="js.build_tools.npm" />
+    <method v="2" />
+  </configuration>
+</component>

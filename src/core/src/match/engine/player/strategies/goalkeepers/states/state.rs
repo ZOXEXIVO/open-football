@@ -1,4 +1,4 @@
-use crate::r#match::goalkeepers::states::{GoalkeeperAttentiveState, GoalkeeperCatchingState, GoalkeeperComingOutState, GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPenaltyState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPressureState, GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperRunningState, GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperSweepingState, GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState};
+use crate::r#match::goalkeepers::states::{GoalkeeperAttentiveState, GoalkeeperCatchingState, GoalkeeperClearingState, GoalkeeperComingOutState, GoalkeeperDistributingState, GoalkeeperDivingState, GoalkeeperHoldingState, GoalkeeperJumpingState, GoalkeeperKickingState, GoalkeeperPassingState, GoalkeeperPenaltyState, GoalkeeperPickingUpState, GoalkeeperPreparingForSaveState, GoalkeeperPressureState, GoalkeeperPunchingState, GoalkeeperRestingState, GoalkeeperReturningGoalState, GoalkeeperRunningState, GoalkeeperShootingState, GoalkeeperStandingState, GoalkeeperSweepingState, GoalkeeperTacklingState, GoalkeeperTakeBallState, GoalkeeperThrowingState, GoalkeeperWalkingState};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -11,6 +11,7 @@ pub enum GoalkeeperState {
     Catching,         // Catching the ball with hands
     Punching,         // Punching the ball away
     Kicking,          // Kicking the ball
+    Clearing,         // Emergency clearance - boot the ball away
     HoldingBall,      // Holding the ball in hands
     Throwing,         // Throwing the ball with hands
     PickingUpBall,    // Picking up the ball from the ground
@@ -51,6 +52,7 @@ impl GoalkeeperStrategies {
                 state_processor.process(GoalkeeperPunchingState::default())
             }
             GoalkeeperState::Kicking => state_processor.process(GoalkeeperKickingState::default()),
+            GoalkeeperState::Clearing => state_processor.process(GoalkeeperClearingState::default()),
             GoalkeeperState::HoldingBall => {
                 state_processor.process(GoalkeeperHoldingState::default())
             }
@@ -110,6 +112,7 @@ impl Display for GoalkeeperState {
             GoalkeeperState::Catching => write!(f, "Catching"),
             GoalkeeperState::Punching => write!(f, "Punching"),
             GoalkeeperState::Kicking => write!(f, "Kicking"),
+            GoalkeeperState::Clearing => write!(f, "Clearing"),
             GoalkeeperState::HoldingBall => write!(f, "Holding Ball"),
             GoalkeeperState::Throwing => write!(f, "Throwing"),
             GoalkeeperState::PickingUpBall => write!(f, "Picking Up Ball"),

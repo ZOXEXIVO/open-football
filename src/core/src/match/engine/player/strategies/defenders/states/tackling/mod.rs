@@ -10,73 +10,96 @@ use rand::Rng;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 3.0;
 const FOUL_CHANCE_BASE: f32 = 0.2;
+const PRESSING_DISTANCE: f32 = 50.0;
+const RETURN_DISTANCE: f32 = 100.0;
 
 #[derive(Default)]
 pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball(){
+        // If we have the ball or our team controls it, transition to running
+        if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
         }
 
-        if ctx.ball().distance() > 200.0 && !ctx.ball().is_towards_player_with_angle(0.8){
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
-        }
-        
+        // Check if there's an opponent with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            if opponent.distance(ctx) > TACKLE_DISTANCE_THRESHOLD {
+            let distance_to_opponent = opponent.distance(ctx);
+
+            // If opponent is too far for tackling, press instead
+            if distance_to_opponent > PRESSING_DISTANCE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
             }
 
+            // If opponent is close but not in tackle range, keep pressing
+            if distance_to_opponent > TACKLE_DISTANCE_THRESHOLD {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+
+            // We're close enough to tackle!
             let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
-                return Some(StateChangeResult::with_defender_state_and_event(
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
-                ));
+                ))
             } else if committed_foul {
-                return Some(StateChangeResult::with_defender_state_and_event(
+                Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::CommitFoul),
-                ));
-            } else {
-                Some(StateChangeResult::with_defender_state(
-                    DefenderState::Standing,
                 ))
+            } else {
+                None
             };
-        } else if self.can_intercept_ball(ctx) {
-            return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Running,
-                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-            ));
-        }
+        } else {
+            // Ball is loose - check for interception
+            if self.can_intercept_ball(ctx) {
+                // Ball is loose and we can intercept it
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                ));
+            }
 
-        // Fallback: if ball is loose and very close, try to claim it
-        let ball_distance = ctx.ball().distance();
-        if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
-            return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Running,
-                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-            ));
-        }
+            // If ball is too far away and not coming toward us, return to position
+            let ball_distance = ctx.ball().distance();
+            if ball_distance > RETURN_DISTANCE && !ctx.ball().is_towards_player_with_angle(0.8) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
 
-        // Timeout fallback: if stuck in tackling state too long, transition out
-        if ctx.in_state_time > 30 {
-            return Some(StateChangeResult::with_defender_state(
-                if ball_distance < 50.0 {
-                    DefenderState::Pressing
-                } else {
-                    DefenderState::Returning
+            // Fallback: if ball is loose and very close, try to claim it
+            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Running,
+                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                ));
+            }
+
+            // If opponent is near the player but doesn't have the ball, maybe it's better to transition to pressing
+            if let Some(close_opponent) = ctx.players().opponents().nearby(15.0).next() {
+                if close_opponent.distance(ctx) < 10.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
                 }
-            ));
+            }
+        }
+
+        if ctx.in_state_time > 30 {
+            let ball_distance = ctx.ball().distance();
+            if ball_distance > PRESSING_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(DefenderState::Returning));
+            }
         }
 
         None
@@ -88,13 +111,13 @@ impl StateProcessingHandler for DefenderTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let target = self.calculate_intelligent_target(ctx);
+
         Some(
-            SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 0.0,
-            }
-            .calculate(ctx.player)
-            .velocity,
+            SteeringBehavior::Pursuit { target }
+                .calculate(ctx.player)
+                .velocity
+                + ctx.player().separation_velocity(),
         )
     }
 
@@ -104,6 +127,31 @@ impl StateProcessingHandler for DefenderTacklingState {
 }
 
 impl DefenderTacklingState {
+    fn calculate_intelligent_target(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let player_position = ctx.player.position;
+        let own_goal_position = ctx.ball().direction_to_own_goal();
+
+        // Check if ball is dangerously close to own goal
+        let ball_distance_to_own_goal = (ball_position - own_goal_position).magnitude();
+        let is_ball_near_own_goal = ball_distance_to_own_goal < ctx.context.field_size.width as f32 * 0.2;
+
+        // Check if we're between the ball and our goal
+        let player_distance_to_own_goal = (player_position - own_goal_position).magnitude();
+        let is_player_closer_to_goal = player_distance_to_own_goal < ball_distance_to_own_goal;
+
+        if is_ball_near_own_goal && !is_player_closer_to_goal {
+            // If ball is near our goal and we're not between ball and goal,
+            // position ourselves between the ball and the goal
+            let ball_to_goal_direction = (own_goal_position - ball_position).normalize();
+            let intercept_distance = 5.0; // Stand 5 units in front of the ball towards our goal
+            ball_position + ball_to_goal_direction * intercept_distance
+        } else {
+            // Otherwise, pursue the ball directly
+            ball_position
+        }
+    }
+
     fn attempt_sliding_tackle(
         &self,
         ctx: &StateProcessingContext,
@@ -145,7 +193,7 @@ impl DefenderTacklingState {
     }
 
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {
-        if self.exists_nearby(ctx){
+        if self.exists_nearby(ctx) {
             return false;
         }
 

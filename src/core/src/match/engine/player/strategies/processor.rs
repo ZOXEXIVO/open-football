@@ -6,9 +6,12 @@ use crate::r#match::midfielders::states::{MidfielderState, MidfielderStrategies}
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, Midfielder};
 use crate::r#match::{
-    BallOperationsImpl, CommonInjuredState, GameTickContext, MatchContext, MatchPlayer,
-    PlayerOperationsImpl, PlayersOperationsImpl, TeamOperationsImpl,
+    BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer,
 };
+use crate::r#match::common_states::CommonInjuredState;
+use crate::r#match::player::strategies::common::PlayerOperationsImpl;
+use crate::r#match::player::strategies::common::PlayersOperationsImpl;
+use crate::r#match::team::TeamOperationsImpl;
 use crate::PlayerFieldPositionGroup;
 use log::debug;
 use nalgebra::Vector3;
@@ -174,6 +177,12 @@ pub struct StateProcessingResult {
     pub events: EventCollection,
 }
 
+impl Default for StateProcessingResult {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StateProcessingResult {
     pub fn new() -> Self {
         StateProcessingResult {
@@ -189,6 +198,12 @@ pub struct StateChangeResult {
     pub velocity: Option<Vector3<f32>>,
 
     pub events: EventCollection,
+}
+
+impl Default for StateChangeResult {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StateChangeResult {

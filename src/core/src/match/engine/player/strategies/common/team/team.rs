@@ -143,7 +143,7 @@ impl<'b> TeamOperationsImpl<'b> {
 
         // Check if the player is already the closest to the ball on their team
         // Calculate player's "ball-chasing score" based on distance, position, and attributes
-        let calculate_score = |player: &MatchPlayerLite, context: &MatchContext| -> f32 {
+        let calculate_score = |player: &MatchPlayerLite, _context: &MatchContext| -> f32 {
             let pos = self.ctx.tick_context.positions.players.position(player.id);
             let dist = (ball_position - pos).magnitude();
 

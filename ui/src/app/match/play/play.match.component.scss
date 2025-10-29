@@ -48,6 +48,31 @@
   pointer-events: none; // Allow clicks to pass through the container
 }
 
+// Half labels
+.half-labels {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 5px;
+  padding: 0 2%;
+  pointer-events: none;
+
+  .half-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: rgba(255, 255, 255, 0.7);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+
+    &.first-half {
+      text-align: left;
+    }
+
+    &.second-half {
+      text-align: right;
+    }
+  }
+}
+
 .time-scrollbar-track {
   position: relative;
   height: 6px;
@@ -56,9 +81,58 @@
   box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   pointer-events: auto; // Enable clicks on the track
   cursor: pointer;
+  overflow: visible;
 
   &:hover {
     background: rgba(255, 255, 255, 0.4);
+  }
+}
+
+// Progress bar showing elapsed time
+.time-progress {
+  position: absolute;
+  left: 0;
+  top: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #4CAF50 0%, #45a049 100%);
+  border-radius: 3px;
+  pointer-events: none;
+  transition: width 0.1s linear;
+}
+
+// Half-time delimiter
+.halftime-delimiter {
+  position: absolute;
+  // left position is set dynamically via [style.left.%]
+  top: 50%;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 2;
+  transition: left 0.3s ease; // Smooth transition when position updates
+
+  .delimiter-line {
+    width: 3px;
+    height: 20px;
+    background: linear-gradient(180deg, #ff9800 0%, #f57c00 100%);
+    border-radius: 2px;
+    box-shadow: 0 2px 6px rgba(255, 152, 0, 0.5);
+    margin: 0 auto;
+  }
+
+  .delimiter-label {
+    position: absolute;
+    top: -25px;
+    left: 50%;
+    transform: translateX(-50%);
+    background: rgba(255, 152, 0, 0.95);
+    color: #fff;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-size: 10px;
+    font-weight: bold;
+    white-space: nowrap;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    letter-spacing: 0.5px;
   }
 }
 
@@ -75,6 +149,7 @@
   cursor: grab;
   pointer-events: auto;
   transition: transform 0.1s ease;
+  z-index: 3; // Above progress bar and delimiter
 
   &:hover {
     transform: translate(-50%, -50%) scale(1.15);

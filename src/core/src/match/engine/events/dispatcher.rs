@@ -1,6 +1,6 @@
 use crate::r#match::ball::events::{BallEvent, BallEventDispatcher};
 use crate::r#match::player::events::{PlayerEvent, PlayerEventDispatcher};
-use crate::r#match::{MatchContext, MatchField};
+use crate::r#match::{MatchContext, MatchField, ResultMatchPositionData};
 
 pub enum Event {
     BallEvent(BallEvent),
@@ -60,6 +60,7 @@ impl EventDispatcher {
         events: Vec<Event>,
         field: &mut MatchField,
         context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
         process_remaining_events: bool,
     ) {
         let mut remaining_events = Vec::with_capacity(10);
@@ -76,7 +77,7 @@ impl EventDispatcher {
                 }
                 Event::PlayerEvent(player_event) => {
                     let mut player_remaining_events =
-                        PlayerEventDispatcher::dispatch(player_event, field, context);
+                        PlayerEventDispatcher::dispatch(player_event, field, context, match_data);
 
                     if process_remaining_events {
                         remaining_events.append(&mut player_remaining_events);
@@ -86,7 +87,7 @@ impl EventDispatcher {
         }
 
         if process_remaining_events {
-            Self::dispatch(remaining_events, field, context, false)
+            Self::dispatch(remaining_events, field, context, match_data, false)
         }
     }
 }

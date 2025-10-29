@@ -5,6 +5,15 @@ pub mod goalkeepers;
 pub mod midfielders;
 pub mod processor;
 
-pub use common::*;
-pub use defenders::*;
+// Re-export common items
+pub use common::{
+    ball::{BallOperationsImpl, MatchBallLogic},
+    passing, players, team,
+};
+pub use common::states as common_states;
+
+// Re-export defenders items
+pub use defenders::decision;
+pub use defenders::states as defender_states;
+
 pub use processor::*;

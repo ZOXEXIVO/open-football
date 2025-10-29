@@ -1,4 +1,4 @@
-use crate::training::result::PlayerTrainingResult;
+use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{Player, PlayerPositionType, PlayerTraining, Staff, Team, TeamTrainingResult};
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;
@@ -145,13 +145,13 @@ impl TeamTraining {
         }
     }
 
-    fn get_next_match_day(team: &Team, date: NaiveDateTime) -> Option<Weekday> {
+    fn get_next_match_day(_team: &Team, _date: NaiveDateTime) -> Option<Weekday> {
         // This would check the actual match schedule
         // For now, assume Saturday matches
         Some(Weekday::Sat)
     }
 
-    fn get_previous_match_day(team: &Team, date: NaiveDateTime) -> Option<Weekday> {
+    fn get_previous_match_day(_team: &Team, _date: NaiveDateTime) -> Option<Weekday> {
         // This would check the actual match history
         // For now, return None
         None
@@ -307,7 +307,7 @@ impl WeeklyTrainingPlan {
         }
     }
 
-    fn monday_sessions(previous_match: Option<Weekday>, phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn monday_sessions(previous_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
         if previous_match == Some(Weekday::Sun) || previous_match == Some(Weekday::Sat) {
             // Recovery after weekend match
             vec![
@@ -378,7 +378,7 @@ impl WeeklyTrainingPlan {
         ]
     }
 
-    fn wednesday_sessions(phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn wednesday_sessions(_phase: PeriodizationPhase) -> Vec<TrainingSession> {
         vec![
             TrainingSession {
                 session_type: TrainingType::Positioning,
@@ -397,7 +397,7 @@ impl WeeklyTrainingPlan {
         ]
     }
 
-    fn thursday_sessions(next_match: Option<Weekday>, phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn thursday_sessions(next_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
         if next_match == Some(Weekday::Sat) {
             // Light preparation for Saturday match
             vec![
@@ -430,7 +430,7 @@ impl WeeklyTrainingPlan {
         }
     }
 
-    fn friday_sessions(next_match: Option<Weekday>, phase: PeriodizationPhase) -> Vec<TrainingSession> {
+    fn friday_sessions(next_match: Option<Weekday>, _phase: PeriodizationPhase) -> Vec<TrainingSession> {
         if next_match == Some(Weekday::Sat) {
             // Final preparation
             vec![

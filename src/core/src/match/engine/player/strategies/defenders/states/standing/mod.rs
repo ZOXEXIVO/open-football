@@ -12,6 +12,8 @@ const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
 const MARKING_DISTANCE: f32 = 15.0;
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
+const PRESSING_DISTANCE: f32 = 100.0;
+const TACKLE_DISTANCE: f32 = 30.0;
 
 #[derive(Default)]
 pub struct DefenderStandingState {}
@@ -25,27 +27,40 @@ impl StateProcessingHandler for DefenderStandingState {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));
-        } else {
-            if ctx.ball().on_own_side() {
-                if ball_ops.is_towards_player_with_angle(0.8)
-                    && ball_ops.distance() < INTERCEPTION_DISTANCE
-                {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Intercepting,
-                    ));
-                }
+        }
 
-                if !team_ops.is_control_ball() && ball_ops.distance() < 150.0 {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
+        // Check for nearby opponents with the ball - press them aggressively
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            let distance_to_opponent = opponent.distance(ctx);
+
+            if distance_to_opponent < TACKLE_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+
+            if distance_to_opponent < PRESSING_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
             }
         }
-        if ball_ops.distance() < 200.0 {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Tackling,
-            ));
+
+        // Check for ball interception opportunities
+        if ctx.ball().on_own_side() {
+            if ball_ops.is_towards_player_with_angle(0.8)
+                && ball_ops.distance() < INTERCEPTION_DISTANCE
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
+            }
+
+            if !team_ops.is_control_ball() && ball_ops.distance() < PRESSING_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
         }
 
         if self.should_push_up(ctx) {
@@ -120,12 +135,13 @@ impl DefenderStandingState {
         let standing_too_long = ctx.in_state_time > STANDING_TIME_LIMIT;
         let ball_far_away = ball_ops.distance() > INTERCEPTION_DISTANCE * 2.0;
 
+        // Fixed: inverted logic - should check if there are NO nearby threats
         let no_immediate_threat = ctx
             .players()
             .opponents()
             .nearby(CLEARING_DISTANCE)
             .next()
-            .is_some();
+            .is_none();
 
         let close_to_optimal_position =
             player_ops.distance_from_start_position() < WALK_DISTANCE_THRESHOLD;
@@ -173,12 +189,14 @@ impl DefenderStandingState {
             > ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD
             && ball_ops.distance_to_own_goal()
                 > ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
+
+        // Fixed: inverted logic - should check if there are NO nearby threats
         let no_immediate_threat = ctx
             .players()
             .opponents()
             .nearby(MARKING_DISTANCE)
             .next()
-            .is_some();
+            .is_none();
 
         let not_in_optimal_position =
             player_ops.distance_from_start_position() > WALK_DISTANCE_THRESHOLD;

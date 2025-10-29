@@ -4,9 +4,11 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartP
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const INTERCEPTION_DISTANCE: f32 = 250.0;
+const INTERCEPTION_DISTANCE: f32 = 150.0;
 const MARKING_DISTANCE: f32 = 50.0;
-const PRESSING_DISTANCE: f32 = 30.0;
+const PRESSING_DISTANCE: f32 = 80.0;
+const TACKLE_DISTANCE: f32 = 25.0;
+const RUNNING_TO_THE_BALL_DISTANCE: f32 = 150.0;
 
 #[derive(Default)]
 pub struct DefenderWalkingState {}
@@ -15,44 +17,49 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
-        // Transition to Intercepting only if ball moving slowly or player very close
-        if ctx.ball().distance() < INTERCEPTION_DISTANCE{
+        if ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Intercepting,
+                DefenderState::TakeBall
             ));
         }
 
-        // Return to position if far away and no immediate threats
-        if ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Small
-            && !self.has_nearby_threats(ctx)
-        {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
-        }
+        // Priority 1: Check for opponents with the ball nearby - be aggressive!
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            let distance_to_opponent = ctx.player.position.distance_to(&opponent.position);
 
-        // Mark opponent if they have the ball or are very close
-        if let Some(opponent_to_mark) = ctx.players().opponents().without_ball().next() {
-            if opponent_to_mark.has_ball(ctx)
-                || ctx.player.position.distance_to(&opponent_to_mark.position)
-                    < MARKING_DISTANCE / 2.0
-            {
+            // Tackle if very close
+            if distance_to_opponent < TACKLE_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+
+            // Press if nearby
+            if distance_to_opponent < PRESSING_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+
+            // Mark if within marking range
+            if distance_to_opponent < MARKING_DISTANCE {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Marking,
                 ));
             }
         }
 
-        // Press opponent only if they have the ball and are close
-        if let Some(opponent_to_press) = ctx.players().opponents().with_ball().next() {
-            if ctx.player.position.distance_to(&opponent_to_press.position) < PRESSING_DISTANCE {
+        // Priority 2: Check for nearby opponents without the ball to mark
+        if let Some(opponent_to_mark) = ctx.players().opponents().without_ball().next() {
+            let distance = ctx.player.position.distance_to(&opponent_to_mark.position);
+            if distance < MARKING_DISTANCE / 2.0 {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
+                    DefenderState::Marking,
                 ));
             }
         }
 
-        // Check if the ball is moving towards the player and is close
+        // Priority 3: Intercept ball if it's coming towards player
         if ctx.ball().is_towards_player_with_angle(0.8)
             && ctx.ball().distance() < INTERCEPTION_DISTANCE
         {
@@ -61,23 +68,16 @@ impl StateProcessingHandler for DefenderWalkingState {
             ));
         }
 
-        // Check if the defender needs to return to their position
-        if ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Small {
+        // Priority 4: Return to position if far away and no immediate threats
+        if ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Small
+            && !self.has_nearby_threats(ctx)
+        {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,
             ));
         }
 
-        // Check if there's an opponent to mark
-        if let Some(opponent_to_mark) = ctx.players().opponents().with_ball().next() {
-            if ctx.player.position.distance_to(&opponent_to_mark.position) < MARKING_DISTANCE {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                ));
-            }
-        }
-
-        // Adjust position if needed
+        // Priority 5: Adjust position if needed
         let optimal_position = self.calculate_optimal_position(ctx);
         if ctx.player.position.distance_to(&optimal_position) > 2.0 {
             result

@@ -592,7 +592,7 @@ impl GroupDynamics {
         }
     }
 
-    fn update_from_relationship(&mut self, entity_id: u32, relationship_level: f32) {
+    fn update_from_relationship(&mut self, _entity_id: u32, _relationship_level: f32) {
         // Logic to form/update groups based on relationships
         // Simplified for brevity
     }

@@ -1,9 +1,9 @@
 <component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Frontend" type="js.build_tools.npm">
+  <configuration default="false" name="Frontend:Release" type="js.build_tools.npm">
     <package-json value="$PROJECT_DIR$/ui/package.json" />
     <command value="run" />
     <scripts>
-      <script value="start" />
+      <script value="start:release" />
     </scripts>
     <node-interpreter value="project" />
     <envs />

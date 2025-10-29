@@ -45,7 +45,7 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             if ctx.ball().is_owned() {
-                if ctx.ball().distance() < 100.0 {
+                if ctx.ball().distance() < 200.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
