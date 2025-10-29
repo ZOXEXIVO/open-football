@@ -13,7 +13,7 @@ impl Default for StateManager {
 impl StateManager {
     pub fn new() -> Self {
         StateManager {
-            current_state: MatchState::FirstHalf,
+            current_state: MatchState::Initial,
         }
     }
 
@@ -38,7 +38,7 @@ impl StateManager {
             MatchState::Initial => MatchState::FirstHalf,
             MatchState::FirstHalf => MatchState::HalfTime,
             MatchState::HalfTime => MatchState::SecondHalf,
-            MatchState::SecondHalf => MatchState::ExtraTime,
+            MatchState::SecondHalf => MatchState::End,  // Regular matches end after second half
             MatchState::ExtraTime => MatchState::PenaltyShootout,
             MatchState::PenaltyShootout => MatchState::End,
             MatchState::End => MatchState::End,
@@ -63,8 +63,13 @@ impl StateManager {
             MatchState::FirstHalf => {
                 Self::play_rest_time(field);
             }
-            MatchState::HalfTime => {}
-            MatchState::SecondHalf => {}
+            MatchState::HalfTime => {
+                // Half-time finished - reset time for second half
+                context.reset_period_time();
+            }
+            MatchState::SecondHalf => {
+                // Second half finished - ready for extra time if needed
+            }
             MatchState::ExtraTime => {}
             MatchState::PenaltyShootout => {}
             _ => {}
@@ -86,17 +91,16 @@ mod tests {
     #[test]
     fn test_state_manager_new() {
         let state_manager = StateManager::new();
-        assert_eq!(state_manager.current(), MatchState::FirstHalf);
+        assert_eq!(state_manager.current(), MatchState::Initial);
     }
 
     #[test]
     fn test_state_manager_next() {
         let mut state_manager = StateManager::new();
+        assert_eq!(state_manager.next(), Some(MatchState::FirstHalf));
         assert_eq!(state_manager.next(), Some(MatchState::HalfTime));
         assert_eq!(state_manager.next(), Some(MatchState::SecondHalf));
-        assert_eq!(state_manager.next(), Some(MatchState::ExtraTime));
-        assert_eq!(state_manager.next(), Some(MatchState::PenaltyShootout));
-        assert_eq!(state_manager.next(), None); // End of match
+        assert_eq!(state_manager.next(), None); // Regular match ends after second half
         assert_eq!(state_manager.next(), None); // No more states after match ends
     }
 }

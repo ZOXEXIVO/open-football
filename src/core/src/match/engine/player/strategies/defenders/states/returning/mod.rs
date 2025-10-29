@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior, MATCH_HALF_TIME_MS,
+    SteeringBehavior, MATCH_TIME_MS,
 };
 use nalgebra::Vector3;
 
@@ -43,7 +43,7 @@ impl StateProcessingHandler for DefenderReturningState {
             }
 
             if ctx.team().is_loosing()
-                && ctx.context.time.time > (MATCH_HALF_TIME_MS - 180)
+                && ctx.context.total_match_time > (MATCH_TIME_MS - 180)
                 && ctx.ball().distance() < 30.0
             {
                 return Some(StateChangeResult::with_defender_state(

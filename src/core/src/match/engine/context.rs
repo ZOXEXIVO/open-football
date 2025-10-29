@@ -1,5 +1,5 @@
 use nalgebra::Vector3;
-use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
+use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
 
@@ -12,7 +12,10 @@ pub struct MatchContext {
     pub goal_positions: GoalPosition,
     pub tactics: TeamsTactics,
 
-    pub(crate) logging_enabled: bool
+    pub(crate) logging_enabled: bool,
+
+    // Track cumulative time across all match states
+    pub total_match_time: u64,
 }
 
 impl MatchContext {
@@ -25,16 +28,31 @@ impl MatchContext {
             players,
             goal_positions: GoalPosition::from(&field.size),
             tactics: TeamsTactics::from_field(field),
-            logging_enabled: false
+            logging_enabled: false,
+            total_match_time: 0,
         }
     }
 
     pub fn increment_time(&mut self) -> bool {
-        self.time.increment(MATCH_TIME_INCREMENT_MS) < MATCH_HALF_TIME_MS
+        let new_time = self.time.increment(MATCH_TIME_INCREMENT_MS);
+
+        self.total_match_time += MATCH_TIME_INCREMENT_MS;
+
+        match self.state.match_state {
+            MatchState::FirstHalf | MatchState::SecondHalf => {
+                new_time < MATCH_HALF_TIME_MS
+            },
+            _ => false
+        }
+    }
+
+    pub fn reset_period_time(&mut self) {
+        self.time = MatchTime::new();
     }
 
     pub fn add_time(&mut self, time: u64) {
         self.time.increment(time);
+        self.total_match_time += time;
     }
 
     pub fn fill_details(&mut self) {

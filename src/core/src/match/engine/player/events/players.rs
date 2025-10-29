@@ -150,7 +150,7 @@ impl PlayerEventDispatcher {
                 // Record the pass event (only if tracking is enabled)
                 if match_data.is_tracking_events() {
                     match_data.add_pass_event(
-                        context.time.time,
+                        context.total_match_time,
                         pass_event_model.from_player_id,
                         pass_event_model.to_player_id,
                     );
@@ -190,13 +190,13 @@ impl PlayerEventDispatcher {
     fn handle_goal_event(player_id: u32, is_auto_goal: bool, field: &mut MatchField, context: &mut MatchContext) {
         let player = field.get_player_mut(player_id).unwrap();
 
-        player.statistics.add_goal(context.time.time, is_auto_goal);
+        player.statistics.add_goal(context.total_match_time, is_auto_goal);
 
         context.score.add_goal_detail(GoalDetail {
             player_id,
             stat_type: MatchStatisticType::Goal,
             is_auto_goal,
-            time: context.time.time,
+            time: context.total_match_time,
         });
 
         field.ball.previous_owner = None;
@@ -209,11 +209,11 @@ impl PlayerEventDispatcher {
         context.score.add_goal_detail(GoalDetail {
             player_id,
             stat_type: MatchStatisticType::Assist,
-            time: context.time.time,
+            time: context.total_match_time,
             is_auto_goal: false
         });
 
-        player.statistics.add_assist(context.time.time);
+        player.statistics.add_assist(context.total_match_time);
     }
 
     fn handle_ball_collision_event(player_id: u32, field: &mut MatchField) {

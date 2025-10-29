@@ -188,13 +188,13 @@ async fn main() {
                 }
 
                 // Update replay_time to current match time for slider display
-                replay_time = context.time.time;
+                replay_time = context.total_match_time;
                 // Track the maximum time reached in live mode
                 max_live_time = max_live_time.max(replay_time);
             }
             PlayMode::Live if is_paused => {
                 // Paused in live mode - keep current time
-                replay_time = context.time.time;
+                replay_time = context.total_match_time;
                 // Track the maximum time reached in live mode
                 max_live_time = max_live_time.max(replay_time);
             }
@@ -228,9 +228,9 @@ async fn main() {
         let elapsed = start.elapsed();
 
         // Get recent pass event from match data (show for 2 seconds)
-        if let Some(recent_pass) = match_data.get_recent_pass_at(context.time.time) {
+        if let Some(recent_pass) = match_data.get_recent_pass_at(context.total_match_time) {
             // Only show passes from last 2 seconds
-            if context.time.time - recent_pass.timestamp <= 2000 {
+            if context.total_match_time - recent_pass.timestamp <= 2000 {
                 pass_target = Some(PassTargetInfo {
                     target_player_id: recent_pass.to_player_id,
                     timestamp: recent_pass.timestamp,

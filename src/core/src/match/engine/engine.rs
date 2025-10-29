@@ -43,7 +43,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
         }
 
-        let mut result = MatchResultRaw::with_match_time(MATCH_HALF_TIME_MS);
+        let mut result = MatchResultRaw::with_match_time(context.total_match_time);
 
         context.fill_details();
 
@@ -86,7 +86,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // dispatch events
         EventDispatcher::dispatch(events.to_vec(), field, context, match_data, true);
 
-        Self::write_match_positions(field, context.time.time, match_data);
+        // Use total cumulative match time for positions
+        Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
     pub fn write_match_positions(
