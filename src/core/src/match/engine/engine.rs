@@ -3,7 +3,7 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
-use crate::r#match::{GameState, GameTickContext, GoalDetail, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
 use crate::Tactics;
 use nalgebra::Vector3;
 use std::collections::HashMap;
@@ -139,9 +139,6 @@ pub enum MatchEvent {
     Assist(u32),
     Injury(u32),
 }
-
-
-
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum BallSide {

@@ -32,8 +32,13 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     application: PIXI.Application | null = null;
     dataLoaded = false;
     matchTimeMs: number = -1;
+    firstHalfDurationMs: number = -1; // Actual first half duration
     currentTime = 0;
     isFullscreen: boolean = false;
+
+    // Configuration: Set to true to force 50% half-time position
+    // Currently defaulting to true until auto-detection is fixed
+    forceEqualHalves: boolean = true;
     @Input()
     leagueSlug: string = '';
     @Input()
@@ -157,6 +162,16 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
                 const lastBallPosition = matchData.ball[matchData.ball.length - 1];
                 this.matchTimeMs = lastBallPosition.timestamp;
                 console.log('Match duration:', this.matchTimeMs, 'ms');
+
+                // Detect first half duration
+                // Look for a significant time gap (half-time break) or use midpoint
+                if (this.forceEqualHalves) {
+                    this.firstHalfDurationMs = this.matchTimeMs / 2;
+                    console.log('Forcing equal halves - First half duration:', this.firstHalfDurationMs, 'ms');
+                } else {
+                    this.firstHalfDurationMs = this.detectFirstHalfDuration(matchData);
+                    console.log('Auto-detected first half duration:', this.firstHalfDurationMs, 'ms');
+                }
             }
 
             await this.initGraphics();
@@ -400,6 +415,110 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         const minutes = Math.floor(totalSeconds / 60);
         const seconds = totalSeconds % 60;
         return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+
+    detectFirstHalfDuration(matchData: MatchDataDto): number {
+        if (!matchData.ball || matchData.ball.length === 0) {
+            // Fallback: assume equal halves
+            console.log('No ball data, using half of match time');
+            return this.matchTimeMs / 2;
+        }
+
+        console.log('Total ball positions:', matchData.ball.length);
+        console.log('Match time range:', matchData.ball[0].timestamp, 'to', matchData.ball[matchData.ball.length - 1].timestamp);
+
+        // Strategy 1: Look for a significant time gap (half-time break)
+        // In simulation data, look for any gap > 1 second (unusual in continuous simulation)
+        let maxGap = 0;
+        let maxGapIndex = -1;
+        let maxGapTime = 0;
+
+        for (let i = 1; i < matchData.ball.length; i++) {
+            const gap = matchData.ball[i].timestamp - matchData.ball[i - 1].timestamp;
+
+            if (gap > maxGap) {
+                maxGap = gap;
+                maxGapIndex = i;
+                maxGapTime = matchData.ball[i - 1].timestamp;
+            }
+        }
+
+        console.log('Max gap found:', maxGap, 'ms at index', maxGapIndex, 'time:', maxGapTime);
+
+        // If we found a gap larger than 10 seconds, it's likely a half-time break
+        if (maxGap > 10000 && maxGapIndex > 0) {
+            const firstHalfEnd = matchData.ball[maxGapIndex - 1].timestamp;
+            console.log('Using gap-based detection, first half ends at:', firstHalfEnd);
+            return firstHalfEnd;
+        }
+
+        // Strategy 2: Look for timestamp around 45 minutes (2,700,000 ms)
+        // with tolerance (±10 minutes to handle stoppage time)
+        const targetFirstHalf = 2700000; // 45 minutes
+        const tolerance = 600000; // 10 minutes
+
+        let closestIndex = -1;
+        let closestDiff = Infinity;
+
+        for (let i = 0; i < matchData.ball.length; i++) {
+            const timestamp = matchData.ball[i].timestamp;
+            const diff = Math.abs(timestamp - targetFirstHalf);
+
+            if (diff < closestDiff && diff < tolerance) {
+                closestDiff = diff;
+                closestIndex = i;
+            }
+        }
+
+        if (closestIndex > 0) {
+            const firstHalfEnd = matchData.ball[closestIndex].timestamp;
+            console.log('Using 45-min proximity detection, first half ends at:', firstHalfEnd, 'diff:', closestDiff);
+            return firstHalfEnd;
+        }
+
+        // Fallback: Use 50% of match time (equal halves)
+        const halfOfMatch = this.matchTimeMs / 2;
+        console.log('Using fallback (50% of match time):', halfOfMatch);
+        return halfOfMatch;
+    }
+
+    getHalfTimePosition(): number {
+        // Return percentage position of half-time delimiter
+        if (this.matchTimeMs <= 0 || this.firstHalfDurationMs <= 0) {
+            console.log('getHalfTimePosition: Using default 50%');
+            return 50; // Default to middle
+        }
+        const position = (this.firstHalfDurationMs / this.matchTimeMs) * 100;
+        console.log('getHalfTimePosition:', {
+            firstHalfDurationMs: this.firstHalfDurationMs,
+            matchTimeMs: this.matchTimeMs,
+            position: position.toFixed(2) + '%'
+        });
+        return position;
+    }
+
+    formatMatchTime(ms: number): string {
+        const totalSeconds = Math.floor(ms / 1000);
+        const totalMinutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+
+        if (this.firstHalfDurationMs <= 0) {
+            // Fallback to simple time display
+            return `${totalMinutes}:${seconds.toString().padStart(2, '0')}`;
+        }
+
+        const firstHalfMinutes = Math.floor(this.firstHalfDurationMs / 1000 / 60);
+
+        if (ms < this.firstHalfDurationMs) {
+            // First half
+            return `${totalMinutes}:${seconds.toString().padStart(2, '0')} (1st)`;
+        } else {
+            // Second half - show minutes relative to second half
+            const secondHalfSeconds = Math.floor((ms - this.firstHalfDurationMs) / 1000);
+            const secondHalfMinutes = Math.floor(secondHalfSeconds / 60);
+            const secondHalfSecs = secondHalfSeconds % 60;
+            return `${secondHalfMinutes}:${secondHalfSecs.toString().padStart(2, '0')} (2nd)`;
+        }
     }
 
     onTimeBarMouseDown(event: MouseEvent): void {
