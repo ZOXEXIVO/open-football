@@ -1,4 +1,4 @@
-﻿use crate::GameAppData;
+﻿use crate::{ApiError, ApiResult, GameAppData};
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -92,7 +92,7 @@ pub struct LeagueTableRow<'l> {
 pub async fn league_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueGetRequest>,
-) -> Response {
+) -> ApiResult<Response> {
     let guard = state.data.read().await;
 
     let simulator_data = guard.as_ref().unwrap();
@@ -103,7 +103,7 @@ pub async fn league_get_action(
         .unwrap()
         .slug_indexes
         .get_league_by_slug(&route_params.league_slug)
-        .unwrap();
+        .ok_or_else(|| ApiError::NotFound(format!("League with slug {} not found", route_params.league_slug)))?;
 
     let league = simulator_data.league(league_id).unwrap();
 
@@ -245,6 +245,6 @@ pub async fn league_get_action(
             model.current_tour_schedule.push(tour_schedule)
         }
     }
-
-    Json(model).into_response()
+    
+    Ok(Json(model).into_response())
 }

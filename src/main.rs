@@ -2,7 +2,7 @@ use std::env;
 use core::utils::TimeEstimation;
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
-use log::info;
+use log::{info};
 use server::{FootballSimulatorServer, GameAppData};
 use std::sync::Arc;
 use tokio::sync::RwLock;

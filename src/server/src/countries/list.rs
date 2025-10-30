@@ -1,4 +1,4 @@
-﻿use crate::GameAppData;
+﻿use crate::{ApiError, ApiResult, GameAppData};
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -24,10 +24,12 @@ pub struct LeagueDto<'l> {
     pub name: &'l str,
 }
 
-pub async fn country_list_action(State(state): State<GameAppData>) -> Response {
+pub async fn country_list_action(State(state): State<GameAppData>) -> ApiResult<Response> {
     let guard = state.data.read().await;
 
-    let simulator_data = guard.as_ref().unwrap();
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let mut model = Vec::with_capacity(simulator_data.continents.len());
 
@@ -58,5 +60,5 @@ pub async fn country_list_action(State(state): State<GameAppData>) -> Response {
         model.push(item);
     }
 
-    Json(model).into_response()
+    Ok(Json(model).into_response())
 }

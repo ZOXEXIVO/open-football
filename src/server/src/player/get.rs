@@ -1,4 +1,4 @@
-﻿use crate::GameAppData;
+﻿use crate::{ApiError, ApiResult, GameAppData};
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -167,31 +167,41 @@ impl PlayerStatusDto {
 pub async fn player_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerGetRequest>,
-) -> Response {
+) -> ApiResult<Response> {
     let guard = state.data.read().await;
 
-    let simulator_data = guard.as_ref().unwrap();
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
+    let indexes = simulator_data
         .indexes
         .as_ref()
-        .unwrap()
+        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+
+    let team_id = indexes
         .slug_indexes
         .get_team_by_slug(&route_params.team_slug)
-        .unwrap();
+        .ok_or_else(|| ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug)))?;
 
-    let team: &Team = simulator_data.team(team_id).unwrap();
+    let team: &Team = simulator_data
+        .team(team_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
     let player: &Player = team
         .players
         .players()
         .iter()
         .find(|p| p.id == route_params.player_id)
-        .unwrap();
+        .ok_or_else(|| ApiError::NotFound(format!("Player with ID {} not found in team", route_params.player_id)))?;
 
-    let country = simulator_data.country(player.country_id).unwrap();
+    let country = simulator_data
+        .country(player.country_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Country with ID {} not found", player.country_id)))?;
 
     let now = simulator_data.date.date();
+
+    let neighbor_teams = get_neighbor_teams(team.club_id, simulator_data)?;
 
     let mut model = PlayerGetViewModel {
         id: player.id,
@@ -214,7 +224,7 @@ pub async fn player_get_action(
         value: &FormattingUtils::format_money(player.value(now)),
         preferred_foot: player.preferred_foot_str(),
         player_attributes: get_attributes(player),
-        neighbor_teams: get_neighbor_teams(team.club_id, simulator_data),
+        neighbor_teams,
         statistics: get_statistics(player),
         status: PlayerStatusDto::new(player.statuses.get()),
     };
@@ -227,7 +237,7 @@ pub async fn player_get_action(
         });
     }
 
-    Json(model).into_response()
+    Ok(Json(model).into_response())
 }
 
 fn get_attributes(player: &Player) -> PlayerAttributesDto {
@@ -287,8 +297,9 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
     }
 }
 
-fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam<'_>> {
-    let club = data.club(club_id).unwrap();
+fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Result<Vec<ClubTeam<'_>>, ApiError> {
+    let club = data.club(club_id)
+        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
     let mut teams: Vec<ClubTeam> = club
         .teams
@@ -303,7 +314,7 @@ fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam<'_>> {
 
     teams.sort_by(|a, b| b.reputation.cmp(&a.reputation));
 
-    teams
+    Ok(teams)
 }
 
 fn get_statistics(player: &Player) -> PlayerStatistics {

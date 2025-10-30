@@ -1,4 +1,4 @@
-﻿use crate::GameAppData;
+﻿use crate::{ApiError, ApiResult, GameAppData};
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -8,32 +8,49 @@ use serde::{Deserialize, Serialize};
 pub async fn match_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<MatchGetRequest>,
-) -> Response {
+) -> ApiResult<Response> {
     let guard = state.data.read().await;
 
-    let simulator_data = guard.as_ref().expect("no simulator data");
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let league_id = simulator_data
         .indexes
         .as_ref()
-        .unwrap()
+        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
         .slug_indexes
         .get_league_by_slug(&route_params.league_slug)
-        .unwrap();
+        .ok_or_else(|| ApiError::NotFound(format!("League '{}' not found", route_params.league_slug)))?;
 
-    let league = simulator_data.league(league_id).unwrap();
+    let league = simulator_data
+        .league(league_id)
+        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", league_id)))?;
 
-    let match_result = league.matches.get(route_params.match_id).unwrap();
+    let match_result = league
+        .matches
+        .get(&route_params.match_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Match '{}' not found", route_params.match_id)))?;
 
-    let home_team = simulator_data.team(match_result.home_team_id).unwrap();
-    let away_team = simulator_data.team(match_result.away_team_id).unwrap();
+    let home_team = simulator_data
+        .team(match_result.home_team_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Home team not found")))?;
 
-    let result_details = match_result.details.as_ref().unwrap();
+    let away_team = simulator_data
+        .team(match_result.away_team_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Away team not found")))?;
 
-    let goals: Vec<GoalEvent> = result_details
+    let result_details = match_result
+        .details
+        .as_ref()
+        .ok_or_else(|| ApiError::NotFound("Match details not available".to_string()))?;
+
+    let score = result_details
         .score
         .as_ref()
-        .unwrap()
+        .ok_or_else(|| ApiError::NotFound("Match score not available".to_string()))?;
+
+    let goals: Vec<GoalEvent> = score
         .detail()
         .iter()
         .map(|goal| GoalEvent {
@@ -45,8 +62,8 @@ pub async fn match_get_action(
 
     let result = MatchGetResponse {
         score: MatchScore {
-            home_goals: result_details.score.as_ref().unwrap().home_team.get(),
-            away_goals: result_details.score.as_ref().unwrap().away_team.get()
+            home_goals: score.home_team.get(),
+            away_goals: score.away_team.get()
         },
         match_time_ms: result_details.match_time_ms,
         goals,
@@ -84,7 +101,7 @@ pub async fn match_get_action(
         },
     };
 
-    Json(result).into_response()
+    Ok(Json(result).into_response())
 }
 
 fn to_match_player(

@@ -1,5 +1,5 @@
-﻿use crate::player::PlayerStatusDto;
-use crate::GameAppData;
+﻿use crate::{ApiError, ApiResult, GameAppData};
+use crate::player::PlayerStatusDto;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
@@ -68,22 +68,30 @@ pub struct TeamPlayer<'cp> {
 pub async fn team_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamGetRequest>,
-) -> Response {
+) -> ApiResult<Response> {
     let guard = state.data.read().await;
 
-    let simulator_data = guard.as_ref().unwrap();
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let team_id = simulator_data
+    let indexes = simulator_data
         .indexes
         .as_ref()
-        .unwrap()
+        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+
+    let team_id = indexes
         .slug_indexes
         .get_team_by_slug(&route_params.team_slug)
-        .unwrap();
+        .ok_or_else(|| ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug)))?;
 
-    let team: &Team = simulator_data.team(team_id).unwrap();
+    let team: &Team = simulator_data
+        .team(team_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
-    let league = simulator_data.league(team.league_id).unwrap();
+    let league = simulator_data
+        .league(team.league_id)
+        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", team.league_id)))?;
 
     let now = simulator_data.date.date();
 
@@ -91,31 +99,37 @@ pub async fn team_get_action(
         .players()
         .iter()
         .map(|p| {
-            let country = simulator_data.country(p.country_id).unwrap();
+            if let Some(country) = simulator_data.country(p.country_id) {
+                let position = p.positions.display_positions().join(", ");
 
-            let position = p.positions.display_positions().join(", ");
-
-            TeamPlayer {
-                id: p.id,
-                first_name: &p.full_name.first_name,
-                position_sort: p.position(),
-                position,
-                behaviour: p.behaviour.as_str(),
-                injured: p.player_attributes.is_injured,
-                country_slug: &country.slug,
-                country_code: &country.code,
-                country_name: &country.name,
-                last_name: &p.full_name.last_name,
-                conditions: get_conditions(p),
-                value: FormattingUtils::format_money(p.value(now)),
-                current_ability: get_current_ability_stars(p),
-                potential_ability: get_potential_ability_stars(p),
-                status: PlayerStatusDto::new(p.statuses.get()),
+                Some(TeamPlayer {
+                    id: p.id,
+                    first_name: &p.full_name.first_name,
+                    position_sort: p.position(),
+                    position,
+                    behaviour: p.behaviour.as_str(),
+                    injured: p.player_attributes.is_injured,
+                    country_slug: &country.slug,
+                    country_code: &country.code,
+                    country_name: &country.name,
+                    last_name: &p.full_name.last_name,
+                    conditions: get_conditions(p),
+                    value: FormattingUtils::format_money(p.value(now)),
+                    current_ability: get_current_ability_stars(p),
+                    potential_ability: get_potential_ability_stars(p),
+                    status: PlayerStatusDto::new(p.statuses.get()),
+                })
+            } else {
+                None
             }
         })
+        .filter_map(|x| x)  // Remove None values
         .collect();
 
-    players.sort_by(|a, b| a.position_sort.partial_cmp(&b.position_sort).unwrap());
+    // Use a stable sorting method that doesn't panic
+    players.sort_by(|a, b| a.position_sort.partial_cmp(&b.position_sort).unwrap_or(std::cmp::Ordering::Equal));
+
+    let neighbor_teams = get_neighbor_teams(team.club_id, simulator_data)?;
 
     let model = TeamGetViewModel {
         slug: &team.slug,
@@ -128,14 +142,15 @@ pub async fn team_get_action(
             outcome: 0,
         },
         players,
-        neighbor_teams: get_neighbor_teams(team.club_id, simulator_data),
+        neighbor_teams,
     };
 
-    Json(model).into_response()
+    Ok(Json(model).into_response())
 }
 
-fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam<'_>> {
-    let club = data.club(club_id).unwrap();
+fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Result<Vec<ClubTeam<'_>>, ApiError> {
+    let club = data.club(club_id)
+        .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
     let mut teams: Vec<ClubTeam> = club
         .teams
@@ -150,7 +165,7 @@ fn get_neighbor_teams(club_id: u32, data: &SimulatorData) -> Vec<ClubTeam<'_>> {
 
     teams.sort_by(|a, b| b.reputation.cmp(&a.reputation));
 
-    teams
+    Ok(teams)
 }
 
 pub fn get_conditions(player: &Player) -> u8 {

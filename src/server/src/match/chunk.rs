@@ -1,4 +1,4 @@
-use crate::GameAppData;
+use crate::{ApiError, ApiResult, GameAppData};
 use crate::r#match::stores::MatchStore;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -29,48 +29,60 @@ pub struct MatchMetadataResponse {
 pub async fn match_chunk_action(
     State(_): State<GameAppData>,
     Path(route_params): Path<MatchChunkRequest>,
-) -> Response {
+) -> ApiResult<Response> {
     let chunk_data = MatchStore::get_chunk(
         &route_params.league_slug,
         &route_params.match_id,
         route_params.chunk_number,
     )
-    .await;
+    .await
+    .ok_or_else(|| {
+        ApiError::NotFound(format!(
+            "Chunk {} not found for match {}/{}",
+            route_params.chunk_number, route_params.league_slug, route_params.match_id
+        ))
+    })?;
 
-    match chunk_data {
-        Some(data) => {
-            let mut response = (StatusCode::OK, data).into_response();
+    let mut response = (StatusCode::OK, chunk_data).into_response();
 
-            response
-                .headers_mut()
-                .append("Content-Type", "application/gzip".parse().unwrap());
-            response
-                .headers_mut()
-                .append("Content-Encoding", "gzip".parse().unwrap());
+    response
+        .headers_mut()
+        .append(
+            "Content-Type",
+            "application/gzip"
+                .parse()
+                .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
+        );
+    response
+        .headers_mut()
+        .append(
+            "Content-Encoding",
+            "gzip"
+                .parse()
+                .map_err(|e| ApiError::InternalError(format!("Header parse error: {:?}", e)))?,
+        );
 
-            response
-        }
-        None => (StatusCode::NOT_FOUND, "Chunk not found").into_response(),
-    }
+    Ok(response)
 }
 
 pub async fn match_metadata_action(
     State(_): State<GameAppData>,
     Path(route_params): Path<MatchMetadataRequest>,
-) -> Response {
-    let metadata_json = MatchStore::get_metadata(&route_params.league_slug, &route_params.match_id).await;
+) -> ApiResult<Response> {
+    let metadata_json = MatchStore::get_metadata(&route_params.league_slug, &route_params.match_id)
+        .await
+        .ok_or_else(|| {
+            ApiError::NotFound(format!(
+                "Chunks not available for match {}/{}",
+                route_params.league_slug, route_params.match_id
+            ))
+        })?;
 
-    match metadata_json {
-        Some(meta) => {
-            let metadata = MatchMetadataResponse {
-                chunk_count: meta["chunk_count"].as_u64().unwrap_or(1) as usize,
-                chunk_duration_ms: meta["chunk_duration_ms"].as_u64().unwrap_or(300_000),
-                total_duration_ms: meta["total_duration_ms"].as_u64().unwrap_or(0),
-            };
-            Json(metadata).into_response()
-        }
-        None => {
-            (StatusCode::NOT_FOUND, "Chunks not available for this match").into_response()
-        }
-    }
+    let metadata = MatchMetadataResponse {
+        chunk_count: metadata_json["chunk_count"].as_u64().unwrap_or(1) as usize,
+        chunk_duration_ms: metadata_json["chunk_duration_ms"].as_u64().unwrap_or(300_000),
+        total_duration_ms: metadata_json["total_duration_ms"].as_u64().unwrap_or(0),
+    };
+
+    Ok(Json(metadata).into_response())
 }
