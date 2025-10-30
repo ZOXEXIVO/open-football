@@ -338,7 +338,7 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        const PASS_FORCE_MULTIPLIER: f32 = 4.0;
+        const PASS_FORCE_MULTIPLIER: f32 = 4.5;
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
@@ -574,6 +574,9 @@ impl PlayerEventDispatcher {
             return 0.0; // Avoid division by zero
         }
 
+        // Add very small random variation to all trajectories for realism
+        let tiny_random = rng.random_range(0.98..1.02);
+
         match trajectory_type {
             // Ground pass - truly on the ground (rolling)
             TrajectoryType::Ground => {
@@ -581,7 +584,7 @@ impl PlayerEventDispatcher {
                 // This keeps the ball rolling along the ground
                 let base_lift = 0.02 * skills.technique;
                 let random_variation = rng.random_range(0.0..0.1);
-                base_lift * random_variation // 0.0 to ~0.002 m/s (truly ground)
+                base_lift * random_variation * tiny_random // 0.0 to ~0.002 m/s (truly ground)
             }
 
             // Low driven - stays very close to ground, minimal arc
@@ -593,13 +596,13 @@ impl PlayerEventDispatcher {
                 let base_z = 0.5 + (distance_factor * 0.8); // 0.5 to 1.3 m/s
                 let variation = rng.random_range(0.85..1.15);
 
-                base_z * skill_factor * variation
+                base_z * skill_factor * variation * tiny_random
             }
 
             // Medium arc - moderate parabolic trajectory (height ~2-4m)
             TrajectoryType::MediumArc => {
                 let base_flight_time = horizontal_distance / horizontal_speed;
-                let flight_time = base_flight_time * 0.8; // Moderate arc
+                let flight_time = base_flight_time * 0.5; // Moderate arc
 
                 let ideal_z = 0.5 * GRAVITY * flight_time;
 
@@ -608,7 +611,7 @@ impl PlayerEventDispatcher {
                 let error_range = (1.0 - execution_quality) * 0.12;
                 let error = rng.random_range(1.0 - error_range..1.0 + error_range);
 
-                ideal_z * error
+                ideal_z * error * tiny_random
             }
 
             // High arc - high parabolic trajectory (height ~4-8m)
@@ -623,7 +626,7 @@ impl PlayerEventDispatcher {
                 let error_range = (1.0 - execution_quality) * 0.18;
                 let error = rng.random_range(1.0 - error_range..1.0 + error_range);
 
-                ideal_z * error
+                ideal_z * error * tiny_random
             }
 
             // Chip - very high arc over short distance (height ~3-6m)
@@ -639,7 +642,7 @@ impl PlayerEventDispatcher {
                 let error_range = (1.0 - chip_ability) * 0.25;
                 let error = rng.random_range(1.0 - error_range..1.0 + error_range);
 
-                base_chip_height * error
+                base_chip_height * error * tiny_random
             }
         }
     }

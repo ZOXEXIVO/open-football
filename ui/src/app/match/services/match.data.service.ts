@@ -129,10 +129,14 @@ export class MatchDataService {
         const scale_x = (real_field_width - 2 * offsetX) / inner_field_width;
         const scale_y = (real_field_height - 2 * offsetY) / inner_field_height;
 
+        // Clamp input coordinates to field bounds (0 to field dimensions)
+        const clampedX = Math.max(0, Math.min(inner_field_width, x));
+        const clampedY = Math.max(0, Math.min(inner_field_height, y));
+
         // Apply the scaling and offsets to translate coordinates
         return {
-            x: offsetX + 42 + x * scale_x,
-            y: offsetY + y * scale_y - 10,
+            x: offsetX + 42 + clampedX * scale_x,
+            y: offsetY + clampedY * scale_y - 10,
             z: z
         };
     }
