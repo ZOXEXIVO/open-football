@@ -30,12 +30,26 @@ pub async fn match_get_action(
 
     let result_details = match_result.details.as_ref().unwrap();
 
+    let goals: Vec<GoalEvent> = result_details
+        .score
+        .as_ref()
+        .unwrap()
+        .detail()
+        .iter()
+        .map(|goal| GoalEvent {
+            player_id: goal.player_id,
+            time: goal.time,
+            is_auto_goal: goal.is_auto_goal,
+        })
+        .collect();
+
     let result = MatchGetResponse {
         score: MatchScore {
             home_goals: result_details.score.as_ref().unwrap().home_team.get(),
             away_goals: result_details.score.as_ref().unwrap().away_team.get()
         },
         match_time_ms: result_details.match_time_ms,
+        goals,
         home_team_name: &home_team.name,
         home_team_slug: &home_team.slug,
         home_squad: MatchSquad {
@@ -111,12 +125,21 @@ pub struct MatchGetResponse<'p> {
     pub match_time_ms: u64,
 
     pub score: MatchScore,
+
+    pub goals: Vec<GoalEvent>,
 }
 
 #[derive(Serialize)]
 pub struct MatchScore {
     pub home_goals: u8,
     pub away_goals: u8,
+}
+
+#[derive(Serialize)]
+pub struct GoalEvent {
+    pub player_id: u32,
+    pub time: u64,
+    pub is_auto_goal: bool,
 }
 
 #[derive(Serialize)]

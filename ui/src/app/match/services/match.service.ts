@@ -17,11 +17,25 @@ export class MatchService {
     data(league_slug: string, match_id: string): Observable<MatchDataDto> {
         return this.http.get<MatchDataDto>(`/api/match/${league_slug}/${match_id}/data`);
     }
+
+    metadata(league_slug: string, match_id: string): Observable<MatchMetadataDto> {
+        return this.http.get<MatchMetadataDto>(`/api/match/${league_slug}/${match_id}/metadata`);
+    }
+
+    chunk(league_slug: string, match_id: string, chunk_number: number): Observable<MatchDataDto> {
+        return this.http.get<MatchDataDto>(`/api/match/${league_slug}/${match_id}/chunk/${chunk_number}`);
+    }
 }
 
 export interface MatchDataDto {
-    players: Map<number, ObjectPositionDto[]>,
+    players: { [key: number]: ObjectPositionDto[] },
     ball: ObjectPositionDto[]
+}
+
+export interface MatchMetadataDto {
+    chunk_count: number,
+    chunk_duration_ms: number,
+    total_duration_ms: number
 }
 
 export class ObjectPositionDto {
@@ -49,6 +63,8 @@ export interface MatchDto {
 
     match_time_ms: number,
 
+    goals: GoalEventDto[],
+
     players: MatchPlayerDto[]
     ball: MatchBallDto
 }
@@ -56,6 +72,12 @@ export interface MatchDto {
 export interface MatchScoreDto {
     home_goals: number,
     away_goals: number,
+}
+
+export interface GoalEventDto {
+    player_id: number,
+    time: number,
+    is_auto_goal: boolean
 }
 
 export interface MatchSquadDto {

@@ -520,15 +520,13 @@ impl PassEvaluator {
         let is_pragmatic = decision_skill > 0.75 && pass_skill > 0.6; // Smart, calculated passes
 
         // Calculate minimum pass distance based on pressure
-        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
-        let under_pressure = nearby_opponents >= 2;
-
-        let min_pass_distance = if under_pressure {
+        let is_under_pressure = ctx.players().opponents().exists(25.0);
+        let min_pass_distance = if is_under_pressure {
             // Under pressure, allow shorter passes
-            5.0
+            50.0
         } else {
             // Not under pressure, prefer passes with some distance
-            12.0
+            150.0
         };
 
         // Get previous ball owner to prevent ping-pong passes
@@ -608,7 +606,7 @@ impl PassEvaluator {
             let interception_penalty = 1.0 - (interception_risk * risk_tolerance);
 
             // Add distance preference bonus - reward passes in the 15-40m range
-            let optimal_distance_bonus = if under_pressure {
+            let optimal_distance_bonus = if is_under_pressure {
                 // Under pressure, all safe passes are good
                 1.0
             } else if pass_distance >= 15.0 && pass_distance <= 40.0 {

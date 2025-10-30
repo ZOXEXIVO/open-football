@@ -12,12 +12,63 @@ export class MatchDataService {
     public width: number = 0;
     public height: number = 0;
 
+    // Track which chunks are loaded
+    private loadedChunks: Set<number> = new Set();
+    private chunkDurationMs: number = 0;
+
     setMatch(match: MatchDto) {
         this.match = match;
     }
 
     setMatchData(data: MatchDataDto) {
         this.matchData = data;
+    }
+
+    mergeMatchData(chunkData: MatchDataDto, chunkNumber: number) {
+        if (!this.matchData) {
+            this.matchData = chunkData;
+            this.loadedChunks.add(chunkNumber);
+            return;
+        }
+
+        // Merge ball data
+        if (chunkData.ball && chunkData.ball.length > 0) {
+            this.matchData.ball.push(...chunkData.ball);
+        }
+
+        // Merge player data
+        if (chunkData.players) {
+            Object.entries(chunkData.players).forEach(([key, value]: [string, ObjectPositionDto[]]) => {
+                const playerId = Number(key);
+
+                if (this.matchData!.players[playerId]) {
+                    this.matchData!.players[playerId].push(...value);
+                } else {
+                    this.matchData!.players[playerId] = value;
+                }
+            });
+        }
+
+        this.loadedChunks.add(chunkNumber);
+    }
+
+    setChunkDuration(durationMs: number) {
+        this.chunkDurationMs = durationMs;
+    }
+
+    getChunkNumberForTime(timestamp: number): number {
+        if (this.chunkDurationMs === 0) return 0;
+        return Math.floor(timestamp / this.chunkDurationMs);
+    }
+
+    isChunkLoaded(chunkNumber: number): boolean {
+        return this.loadedChunks.has(chunkNumber);
+    }
+
+    reset() {
+        this.loadedChunks.clear();
+        this.chunkDurationMs = 0;
+        this.matchData = null;
     }
 
     setResolution(width: number, height: number){

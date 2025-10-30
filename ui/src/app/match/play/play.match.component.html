@@ -20,6 +20,15 @@
                             <div class="delimiter-label">HT</div>
                         </div>
 
+                        <!-- Goal markers -->
+                        <div *ngFor="let goal of goals"
+                             class="goal-marker"
+                             [class.goal-marker-home]="isHomeGoal(goal)"
+                             [class.goal-marker-away]="!isHomeGoal(goal)"
+                             [style.left.%]="getGoalPosition(goal.time)">
+                            <div class="goal-icon">⚽</div>
+                        </div>
+
                         <!-- Progress bar showing elapsed time -->
                         <div class="time-progress"
                              [style.width.%]="getSliderPosition()">

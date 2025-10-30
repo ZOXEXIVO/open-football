@@ -15,7 +15,14 @@ import {Assets, Container, Graphics, TextStyle} from 'pixi.js';
 import {UntilDestroy} from "@ngneat/until-destroy";
 import {MatchPlayService} from "../services/match.play.service";
 import {MatchDataService} from "../services/match.data.service";
-import {MatchDataDto, MatchPlayerDto, MatchService, ObjectPositionDto} from "../services/match.service";
+import {
+    GoalEventDto,
+    MatchDataDto,
+    MatchMetadataDto,
+    MatchPlayerDto,
+    MatchService,
+    ObjectPositionDto
+} from "../services/match.service";
 
 @UntilDestroy()
 @Component({
@@ -35,6 +42,9 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     firstHalfDurationMs: number = -1; // Actual first half duration
     currentTime = 0;
     isFullscreen: boolean = false;
+    goals: GoalEventDto[] = [];
+    private totalChunks: number = 0;
+    private isLoadingChunk: boolean = false;
 
     // Configuration: Set to true to force 50% half-time position
     // Currently defaulting to true until auto-detection is fixed
@@ -61,6 +71,12 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     ngOnInit(): void {
         this.matchPlayService.timeChanged$.subscribe(time => {
             this.currentTime = time;
+
+            // Load chunk if needed during playback
+            if (this.totalChunks > 0) {
+                this.loadChunkIfNeeded(time);
+            }
+
             // Trigger change detection to update slider position
             if (!this.isDraggingSlider) {
                 this.cdr.detectChanges();
@@ -152,31 +168,106 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     public ngAfterViewInit(): void {
         this.matchDataService.setResolution(this.maxWidth, this.maxHeight);
 
-        this.matchService.data(this.leagueSlug, this.matchId).subscribe(async matchData => {
-            this.dataLoaded = true;
+        // First, get metadata to know how many chunks we need to load
+        this.matchService.metadata(this.leagueSlug, this.matchId).subscribe(metadata => {
+            console.log('Match metadata:', metadata);
 
-            this.matchDataService.setMatchData(matchData);
+            // Set total duration upfront so timeline doesn't change
+            this.matchTimeMs = metadata.total_duration_ms;
+            this.totalChunks = metadata.chunk_count;
+            this.matchDataService.setChunkDuration(metadata.chunk_duration_ms);
 
-            // Calculate match duration from ball position data
-            if (matchData.ball && matchData.ball.length > 0) {
-                const lastBallPosition = matchData.ball[matchData.ball.length - 1];
-                this.matchTimeMs = lastBallPosition.timestamp;
-                console.log('Match duration:', this.matchTimeMs, 'ms');
-
-                // Detect first half duration
-                // Look for a significant time gap (half-time break) or use midpoint
-                if (this.forceEqualHalves) {
-                    this.firstHalfDurationMs = this.matchTimeMs / 2;
-                    console.log('Forcing equal halves - First half duration:', this.firstHalfDurationMs, 'ms');
-                } else {
-                    this.firstHalfDurationMs = this.detectFirstHalfDuration(matchData);
-                    console.log('Auto-detected first half duration:', this.firstHalfDurationMs, 'ms');
-                }
+            // Calculate first half duration upfront
+            if (this.forceEqualHalves) {
+                this.firstHalfDurationMs = this.matchTimeMs / 2;
             }
 
-            await this.initGraphics();
-            await this.setupGraphics(matchData);
+            // Always use chunk loading if metadata is available (even for single chunk)
+            this.loadChunkedMatchData(metadata.chunk_count);
+        }, error => {
+            // Fallback to old method if metadata endpoint doesn't exist (for old matches without chunks)
+            console.warn('Metadata endpoint not available, falling back to full data load');
+            this.loadFullMatchData();
         });
+    }
+
+    private loadFullMatchData(): void {
+        this.matchService.data(this.leagueSlug, this.matchId).subscribe(async matchData => {
+            this.dataLoaded = true;
+            this.matchDataService.setMatchData(matchData);
+            await this.initializeMatch(matchData);
+        });
+    }
+
+    private loadChunkedMatchData(chunkCount: number): void {
+        // Load only the first chunk immediately
+        this.matchService.chunk(this.leagueSlug, this.matchId, 0).subscribe(async firstChunk => {
+            console.log('First chunk (0) loaded');
+            this.dataLoaded = true;
+
+            this.matchDataService.setMatchData(firstChunk);
+            this.matchDataService.mergeMatchData(firstChunk, 0);
+            await this.initializeMatch(firstChunk);
+
+            // Other chunks will be loaded on-demand when seeking
+        });
+    }
+
+    private async initializeMatch(matchData: MatchDataDto): Promise<void> {
+        // Load goals from match data service
+        if (this.matchDataService.match?.goals) {
+            this.goals = this.matchDataService.match.goals;
+        }
+
+        // Only calculate duration if not already set (for non-chunked matches)
+        if (this.matchTimeMs <= 0 && matchData.ball && matchData.ball.length > 0) {
+            const lastBallPosition = matchData.ball[matchData.ball.length - 1];
+            this.matchTimeMs = lastBallPosition.timestamp;
+            console.log('Match duration from data:', this.matchTimeMs, 'ms');
+
+            // Detect first half duration
+            if (this.forceEqualHalves) {
+                this.firstHalfDurationMs = this.matchTimeMs / 2;
+                console.log('Forcing equal halves - First half duration:', this.firstHalfDurationMs, 'ms');
+            } else {
+                this.firstHalfDurationMs = this.detectFirstHalfDuration(matchData);
+                console.log('Auto-detected first half duration:', this.firstHalfDurationMs, 'ms');
+            }
+        } else {
+            console.log('Using metadata duration:', this.matchTimeMs, 'ms');
+        }
+
+        await this.initGraphics();
+        await this.setupGraphics(matchData);
+    }
+
+    private loadChunkIfNeeded(timestamp: number): void {
+        const chunkNumber = this.matchDataService.getChunkNumberForTime(timestamp);
+
+        // Check if chunk is already loaded or being loaded
+        if (this.matchDataService.isChunkLoaded(chunkNumber) || this.isLoadingChunk) {
+            return;
+        }
+
+        // Validate chunk number
+        if (chunkNumber < 0 || chunkNumber >= this.totalChunks) {
+            return;
+        }
+
+        console.log(`Loading chunk ${chunkNumber} for time ${timestamp}ms`);
+        this.isLoadingChunk = true;
+
+        this.matchService.chunk(this.leagueSlug, this.matchId, chunkNumber).subscribe(
+            chunkData => {
+                console.log(`Chunk ${chunkNumber} loaded successfully`);
+                this.matchDataService.mergeMatchData(chunkData, chunkNumber);
+                this.isLoadingChunk = false;
+            },
+            error => {
+                console.error(`Failed to load chunk ${chunkNumber}:`, error);
+                this.isLoadingChunk = false;
+            }
+        );
     }
 
     forceRedraw() {
@@ -410,6 +501,16 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         return (this.currentTime / this.matchTimeMs) * 100;
     }
 
+    getGoalPosition(goalTime: number): number {
+        if (this.matchTimeMs <= 0) return 0;
+        return (goalTime / this.matchTimeMs) * 100;
+    }
+
+    isHomeGoal(goal: GoalEventDto): boolean {
+        const player = this.matchDataService.match?.players.find(p => p.id === goal.player_id);
+        return player?.is_home ?? false;
+    }
+
     formatTime(ms: number): string {
         const totalSeconds = Math.floor(ms / 1000);
         const minutes = Math.floor(totalSeconds / 60);
@@ -553,11 +654,15 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         const percentage = Math.max(0, Math.min(1, x / rect.width));
         const newTime = percentage * this.matchTimeMs;
 
+        // Load chunk if needed before seeking
+        this.loadChunkIfNeeded(newTime);
+
         this.matchPlayService.seekToTime(newTime);
     }
 
     ngOnDestroy(): void {
         this.matchPlayService.reset();
+        this.matchDataService.reset();
 
         this.isDisposed = true;
         this.application?.ticker.stop();

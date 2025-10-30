@@ -70,6 +70,60 @@ impl ResultMatchPositionData {
 
     pub fn compress(&mut self) {}
 
+    /// Split the data into chunks based on time ranges
+    /// Returns a vector of chunks, each containing data for a specific time window
+    pub fn split_into_chunks(&self, chunk_duration_ms: u64) -> Vec<ResultMatchPositionData> {
+        if self.ball.is_empty() {
+            return vec![self.clone()];
+        }
+
+        let max_timestamp = self.max_timestamp();
+        let num_chunks = ((max_timestamp as f64 / chunk_duration_ms as f64).ceil() as usize).max(1);
+        let mut chunks = Vec::with_capacity(num_chunks);
+
+        for chunk_idx in 0..num_chunks {
+            let start_time = chunk_idx as u64 * chunk_duration_ms;
+            let end_time = start_time + chunk_duration_ms;
+
+            let mut chunk = ResultMatchPositionData {
+                ball: Vec::new(),
+                players: HashMap::new(),
+                passes: Vec::new(),
+                track_events: self.track_events,
+            };
+
+            // Filter ball positions for this time window
+            chunk.ball = self.ball.iter()
+                .filter(|item| item.timestamp >= start_time && item.timestamp < end_time)
+                .cloned()
+                .collect();
+
+            // Filter player positions for this time window
+            for (player_id, positions) in &self.players {
+                let filtered_positions: Vec<ResultPositionDataItem> = positions.iter()
+                    .filter(|item| item.timestamp >= start_time && item.timestamp < end_time)
+                    .cloned()
+                    .collect();
+
+                if !filtered_positions.is_empty() {
+                    chunk.players.insert(*player_id, filtered_positions);
+                }
+            }
+
+            // Filter passes for this time window
+            if self.track_events {
+                chunk.passes = self.passes.iter()
+                    .filter(|pass| pass.timestamp >= start_time && pass.timestamp < end_time)
+                    .cloned()
+                    .collect();
+            }
+
+            chunks.push(chunk);
+        }
+
+        chunks
+    }
+
     /// Check if event tracking is enabled
     #[inline]
     pub fn is_tracking_events(&self) -> bool {
