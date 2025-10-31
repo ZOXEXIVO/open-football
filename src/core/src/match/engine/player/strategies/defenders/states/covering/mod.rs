@@ -57,7 +57,8 @@ impl StateProcessingHandler for DefenderCoveringState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(
             SteeringBehavior::Pursuit {
-                target: self.calculate_optimal_covering_position(ctx)
+                target: self.calculate_optimal_covering_position(ctx),
+                target_velocity: Vector3::zeros(), // Static target position
             }
             .calculate(ctx.player)
             .velocity,

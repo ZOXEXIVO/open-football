@@ -1569,7 +1569,6 @@ dependencies = [
  "core",
  "env_logger",
  "macroquad",
- "tokio",
 ]
 
 [[package]]

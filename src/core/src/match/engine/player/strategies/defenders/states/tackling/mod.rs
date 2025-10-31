@@ -114,7 +114,10 @@ impl StateProcessingHandler for DefenderTacklingState {
         let target = self.calculate_intelligent_target(ctx);
 
         Some(
-            SteeringBehavior::Pursuit { target }
+            SteeringBehavior::Pursuit {
+                target,
+                target_velocity: Vector3::zeros(), // Static/calculated target position
+            }
                 .calculate(ctx.player)
                 .velocity
                 + ctx.player().separation_velocity(),

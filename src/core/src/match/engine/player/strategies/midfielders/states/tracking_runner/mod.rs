@@ -5,14 +5,37 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TRACKING_DISTANCE_THRESHOLD: f32 = 10.0; // Maximum distance to track the runner
+const TRACKING_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to track the runner
 const STAMINA_THRESHOLD: f32 = 50.0; // Minimum stamina required to continue tracking
+const BALL_INTERCEPTION_DISTANCE: f32 = 15.0; // Distance to switch to intercepting ball
 
 #[derive(Default)]
 pub struct MidfielderTrackingRunnerState {}
 
 impl StateProcessingHandler for MidfielderTrackingRunnerState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Check for ball interception opportunities first
+        let ball_distance = ctx.ball().distance();
+        if ball_distance < BALL_INTERCEPTION_DISTANCE && ctx.ball().is_towards_player() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Intercepting,
+            ));
+        }
+
+        // Check if opponent with ball is nearby - switch to tackling
+        if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
+            let distance = opponent_with_ball.distance(ctx);
+            if distance < 5.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            } else if distance < 20.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+        }
+
         let nearest_forward = ctx.players().opponents().forwards().min_by(|a, b| {
             let dist_a = (a.position - ctx.player.position).magnitude();
             let dist_b = (b.position - ctx.player.position).magnitude();
@@ -61,7 +84,8 @@ impl StateProcessingHandler for MidfielderTrackingRunnerState {
         // Move towards the opponent runner
         if let Some(runner) = nearest_forward {
             let steering = SteeringBehavior::Pursuit {
-                target: runner.position
+                target: runner.position,
+                target_velocity: Vector3::zeros(), // Opponent velocity not available in lite struct
             }
             .calculate(ctx.player);
 

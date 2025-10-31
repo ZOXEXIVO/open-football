@@ -71,13 +71,11 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
                 }
 
                 // Check if player matches has_ball criteria
-                let matches_ball_filter = match has_ball {
+                match has_ball {
                     None => true,  // No filter, include all teammates
                     Some(true) => self.ctx.ball().owner_id() == Some(player.id),  // Only teammates with ball
                     Some(false) => self.ctx.ball().owner_id() != Some(player.id)  // Only teammates without ball
-                };
-
-                matches_ball_filter
+                }
             })
             .map(|player| MatchPlayerLite {
                 id: player.id,
@@ -87,12 +85,14 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     }
 
     pub fn nearby(&'b self, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
-        const MIN_DISTANCE: f32 = 1.0; // Changed from 50.0 to allow closer teammates
+        self.nearby_range(1.0, max_distance)
+    }
 
+    pub fn nearby_range(&'b self, min_distance: f32, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx
             .tick_context
             .distances
-            .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
+            .teammates(self.ctx.player.id, min_distance, max_distance)
             .map(|(pid, _)| MatchPlayerLite {
                 id: pid,
                 position: self.ctx.tick_context.positions.players.position(pid),

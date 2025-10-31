@@ -49,7 +49,7 @@ impl GoalkeeperKickingState {
         ctx: &StateProcessingContext<'a>,
     ) -> Option<MatchPlayerLite> {
         // Kicking allows for extreme long passes - search maximum range including 300m+
-        let max_distance = ctx.context.field_size.width as f32 * 2.5;
+        let max_distance = ctx.context.field_size.width as f32 * 3.0;
 
         // Get goalkeeper's kicking and vision skills
         let vision_skill = ctx.player.skills.mental.vision / 20.0;

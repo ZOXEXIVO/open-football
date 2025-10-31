@@ -1,5 +1,5 @@
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -53,8 +53,29 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Forward should sprint toward goal, behind the defensive line
+        let opponent_goal = ctx.ball().direction_to_opponent_goal();
+        let current_position = ctx.player.position;
+
+        // Calculate target position: run toward goal, slightly angled to stay in passing lane
+        let to_goal = (opponent_goal - current_position).normalize();
+
+        // Add slight lateral movement to avoid being directly behind defender
+        let lateral_offset = if current_position.y > 0.0 {
+            Vector3::new(0.0, -0.2, 0.0) // Drift slightly inward
+        } else {
+            Vector3::new(0.0, 0.2, 0.0)
+        };
+
+        let direction = (to_goal + lateral_offset).normalize();
+
+        // Sprint at maximum pace with acceleration bonus
+        let pace = ctx.player.skills.physical.pace;
+        let acceleration = ctx.player.skills.physical.acceleration / 20.0;
+        let sprint_speed = pace * (1.5 + acceleration * 0.5); // Fast sprint
+
+        Some(direction * sprint_speed)
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}

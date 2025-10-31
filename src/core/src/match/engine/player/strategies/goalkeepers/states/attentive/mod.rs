@@ -251,7 +251,7 @@ impl GoalkeeperAttentiveState {
         let positioning_skill = ctx.player.skills.mental.positioning / 20.0; // Normalize to 0-1
 
         // Determine optimal distance - better goalkeepers position more optimally
-        let base_distance = 5.0;
+        let base_distance = 30.0;
         let skill_adjusted_distance = base_distance * (0.8 + positioning_skill * 0.4);
 
         // Position is on the line between goal and ball, but closer to goal

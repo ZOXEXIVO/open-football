@@ -46,6 +46,7 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         Some(
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
+                target_velocity: ctx.tick_context.positions.ball.velocity,
             }
                 .calculate(ctx.player)
                 .velocity,

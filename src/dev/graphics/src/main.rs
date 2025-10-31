@@ -17,7 +17,6 @@ use env_logger::Env;
 use macroquad::prelude::*;
 use std::time::Duration;
 use std::time::Instant;
-use tokio::time::sleep;
 
 use core::r#match::PlayerSide;
 use core::r#match::Score;
@@ -285,7 +284,7 @@ async fn main() {
         left_mouse_pressed = is_mouse_button_down(MouseButton::Left);
 
         if left_mouse_pressed {
-            sleep(Duration::from_millis(500)).await;
+            std::thread::sleep(Duration::from_millis(500));
         }
 
         next_frame().await;

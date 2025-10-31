@@ -119,6 +119,7 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
                 return Some(
                     SteeringBehavior::Pursuit {
                         target: ball_position,
+                        target_velocity: ctx.tick_context.positions.ball.velocity,
                     }
                         .calculate(ctx.player)
                         .velocity,

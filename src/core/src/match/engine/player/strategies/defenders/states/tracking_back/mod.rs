@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, MATCH_TIME_MS,
+    StateProcessingHandler, SteeringBehavior, MATCH_TIME_MS,
 };
 use nalgebra::Vector3;
 
@@ -61,8 +61,37 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let start_position = ctx.player.start_position;
+        let distance_from_start = ctx.player().distance_from_start_position();
+
+        // Calculate urgency based on game situation
+        let urgency = if ctx.ball().on_own_side() {
+            // Ball on own side - more urgent to get back
+            1.5
+        } else if ctx.team().is_loosing() && ctx.context.total_match_time > (MATCH_TIME_MS - 300) {
+            // Losing late in game - less urgent to defend
+            0.8
+        } else {
+            1.0
+        };
+
+        // Use Arrive behavior with slowing distance based on how far we are
+        let slowing_distance = if distance_from_start > 50.0 {
+            15.0 // Far away - longer slowing distance
+        } else {
+            10.0 // Close - shorter slowing distance
+        };
+
+        Some(
+            SteeringBehavior::Arrive {
+                target: start_position,
+                slowing_distance,
+            }
+            .calculate(ctx.player)
+            .velocity
+            * urgency,
+        )
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}

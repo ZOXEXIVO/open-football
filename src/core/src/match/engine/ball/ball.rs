@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
@@ -111,7 +112,7 @@ impl Ball {
         // Check if ball has moved significantly from last boundary position
         let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
             let distance_from_boundary = (self.position - last_pos).magnitude();
-            distance_from_boundary > 15.0 // Must move at least 15 units away from boundary
+            distance_from_boundary > 30.0 // Must move at least 15 units away from boundary
         } else {
             true // No previous boundary position recorded
         };
@@ -265,10 +266,9 @@ impl Ball {
         events: &mut EventCollection,
     ) -> Vec<u32> {
         let ball_position = self.position;
-        const NOTIFICATION_RADIUS: f32 = 30.0; // Players within this range will be notified
+        const NOTIFICATION_RADIUS: f32 = 300.0; // Players within this range will be notified
 
         // Group players by team and find nearest from each team
-        use std::collections::HashMap;
         let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();
 
         for player in players {

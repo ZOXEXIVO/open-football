@@ -9,13 +9,16 @@ pub struct GoalkeeperDistributingState {}
 
 impl StateProcessingHandler for GoalkeeperDistributingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // If we no longer have the ball, we must have passed or lost it
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
         }
 
+        // Try to find the best pass option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
+            // Execute the pass and transition to returning to goal
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::ReturningToGoal,
                 Event::PlayerEvent(PlayerEvent::PassTo(
@@ -27,12 +30,17 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
             ));
         }
 
+        // Timeout after a short time if no pass is made
+        // This prevents the goalkeeper from being stuck trying to pass forever
         if ctx.in_state_time > 10 {
+            // If we still have the ball after timeout, try running to find space
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Running,
             ));
         }
 
+        // If we have the ball but no good passing option yet, wait
+        // The goalkeeper should not be trying to catch the ball since they already have it
         None
     }
 

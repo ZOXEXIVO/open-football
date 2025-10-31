@@ -4,8 +4,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 2.0; // Distance within which the defender can tackle
-const PRESSING_DISTANCE_THRESHOLD: f32 = 20.0; // Max distance to consider pressing
+const TACKLING_DISTANCE_THRESHOLD: f32 = 3.0; // Distance within which the defender can tackle
+const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Max distance to consider pressing
 const STAMINA_THRESHOLD: f32 = 30.0; // Minimum stamina to continue pressing
 
 #[derive(Default)]
@@ -29,7 +29,7 @@ impl StateProcessingHandler for DefenderPressingState {
             // 4. If close enough to tackle, transition to Tackling state
             if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::SlidingTackle,
+                    DefenderState::Tackling,
                 ));
             }
 

@@ -28,7 +28,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         let threat_level = self.assess_threat_level(ctx);
 
         // Transition to Attentive if ball is on own side and moderately close
-        if ball_on_own_side && ball_distance < 250.0 {
+        if ball_on_own_side {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Attentive,
             ));

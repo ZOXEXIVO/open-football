@@ -1,4 +1,4 @@
-use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -17,27 +17,27 @@ impl StateProcessingHandler for MidfielderRestingState {
         // 1. Check if player's stamina has recovered
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina >= STAMINA_RECOVERY_THRESHOLD {
-            // Transition back to HoldingLine state
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
+            // Transition back to Standing state
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Standing,
             ));
         }
 
         if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD {
             // If the ball is close, check for nearby opponents
             let opponent_nearby = self.is_opponent_nearby(ctx);
-            return Some(StateChangeResult::with_defender_state(if opponent_nearby {
-                DefenderState::Marking
+            return Some(StateChangeResult::with_midfielder_state(if opponent_nearby {
+                MidfielderState::Tackling
             } else {
-                DefenderState::Intercepting
+                MidfielderState::Intercepting
             }));
         }
 
         // 3. Check if the team is under threat
         if self.is_team_under_threat(ctx) {
             // Transition to Pressing state to help the team
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Pressing,
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Pressing,
             ));
         }
 

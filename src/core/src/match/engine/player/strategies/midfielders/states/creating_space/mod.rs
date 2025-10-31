@@ -116,6 +116,7 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
                     Some(
                         SteeringBehavior::Pursuit {
                             target: target_position,
+                            target_velocity: Vector3::zeros(), // Static target position
                         }
                             .calculate(ctx.player)
                             .velocity + avoidance_vector

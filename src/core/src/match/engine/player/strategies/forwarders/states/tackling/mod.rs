@@ -132,6 +132,7 @@ impl StateProcessingHandler for ForwardTacklingState {
                 return Some(
                     SteeringBehavior::Pursuit {
                         target: opponent.position,
+                        target_velocity: Vector3::zeros(), // Opponent velocity not available in lite struct
                     }
                         .calculate(ctx.player)
                         .velocity,
@@ -144,6 +145,7 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(
                 SteeringBehavior::Pursuit {
                     target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
                 }
                     .calculate(ctx.player)
                     .velocity,

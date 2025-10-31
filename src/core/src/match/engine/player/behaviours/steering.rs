@@ -10,7 +10,8 @@ pub enum SteeringBehavior {
         slowing_distance: f32,
     },
     Pursuit {
-        target: Vector3<f32>
+        target: Vector3<f32>,
+        target_velocity: Vector3<f32>,
     },
     Evade {
         target: Vector3<f32>
@@ -118,7 +119,8 @@ impl SteeringBehavior {
                     rotation: 0.0,
                 }
             }
-            SteeringBehavior::Pursuit { target } => {
+            SteeringBehavior::Pursuit { target, target_velocity } => {
+                // Calculate interception point by predicting where the target will be
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
 
@@ -136,33 +138,45 @@ impl SteeringBehavior {
                     };
                 }
 
-                // Normalize skill values to a range of 0.5 to 1.5
-                let acceleration_normalized = 0.9 + (player.skills.physical.acceleration - 1.0) / 19.0;
-                let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
-                let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
+                // Normalize skill values
+                let acceleration_normalized = 1.2 + (player.skills.physical.acceleration - 1.0) / 19.0;
+                let pace_normalized = 1.1 + (player.skills.physical.pace - 1.0) / 19.0;
+                let agility_normalized = 1.1 + (player.skills.physical.agility - 1.0) / 19.0;
 
                 let max_speed = player.skills.max_speed() * pace_normalized * acceleration_normalized;
 
+                // Calculate interception point
+                let interception_point = Self::calculate_interception_point(
+                    player.position,
+                    *target,
+                    *target_velocity,
+                    max_speed,
+                );
+
+                // Calculate direction to interception point
+                let to_interception = interception_point - player.position;
+                let interception_distance = to_interception.norm();
+
                 // Calculate desired speed based on distance - slow down when approaching
-                let desired_speed = if distance < SLOWING_DISTANCE {
+                let desired_speed = if interception_distance < SLOWING_DISTANCE {
                     // Within slowing distance - reduce speed proportionally
-                    let speed_ratio = (distance / SLOWING_DISTANCE).clamp(0.2, 1.0);
+                    let speed_ratio = (interception_distance / SLOWING_DISTANCE).clamp(0.2, 1.0);
                     max_speed * speed_ratio
                 } else {
                     // Full speed when far away
                     max_speed
                 };
 
-                let desired_velocity = if distance > 0.0 {
-                    to_target.normalize() * desired_speed
+                let desired_velocity = if interception_distance > 0.0 {
+                    to_interception.normalize() * desired_speed
                 } else {
                     Vector3::zeros()
                 };
 
                 // Use direct velocity blending when close to prevent oscillation
-                let final_velocity = if distance < SLOWING_DISTANCE {
+                let final_velocity = if interception_distance < SLOWING_DISTANCE {
                     // Close to target - blend toward desired velocity to prevent overshoot
-                    let blend_factor = (distance / SLOWING_DISTANCE).clamp(0.0, 1.0);
+                    let blend_factor = (interception_distance / SLOWING_DISTANCE).clamp(0.0, 1.0);
                     let damping = 0.7 - (blend_factor * 0.3); // More damping when closer
 
                     desired_velocity * (1.0 - damping) + player.velocity * damping
@@ -340,6 +354,77 @@ impl SteeringBehavior {
         } else {
             v
         }
+    }
+
+    fn calculate_interception_point(
+        pursuer_pos: Vector3<f32>,
+        target_pos: Vector3<f32>,
+        target_vel: Vector3<f32>,
+        pursuer_speed: f32,
+    ) -> Vector3<f32> {
+        // If target is not moving, just return its current position
+        let target_speed = target_vel.norm();
+        if target_speed < 0.01 {
+            return target_pos;
+        }
+
+        // Calculate relative position
+        let relative_pos = target_pos - pursuer_pos;
+        let distance_sq = relative_pos.norm_squared();
+
+        // If target is very close, just return its current position
+        if distance_sq < 1.0 {
+            return target_pos;
+        }
+
+        // Calculate time to intercept using quadratic formula
+        // We're solving: |relative_pos + target_vel * t| = pursuer_speed * t
+        // Which expands to: a*t^2 + b*t + c = 0
+        let target_speed_sq = target_vel.norm_squared();
+        let pursuer_speed_sq = pursuer_speed * pursuer_speed;
+
+        let a = target_speed_sq - pursuer_speed_sq;
+        let b = 2.0 * relative_pos.dot(&target_vel);
+        let c = distance_sq;
+
+        // Solve quadratic equation
+        let discriminant = b * b - 4.0 * a * c;
+
+        let intercept_time = if discriminant < 0.0 {
+            // No real solution - target is too fast to catch
+            // Aim for where target will be in 1 second
+            1.0
+        } else if a.abs() < 0.001 {
+            // Linear case (pursuer and target have same speed)
+            if b.abs() < 0.001 {
+                0.0
+            } else {
+                -c / b
+            }
+        } else {
+            // Quadratic case - take the smaller positive root
+            let sqrt_discriminant = discriminant.sqrt();
+            let t1 = (-b - sqrt_discriminant) / (2.0 * a);
+            let t2 = (-b + sqrt_discriminant) / (2.0 * a);
+
+            // Choose the smallest positive time
+            if t1 > 0.0 && t2 > 0.0 {
+                t1.min(t2)
+            } else if t1 > 0.0 {
+                t1
+            } else if t2 > 0.0 {
+                t2
+            } else {
+                // Both negative, can't intercept - aim ahead by 1 second
+                1.0
+            }
+        };
+
+        // Clamp intercept time to reasonable range (0.1 to 5 seconds)
+        let clamped_time = intercept_time.clamp(0.1, 5.0);
+
+        // Calculate predicted position
+        target_pos + target_vel * clamped_time
     }
 }
 

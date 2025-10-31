@@ -14,6 +14,9 @@ const MARKING_DISTANCE: f32 = 15.0;
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const PRESSING_DISTANCE: f32 = 100.0;
 const TACKLE_DISTANCE: f32 = 30.0;
+const BLOCKING_DISTANCE: f32 = 15.0;
+const HEADING_HEIGHT: f32 = 1.5;
+const HEADING_DISTANCE: f32 = 5.0;
 
 #[derive(Default)]
 pub struct DefenderStandingState {}
@@ -44,6 +47,20 @@ impl StateProcessingHandler for DefenderStandingState {
                     DefenderState::Pressing,
                 ));
             }
+        }
+
+        // Check for aerial balls requiring heading
+        if self.should_head_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Heading,
+            ));
+        }
+
+        // Check for shots requiring blocking
+        if self.should_block_shot(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Blocking,
+            ));
         }
 
         // Check for ball interception opportunities
@@ -209,5 +226,46 @@ impl DefenderStandingState {
             .teammates()
             .defenders()
             .all(|d| d.position.x >= ctx.player.position.x)
+    }
+
+    fn should_head_ball(&self, ctx: &StateProcessingContext) -> bool {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_distance = ctx.ball().distance();
+
+        // Ball must be at heading height and close enough
+        ball_position.z > HEADING_HEIGHT
+            && ball_distance < HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6)
+    }
+
+    fn should_block_shot(&self, ctx: &StateProcessingContext) -> bool {
+        let ball_distance = ctx.ball().distance();
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let ball_speed = ball_velocity.norm();
+
+        // Check if ball is moving fast towards the defender
+        if ball_speed < 8.0 || ball_distance > BLOCKING_DISTANCE {
+            return false;
+        }
+
+        // Check if ball is coming towards player
+        if !ctx.ball().is_towards_player_with_angle(0.7) {
+            return false;
+        }
+
+        // Check if opponent recently shot (ball is fast and low)
+        let ball_height = ctx.tick_context.positions.ball.position.z;
+        if ball_height > 2.0 {
+            return false; // Too high, not a shot
+        }
+
+        // Check if there's an opponent nearby who might have shot
+        let opponent_nearby = ctx
+            .players()
+            .opponents()
+            .nearby(30.0)
+            .any(|opp| opp.has_ball(ctx) || opp.distance(ctx) < 15.0);
+
+        opponent_nearby && ball_distance < BLOCKING_DISTANCE
     }
 }

@@ -3,7 +3,7 @@ use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Maximum distance to attempt a shot
-const MIN_SHOOTING_DISTANCE: f32 = 16.5; // Minimum distance to attempt a shot (e.g., edge of penalty area)
+const MIN_SHOOTING_DISTANCE: f32 = 1.0; // Minimum distance to attempt a shot (very close to goal)
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
 
 #[derive(Default)]
@@ -112,7 +112,7 @@ impl ForwardStandingState {
 
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.ball().distance() < PRESS_DISTANCE && ctx.player.has_ball(ctx)
+        ctx.ball().distance() < PRESS_DISTANCE && !ctx.player.has_ball(ctx)
     }
 
     /// Calculates the distance from the forward to the opponent's goal.

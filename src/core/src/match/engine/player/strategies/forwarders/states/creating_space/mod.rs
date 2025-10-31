@@ -82,6 +82,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 // Direct aggressive run to free space
                 let base_velocity = SteeringBehavior::Pursuit {
                     target: target_position,
+                    target_velocity: Vector3::zeros(), // Static target position
                 }
                     .calculate(ctx.player)
                     .velocity;
@@ -106,6 +107,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 Some(
                     SteeringBehavior::Pursuit {
                         target: channel_target,
+                        target_velocity: Vector3::zeros(), // Static target position
                     }
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 0.8

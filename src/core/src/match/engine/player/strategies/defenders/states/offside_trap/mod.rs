@@ -103,9 +103,52 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
 }
 
 impl DefenderOffsideTrapState {
-    fn is_opponent_style_suitable(&self, _ctx: &StateProcessingContext) -> bool {
-        // TODO
-        false
+    fn is_opponent_style_suitable(&self, ctx: &StateProcessingContext) -> bool {
+        // Offside trap works best against certain opponent styles:
+        // - Teams with fast attackers who run in behind
+        // - Teams that play with high attacking lines
+        // - Teams without exceptional passing/vision to break the trap
+
+        let opponent_attackers: Vec<MatchPlayerLite> = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|p| {
+                // Filter for attackers (those positioned in attacking areas)
+                let ball_ops = ctx.ball();
+                let distance_to_our_goal = (p.position - ball_ops.direction_to_own_goal()).magnitude();
+                distance_to_our_goal > 200.0 // Attackers are usually far from our goal
+            })
+            .collect();
+
+        if opponent_attackers.is_empty() {
+            return true; // No attackers present, trap is safe
+        }
+
+        // Calculate average opponent attacker speed
+        let player_ops = ctx.player();
+        let total_speed: f32 = opponent_attackers
+            .iter()
+            .map(|p| player_ops.skills(p.id).physical.pace)
+            .sum();
+        let avg_opponent_speed = total_speed / opponent_attackers.len() as f32;
+
+        // Calculate average opponent passing/vision
+        let total_vision: f32 = opponent_attackers
+            .iter()
+            .map(|p| player_ops.skills(p.id).mental.vision)
+            .sum();
+        let avg_opponent_vision = total_vision / opponent_attackers.len() as f32;
+
+        // Trap is suitable if:
+        // 1. Opponents are fast (70+) - they rely on pace, not passing
+        // 2. OR opponents have low vision (<60) - can't break trap with passes
+        // 3. AND there are not too many attackers (overwhelming the defense)
+        let opponents_are_fast = avg_opponent_speed >= 70.0;
+        let opponents_lack_vision = avg_opponent_vision < 60.0;
+        let reasonable_attacker_count = opponent_attackers.len() <= 3;
+
+        (opponents_are_fast || opponents_lack_vision) && reasonable_attacker_count
     }
 
     fn evaluate_defensive_line_cohesion(&self, ctx: &StateProcessingContext) -> bool {

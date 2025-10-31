@@ -4,10 +4,12 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MARKING_DISTANCE_THRESHOLD: f32 = 2.0; // Desired distance to maintain from the opponent
-const TACKLING_DISTANCE_THRESHOLD: f32 = 1.0; // Distance within which the defender can tackle
+const MARKING_DISTANCE_THRESHOLD: f32 = 10.0; // Desired distance to maintain from the opponent
+const TACKLING_DISTANCE_THRESHOLD: f32 = 3.0; // Distance within which the defender can tackle
 const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
-const BALL_PROXIMITY_THRESHOLD: f32 = 5.0; // Distance to consider the ball as close
+const BALL_PROXIMITY_THRESHOLD: f32 = 10.0; // Distance to consider the ball as close
+const HEADING_HEIGHT: f32 = 1.5;
+const HEADING_DISTANCE: f32 = 5.0;
 
 #[derive(Default)]
 pub struct DefenderMarkingState {}
@@ -23,14 +25,26 @@ impl StateProcessingHandler for DefenderMarkingState {
             ));
         }
 
-        // 2. Identify the opponent player to mark
-        if let Some(opponent_to_mark) = ctx.players().opponents().nearby(100.0).next() {
+        // Check if ball is aerial and at heading height
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_distance = ctx.ball().distance();
+
+        if ball_position.z > HEADING_HEIGHT
+            && ball_distance < HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Heading,
+            ));
+        }
+
+        // 2. Identify the most dangerous opponent player to mark
+        if let Some(opponent_to_mark) = self.find_most_dangerous_opponent(ctx) {
             let distance_to_opponent = opponent_to_mark.distance(ctx);
 
             // 4. If the opponent has the ball and is within tackling distance, attempt a tackle
             if opponent_to_mark.has_ball(ctx) && distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
                 return Some(StateChangeResult::with_defender_state(
-                    DefenderState::SlidingTackle,
+                    DefenderState::Tackling,
                 ));
             }
 
@@ -68,8 +82,8 @@ impl StateProcessingHandler for DefenderMarkingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move to maintain position relative to the opponent being marked
 
-        // Identify the opponent player to mark
-        if let Some(opponent_to_mark) = ctx.players().opponents().nearby(100.0).next() {
+        // Identify the most dangerous opponent player to mark
+        if let Some(opponent_to_mark) = self.find_most_dangerous_opponent(ctx) {
             // Calculate desired position to maintain proper marking
             let opponent_future_position = opponent_to_mark.position + opponent_to_mark.velocity(ctx);
             let desired_position = opponent_future_position
@@ -92,5 +106,70 @@ impl StateProcessingHandler for DefenderMarkingState {
 }
 
 impl DefenderMarkingState {
+    /// Find the most dangerous opponent to mark based on multiple factors
+    fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
+        let nearby_opponents: Vec<_> = ctx.players().opponents().nearby(100.0).collect();
 
+        if nearby_opponents.is_empty() {
+            return None;
+        }
+
+        let player_ops = ctx.player();
+
+        // Calculate danger score for each opponent
+        let mut best_opponent = None;
+        let mut best_score = f32::MIN;
+
+        for opponent in nearby_opponents {
+            let mut danger_score = 0.0;
+
+            // Factor 1: Has the ball (VERY dangerous)
+            if opponent.has_ball(ctx) {
+                danger_score += 100.0;
+            }
+
+            // Factor 2: Distance to our goal (closer = more dangerous)
+            let own_goal_position = ctx.ball().direction_to_own_goal();
+            let distance_to_own_goal = (opponent.position - own_goal_position).magnitude();
+            danger_score += (500.0 - distance_to_own_goal) / 10.0; // Max 50 points
+
+            // Factor 3: Distance to defender (closer = needs marking)
+            let distance_to_defender = opponent.distance(ctx);
+            danger_score += (100.0 - distance_to_defender.min(100.0)) / 5.0; // Max 20 points
+
+            // Factor 4: Opponent facing our goal (attacking posture)
+            let opponent_velocity = opponent.velocity(ctx);
+            let to_our_goal = (own_goal_position - opponent.position).normalize();
+            if opponent_velocity.norm() > 0.1 {
+                let velocity_dir = opponent_velocity.normalize();
+                let alignment = velocity_dir.dot(&to_our_goal);
+                if alignment > 0.0 {
+                    danger_score += alignment * 30.0; // Max 30 points for running towards goal
+                }
+            }
+
+            // Factor 5: Ball proximity (if opponent doesn't have ball, closer to ball = more dangerous)
+            if !opponent.has_ball(ctx) {
+                let ball_position = ctx.tick_context.positions.ball.position;
+                let distance_to_ball = (opponent.position - ball_position).magnitude();
+                danger_score += (50.0 - distance_to_ball.min(50.0)) / 5.0; // Max 10 points
+            }
+
+            // Factor 6: Opponent skill level (better players are more dangerous)
+            let opponent_skills = player_ops.skills(opponent.id);
+            let attacking_skill = (opponent_skills.physical.pace
+                + opponent_skills.technical.dribbling
+                + opponent_skills.technical.finishing) / 3.0;
+            danger_score += attacking_skill / 20.0; // Max ~5 points for elite attacker
+
+            // Update best if this opponent is more dangerous
+            if danger_score > best_score {
+                best_score = danger_score;
+                best_opponent = Some(opponent);
+            }
+        }
+
+        best_opponent
+    }
 }
+

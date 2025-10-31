@@ -15,12 +15,12 @@ impl StateProcessingHandler for ForwardDribblingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
         
-        if ctx.ball().distance_to_opponent_goal() < 250.0 && ctx.player().has_clear_shot() {
+        if ctx.ball().distance_to_opponent_goal() < 35.0 && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
         // Check if the player is under pressure
-        if ctx.players().opponents().nearby_raw(50.0).count() >= 2 {
+        if ctx.players().opponents().nearby_raw(15.0).count() >= 2 {
             // Transition to Passing state if under pressure
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
@@ -64,13 +64,13 @@ impl StateProcessingHandler for ForwardDribblingState {
 
 impl ForwardDribblingState {
     fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        let dribble_distance = 10.0;
+        let dribble_distance = 15.0;
 
         !ctx.players().opponents().exists(dribble_distance)
     }
 
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {
-        let shot_distance = 200.0;
+        let shot_distance = 35.0;
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 

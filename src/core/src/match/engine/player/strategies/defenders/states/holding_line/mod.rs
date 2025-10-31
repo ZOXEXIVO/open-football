@@ -12,11 +12,11 @@ pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Calculate the defensive line position
+        // 1. Calculate the defensive line position (x-axis: goal-to-goal)
         let defensive_line_position = self.calculate_defensive_line_position(ctx);
 
         // 2. Calculate the distance from the defender to the defensive line
-        let distance_from_line = (ctx.player.position.y - defensive_line_position).abs();
+        let distance_from_line = (ctx.player.position.x - defensive_line_position).abs();
 
         // 3. If the defender is too far from the defensive line, switch to Running state
         if distance_from_line > MAX_DEFENSIVE_LINE_DEVIATION {
@@ -59,7 +59,8 @@ impl StateProcessingHandler for DefenderHoldingLineState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let defensive_line_position = self.calculate_defensive_line_position(ctx);
         let current_position = ctx.player.position;
-        let target_position = Vector3::new(current_position.x, defensive_line_position, current_position.z);
+        // Target position uses x for defensive line, keeps y (lateral position) and z the same
+        let target_position = Vector3::new(defensive_line_position, current_position.y, current_position.z);
 
         // Calculate the distance between the current position and the target position
         let distance = (target_position - current_position).magnitude();
@@ -99,12 +100,14 @@ impl StateProcessingHandler for DefenderHoldingLineState {
 
 impl DefenderHoldingLineState {
     /// Calculates the defensive line position based on team tactics and defender positions.
+    /// Returns the average x-position (goal-to-goal axis) of defenders.
     fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
         let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
 
-        // Calculate the average y-position of defenders to determine the defensive line
-        let sum_y_positions: f32 = defenders.iter().map(|p| p.position.y).sum();
-        sum_y_positions / defenders.len() as f32
+        // Calculate the average x-position of defenders to determine the defensive line
+        // X-axis is the goal-to-goal direction, which is what we want for a defensive line
+        let sum_x_positions: f32 = defenders.iter().map(|p| p.position.x).sum();
+        sum_x_positions / defenders.len() as f32
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

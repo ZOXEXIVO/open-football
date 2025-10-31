@@ -154,11 +154,6 @@ impl Team {
                 );
             }
         }
-
-        // Log formation strength
-        let formation_strength = tactics.calculate_formation_fitness(&self.players.players());
-
-        info!("Formation fitness: {:.2}", formation_strength);
     }
 
     /// Select team captain based on leadership and experience

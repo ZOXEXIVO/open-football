@@ -2,6 +2,9 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
+const HEADING_HEIGHT: f32 = 1.5;
+const HEADING_DISTANCE: f32 = 5.0;
+
 #[derive(Default)]
 pub struct DefenderInterceptingState {}
 
@@ -13,7 +16,17 @@ impl StateProcessingHandler for DefenderInterceptingState {
             ));
         }
 
+        // Check if ball is aerial and at heading height
+        let ball_position = ctx.tick_context.positions.ball.position;
         let ball_distance = ctx.ball().distance();
+
+        if ball_position.z > HEADING_HEIGHT
+            && ball_distance < HEADING_DISTANCE
+            && ctx.ball().is_towards_player_with_angle(0.6) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Heading,
+            ));
+        }
 
         if ball_distance < 20.0 {
             return Some(StateChangeResult::with_defender_state(
@@ -45,6 +58,7 @@ impl StateProcessingHandler for DefenderInterceptingState {
         Some(
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
+                target_velocity: ctx.tick_context.positions.ball.velocity,
             }
                 .calculate(ctx.player)
                 .velocity,

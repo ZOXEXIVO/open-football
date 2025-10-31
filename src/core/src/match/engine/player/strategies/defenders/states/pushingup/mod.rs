@@ -71,7 +71,8 @@ impl StateProcessingHandler for DefenderPushingUpState {
 
         Some(
             SteeringBehavior::Pursuit {
-                target: optimal_position
+                target: optimal_position,
+                target_velocity: Vector3::zeros(), // Static target position
             }
                 .calculate(ctx.player)
                 .velocity,

@@ -1,4 +1,4 @@
-use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderHoldingPossessionState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderTrackingRunnerState, MidfielderWalkingState};
+use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderHoldingPossessionState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderRestingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderTrackingRunnerState, MidfielderWalkingState};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -69,7 +69,7 @@ impl MidfielderStrategies {
                 state_processor.process(MidfielderReturningState::default())
             }
             MidfielderState::Resting => {
-                state_processor.process(MidfielderDistributingState::default())
+                state_processor.process(MidfielderRestingState::default())
             }
             MidfielderState::Walking => state_processor.process(MidfielderWalkingState::default()),
             MidfielderState::Running => state_processor.process(MidfielderRunningState::default()),

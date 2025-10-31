@@ -97,11 +97,12 @@ impl ForwardPassingState {
         let teammates = ctx.players().teammates();
 
         // Use player's vision skill to determine range
-        let vision_range = ctx.player.skills.mental.vision * 15.0;
+        let vision_range = ctx.player.skills.mental.vision * 30.0;
+        let vision_range_min = 100.0;
 
         // Get viable passing options within range
         let pass_options: Vec<MatchPlayerLite> = teammates
-            .nearby(vision_range)
+            .nearby_range(50.0, vision_range.max(vision_range_min))
             .filter(|t| self.is_viable_pass_target(ctx, t))
             .collect();
 
@@ -222,7 +223,6 @@ impl ForwardPassingState {
 
         // Check if the teammate is in a good shooting position
         let distance_to_goal = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-
         if distance_to_goal < 200.0 {
             return true;
         }
@@ -239,7 +239,7 @@ impl ForwardPassingState {
 
     /// Check if a player is heavily marked by opponents
     fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        const MARKING_DISTANCE: f32 = 5.0;
+        const MARKING_DISTANCE: f32 = 10.0;
         const MAX_MARKERS: usize = 2;
 
         let markers = ctx.players().opponents().all()
@@ -265,7 +265,7 @@ impl ForwardPassingState {
             false,
         );
 
-        ray_cast_result.is_none() && shot_distance < 250.0
+        ray_cast_result.is_none() && shot_distance < 300.0
     }
 
     /// Calculate the amount of space around a player

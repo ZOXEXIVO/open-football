@@ -62,7 +62,7 @@ impl PassSkills {
 
     /// Calculate overall passing quality (affected by condition)
     fn overall_quality(&self) -> f32 {
-        let base_quality = self.passing * 0.4 + self.technique * 0.3 + self.vision * 0.3;
+        let base_quality = self.passing * 0.5 + self.technique * 0.3 + self.vision * 0.2;
         base_quality * self.condition_factor * self.match_readiness
     }
 
@@ -201,6 +201,9 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = None;
         field.ball.current_owner = None;
+
+        field.reset_players_positions();
+        field.ball.reset();
     }
 
     fn handle_assist_event(player_id: u32, field: &mut MatchField, context: &mut MatchContext) {
@@ -370,7 +373,7 @@ impl PlayerEventDispatcher {
         let skill_influenced_random = {
             let pure_random = rng.random_range(0.0..1.0);
             let randomness_factor = 1.0 - (decision_quality * 0.6);
-            let skill_bias = decision_quality * 0.5;
+            let skill_bias = decision_quality * 0.3;
             (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
         };
 
@@ -380,10 +383,10 @@ impl PlayerEventDispatcher {
         let clear_lane = obstacles_in_lane == 0;
 
         // Distance categories (adjusted for more realistic football passing)
-        let is_short = horizontal_distance <= 25.0;
-        let is_medium = horizontal_distance > 25.0 && horizontal_distance <= 55.0;
-        let is_long = horizontal_distance > 55.0 && horizontal_distance <= 90.0;
-        let is_very_long = horizontal_distance > 90.0;
+        let is_short = horizontal_distance <= 100.0;
+        let is_medium = horizontal_distance > 100.0 && horizontal_distance <= 200.0;
+        let is_long = horizontal_distance > 200.0 && horizontal_distance <= 300.0;
+        let is_very_long = horizontal_distance > 300.0;
 
         // SHORT PASSES (0-25m) - context matters most
         if is_short {
@@ -508,12 +511,10 @@ impl PlayerEventDispatcher {
             }
         }
         // EXTREME DISTANCES (fallback)
-        else {
-            if skill_influenced_random < 0.4 {
-                TrajectoryType::MediumArc
-            } else {
-                TrajectoryType::HighArc
-            }
+        else if skill_influenced_random < 0.4 {
+            TrajectoryType::MediumArc
+        } else {
+            TrajectoryType::HighArc
         }
     }
 
@@ -604,7 +605,7 @@ impl PlayerEventDispatcher {
                 let base_flight_time = horizontal_distance / horizontal_speed;
                 let flight_time = base_flight_time * 0.5; // Moderate arc
 
-                let ideal_z = 0.5 * GRAVITY * flight_time;
+                let ideal_z = 0.7 * GRAVITY * flight_time;
 
                 // Skill affects consistency
                 let execution_quality = skills.overall_quality();
@@ -619,7 +620,7 @@ impl PlayerEventDispatcher {
                 let base_flight_time = horizontal_distance / horizontal_speed;
                 let flight_time = base_flight_time * 1.3; // High arc
 
-                let ideal_z = 0.5 * GRAVITY * flight_time;
+                let ideal_z = 0.7 * GRAVITY * flight_time;
 
                 // Requires good long passing ability
                 let execution_quality = (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
@@ -695,45 +696,90 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
+        const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
+        const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
+
         let mut rng = rand::rng();
 
-        let ball_shot_vector = shoot_event_model.target - field.ball.position;
-        let horizontal_distance = (ball_shot_vector.x * ball_shot_vector.x + ball_shot_vector.y * ball_shot_vector.y).sqrt();
-
         // Get player skills for power and accuracy calculations
-        let player = field.get_player_mut(shoot_event_model.from_player_id).unwrap();
+        let player = field.get_player(shoot_event_model.from_player_id).unwrap();
 
         let finishing_skill = (player.skills.technical.finishing / 20.0).clamp(0.5, 1.0);
         let technique_skill = (player.skills.technical.technique / 20.0).clamp(0.5, 1.0);
         let long_shot_skill = (player.skills.technical.long_shots / 20.0).clamp(0.5, 1.0);
         let composure_skill = (player.skills.mental.composure / 20.0).clamp(0.4, 1.0);
+        let decisions_skill = (player.skills.mental.decisions / 20.0).clamp(0.4, 1.0);
 
-        // Add directional inaccuracy (shooting error)
-        // Better finishers have less angular error
-        let accuracy_factor = finishing_skill * composure_skill;
-        let max_angle_error = if horizontal_distance > 50.0 {
-            0.25 * (1.5 - accuracy_factor) // Long shots: up to ±14.3° for poor shooters
+        // Determine which goal we're shooting at
+        let goal_center = shoot_event_model.target;
+
+        // Calculate goal bounds
+        let goal_left_post = goal_center.y - GOAL_WIDTH;
+        let goal_right_post = goal_center.y + GOAL_WIDTH;
+
+        // Calculate distance to goal
+        let ball_to_goal_vector = goal_center - field.ball.position;
+        let horizontal_distance = (ball_to_goal_vector.x * ball_to_goal_vector.x +
+                                   ball_to_goal_vector.y * ball_to_goal_vector.y).sqrt();
+
+        // Calculate overall shooting accuracy (0.0 to 1.0)
+        let base_accuracy = if horizontal_distance > 100.0 {
+            // Long shots depend more on long_shot skill and technique
+            (long_shot_skill * 0.5 + technique_skill * 0.3 + finishing_skill * 0.2) * composure_skill
+        } else if horizontal_distance > 50.0 {
+            // Medium range - balanced
+            (finishing_skill * 0.4 + technique_skill * 0.3 + long_shot_skill * 0.3) * composure_skill
         } else {
-            0.15 * (1.3 - accuracy_factor) // Close shots: up to ±8.6° for poor shooters
+            // Close range - finishing is key
+            (finishing_skill * 0.6 + technique_skill * 0.2 + composure_skill * 0.2)
         };
 
-        let angle_error = rng.random_range(-max_angle_error..max_angle_error);
+        // Calculate target point within goal (aim for corners/areas based on skill)
+        // Better players aim for harder-to-save spots (corners)
+        let target_preference = rng.random_range(0.0..1.0);
+        let ideal_y_target = if target_preference < 0.3 {
+            // Aim for left side of goal (30%)
+            goal_center.y - (GOAL_WIDTH * 0.6) * decisions_skill
+        } else if target_preference < 0.6 {
+            // Aim for right side of goal (30%)
+            goal_center.y + (GOAL_WIDTH * 0.6) * decisions_skill
+        } else {
+            // Aim more central (40%) - safer but easier to save
+            goal_center.y + rng.random_range(-GOAL_WIDTH * 0.3..GOAL_WIDTH * 0.3)
+        };
 
-        // Rotate shot vector for directional error
-        let cos_angle = angle_error.cos();
-        let sin_angle = angle_error.sin();
-        let adjusted_shot_vector = Vector3::new(
-            ball_shot_vector.x * cos_angle - ball_shot_vector.y * sin_angle,
-            ball_shot_vector.x * sin_angle + ball_shot_vector.y * cos_angle,
-            0.0,
+        // Add shooting error based on skills and distance
+        // Error increases with distance and decreases with skill
+        let distance_error_factor = (horizontal_distance / 100.0).clamp(0.5, 2.5);
+        let skill_error_reduction = base_accuracy;
+
+        // Calculate positional error (how far from intended target)
+        // Elite players: ±2-5 units, Poor players: ±10-20 units
+        let base_position_error = 8.0 * distance_error_factor * (1.0 - skill_error_reduction);
+        let max_y_error = base_position_error.clamp(2.0, 25.0);
+
+        // Add random error to y-coordinate
+        let y_error = rng.random_range(-max_y_error..max_y_error);
+        let actual_y_target = ideal_y_target + y_error;
+
+        // Clamp to reasonable bounds (can miss goal, but not by too much)
+        // Allow shots to miss by up to 50% of goal width on each side
+        let max_miss_distance = GOAL_WIDTH * 0.5;
+        let clamped_y_target = actual_y_target.clamp(
+            goal_left_post - max_miss_distance,
+            goal_right_post + max_miss_distance
         );
 
+        // Calculate final shot direction
+        let actual_target = Vector3::new(goal_center.x, clamped_y_target, 0.0);
+        let shot_vector = actual_target - field.ball.position;
+
         // Calculate skill-based power multiplier (better players shoot harder)
-        let power_skill_factor = (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.3);
-        let power_multiplier = 0.97 + (power_skill_factor * 0.3); // Range: 0.95 to 1.25
+        let power_skill_factor = (finishing_skill * 0.5) + (technique_skill * 0.3) + (long_shot_skill * 0.2);
+        let power_multiplier = 0.95 + (power_skill_factor * 0.35); // Range: 0.95 to 1.30
 
         // Calculate horizontal velocity with skill-based power
-        let horizontal_direction = Vector3::new(adjusted_shot_vector.x, adjusted_shot_vector.y, 0.0).normalize();
+        let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
         let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier;
 
         // Add power randomness (better players have more consistent power)
