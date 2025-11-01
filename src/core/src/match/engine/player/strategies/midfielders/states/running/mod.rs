@@ -4,7 +4,7 @@ use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0;
+const MAX_SHOOTING_DISTANCE: f32 = 350.0;
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}

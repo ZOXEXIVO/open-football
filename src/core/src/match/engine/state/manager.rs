@@ -62,7 +62,9 @@ impl StateManager {
             MatchState::Initial => {}
             MatchState::FirstHalf => {
                 Self::play_rest_time(field);
+
                 field.reset_players_positions();
+                field.ball.reset();
             }
             MatchState::HalfTime => {
                 // Half-time finished - reset time for second half

@@ -282,8 +282,8 @@ impl PlayerEventDispatcher {
 
         // Calculate pass force with power variation
         // Reduced variation to make passes more consistent
-        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.07);
-        let power_variation_range = (1.0 - overall_quality) * 0.08;
+        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.1);
+        let power_variation_range = (1.0 - overall_quality) * 0.11;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
         );
@@ -341,7 +341,7 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        const PASS_FORCE_MULTIPLIER: f32 = 4.5;
+        const PASS_FORCE_MULTIPLIER: f32 = 5.0;
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
@@ -603,9 +603,9 @@ impl PlayerEventDispatcher {
             // Medium arc - moderate parabolic trajectory (height ~2-4m)
             TrajectoryType::MediumArc => {
                 let base_flight_time = horizontal_distance / horizontal_speed;
-                let flight_time = base_flight_time * 0.5; // Moderate arc
+                let flight_time = base_flight_time * 0.7; // Moderate arc
 
-                let ideal_z = 0.7 * GRAVITY * flight_time;
+                let ideal_z = 0.8 * GRAVITY * flight_time;
 
                 // Skill affects consistency
                 let execution_quality = skills.overall_quality();
@@ -618,9 +618,9 @@ impl PlayerEventDispatcher {
             // High arc - high parabolic trajectory (height ~4-8m)
             TrajectoryType::HighArc => {
                 let base_flight_time = horizontal_distance / horizontal_speed;
-                let flight_time = base_flight_time * 1.3; // High arc
+                let flight_time = base_flight_time * 1.5; // High arc
 
-                let ideal_z = 0.7 * GRAVITY * flight_time;
+                let ideal_z = 0.8 * GRAVITY * flight_time;
 
                 // Requires good long passing ability
                 let execution_quality = (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
