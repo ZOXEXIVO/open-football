@@ -330,7 +330,7 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
-        field.ball.flags.in_flight_state = 10;
+        field.ball.flags.in_flight_state = 30;
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {

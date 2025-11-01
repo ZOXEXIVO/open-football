@@ -32,6 +32,17 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+        if ball_ops.distance() < 50.0 && !ball_ops.is_owned() {
+            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_velocity < 1.0 {
+                // Ball is stopped or nearly stopped - take it directly
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+        }
+
         // Check for nearby opponents with the ball - press them aggressively
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);

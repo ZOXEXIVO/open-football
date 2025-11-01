@@ -21,6 +21,7 @@ pub struct Ball {
     pub notification_cooldown: u32,
     pub notification_timeout: u32,  // Ticks since players were notified
     pub last_boundary_position: Option<Vector3<f32>>,
+    pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
 }
 
 #[derive(Default)]
@@ -55,6 +56,7 @@ impl Ball {
             notification_cooldown: 0,
             notification_timeout: 0,
             last_boundary_position: None,
+            unowned_stopped_ticks: 0,
         }
     }
 
@@ -71,6 +73,9 @@ impl Ball {
 
         self.try_intercept(players, events);
         self.try_notify_standing_ball(players, events);
+
+        // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
+        self.force_claim_if_deadlock(players, events);
 
         self.process_ownership(context, players, events);
 
@@ -112,7 +117,7 @@ impl Ball {
         // Check if ball has moved significantly from last boundary position
         let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
             let distance_from_boundary = (self.position - last_pos).magnitude();
-            distance_from_boundary > 30.0 // Must move at least 15 units away from boundary
+            distance_from_boundary > 5.0 // Must move at least 5 units away from boundary
         } else {
             true // No previous boundary position recorded
         };
@@ -139,7 +144,7 @@ impl Ball {
             self.notification_timeout += 1;
 
             // If players haven't claimed the ball within reasonable time, reset and try again
-            const MAX_NOTIFICATION_TIMEOUT: u32 = 20; // ~0.33 seconds
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 100; // ~1.67 seconds - increased to give players more time
             if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
@@ -250,14 +255,52 @@ impl Ball {
             && self.velocity.norm() < 0.1 // Nearly zero velocity (stopped or rolling very slowly)
             && self.position.z < 0.5 // Ball is on or near the ground
             && self.current_owner.is_none()
-            && self.flags.in_flight_state == 0 // Not in flight from a pass/shot
+        // Removed in_flight_state check - if ball has stopped, notify players regardless
     }
 
     pub fn is_ball_outside(&self) -> bool {
-        self.position.x == 0.0
+        self.position.x < 0.0
             || self.position.x >= self.field_width
-            || self.position.y == 0.0
+            || self.position.y < 0.0
             || self.position.y >= self.field_height
+    }
+
+    /// NUCLEAR OPTION: Force the nearest player to claim the ball if it's been sitting unowned for too long
+    /// This is a last-resort failsafe to prevent deadlocks where no one claims the ball
+    fn force_claim_if_deadlock(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // Check if ball is stopped and unowned
+        let is_stopped = self.velocity.norm() < 0.1 && self.position.z < 0.5;
+        let is_unowned = self.current_owner.is_none();
+
+        if is_stopped && is_unowned {
+            self.unowned_stopped_ticks += 1;
+
+            // If ball has been stopped and unowned for 10 ticks (~0.16 seconds), FORCE claiming
+            if self.unowned_stopped_ticks >= 10 {
+                // Find the absolute nearest player to the ball (ignoring all other logic)
+                if let Some(nearest_player) = players.iter().min_by(|a, b| {
+                    let dist_a = (a.position - self.position).magnitude();
+                    let dist_b = (b.position - self.position).magnitude();
+                    dist_a.partial_cmp(&dist_b).unwrap()
+                }) {
+                    // FORCE this player to go for the ball
+                    events.add_ball_event(BallEvent::TakeMe(nearest_player.id));
+
+                    // Reset counter
+                    self.unowned_stopped_ticks = 0;
+
+                    // Clear any existing notifications to avoid conflicts
+                    self.take_ball_notified_players.clear();
+                }
+            }
+        } else {
+            // Ball is moving or owned - reset counter
+            self.unowned_stopped_ticks = 0;
+        }
     }
 
     fn notify_nearest_player(
@@ -266,7 +309,7 @@ impl Ball {
         events: &mut EventCollection,
     ) -> Vec<u32> {
         let ball_position = self.position;
-        const NOTIFICATION_RADIUS: f32 = 300.0; // Players within this range will be notified
+        const NOTIFICATION_RADIUS: f32 = 10000.0; // Cover entire field - all players can be notified
 
         // Group players by team and find nearest from each team
         let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();

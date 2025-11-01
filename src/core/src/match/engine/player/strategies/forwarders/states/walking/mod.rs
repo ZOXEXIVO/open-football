@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -9,7 +10,18 @@ use nalgebra::Vector3;
 pub struct ForwardWalkingState {}
 
 impl StateProcessingHandler for ForwardWalkingState {
-    fn try_fast(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_velocity < 1.0 {
+                // Ball is stopped or nearly stopped - take it directly
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::TakeBall,
+                ));
+            }
+        }
+
         None
     }
 

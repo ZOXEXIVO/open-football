@@ -80,8 +80,23 @@ impl GoalkeeperDistributingState {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
+        // Get the previous ball owner to avoid immediate pass-backs
+        let previous_owner = ctx.tick_context.ball.last_owner;
+
         for teammate in ctx.players().teammates().nearby(max_distance) {
+            // PREVENT PASS-BACK: Don't pass to the player who just passed to us
+            if let Some(prev_owner_id) = previous_owner {
+                if teammate.id == prev_owner_id {
+                    continue; // Skip this player
+                }
+            }
+
             let distance = (teammate.position - ctx.player.position).norm();
+
+            // PREVENT PASSING TO PLAYERS TOO CLOSE TO GOALKEEPER (creates ping-pong)
+            if distance < 50.0 {
+                continue; // Skip players too close to goalkeeper
+            }
 
             // Skill-based distance preference with ultra-long pass support
             let distance_bonus = if is_elite_distributor {
@@ -275,7 +290,7 @@ impl GoalkeeperDistributingState {
             // Check if receiver is in space
             let nearby_opponents = ctx.tick_context
                 .distances
-                .opponents(teammate.id, 10.0)
+                .opponents(teammate.id, 15.0)
                 .count();
 
             let space_bonus = if nearby_opponents == 0 {
@@ -347,6 +362,6 @@ impl GoalkeeperDistributingState {
 
         let pass_skill = ctx.player.skills.technical.passing;
 
-        (distance / pass_skill as f32 * 10.0) as f64
+        (distance / pass_skill * 10.0) as f64
     }
 }

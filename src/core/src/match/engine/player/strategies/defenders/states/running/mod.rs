@@ -102,7 +102,42 @@ impl StateProcessingHandler for DefenderRunningState {
 
 impl DefenderRunningState {
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(100.0)
+        // Original: Clear if in own penalty area with nearby opponents
+        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(100.0) {
+            return true;
+        }
+
+        // New: Clear if congested in corner/boundary
+        if self.is_congested_near_boundary(ctx) {
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if player is stuck in a corner/boundary with multiple players around
+    fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
+        // Check if near any boundary (within 20 units)
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let pos = ctx.player.position;
+
+        let near_boundary = pos.x < 20.0
+            || pos.x > field_width - 20.0
+            || pos.y < 20.0
+            || pos.y > field_height - 20.0;
+
+        if !near_boundary {
+            return false;
+        }
+
+        // Count all nearby players (teammates + opponents) within 15 units
+        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
+        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
+        let total_nearby = nearby_teammates + nearby_opponents;
+
+        // If 3 or more players nearby (congestion), need to clear
+        total_nearby >= 3
     }
 
     pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {

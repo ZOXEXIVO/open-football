@@ -8,9 +8,9 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::Rng;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 3.0;
+const TACKLE_DISTANCE_THRESHOLD: f32 = 15.0;
 const FOUL_CHANCE_BASE: f32 = 0.2;
-const PRESSING_DISTANCE: f32 = 50.0;
+const PRESSING_DISTANCE: f32 = 70.0;
 const RETURN_DISTANCE: f32 = 100.0;
 
 #[derive(Default)]

@@ -17,6 +17,17 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
+        // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_velocity < 1.0 {
+                // Ball is stopped or nearly stopped - take it directly
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+        }
+
         if ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall

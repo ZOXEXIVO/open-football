@@ -31,6 +31,17 @@ impl StateProcessingHandler for MidfielderStandingState {
             };
         }
         else {
+            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+                if ball_velocity < 1.0 {
+                    // Ball is stopped or nearly stopped - take it directly
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::TakeBall,
+                    ));
+                }
+            }
+
             if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Running,

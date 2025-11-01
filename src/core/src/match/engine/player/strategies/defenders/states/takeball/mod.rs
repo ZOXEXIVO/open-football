@@ -5,8 +5,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TAKEBALL_TIMEOUT: u64 = 1000; // Give up after 100 ticks
-const MAX_TAKEBALL_DISTANCE: f32 = 150.0; // Don't chase balls further than this
+const TAKEBALL_TIMEOUT: u64 = 1000; // Give up after 1000 ticks
+const MAX_TAKEBALL_DISTANCE: f32 = 500.0; // Don't chase balls further than this - increased to ensure someone always goes
 
 #[derive(Default)]
 pub struct DefenderTakeBallState {}

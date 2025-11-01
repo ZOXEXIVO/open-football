@@ -53,6 +53,13 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
 impl GoalkeeperCatchingState {
     fn is_catch_successful(&self, ctx: &StateProcessingContext) -> bool {
+        // Prevent catching ball that was just kicked by this goalkeeper
+        if let Some(last_owner_id) = ctx.tick_context.ball.last_owner {
+            if last_owner_id == ctx.player.id {
+                return false;
+            }
+        }
+
         // Use goalkeeper-specific skills (handling is key for catching!)
         let handling = ctx.player.skills.technical.first_touch; // Using first_touch as handling proxy
         let reflexes = ctx.player.skills.mental.concentration; // Using concentration as reflexes proxy

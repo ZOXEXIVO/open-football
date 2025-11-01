@@ -20,6 +20,14 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
+            // Priority 0: Clear ball if congested in corner/boundary
+            if self.is_congested_near_boundary(ctx) {
+                // Force a long clearance pass to any teammate
+                if let Some(target_teammate) = ctx.players().teammates().all().next() {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+            }
+
             // Priority 1: Clear shooting opportunity
             if self.has_excellent_shooting_opportunity(ctx) {
                 return Some(StateChangeResult::with_forward_state(
@@ -71,6 +79,17 @@ impl StateProcessingHandler for ForwardRunningState {
         }
         // Handle cases when player doesn't have the ball
         else {
+            // Priority 0: Emergency - if ball is nearby, stopped, and unowned, go for it immediately
+            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+                if ball_velocity < 1.0 {
+                    // Ball is stopped or nearly stopped - take it directly
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::TakeBall,
+                    ));
+                }
+            }
+
             // Priority 1: Ball interception opportunity
             if self.can_intercept_ball(ctx) {
                 return Some(StateChangeResult::with_forward_state(
@@ -235,12 +254,17 @@ impl ForwardRunningState {
         let finishing = ctx.player.skills.technical.finishing / 20.0;
 
         // Very close to goal - almost always shoot
-        if distance < 100.0 && has_clear_shot {
+        if distance < 150.0 && has_clear_shot {
             return true;
         }
 
-        // Good position and skills
-        if distance < 200.0 && has_clear_shot && (confidence + finishing) / 2.0 > 0.6 {
+        // Good position and skills - INCREASED RANGE
+        if distance < 300.0 && has_clear_shot && (confidence + finishing) / 2.0 > 0.5 {
+            return true;
+        }
+
+        // Medium distance with good skills - shoot anyway
+        if distance < 250.0 && finishing > 0.6 {
             return true;
         }
 
@@ -1059,5 +1083,30 @@ impl ForwardRunningState {
         let target_y = ctx.player.start_position.y;
 
         Vector3::new(forward_line, target_y, 0.0)
+    }
+
+    /// Check if player is stuck in a corner/boundary with multiple players around
+    fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
+        // Check if near any boundary (within 20 units)
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let pos = ctx.player.position;
+
+        let near_boundary = pos.x < 20.0
+            || pos.x > field_width - 20.0
+            || pos.y < 20.0
+            || pos.y > field_height - 20.0;
+
+        if !near_boundary {
+            return false;
+        }
+
+        // Count all nearby players (teammates + opponents) within 15 units
+        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
+        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
+        let total_nearby = nearby_teammates + nearby_opponents;
+
+        // If 3 or more players nearby (congestion), need to clear
+        total_nearby >= 3
     }
 }

@@ -37,6 +37,17 @@ impl StateProcessingHandler for ForwardStandingState {
                 //return Some(StateChangeResult::with_forward_state(ForwardState::HoldingPossession));
             }
         } else {
+            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+                if ball_velocity < 1.0 {
+                    // Ball is stopped or nearly stopped - take it directly
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::TakeBall,
+                    ));
+                }
+            }
+
             // If the forward doesn't have the ball, decide to move or press
             if self.should_press(ctx) {
                 // Transition to Pressing state
