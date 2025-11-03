@@ -33,7 +33,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
 
         // Skill-based threat assessment
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let positioning = ctx.player.skills.mental.positioning / 20.0;
         let command_of_area = ctx.player.skills.mental.vision / 20.0;
 
         // Check for immediate threats requiring urgent action
