@@ -22,10 +22,13 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        if ctx.ball().distance() < 15.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Tackling,
-            ));
+        // Only tackle if an opponent has the ball nearby
+        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            if ctx.ball().distance() < 15.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
         }
 
         // If ball is far away or team has possession, stop pressing

@@ -51,7 +51,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
             }
         }
 
-        // 4. Check if teammate is closer to the ball
+        // 3. Check if teammate is closer to the ball
         if let Some(closest_teammate) = ctx.players().teammates().all().filter(|t| t.id != ctx.player.id).min_by(|a, b| {
             let dist_a = (a.position - ball_position).magnitude();
             let dist_b = (b.position - ball_position).magnitude();

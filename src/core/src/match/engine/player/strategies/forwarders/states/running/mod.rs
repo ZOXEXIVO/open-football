@@ -6,11 +6,11 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0;
+const MAX_SHOOTING_DISTANCE: f32 = 350.0;
 const MIN_SHOOTING_DISTANCE: f32 = 10.0;
 const MAX_LONG_SHOOTING_DISTANCE: f32 = 400.0;
 const MIN_LONG_SHOOTING_DISTANCE: f32 = 200.0;
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 180.0;
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 200.0;
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 
 #[derive(Default)]

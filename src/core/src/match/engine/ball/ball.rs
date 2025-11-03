@@ -19,7 +19,6 @@ pub struct Ball {
     pub current_owner: Option<u32>,
     pub take_ball_notified_players: Vec<u32>,
     pub notification_cooldown: u32,
-    pub notification_timeout: u32,  // Ticks since players were notified
     pub last_boundary_position: Option<Vector3<f32>>,
     pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
 }
@@ -54,7 +53,6 @@ impl Ball {
             current_owner: None,
             take_ball_notified_players: Vec::new(),
             notification_cooldown: 0,
-            notification_timeout: 0,
             last_boundary_position: None,
             unowned_stopped_ticks: 0,
         }
@@ -131,7 +129,6 @@ impl Ball {
             let notified_players = self.notify_nearest_player(players, events);
             if !notified_players.is_empty() {
                 self.take_ball_notified_players = notified_players;
-                self.notification_timeout = 0; // Reset timeout when new players are notified
 
                 // If ball is at boundary, set cooldown and record position
                 if self.is_ball_outside() {
@@ -151,7 +148,7 @@ impl Ball {
                 return; // Will re-notify on next tick
             }
             // Check if any notified player reached the ball
-            const CLAIM_DISTANCE: f32 = 8.0; // Slightly larger than normal ownership distance
+            const CLAIM_DISTANCE: f32 = 3.0; // Players must be very close to claim the ball
 
             // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
@@ -195,7 +192,6 @@ impl Ball {
             if let Some(player_id) = claiming_player_id {
                 self.current_owner = Some(player_id);
                 self.take_ball_notified_players.clear();
-                self.notification_timeout = 0;
                 events.add_ball_event(BallEvent::Claimed(player_id));
 
                 // Reset boundary tracking when ball is claimed
@@ -401,28 +397,11 @@ impl Ball {
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
         const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.0; // Player can reach ~2.8m when jumping
         const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
+        const TACKLE_ADVANTAGE_THRESHOLD: f32 = 20.0; // Require 20% better tackling to steal ball
 
         // Ball is too high to be claimed by any player (flying over everyone's heads)
         if self.position.z > MAX_BALL_HEIGHT {
             return;
-        }
-
-        // Check if previous owner is still within range (use 3D distance)
-        if let Some(previous_owner_id) = self.previous_owner {
-            let owner = context.players.by_id(previous_owner_id).unwrap();
-
-            // Calculate proper 3D distance
-            let dx = owner.position.x - self.position.x;
-            let dy = owner.position.y - self.position.y;
-            let dz = self.position.z; // Ball height from ground (player is at z=0)
-            let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
-
-            if distance_3d > BALL_DISTANCE_THRESHOLD {
-                self.previous_owner = None;
-            } else {
-                // Previous owner still in range, no need to check for new ownership
-                return;
-            }
         }
 
         // Find all players within ball distance threshold with proper 3D collision detection
@@ -460,52 +439,89 @@ impl Ball {
 
         // Early exit if no nearby players
         if nearby_players.is_empty() {
+            // Clear previous owner if they're too far
+            if let Some(previous_owner_id) = self.previous_owner {
+                let owner = context.players.by_id(previous_owner_id).unwrap();
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let dz = self.position.z;
+                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if distance_3d > BALL_DISTANCE_THRESHOLD {
+                    self.previous_owner = None;
+                }
+            }
             return;
         }
 
-        // Check if current owner is nearby
+        // Check if current owner is still nearby
         if let Some(current_owner_id) = self.current_owner {
-            // Check if current owner is still nearby
             let current_owner_nearby = nearby_players
                 .iter()
                 .any(|player| player.id == current_owner_id);
 
-            if current_owner_nearby {
-                // Current owner is still close to the ball - maintain ownership
-                return;
+            if !current_owner_nearby {
+                // Current owner is NOT nearby - clear ownership
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
             }
-
-            // Current owner is NOT nearby - clear ownership so ball can be claimed
-            // This prevents the ball from being "owned" by a player who is far away
-            self.previous_owner = self.current_owner;
-            self.current_owner = None;
-
-            // If only teammates are nearby, they can now claim the ball
-            // If opponents are nearby, they compete for it
-            // This prevents the rapid position changes caused by inconsistent ownership state
         }
 
-        // Determine the best tackler from nearby players
-        let best_tackler = if nearby_players.len() == 1 {
-            nearby_players.first().copied()
-        } else {
-            nearby_players
+        // If there's a current owner nearby, check if someone can take the ball from them
+        if let Some(current_owner_id) = self.current_owner {
+            // Calculate tackling scores for all nearby players
+            let scored_players: Vec<(&MatchPlayer, f32)> = nearby_players
                 .iter()
-                .max_by(|player_a, player_b| {
-                    let player_a_full = context.players.by_id(player_a.id).unwrap();
-                    let player_b_full = context.players.by_id(player_b.id).unwrap();
-
-                    let tackling_score_a = Self::calculate_tackling_score(player_a_full);
-                    let tackling_score_b = Self::calculate_tackling_score(player_b_full);
-
-                    tackling_score_a
-                        .partial_cmp(&tackling_score_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
+                .map(|&player| {
+                    let player_full = context.players.by_id(player.id).unwrap();
+                    let score = Self::calculate_tackling_score(player_full);
+                    (player, score)
                 })
-                .copied()
-        };
+                .collect();
 
-        // Transfer ownership to the best tackler
+            // Find current owner's score
+            let current_owner_score = scored_players
+                .iter()
+                .find(|(p, _)| p.id == current_owner_id)
+                .map(|(_, score)| *score)
+                .unwrap_or(0.0);
+
+            // Find best challenger (not the current owner)
+            let best_challenger = scored_players
+                .iter()
+                .filter(|(p, _)| p.id != current_owner_id)
+                .max_by(|(_, score_a), (_, score_b)| {
+                    score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+            // Check if challenger is significantly better
+            if let Some((challenger, challenger_score)) = best_challenger {
+                let required_score = current_owner_score * (1.0 + TACKLE_ADVANTAGE_THRESHOLD / 100.0);
+                if *challenger_score >= required_score {
+                    // Challenger wins the ball
+                    self.previous_owner = self.current_owner;
+                    self.current_owner = Some(challenger.id);
+                    events.add_ball_event(BallEvent::Claimed(challenger.id));
+                }
+            }
+            // Current owner keeps the ball (no challenger or not good enough)
+            return;
+        }
+
+        // No current owner - award ball to best tackler among nearby players
+        let best_tackler = nearby_players
+            .iter()
+            .max_by(|player_a, player_b| {
+                let player_a_full = context.players.by_id(player_a.id).unwrap();
+                let player_b_full = context.players.by_id(player_b.id).unwrap();
+
+                let tackling_score_a = Self::calculate_tackling_score(player_a_full);
+                let tackling_score_b = Self::calculate_tackling_score(player_b_full);
+
+                tackling_score_a
+                    .partial_cmp(&tackling_score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+
         if let Some(player) = best_tackler {
             self.previous_owner = self.current_owner;
             self.current_owner = Some(player.id);

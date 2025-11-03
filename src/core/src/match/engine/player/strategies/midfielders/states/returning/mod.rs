@@ -16,10 +16,13 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        if ctx.ball().distance() < 15.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Tackling,
-            ));
+        // Only tackle if an opponent has the ball nearby
+        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            if ctx.ball().distance() < 15.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
         }
 
         if !ctx.team().is_control_ball() && ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {

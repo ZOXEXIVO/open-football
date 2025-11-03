@@ -69,6 +69,8 @@ impl StateManager {
             MatchState::HalfTime => {
                 // Half-time finished - reset time for second half
                 context.reset_period_time();
+                field.reset_players_positions();
+                field.ball.reset();
             }
             MatchState::SecondHalf => {
                 // Second half finished - ready for extra time if needed

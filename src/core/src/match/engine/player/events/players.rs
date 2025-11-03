@@ -331,6 +331,19 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
         field.ball.flags.in_flight_state = 30;
+
+        // Increase in_flight_state based on pass distance to prevent immediate reclaim
+        // Short passes (< 30m): 20 ticks (~0.33s)
+        // Medium passes (30-60m): 30 ticks (~0.5s)
+        // Long passes (> 60m): 40 ticks (~0.67s)
+        let flight_protection = if actual_horizontal_distance < 30.0 {
+            20
+        } else if actual_horizontal_distance < 60.0 {
+            30
+        } else {
+            40
+        };
+        field.ball.flags.in_flight_state = flight_protection;
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {

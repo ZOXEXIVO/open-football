@@ -44,13 +44,14 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            if ctx.ball().is_owned() {
+            // Only tackle if an opponent has the ball
+            if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
                 if ctx.ball().distance() < 200.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
                 }
-            } else if self.should_intercept(ctx) {
+            } else if !ctx.ball().is_owned() && self.should_intercept(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));

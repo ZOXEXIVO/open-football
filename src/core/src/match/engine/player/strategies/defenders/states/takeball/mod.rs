@@ -23,21 +23,14 @@ impl StateProcessingHandler for DefenderTakeBallState {
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.landing_position;
 
-        // 1. Timeout check - give up after too long
-        if ctx.in_state_time > TAKEBALL_TIMEOUT {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Returning,
-            ));
-        }
-
-        // 2. Distance check - ball too far away
+        // 1. Distance check - ball too far away
         if ball_distance > MAX_TAKEBALL_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,
             ));
         }
 
-        // 3. Check if opponent will reach ball first
+        // 2. Check if opponent will reach ball first
         if let Some(closest_opponent) = ctx.players().opponents().all().min_by(|a, b| {
             let dist_a = (a.position - ball_position).magnitude();
             let dist_b = (b.position - ball_position).magnitude();
@@ -53,7 +46,7 @@ impl StateProcessingHandler for DefenderTakeBallState {
             }
         }
 
-        // 4. Check if teammate is closer to the ball
+        // 3. Check if teammate is closer to the ball
         if let Some(closest_teammate) = ctx.players().teammates().all().filter(|t| t.id != ctx.player.id).min_by(|a, b| {
             let dist_a = (a.position - ball_position).magnitude();
             let dist_b = (b.position - ball_position).magnitude();

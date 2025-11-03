@@ -1,6 +1,7 @@
 use async_compression::tokio::write::GzipEncoder;
 use core::r#match::{MatchResult, ResultMatchPositionData};
 use log::{debug, info};
+use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -11,9 +12,11 @@ pub struct MatchStore;
 
 impl MatchStore {
     pub async fn get(league_slug: &str, match_id: &str) -> Vec<u8> {
-        let match_file = format!("{}/{}/{}.json.gz", MATCH_DIRECTORY, league_slug, match_id);
+        let match_file = PathBuf::from(MATCH_DIRECTORY)
+            .join(league_slug)
+            .join(format!("{}.json.gz", match_id));
 
-        let mut file = File::options().read(true).open(match_file).await.unwrap();
+        let mut file = File::options().read(true).open(&match_file).await.unwrap();
 
         let mut result = Vec::new();
 
@@ -25,15 +28,14 @@ impl MatchStore {
     }
 
     pub async fn get_chunk(league_slug: &str, match_id: &str, chunk_number: usize) -> Option<Vec<u8>> {
-        let chunk_file = format!(
-            "{}/{}/{}_chunk_{}.json.gz",
-            MATCH_DIRECTORY, league_slug, match_id, chunk_number
-        );
+        let chunk_file = PathBuf::from(MATCH_DIRECTORY)
+            .join(league_slug)
+            .join(format!("{}_chunk_{}.json.gz", match_id, chunk_number));
 
         let mut file = match File::options().read(true).open(&chunk_file).await {
             Ok(f) => f,
             Err(_) => {
-                debug!("Chunk file not found: {}", chunk_file);
+                debug!("Chunk file not found: {}", chunk_file.display());
                 return None;
             }
         };
@@ -47,15 +49,14 @@ impl MatchStore {
     }
 
     pub async fn get_metadata(league_slug: &str, match_id: &str) -> Option<serde_json::Value> {
-        let metadata_file = format!(
-            "{}/{}/{}_metadata.json",
-            MATCH_DIRECTORY, league_slug, match_id
-        );
+        let metadata_file = PathBuf::from(MATCH_DIRECTORY)
+            .join(league_slug)
+            .join(format!("{}_metadata.json", match_id));
 
         let mut file = match File::options().read(true).open(&metadata_file).await {
             Ok(f) => f,
             Err(_) => {
-                debug!("Metadata file not found: {}", metadata_file);
+                debug!("Metadata file not found: {}", metadata_file.display());
                 return None; // No metadata means no chunks available
             }
         };
@@ -72,11 +73,11 @@ impl MatchStore {
     }
 
     pub async fn store(result: MatchResult) {
-        let out_dir = format!("{}/{}", MATCH_DIRECTORY, result.league_slug);
+        let out_dir = PathBuf::from(MATCH_DIRECTORY).join(&result.league_slug);
 
         if let Ok(_) = tokio::fs::create_dir_all(&out_dir).await{}
 
-        let out_file = format!("{}/{}.json.gz", out_dir, result.id);
+        let out_file = out_dir.join(format!("{}.json.gz", result.id));
 
         let file = File::options()
             .write(true)
@@ -84,7 +85,7 @@ impl MatchStore {
             .truncate(true)
             .open(&out_file)
             .await
-            .expect(&format!("failed to create file {}", &out_file));
+            .expect(&format!("failed to create file {}", out_file.display()));
 
         let mut compressed_file = GzipEncoder::with_quality(file, async_compression::Level::Best);
 
@@ -120,10 +121,9 @@ impl MatchStore {
 
         // Store each chunk
         for (idx, chunk) in chunks.iter().enumerate() {
-            let chunk_file = format!(
-                "{}/{}/{}_chunk_{}.json.gz",
-                MATCH_DIRECTORY, league_slug, match_id, idx
-            );
+            let chunk_file = PathBuf::from(MATCH_DIRECTORY)
+                .join(league_slug)
+                .join(format!("{}_chunk_{}.json.gz", match_id, idx));
 
             let file = File::options()
                 .write(true)
@@ -131,7 +131,7 @@ impl MatchStore {
                 .truncate(true)
                 .open(&chunk_file)
                 .await
-                .expect(&format!("failed to create chunk file {}", &chunk_file));
+                .expect(&format!("failed to create chunk file {}", chunk_file.display()));
 
             let mut compressed_file = GzipEncoder::with_quality(file, async_compression::Level::Best);
 
@@ -151,10 +151,9 @@ impl MatchStore {
         }
 
         // Store metadata
-        let metadata_file = format!(
-            "{}/{}/{}_metadata.json",
-            MATCH_DIRECTORY, league_slug, match_id
-        );
+        let metadata_file = PathBuf::from(MATCH_DIRECTORY)
+            .join(league_slug)
+            .join(format!("{}_metadata.json", match_id));
 
         let metadata = serde_json::json!({
             "chunk_count": chunk_count,
@@ -164,6 +163,6 @@ impl MatchStore {
 
         tokio::fs::write(&metadata_file, serde_json::to_string_pretty(&metadata).unwrap())
             .await
-            .expect(&format!("failed to write metadata file {}", &metadata_file));
+            .expect(&format!("failed to write metadata file {}", metadata_file.display()));
     }
 }
