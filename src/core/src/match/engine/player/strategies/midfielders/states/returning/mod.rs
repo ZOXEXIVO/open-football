@@ -31,7 +31,10 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Small {
+        // Use hysteresis: only transition to Walking when significantly close (< 80 units)
+        // This prevents oscillation at the 100-unit boundary
+        let distance_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
+        if distance_to_start < 80.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Walking,
             ));
@@ -48,7 +51,7 @@ impl StateProcessingHandler for MidfielderReturningState {
         Some(
             SteeringBehavior::Arrive {
                 target: ctx.player.start_position,
-                slowing_distance: 10.0,
+                slowing_distance: 50.0,  // Increased from 10.0 to slow down earlier and prevent overshoot
             }
             .calculate(ctx.player)
             .velocity  + ctx.player().separation_velocity(),

@@ -32,7 +32,11 @@ impl StateProcessingHandler for MidfielderStandingState {
         }
         else {
             // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+            // OR if player is notified to take the ball (no distance limit when notified)
+            let is_nearby = ctx.ball().distance() < 50.0;
+            let is_notified = ctx.ball().is_player_notified();
+
+            if (is_nearby || is_notified) && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
                 if ball_velocity < 1.0 {
                     // Ball is stopped or nearly stopped - take it directly
@@ -48,20 +52,26 @@ impl StateProcessingHandler for MidfielderStandingState {
                 ));
             }
             else {
-                if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-                    // Transition to Tackling state to try and win the ball
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Pressing,
-                    ));
+                // Only press/tackle if an OPPONENT has the ball
+                if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+                    if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
+                        // Transition to Pressing state to try and win the ball
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Pressing,
+                        ));
+                    }
+
+                    if ctx.ball().distance() < 100.0 {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Tackling,
+                        ));
+                    }
                 }
 
-                if ctx.ball().distance() < 100.0 {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Tackling,
-                    ));
-                }
-
-                if ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
+                // Only intercept if ball is loose (not owned by anyone)
+                if !ctx.ball().is_owned()
+                    && ctx.ball().distance() < 250.0
+                    && ctx.ball().is_towards_player_with_angle(0.8) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Intercepting,
                     ));
@@ -69,11 +79,14 @@ impl StateProcessingHandler for MidfielderStandingState {
             }
         }
 
-        if self.is_opponent_nearby(ctx) {
-            // Transition to Pressing state to apply pressure
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
-            ));
+        // Only press if opponent is nearby AND has the ball
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            if opponent.distance(ctx) < PRESSING_DISTANCE_THRESHOLD {
+                // Transition to Pressing state to apply pressure
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
         }
 
         // 4. Check if a teammate is making a run and needs support

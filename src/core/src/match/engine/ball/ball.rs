@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::club::player::PlayerPositionType;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
@@ -22,6 +23,8 @@ pub struct Ball {
     pub notification_timeout: u32,  // Ticks since players were notified
     pub last_boundary_position: Option<Vector3<f32>>,
     pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
+    pub ownership_duration: u32,  // How many ticks current owner has had the ball
+    pub goalkeeper_catch_immunity: u32,  // Ticks of immunity after goalkeeper catches ball
 }
 
 #[derive(Default)]
@@ -57,6 +60,8 @@ impl Ball {
             notification_timeout: 0,
             last_boundary_position: None,
             unowned_stopped_ticks: 0,
+            ownership_duration: 0,
+            goalkeeper_catch_immunity: 0,
         }
     }
 
@@ -80,6 +85,11 @@ impl Ball {
         self.process_ownership(context, players, events);
 
         self.move_to(tick_context);
+
+        // Decrement goalkeeper catch immunity
+        if self.goalkeeper_catch_immunity > 0 {
+            self.goalkeeper_catch_immunity -= 1;
+        }
     }
 
     pub fn process_ownership(
@@ -145,6 +155,8 @@ impl Ball {
             if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
+                // Clear boundary position to allow re-notification even if ball hasn't moved
+                self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
             // Check if any notified player reached the ball
@@ -389,7 +401,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
+        // Increased from 5.0 to 8.0 to match CLAIM_DISTANCE and accommodate player separation forces
+        const BALL_DISTANCE_THRESHOLD: f32 = 8.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -466,6 +479,7 @@ impl Ball {
 
             if current_owner_nearby {
                 // Current owner is still close to the ball - maintain ownership
+                self.ownership_duration += 1;
                 return;
             }
 
@@ -478,6 +492,10 @@ impl Ball {
             // If opponents are nearby, they compete for it
             // This prevents the rapid position changes caused by inconsistent ownership state
         }
+
+        // Ownership stability constants
+        const MIN_OWNERSHIP_DURATION: u32 = 15; // Minimum ticks before ownership can change easily
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.3; // Challenger must be 30% better
 
         // Determine the best tackler from nearby players
         let best_tackler = if nearby_players.len() == 1 {
@@ -499,11 +517,62 @@ impl Ball {
                 .copied()
         };
 
-        // Transfer ownership to the best tackler
+        // Transfer ownership to the best tackler (with stability checks)
         if let Some(player) = best_tackler {
-            self.previous_owner = self.current_owner;
-            self.current_owner = Some(player.id);
-            events.add_ball_event(BallEvent::Claimed(player.id));
+            // GOALKEEPER IMMUNITY: If goalkeeper has immunity (just caught the ball),
+            // only allow goalkeeper to keep ownership - block field players from stealing
+            if self.goalkeeper_catch_immunity > 0 {
+                if let Some(current_owner_id) = self.current_owner {
+                    // Check if current owner is the goalkeeper
+                    let current_owner_full = context.players.by_id(current_owner_id).unwrap();
+                    let challenger_full = context.players.by_id(player.id).unwrap();
+
+                    // If current owner is goalkeeper and challenger is not, block the steal
+                    if current_owner_full.tactical_position.current_position == PlayerPositionType::Goalkeeper
+                        && challenger_full.tactical_position.current_position != PlayerPositionType::Goalkeeper {
+                        // Goalkeeper has immunity - field player cannot steal
+                        self.ownership_duration += 1;
+                        return;
+                    }
+                }
+            }
+
+            // Check if this is a new owner or maintaining current ownership
+            let is_ownership_change = self.current_owner.map_or(true, |id| id != player.id);
+
+            if is_ownership_change {
+                // Prevent rapid ownership changes by requiring significant advantage
+                if self.ownership_duration < MIN_OWNERSHIP_DURATION {
+                    if let Some(current_owner_id) = self.current_owner {
+                        // Find current owner in nearby players
+                        if let Some(current_owner) = nearby_players.iter()
+                            .find(|p| p.id == current_owner_id)
+                        {
+                            let current_owner_full = context.players.by_id(current_owner_id).unwrap();
+                            let challenger_full = context.players.by_id(player.id).unwrap();
+
+                            let current_score = Self::calculate_tackling_score(current_owner_full);
+                            let challenger_score = Self::calculate_tackling_score(challenger_full);
+
+                            // Require challenger to be significantly better
+                            if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
+                                // Challenger not strong enough - maintain current ownership
+                                self.ownership_duration += 1;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Ownership change approved - reset duration
+                self.previous_owner = self.current_owner;
+                self.current_owner = Some(player.id);
+                self.ownership_duration = 0;
+                events.add_ball_event(BallEvent::Claimed(player.id));
+            } else {
+                // Same owner - just increment duration
+                self.ownership_duration += 1;
+            }
         }
     }
 
