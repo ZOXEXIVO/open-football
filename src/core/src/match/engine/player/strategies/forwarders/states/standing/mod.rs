@@ -37,6 +37,21 @@ impl StateProcessingHandler for ForwardStandingState {
                 //return Some(StateChangeResult::with_forward_state(ForwardState::HoldingPossession));
             }
         } else {
+            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+            // OR if player is notified to take the ball (no distance limit when notified)
+            let is_nearby = ctx.ball().distance() < 50.0;
+            let is_notified = ctx.ball().is_player_notified();
+
+            if (is_nearby || is_notified) && !ctx.ball().is_owned() {
+                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+                if ball_velocity < 1.0 {
+                    // Ball is stopped or nearly stopped - take it directly
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::TakeBall,
+                    ));
+                }
+            }
+
             // If the forward doesn't have the ball, decide to move or press
             if self.should_press(ctx) {
                 // Transition to Pressing state
@@ -112,7 +127,12 @@ impl ForwardStandingState {
 
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.ball().distance() < PRESS_DISTANCE && !ctx.player.has_ball(ctx)
+        // Only press if opponent has the ball AND is close
+        if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+            opponent.distance(ctx) < PRESS_DISTANCE
+        } else {
+            false
+        }
     }
 
     /// Calculates the distance from the forward to the opponent's goal.

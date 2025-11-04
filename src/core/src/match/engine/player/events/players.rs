@@ -282,8 +282,8 @@ impl PlayerEventDispatcher {
 
         // Calculate pass force with power variation
         // Reduced variation to make passes more consistent
-        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.07);
-        let power_variation_range = (1.0 - overall_quality) * 0.08;
+        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.1);
+        let power_variation_range = (1.0 - overall_quality) * 0.11;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
         );
@@ -330,7 +330,20 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
-        field.ball.flags.in_flight_state = 10;
+        field.ball.flags.in_flight_state = 30;
+
+        // Increase in_flight_state based on pass distance to prevent immediate reclaim
+        // Short passes (< 30m): 20 ticks (~0.33s)
+        // Medium passes (30-60m): 30 ticks (~0.5s)
+        // Long passes (> 60m): 40 ticks (~0.67s)
+        let flight_protection = if actual_horizontal_distance < 30.0 {
+            20
+        } else if actual_horizontal_distance < 60.0 {
+            30
+        } else {
+            40
+        };
+        field.ball.flags.in_flight_state = flight_protection;
     }
 
     fn calculate_horizontal_distance(ball_pass_vector: &Vector3<f32>) -> f32 {
@@ -341,7 +354,7 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        const PASS_FORCE_MULTIPLIER: f32 = 4.5;
+        const PASS_FORCE_MULTIPLIER: f32 = 5.0;
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
@@ -603,9 +616,9 @@ impl PlayerEventDispatcher {
             // Medium arc - moderate parabolic trajectory (height ~2-4m)
             TrajectoryType::MediumArc => {
                 let base_flight_time = horizontal_distance / horizontal_speed;
-                let flight_time = base_flight_time * 0.5; // Moderate arc
+                let flight_time = base_flight_time * 0.7; // Moderate arc
 
-                let ideal_z = 0.7 * GRAVITY * flight_time;
+                let ideal_z = 0.8 * GRAVITY * flight_time;
 
                 // Skill affects consistency
                 let execution_quality = skills.overall_quality();
@@ -618,9 +631,9 @@ impl PlayerEventDispatcher {
             // High arc - high parabolic trajectory (height ~4-8m)
             TrajectoryType::HighArc => {
                 let base_flight_time = horizontal_distance / horizontal_speed;
-                let flight_time = base_flight_time * 1.3; // High arc
+                let flight_time = base_flight_time * 1.5; // High arc
 
-                let ideal_z = 0.7 * GRAVITY * flight_time;
+                let ideal_z = 0.8 * GRAVITY * flight_time;
 
                 // Requires good long passing ability
                 let execution_quality = (skills.overall_quality() + skills.long_shots + skills.crossing) / 3.0;
@@ -838,7 +851,8 @@ impl PlayerEventDispatcher {
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
-        
+        // Give goalkeeper 30 ticks (~0.5 seconds) of immunity from field players stealing the ball
+        field.ball.goalkeeper_catch_immunity = 30;
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {

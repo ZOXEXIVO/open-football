@@ -22,10 +22,35 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
-        if ctx.ball().distance() < 15.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Tackling,
-            ));
+        // Early exit if a teammate is significantly closer to avoid circular running
+        let ball_distance = ctx.ball().distance();
+        let ball_position = ctx.tick_context.positions.ball.position;
+
+        if let Some(closest_teammate) = ctx.players().teammates().all()
+            .filter(|t| t.id != ctx.player.id)
+            .min_by(|a, b| {
+                let dist_a = (a.position - ball_position).magnitude();
+                let dist_b = (b.position - ball_position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            })
+        {
+            let teammate_distance = (closest_teammate.position - ball_position).magnitude();
+
+            // If teammate is closer by 10+ units, give up pressing
+            if teammate_distance < ball_distance - 10.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Running,
+                ));
+            }
+        }
+
+        // Only tackle if an opponent has the ball nearby
+        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            if ctx.ball().distance() < 15.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
         }
 
         // If ball is far away or team has possession, stop pressing
@@ -57,15 +82,22 @@ impl StateProcessingHandler for MidfielderPressingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Pursuit {
-                target: ctx.tick_context.positions.ball.position,
-                target_velocity: ctx.tick_context.positions.ball.velocity,
-            }
-            .calculate(ctx.player)
-            .velocity
-                + ctx.player().separation_velocity(),
-        )
+        // Only pursue if opponent has the ball
+        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            // Pursue the ball (which is with the opponent)
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
+            )
+        } else {
+            // If no opponent has ball (teammate has it or it's loose), just maintain position
+            Some(Vector3::zeros())
+        }
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {

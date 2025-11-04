@@ -4,7 +4,7 @@ use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0;
+const MAX_SHOOTING_DISTANCE: f32 = 350.0;
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -12,6 +12,26 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            // Priority: Clear ball if congested in corner/boundary
+            if self.is_congested_near_boundary(ctx) {
+                // Force a long clearance pass to any teammate (furthest away preferred)
+                if let Some(target_teammate) = ctx.players().teammates().all().max_by(|a, b| {
+                    let dist_a = (a.position - ctx.player.position).magnitude();
+                    let dist_b = (b.position - ctx.player.position).magnitude();
+                    dist_a.partial_cmp(&dist_b).unwrap()
+                }) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target_teammate.id)
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
+
             // Quick shooting checks
             let goal_dist = ctx.ball().distance_to_opponent_goal();
 
@@ -40,6 +60,17 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
         } else {
             // Without ball - use simpler checks
+            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+                if ball_velocity < 1.0 {
+                    // Ball is stopped or nearly stopped - take it directly
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::TakeBall,
+                    ));
+                }
+            }
+
             if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
@@ -284,5 +315,30 @@ impl MidfielderRunningState {
 
                 is_attacker && in_attacking_third && (in_free_space || making_run) && has_clear_pass
             })
+    }
+
+    /// Check if player is stuck in a corner/boundary with multiple players around
+    fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
+        // Check if near any boundary (within 20 units)
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let pos = ctx.player.position;
+
+        let near_boundary = pos.x < 20.0
+            || pos.x > field_width - 20.0
+            || pos.y < 20.0
+            || pos.y > field_height - 20.0;
+
+        if !near_boundary {
+            return false;
+        }
+
+        // Count all nearby players (teammates + opponents) within 15 units
+        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
+        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
+        let total_nearby = nearby_teammates + nearby_opponents;
+
+        // If 3 or more players nearby (congestion), need to clear
+        total_nearby >= 3
     }
 }

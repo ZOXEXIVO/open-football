@@ -183,6 +183,12 @@ impl<'b> BallOperationsImpl<'b> {
 
         BallSide::Right
     }
+
+    /// Check if current player has been notified to take the ball
+    #[inline]
+    pub fn is_player_notified(&self) -> bool {
+        self.ctx.tick_context.ball.notified_players.contains(&self.ctx.player.id)
+    }
 }
 
 pub struct MatchBallLogic;

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use crate::club::player::PlayerPositionType;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
@@ -21,6 +22,9 @@ pub struct Ball {
     pub notification_cooldown: u32,
     pub notification_timeout: u32,  // Ticks since players were notified
     pub last_boundary_position: Option<Vector3<f32>>,
+    pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
+    pub ownership_duration: u32,  // How many ticks current owner has had the ball
+    pub goalkeeper_catch_immunity: u32,  // Ticks of immunity after goalkeeper catches ball
 }
 
 #[derive(Default)]
@@ -55,6 +59,9 @@ impl Ball {
             notification_cooldown: 0,
             notification_timeout: 0,
             last_boundary_position: None,
+            unowned_stopped_ticks: 0,
+            ownership_duration: 0,
+            goalkeeper_catch_immunity: 0,
         }
     }
 
@@ -72,9 +79,17 @@ impl Ball {
         self.try_intercept(players, events);
         self.try_notify_standing_ball(players, events);
 
+        // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
+        self.force_claim_if_deadlock(players, events);
+
         self.process_ownership(context, players, events);
 
         self.move_to(tick_context);
+
+        // Decrement goalkeeper catch immunity
+        if self.goalkeeper_catch_immunity > 0 {
+            self.goalkeeper_catch_immunity -= 1;
+        }
     }
 
     pub fn process_ownership(
@@ -106,18 +121,15 @@ impl Ball {
         // Check if ball is stopped (either outside or inside field) and no one owns it
         let is_ball_stopped = self.is_stands_outside() || self.is_ball_stopped_on_field();
 
-        // Also check if ball is aerial and needs interception
-        let is_ball_aerial = self.is_aerial() && self.current_owner.is_none();
-
         // Check if ball has moved significantly from last boundary position
         let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
             let distance_from_boundary = (self.position - last_pos).magnitude();
-            distance_from_boundary > 30.0 // Must move at least 15 units away from boundary
+            distance_from_boundary > 5.0 // Must move at least 5 units away from boundary
         } else {
             true // No previous boundary position recorded
         };
 
-        if (is_ball_stopped || is_ball_aerial)
+        if (is_ball_stopped)
             && self.take_ball_notified_players.is_empty()
             && self.current_owner.is_none()
             && self.notification_cooldown == 0 // Only notify if cooldown expired
@@ -139,10 +151,12 @@ impl Ball {
             self.notification_timeout += 1;
 
             // If players haven't claimed the ball within reasonable time, reset and try again
-            const MAX_NOTIFICATION_TIMEOUT: u32 = 20; // ~0.33 seconds
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 100; // ~1.67 seconds - increased to give players more time
             if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
+                // Clear boundary position to allow re-notification even if ball hasn't moved
+                self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
             // Check if any notified player reached the ball
@@ -245,19 +259,54 @@ impl Ball {
     }
 
     pub fn is_ball_stopped_on_field(&self) -> bool {
-        // Ball has stopped moving inside the field (loose ball situation)
         !self.is_ball_outside()
             && self.velocity.norm() < 0.1 // Nearly zero velocity (stopped or rolling very slowly)
-            && self.position.z < 0.5 // Ball is on or near the ground
             && self.current_owner.is_none()
-            && self.flags.in_flight_state == 0 // Not in flight from a pass/shot
     }
 
     pub fn is_ball_outside(&self) -> bool {
-        self.position.x == 0.0
+        self.position.x <= 0.0
             || self.position.x >= self.field_width
-            || self.position.y == 0.0
+            || self.position.y <= 0.0
             || self.position.y >= self.field_height
+    }
+
+    /// NUCLEAR OPTION: Force the nearest player to claim the ball if it's been sitting unowned for too long
+    /// This is a last-resort failsafe to prevent deadlocks where no one claims the ball
+    fn force_claim_if_deadlock(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // Check if ball is stopped and unowned
+        let is_stopped = self.velocity.norm() < 0.1 && self.position.z < 0.5;
+        let is_unowned = self.current_owner.is_none();
+
+        if is_stopped && is_unowned {
+            self.unowned_stopped_ticks += 1;
+
+            // If ball has been stopped and unowned for 10 ticks (~0.16 seconds), FORCE claiming
+            if self.unowned_stopped_ticks >= 10 {
+                // Find the absolute nearest player to the ball (ignoring all other logic)
+                if let Some(nearest_player) = players.iter().min_by(|a, b| {
+                    let dist_a = (a.position - self.position).magnitude();
+                    let dist_b = (b.position - self.position).magnitude();
+                    dist_a.partial_cmp(&dist_b).unwrap()
+                }) {
+                    // FORCE this player to go for the ball
+                    events.add_ball_event(BallEvent::TakeMe(nearest_player.id));
+
+                    // Reset counter
+                    self.unowned_stopped_ticks = 0;
+
+                    // Clear any existing notifications to avoid conflicts
+                    self.take_ball_notified_players.clear();
+                }
+            }
+        } else {
+            // Ball is moving or owned - reset counter
+            self.unowned_stopped_ticks = 0;
+        }
     }
 
     fn notify_nearest_player(
@@ -266,7 +315,7 @@ impl Ball {
         events: &mut EventCollection,
     ) -> Vec<u32> {
         let ball_position = self.position;
-        const NOTIFICATION_RADIUS: f32 = 300.0; // Players within this range will be notified
+        const NOTIFICATION_RADIUS: f32 = 500.0; // Cover entire field - all players can be notified
 
         // Group players by team and find nearest from each team
         let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();
@@ -352,7 +401,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
+        // Increased from 5.0 to 8.0 to match CLAIM_DISTANCE and accommodate player separation forces
+        const BALL_DISTANCE_THRESHOLD: f32 = 8.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -429,6 +479,7 @@ impl Ball {
 
             if current_owner_nearby {
                 // Current owner is still close to the ball - maintain ownership
+                self.ownership_duration += 1;
                 return;
             }
 
@@ -441,6 +492,10 @@ impl Ball {
             // If opponents are nearby, they compete for it
             // This prevents the rapid position changes caused by inconsistent ownership state
         }
+
+        // Ownership stability constants
+        const MIN_OWNERSHIP_DURATION: u32 = 15; // Minimum ticks before ownership can change easily
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.3; // Challenger must be 30% better
 
         // Determine the best tackler from nearby players
         let best_tackler = if nearby_players.len() == 1 {
@@ -462,11 +517,62 @@ impl Ball {
                 .copied()
         };
 
-        // Transfer ownership to the best tackler
+        // Transfer ownership to the best tackler (with stability checks)
         if let Some(player) = best_tackler {
-            self.previous_owner = self.current_owner;
-            self.current_owner = Some(player.id);
-            events.add_ball_event(BallEvent::Claimed(player.id));
+            // GOALKEEPER IMMUNITY: If goalkeeper has immunity (just caught the ball),
+            // only allow goalkeeper to keep ownership - block field players from stealing
+            if self.goalkeeper_catch_immunity > 0 {
+                if let Some(current_owner_id) = self.current_owner {
+                    // Check if current owner is the goalkeeper
+                    let current_owner_full = context.players.by_id(current_owner_id).unwrap();
+                    let challenger_full = context.players.by_id(player.id).unwrap();
+
+                    // If current owner is goalkeeper and challenger is not, block the steal
+                    if current_owner_full.tactical_position.current_position == PlayerPositionType::Goalkeeper
+                        && challenger_full.tactical_position.current_position != PlayerPositionType::Goalkeeper {
+                        // Goalkeeper has immunity - field player cannot steal
+                        self.ownership_duration += 1;
+                        return;
+                    }
+                }
+            }
+
+            // Check if this is a new owner or maintaining current ownership
+            let is_ownership_change = self.current_owner.map_or(true, |id| id != player.id);
+
+            if is_ownership_change {
+                // Prevent rapid ownership changes by requiring significant advantage
+                if self.ownership_duration < MIN_OWNERSHIP_DURATION {
+                    if let Some(current_owner_id) = self.current_owner {
+                        // Find current owner in nearby players
+                        if let Some(current_owner) = nearby_players.iter()
+                            .find(|p| p.id == current_owner_id)
+                        {
+                            let current_owner_full = context.players.by_id(current_owner_id).unwrap();
+                            let challenger_full = context.players.by_id(player.id).unwrap();
+
+                            let current_score = Self::calculate_tackling_score(current_owner_full);
+                            let challenger_score = Self::calculate_tackling_score(challenger_full);
+
+                            // Require challenger to be significantly better
+                            if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
+                                // Challenger not strong enough - maintain current ownership
+                                self.ownership_duration += 1;
+                                return;
+                            }
+                        }
+                    }
+                }
+
+                // Ownership change approved - reset duration
+                self.previous_owner = self.current_owner;
+                self.current_owner = Some(player.id);
+                self.ownership_duration = 0;
+                events.add_ball_event(BallEvent::Claimed(player.id));
+            } else {
+                // Same owner - just increment duration
+                self.ownership_duration += 1;
+            }
         }
     }
 

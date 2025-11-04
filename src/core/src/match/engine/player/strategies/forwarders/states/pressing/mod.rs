@@ -40,14 +40,21 @@ impl StateProcessingHandler for ForwardPressingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 10.0,
-            }
-                .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
-        )
+        // Only pursue if opponent has the ball
+        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            // Pursue the ball (which is with the opponent)
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                    .calculate(ctx.player)
+                    .velocity + ctx.player().separation_velocity(),
+            )
+        } else {
+            // If no opponent has ball (teammate has it or it's loose), just maintain position
+            Some(Vector3::zeros())
+        }
     }
 
     fn process_conditions(&self, _ctx: ConditionContext) {}
