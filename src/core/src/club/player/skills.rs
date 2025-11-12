@@ -13,7 +13,7 @@ impl PlayerSkills {
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
         let balance_factor = (self.physical.balance as f32 - 1.0) / 19.0;
 
-        let base_speed = 1.3; // Increased by 30% from 1.0 to 1.3
+        let base_speed = 2.6; // Increased by 2x from 1.3 to 2.6 for faster gameplay
         let max_speed = base_speed
             * (0.6 * pace_factor
                 + 0.2 * acceleration_factor
@@ -28,15 +28,24 @@ impl PlayerSkills {
     pub fn max_speed_with_condition(&self, condition: i16, fitness: i16, jadedness: i16) -> f32 {
         let base_max_speed = self.max_speed();
 
-        // Calculate condition factor (similar to PassSkills logic)
+        // Direct condition percentage (50% condition = 50% speed or less)
         let condition_percentage = (condition as f32 / 10000.0).clamp(0.0, 1.0);
-        let fitness_factor = (fitness as f32 / 10000.0).clamp(0.5, 1.0);
-        let jadedness_penalty = (jadedness as f32 / 10000.0) * 0.3;
-        let stamina_skill = (self.physical.stamina / 20.0).clamp(0.3, 1.0);
 
-        // Condition factor ranges from 0.5 to 1.0 (tired players at 50% speed minimum)
-        let condition_factor = (condition_percentage * fitness_factor * stamina_skill - jadedness_penalty)
-            .clamp(0.5, 1.0);
+        // Fitness affects how condition translates to performance
+        let fitness_factor = (fitness as f32 / 10000.0).clamp(0.7, 1.0);
+
+        // Jadedness reduces performance (up to 30% penalty at max jadedness)
+        let jadedness_penalty = (jadedness as f32 / 10000.0) * 0.3;
+
+        // Stamina skill helps maintain performance when tired (10-25% bonus)
+        let stamina_bonus = (self.physical.stamina / 20.0).clamp(0.0, 0.25);
+
+        // Final condition factor: base condition + stamina bonus - jadedness penalty
+        // At 50% condition with average stats: 0.5 + 0.125 - 0 = 0.625 (62.5% speed)
+        // At 50% condition with low stamina: 0.5 + 0 - 0 = 0.5 (50% speed)
+        // At 0% condition: 0.0 + bonus - penalty (can go very low, minimum 20%)
+        let condition_factor = (condition_percentage + stamina_bonus * condition_percentage - jadedness_penalty)
+            .clamp(0.2, 1.0) * fitness_factor;
 
         base_max_speed * condition_factor
     }
