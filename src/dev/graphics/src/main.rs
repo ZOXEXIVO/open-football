@@ -716,22 +716,7 @@ fn draw_players(
 
         // ID
 
-        let left_goal = Vector3::new(0.0, field.size.height as f32 / 2.0, 0.0);
-        let right_goal = Vector3::new(
-            field.size.width as f32,
-            (field.size.height / 2usize) as f32,
-            0.0,
-        );
-
-        let target_goal = match player.side {
-            Some(PlayerSide::Left) => Vector3::new(right_goal.x, right_goal.y, 0.0),
-            Some(PlayerSide::Right) => Vector3::new(left_goal.x, left_goal.y, 0.0),
-            _ => Vector3::new(0.0, 0.0, 0.0),
-        };
-
-        let goal_distance = field.ball.position.distance_to(&target_goal);
-
-        let distance_to_opponent_goal = &format!("g_d = {}", goal_distance);
+        let distance_to_opponent_goal = &format!("c = {}", player.player_attributes.condition);
 
         let distance_to_opponent_goal_font_size = 13.0 * scale;
         let distance_to_opponent_goal_text_dimensions = measure_text(

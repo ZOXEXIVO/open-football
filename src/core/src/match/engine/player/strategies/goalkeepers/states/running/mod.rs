@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
@@ -81,7 +82,11 @@ impl StateProcessingHandler for GoalkeeperRunningState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Goalkeepers rarely run long distances, but when they do it can be intense
+        // (coming out for balls, running back to goal, distribution runs)
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl GoalkeeperRunningState {

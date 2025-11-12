@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -57,5 +58,8 @@ impl StateProcessingHandler for ForwardPressingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Pressing is high intensity - sustained running and pressure
+        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }

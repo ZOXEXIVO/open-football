@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
@@ -96,7 +97,10 @@ impl StateProcessingHandler for MidfielderTrackingRunnerState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Tracking runner is moderate intensity - sustained tracking
+        MidfielderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl MidfielderTrackingRunnerState {}

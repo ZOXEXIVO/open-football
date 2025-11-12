@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -104,8 +105,9 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Tackling is a very high intensity activity requiring explosive effort
+        GoalkeeperCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

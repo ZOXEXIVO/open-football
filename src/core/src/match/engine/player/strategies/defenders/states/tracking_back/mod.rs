@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior, MATCH_TIME_MS,
@@ -94,5 +95,8 @@ impl StateProcessingHandler for DefenderTrackingBackState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Tracking back is running back to defensive position - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }

@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -74,5 +75,8 @@ impl StateProcessingHandler for ForwardReturningState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Returning is moderate intensity - getting back to position
+        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }

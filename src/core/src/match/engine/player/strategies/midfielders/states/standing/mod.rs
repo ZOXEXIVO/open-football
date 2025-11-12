@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -32,18 +33,10 @@ impl StateProcessingHandler for MidfielderStandingState {
         }
         else {
             // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-            // OR if player is notified to take the ball (no distance limit when notified)
-            let is_nearby = ctx.ball().distance() < 50.0;
-            let is_notified = ctx.ball().is_player_notified();
-
-            if (is_nearby || is_notified) && !ctx.ball().is_owned() {
-                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 1.0 {
-                    // Ball is stopped or nearly stopped - take it directly
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::TakeBall,
-                    ));
-                }
+            if ctx.ball().should_take_ball_immediately() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::TakeBall,
+                ));
             }
 
             if ctx.team().is_control_ball() {
@@ -132,8 +125,9 @@ impl StateProcessingHandler for MidfielderStandingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Standing is recovery - minimal movement
+        MidfielderCondition::new(ActivityIntensity::Recovery).process(ctx);
     }
 }
 

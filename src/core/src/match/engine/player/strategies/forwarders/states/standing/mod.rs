@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -13,9 +14,13 @@ impl StateProcessingHandler for ForwardStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
+            // CRITICAL: Add cooldown before allowing another shot to prevent rapid-fire goal spam
+            // Must wait at least 40 ticks (~0.7 seconds) after entering Standing before shooting again
+            const SHOOTING_COOLDOWN: u64 = 40;
+
             // Decide next action based on game context
-            if self.is_in_shooting_range(ctx) {
-                // Transition to Shooting state
+            if self.is_in_shooting_range(ctx) && ctx.in_state_time > SHOOTING_COOLDOWN {
+                // Transition to Shooting state (only after cooldown)
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
@@ -93,8 +98,9 @@ impl StateProcessingHandler for ForwardStandingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // Handle additional conditions or triggers if necessary
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Standing is recovery - minimal movement
+        ForwardCondition::new(ActivityIntensity::Recovery).process(ctx);
     }
 }
 

@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -9,13 +10,25 @@ const MARKING_DISTANCE: f32 = 15.0;
 const INTERCEPTION_DISTANCE: f32 = 100.0;
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const PUSH_UP_HYSTERESIS: f32 = 0.05;
+const THREAT_SCAN_DISTANCE: f32 = 70.0;
+const DANGEROUS_RUN_SPEED: f32 = 3.0;
+const DANGEROUS_RUN_ANGLE: f32 = 0.7;
+const MIN_STATE_TIME_DEFAULT: u64 = 200; // Reduced from 300
+const MIN_STATE_TIME_WITH_THREAT: u64 = 50; // Fast reaction when threats detected
 
 #[derive(Default)]
 pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.in_state_time < 300 {
+        // Adaptive reaction time based on threat detection
+        let min_time = if self.has_dangerous_threat_nearby(ctx) {
+            MIN_STATE_TIME_WITH_THREAT
+        } else {
+            MIN_STATE_TIME_DEFAULT
+        };
+
+        if ctx.in_state_time < min_time {
             return None;
         }
 
@@ -65,7 +78,10 @@ impl StateProcessingHandler for DefenderCoveringState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Covering space involves moving to cover gaps - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl DefenderCoveringState {
@@ -114,16 +130,33 @@ impl DefenderCoveringState {
         const SMOOTHING_FACTOR: f32 = 0.15; // Adjust this value (0.0 to 1.0) to control smoothing
         let previous_position = ctx.player.position;
 
+        // Check for dangerous spaces that need covering
+        let dangerous_space = self.find_dangerous_space(ctx);
+
         // Calculate blended position with weighted factors
-        let target_position = Vector3::new(
-            covering_position.x * 0.5 +  // Reduced weight from 0.6
-                middle_third_center.x * 0.4 + // Increased weight from 0.3
-                player_position.x * 0.1,
-            covering_position.y * 0.5 +
-                middle_third_center.y * 0.4 +
-                player_position.y * 0.1,
-            0.0,
-        );
+        let target_position = if let Some(danger_pos) = dangerous_space {
+            // Prioritize covering dangerous space
+            Vector3::new(
+                danger_pos.x * 0.5 +
+                    covering_position.x * 0.3 +
+                    player_position.x * 0.2,
+                danger_pos.y * 0.5 +
+                    covering_position.y * 0.3 +
+                    player_position.y * 0.2,
+                0.0,
+            )
+        } else {
+            // Default covering behavior - reduced middle_third bias
+            Vector3::new(
+                covering_position.x * 0.5 +
+                    middle_third_center.x * 0.3 + // Reduced from 0.4
+                    player_position.x * 0.2,      // Increased from 0.1
+                covering_position.y * 0.5 +
+                    middle_third_center.y * 0.3 +
+                    player_position.y * 0.2,
+                0.0,
+            )
+        };
 
         // Apply smoothing between frames
         let smoothed_position = previous_position.lerp(&target_position, SMOOTHING_FACTOR);
@@ -143,5 +176,82 @@ impl DefenderCoveringState {
             capped_position.y.clamp(field_height * 0.1, field_height * 0.9), // Keep away from sidelines
             0.0,
         )
+    }
+
+    /// Check if there are dangerous threats nearby that require immediate attention
+    fn has_dangerous_threat_nearby(&self, ctx: &StateProcessingContext) -> bool {
+        // Check for immediate threats within marking distance
+        if ctx.players().opponents().nearby(MARKING_DISTANCE).next().is_some() {
+            return true;
+        }
+
+        // Check for dangerous runs
+        let own_goal_position = ctx.ball().direction_to_own_goal();
+
+        ctx.players()
+            .opponents()
+            .nearby(THREAT_SCAN_DISTANCE)
+            .any(|opp| {
+                let velocity = opp.velocity(ctx);
+                let speed = velocity.norm();
+
+                if speed < DANGEROUS_RUN_SPEED {
+                    return false;
+                }
+
+                let to_goal = (own_goal_position - opp.position).normalize();
+                let velocity_dir = velocity.normalize();
+                let alignment = velocity_dir.dot(&to_goal);
+
+                alignment >= DANGEROUS_RUN_ANGLE
+            })
+    }
+
+    /// Find dangerous space that needs to be covered (e.g., unmarked attackers in dangerous positions)
+    fn find_dangerous_space(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let own_goal_position = ctx.ball().direction_to_own_goal();
+
+        // Find opponents making dangerous runs or in dangerous positions
+        let dangerous_opponents: Vec<_> = ctx
+            .players()
+            .opponents()
+            .nearby(THREAT_SCAN_DISTANCE)
+            .filter(|opp| {
+                let velocity = opp.velocity(ctx);
+                let speed = velocity.norm();
+
+                // Either running toward goal OR in a dangerous static position
+                if speed >= DANGEROUS_RUN_SPEED {
+                    let to_goal = (own_goal_position - opp.position).normalize();
+                    let velocity_dir = velocity.normalize();
+                    velocity_dir.dot(&to_goal) >= DANGEROUS_RUN_ANGLE
+                } else {
+                    // Check if in dangerous static position (between ball and goal)
+                    let ball_pos = ctx.tick_context.positions.ball.position;
+                    let distance_to_goal = (opp.position - own_goal_position).magnitude();
+                    let ball_distance_to_goal = (ball_pos - own_goal_position).magnitude();
+
+                    // Opponent is closer to goal than ball and within threatening distance
+                    distance_to_goal < ball_distance_to_goal && distance_to_goal < 300.0
+                }
+            })
+            .collect();
+
+        if dangerous_opponents.is_empty() {
+            return None;
+        }
+
+        // Find the most dangerous opponent's position
+        let most_dangerous = dangerous_opponents
+            .iter()
+            .min_by(|a, b| {
+                let dist_a = (a.position - own_goal_position).magnitude();
+                let dist_b = (b.position - own_goal_position).magnitude();
+                dist_a.partial_cmp(&dist_b).unwrap()
+            })?;
+
+        // Calculate position between the dangerous opponent and our goal
+        let direction_to_goal = (own_goal_position - most_dangerous.position).normalize();
+        Some(most_dangerous.position + direction_to_goal * 15.0)
     }
 }

@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -144,7 +145,10 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Attack supporting is high intensity - sustained running to support attacks
+        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl MidfielderAttackSupportingState {

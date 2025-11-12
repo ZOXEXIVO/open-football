@@ -1,4 +1,5 @@
 use crate::r#match::events::EventCollection;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -39,7 +40,8 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Shooting requires moderate intensity with focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
     }
 }

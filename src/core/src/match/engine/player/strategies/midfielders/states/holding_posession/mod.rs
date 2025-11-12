@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -66,7 +67,10 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Holding possession is low intensity - controlled possession
+        MidfielderCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl MidfielderHoldingPossessionState {

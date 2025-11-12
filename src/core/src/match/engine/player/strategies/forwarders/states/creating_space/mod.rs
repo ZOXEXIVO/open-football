@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
@@ -19,8 +20,11 @@ use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 15.0;
+const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0; // Ideal passing range start
+const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 45.0; // Ideal passing range end
 const SPACE_SCAN_RADIUS: f32 = 100.0;
 const CONGESTION_THRESHOLD: f32 = 3.0;
+const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lanes
 
 #[derive(Default)]
 pub struct ForwardCreatingSpaceState {}
@@ -152,7 +156,10 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Creating space is moderate intensity - tactical movement
+        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl ForwardCreatingSpaceState {
@@ -266,10 +273,44 @@ impl ForwardCreatingSpaceState {
             score += 20.0;
         }
 
-        // Distance from ball penalty (don't go too far)
-        let ball_distance = (position - ctx.tick_context.positions.ball.position).magnitude();
-        if ball_distance > MAX_DISTANCE_FROM_BALL {
-            score -= (ball_distance - MAX_DISTANCE_FROM_BALL) * 0.5;
+        // IMPROVED: Ball holder awareness - CRITICAL for receiving passes
+        if let Some(ball_holder) = self.get_ball_holder(ctx) {
+            let holder_distance = (position - ball_holder.position).magnitude();
+
+            // MAJOR BONUS for optimal passing distance (20-45m)
+            if holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN
+                && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX {
+                score += 25.0; // STRONG incentive to be in passing range
+            } else if holder_distance < OPTIMAL_PASSING_DISTANCE_MIN {
+                // Penalty for being too close (harder to receive)
+                score -= (OPTIMAL_PASSING_DISTANCE_MIN - holder_distance) * 0.5;
+            } else if holder_distance > OPTIMAL_PASSING_DISTANCE_MAX {
+                // Progressive penalty for being too far
+                score -= (holder_distance - OPTIMAL_PASSING_DISTANCE_MAX) * 0.8;
+            }
+
+            // MAJOR BONUS for clear passing lane from ball holder
+            if self.has_clear_passing_lane(ball_holder.position, position, ctx) {
+                score += PASSING_LANE_IMPORTANCE;
+            } else {
+                // Penalty for blocked passing lane
+                score -= 10.0;
+            }
+
+            // BONUS for good receiving angle (diagonal/forward from holder)
+            let angle_quality = self.calculate_receiving_angle_quality(ctx, ball_holder.position, position);
+            score += angle_quality * 8.0; // Up to 8 bonus points for perfect angle
+
+            // BONUS if holder is under pressure (need to offer option quickly)
+            if self.is_ball_holder_under_pressure(ctx, ball_holder.id) {
+                score += 12.0;
+            }
+        } else {
+            // Fallback: distance from ball (when no clear holder)
+            let ball_distance = (position - ctx.tick_context.positions.ball.position).magnitude();
+            if ball_distance > MAX_DISTANCE_FROM_BALL {
+                score -= (ball_distance - MAX_DISTANCE_FROM_BALL) * 0.5;
+            }
         }
 
         score
@@ -326,7 +367,7 @@ impl ForwardCreatingSpaceState {
         avoidance
     }
 
-    /// Get intelligent movement pattern for forward
+    /// Get intelligent movement pattern for forward - IMPROVED to prioritize being a passing option
     fn get_intelligent_movement_pattern(&self, ctx: &StateProcessingContext) -> ForwardMovementPattern {
         let congestion = self.calculate_local_congestion(ctx);
         let defensive_line_height = self.get_defensive_line_height(ctx);
@@ -337,6 +378,33 @@ impl ForwardCreatingSpaceState {
         let defenders_compact = self.are_defenders_compact(ctx);
         let has_space_behind = self.has_space_behind_defense(ctx);
 
+        // NEW: Check ball holder situation
+        let ball_holder_under_pressure = if let Some(holder) = self.get_ball_holder(ctx) {
+            self.is_ball_holder_under_pressure(ctx, holder.id)
+        } else {
+            false
+        };
+
+        // NEW: Check if we're in good passing range
+        let in_passing_range = if let Some(holder) = self.get_ball_holder(ctx) {
+            let distance = (ctx.player.position - holder.position).magnitude();
+            distance >= OPTIMAL_PASSING_DISTANCE_MIN && distance <= OPTIMAL_PASSING_DISTANCE_MAX
+        } else {
+            false
+        };
+
+        // PRIORITIZE: If ball holder under pressure, offer immediate support
+        if ball_holder_under_pressure {
+            if in_passing_range {
+                // Already in range - maintain position with diagonal movement
+                return ForwardMovementPattern::DiagonalRun;
+            } else {
+                // Not in range - check to feet immediately
+                return ForwardMovementPattern::CheckToFeet;
+            }
+        }
+
+        // PRIORITIZE: Exploit space behind defense if available
         if has_space_behind && !self.would_be_offside_now(ctx) {
             ForwardMovementPattern::ChannelRun
         } else if defenders_compact && ball_in_wide_area {
@@ -345,7 +413,8 @@ impl ForwardCreatingSpaceState {
             ForwardMovementPattern::DriftWide
         } else if defensive_line_height > 0.6 && ctx.player().skills(ctx.player.id).mental.off_the_ball > 14.0 {
             ForwardMovementPattern::DirectRun
-        } else if time_factor < 20 && ctx.ball().distance() < 40.0 {
+        } else if !in_passing_range && ctx.ball().distance() < 60.0 {
+            // IMPROVED: CheckToFeet more often when not in optimal passing range
             ForwardMovementPattern::CheckToFeet
         } else if self.detect_defensive_shift(ctx) {
             ForwardMovementPattern::OppositeMovement
@@ -425,16 +494,45 @@ impl ForwardCreatingSpaceState {
         Vector3::new(forward_position, target_y, 0.0)
     }
 
-    /// Calculate check position (coming short)
+    /// Calculate check position (coming short) - IMPROVED for better receiving angles
     fn calculate_check_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let ball_pos = ctx.tick_context.positions.ball.position;
         let player_pos = ctx.player.position;
 
-        // Come toward ball but maintain angle
+        // Prioritize positioning relative to ball holder, not just ball
+        if let Some(ball_holder) = self.get_ball_holder(ctx) {
+            let holder_pos = ball_holder.position;
+            let to_player = (player_pos - holder_pos).normalize();
+            let attacking_direction = self.get_attacking_direction(ctx);
+
+            // Calculate optimal check distance (within passing range)
+            let current_distance = (player_pos - holder_pos).magnitude();
+            let target_distance = OPTIMAL_PASSING_DISTANCE_MIN + 10.0; // 30m
+
+            // Create diagonal angle for easier passing
+            let lateral_direction = Vector3::new(-to_player.y, to_player.x, 0.0);
+
+            // Blend forward movement with lateral movement for diagonal angle
+            let ideal_direction = if current_distance > target_distance {
+                // Too far - come closer, but at an angle
+                (-to_player * 0.6 + lateral_direction * 0.4 + attacking_direction * 0.3).normalize()
+            } else {
+                // Right distance - maintain angle and move slightly forward
+                (lateral_direction * 0.5 + attacking_direction * 0.5).normalize()
+            };
+
+            let target_position = player_pos + ideal_direction * 15.0;
+
+            // Ensure we're not moving into congested area
+            if self.calculate_position_congestion(ctx, target_position) < 4.0 {
+                return target_position;
+            }
+        }
+
+        // Fallback: original logic if no ball holder found
+        let ball_pos = ctx.tick_context.positions.ball.position;
         let to_ball = (ball_pos - player_pos).normalize();
         let check_distance = 20.0;
 
-        // Add slight lateral movement for better angle
         let lateral_offset = if player_pos.y < ctx.context.field_size.height as f32 / 2.0 {
             Vector3::new(0.0, -5.0, 0.0)
         } else {
@@ -799,5 +897,61 @@ impl ForwardCreatingSpaceState {
         let field_width = ctx.context.field_size.width as f32;
 
         ball_distance_to_goal < field_width * 0.7
+    }
+
+    /// Calculate quality of receiving angle from ball holder
+    /// Returns 0.0-1.0 where 1.0 is ideal diagonal/forward angle
+    fn calculate_receiving_angle_quality(&self, ctx: &StateProcessingContext, holder_pos: Vector3<f32>, target_pos: Vector3<f32>) -> f32 {
+        let to_target = (target_pos - holder_pos).normalize();
+        let attacking_direction = self.get_attacking_direction(ctx);
+
+        // Calculate forward component (how much position is ahead of holder)
+        let forward_alignment = to_target.dot(&attacking_direction);
+
+        // Calculate lateral component (diagonal passing angle)
+        let lateral_component = to_target.y.abs();
+
+        // Ideal angle is diagonal-forward (not straight ahead, not directly sideways)
+        // Best: 45-degree diagonal forward (forward_alignment ~0.7, lateral ~0.7)
+        let angle_quality = if forward_alignment > 0.3 {
+            // Forward or diagonal-forward
+            if lateral_component > 0.3 && lateral_component < 0.8 {
+                // Good diagonal angle
+                1.0
+            } else if lateral_component <= 0.3 {
+                // Straight ahead - decent but not ideal
+                0.7
+            } else {
+                // Too wide
+                0.4
+            }
+        } else if forward_alignment > -0.2 {
+            // Lateral pass - acceptable
+            0.5
+        } else {
+            // Backwards - poor receiving angle
+            0.1
+        };
+
+        angle_quality
+    }
+
+    /// Check if ball holder is under defensive pressure
+    fn is_ball_holder_under_pressure(&self, ctx: &StateProcessingContext, holder_id: u32) -> bool {
+        if let Some(holder) = ctx.players().teammates().all().find(|p| p.id == holder_id) {
+            // Check for opponents within pressing distance
+            let pressing_opponents = ctx.players()
+                .opponents()
+                .all()
+                .filter(|opp| {
+                    let distance = (opp.position - holder.position).magnitude();
+                    distance < 10.0
+                })
+                .count();
+
+            pressing_opponents >= 1
+        } else {
+            false
+        }
     }
 }

@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
@@ -54,7 +55,8 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // If no good passing option after waiting, try something else
-        if ctx.in_state_time > 50 {
+        // Reduced from 50 to 30 ticks for faster decision-making
+        if ctx.in_state_time > 30 {
             return if ctx.ball().distance_to_opponent_goal() < 200.0 {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
@@ -74,32 +76,17 @@ impl StateProcessingHandler for MidfielderPassingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Make small movements to create better passing angles
-        if ctx.in_state_time > 10 {
-            let field_center = Vector3::new(
-                ctx.context.field_size.width as f32 / 2.0,
-                ctx.context.field_size.height as f32 / 2.0,
-                0.0,
-            );
-
-            let to_center = (field_center - ctx.player.position).normalize();
-            let random_jitter = Vector3::new(
-                (rand::random::<f32>() - 0.5) * 0.5,
-                (rand::random::<f32>() - 0.5) * 0.5,
-                0.0,
-            );
-
-            return Some((to_center + random_jitter).normalize() * 1.0);
-        }
-
-        // Periodic small movements to avoid looking stuck
-        if ctx.in_state_time.is_multiple_of(10) {
-            let jitter = Vector3::new(
-                (rand::random::<f32>() - 0.5) * 0.8,
-                (rand::random::<f32>() - 0.5) * 0.8,
-                0.0,
-            );
-            return Some(jitter);
+        // If under heavy pressure, shield the ball and create space
+        if self.is_under_heavy_pressure(ctx) {
+            // Move away from nearest opponent to create passing space
+            if let Some(nearest_opponent) = ctx.players().opponents().nearby(15.0).next() {
+                let away_from_opponent = (ctx.player.position - nearest_opponent.position).normalize();
+                // Shield ball by moving perpendicular to goal direction
+                let to_goal = (ctx.player().opponent_goal_position() - ctx.player.position).normalize();
+                let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0);
+                let escape_direction = (away_from_opponent * 0.7 + perpendicular * 0.3).normalize();
+                return Some(escape_direction * 2.5 + ctx.player().separation_velocity());
+            }
         }
 
         // Adjust position to find better passing angles if needed
@@ -111,20 +98,20 @@ impl StateProcessingHandler for MidfielderPassingState {
                         slowing_distance: 30.0,
                     }
                         .calculate(ctx.player)
-                        .velocity,
+                        .velocity + ctx.player().separation_velocity(),
                 );
             }
         }
 
-        // Default small movement
-        Some(Vector3::new(
-            (rand::random::<f32>() - 0.5) * 0.3,
-            (rand::random::<f32>() - 0.5) * 0.3,
-            0.0,
-        ))
+        // Default: slow, controlled movement with ball - like scanning for options
+        // Use separation to avoid colliding with other players
+        Some(ctx.player().separation_velocity() * 0.5)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Passing is low intensity - minimal fatigue
+        MidfielderCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl MidfielderPassingState {

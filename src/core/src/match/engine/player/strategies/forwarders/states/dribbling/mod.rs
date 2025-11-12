@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
@@ -14,14 +15,26 @@ impl StateProcessingHandler for ForwardDribblingState {
             // Transition to Running state if the player doesn't have the ball
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
-        
+
+        // Prevent infinite dribbling - timeout after 40 ticks to reassess
+        if ctx.in_state_time > 40 {
+            // Check for shooting opportunity first
+            if ctx.ball().distance_to_opponent_goal() < 250.0 && ctx.player().has_clear_shot() {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
+            // Otherwise try passing
+            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+        }
+
         if ctx.ball().distance_to_opponent_goal() < 35.0 && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
-        // Check if the player is under pressure
-        if ctx.players().opponents().nearby_raw(15.0).count() >= 2 {
-            // Transition to Passing state if under pressure
+        // Check if the player is under pressure from multiple defenders
+        // Reduced check from nearby_raw to more accurate close defenders
+        let close_defenders = ctx.players().opponents().nearby(8.0).count();
+        if close_defenders >= 2 {
+            // Transition to Passing state if under pressure from multiple close defenders
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
@@ -59,7 +72,10 @@ impl StateProcessingHandler for ForwardDribblingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Dribbling is high intensity - sustained movement with ball
+        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl ForwardDribblingState {

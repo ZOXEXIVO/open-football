@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -30,7 +31,10 @@ impl StateProcessingHandler for DefenderShootingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Shooting is explosive - powerful leg action requires significant energy
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl DefenderShootingState {}

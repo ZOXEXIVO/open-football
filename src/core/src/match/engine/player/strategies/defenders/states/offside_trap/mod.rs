@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{ConditionContext, MatchPlayer, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use rand::Rng;
@@ -97,8 +98,9 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
         Some(blended_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Offside trap involves quick coordinated movement - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
     }
 }
 

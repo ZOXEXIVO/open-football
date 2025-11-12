@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
@@ -138,7 +139,10 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Creating space is moderate intensity - tactical movement
+        MidfielderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl MidfielderCreatingSpaceState {

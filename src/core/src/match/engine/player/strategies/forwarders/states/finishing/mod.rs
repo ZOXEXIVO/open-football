@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -48,7 +49,10 @@ impl StateProcessingHandler for ForwardFinishingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Finishing is very high intensity - explosive action
+        ForwardCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl ForwardFinishingState {

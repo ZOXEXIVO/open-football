@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -6,7 +7,7 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 400.0;
+const MAX_SHOOTING_DISTANCE: f32 = 80.0; // Defenders rarely shoot, only from close range
 
 #[derive(Default)]
 pub struct DefenderRunningState {}
@@ -98,7 +99,11 @@ impl StateProcessingHandler for DefenderRunningState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Running is physically demanding - reduce condition based on intensity and player's stamina
+        // Use velocity-based calculation to account for sprinting vs jogging
+        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl DefenderRunningState {

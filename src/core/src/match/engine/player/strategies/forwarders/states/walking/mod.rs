@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -59,5 +60,8 @@ impl StateProcessingHandler for ForwardWalkingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Walking is low intensity - minimal fatigue
+        ForwardCondition::with_velocity(ActivityIntensity::Low).process(ctx);
+    }
 }

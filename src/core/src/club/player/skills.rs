@@ -6,13 +6,14 @@ pub struct PlayerSkills {
 }
 
 impl PlayerSkills {
+    /// Calculate maximum speed without condition factor (raw speed based on skills only)
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
         let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
         let balance_factor = (self.physical.balance as f32 - 1.0) / 19.0;
 
-        let base_speed = 1.0;
+        let base_speed = 1.3; // Increased by 30% from 1.0 to 1.3
         let max_speed = base_speed
             * (0.6 * pace_factor
                 + 0.2 * acceleration_factor
@@ -20,6 +21,24 @@ impl PlayerSkills {
                 + 0.1 * balance_factor);
 
         max_speed
+    }
+
+    /// Calculate maximum speed with condition/stamina factor (real-time performance)
+    /// This is what should be used during match for actual speed calculation
+    pub fn max_speed_with_condition(&self, condition: i16, fitness: i16, jadedness: i16) -> f32 {
+        let base_max_speed = self.max_speed();
+
+        // Calculate condition factor (similar to PassSkills logic)
+        let condition_percentage = (condition as f32 / 10000.0).clamp(0.0, 1.0);
+        let fitness_factor = (fitness as f32 / 10000.0).clamp(0.5, 1.0);
+        let jadedness_penalty = (jadedness as f32 / 10000.0) * 0.3;
+        let stamina_skill = (self.physical.stamina / 20.0).clamp(0.3, 1.0);
+
+        // Condition factor ranges from 0.5 to 1.0 (tired players at 50% speed minimum)
+        let condition_factor = (condition_percentage * fitness_factor * stamina_skill - jadedness_penalty)
+            .clamp(0.5, 1.0);
+
+        base_max_speed * condition_factor
     }
 }
 

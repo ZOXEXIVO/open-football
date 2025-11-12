@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -44,7 +45,8 @@ impl StateProcessingHandler for GoalkeeperSweepingState {
         Some(direction * speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Sweeping requires high intensity as goalkeeper moves far from goal
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }

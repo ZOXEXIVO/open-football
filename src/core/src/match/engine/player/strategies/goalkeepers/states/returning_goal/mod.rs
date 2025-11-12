@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -40,5 +41,8 @@ impl StateProcessingHandler for GoalkeeperReturningGoalState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Returning to goal requires high intensity as goalkeeper moves back quickly
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }

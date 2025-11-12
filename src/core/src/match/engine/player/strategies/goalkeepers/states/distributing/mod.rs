@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
@@ -32,7 +33,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 
         // Timeout after a short time if no pass is made
         // This prevents the goalkeeper from being stuck trying to pass forever
-        if ctx.in_state_time > 10 {
+        if ctx.in_state_time > 20 {
             // If we still have the ball after timeout, try running to find space
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Running,
@@ -52,7 +53,10 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Distributing requires moderate intensity with focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl GoalkeeperDistributingState {

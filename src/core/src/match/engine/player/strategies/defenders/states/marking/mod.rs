@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -100,15 +101,17 @@ impl StateProcessingHandler for DefenderMarkingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Marking involves constant movement following opponent - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
     }
 }
 
 impl DefenderMarkingState {
     /// Find the most dangerous opponent to mark based on multiple factors
     fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
-        let nearby_opponents: Vec<_> = ctx.players().opponents().nearby(100.0).collect();
+        // Extended search range to catch dangerous runs from distance
+        let nearby_opponents: Vec<_> = ctx.players().opponents().nearby(150.0).collect();
 
         if nearby_opponents.is_empty() {
             return None;
@@ -137,14 +140,23 @@ impl DefenderMarkingState {
             let distance_to_defender = opponent.distance(ctx);
             danger_score += (100.0 - distance_to_defender.min(100.0)) / 5.0; // Max 20 points
 
-            // Factor 4: Opponent facing our goal (attacking posture)
+            // Factor 4: Opponent facing our goal (attacking posture) - ENHANCED
             let opponent_velocity = opponent.velocity(ctx);
             let to_our_goal = (own_goal_position - opponent.position).normalize();
-            if opponent_velocity.norm() > 0.1 {
+            let speed = opponent_velocity.norm();
+
+            if speed > 0.1 {
                 let velocity_dir = opponent_velocity.normalize();
                 let alignment = velocity_dir.dot(&to_our_goal);
+
                 if alignment > 0.0 {
-                    danger_score += alignment * 30.0; // Max 30 points for running towards goal
+                    // Base points for running towards goal
+                    danger_score += alignment * 30.0;
+
+                    // Bonus for dangerous runs: high speed + good alignment
+                    if speed > 3.0 && alignment > 0.7 {
+                        danger_score += 25.0; // Additional points for clear dangerous run
+                    }
                 }
             }
 

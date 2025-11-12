@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
@@ -7,7 +8,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MAX_PASS_DURATION: u64 = 50; // Ticks before considering fatigue
+const MAX_PASS_DURATION: u64 = 30; // Ticks before trying alternative action (reduced for faster decision-making)
 
 #[derive(Default)]
 pub struct ForwardPassingState {}
@@ -17,9 +18,7 @@ impl StateProcessingHandler for ForwardPassingState {
         // Check if the forward still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running state
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         // Determine the best teammate to pass to
@@ -37,7 +36,8 @@ impl StateProcessingHandler for ForwardPassingState {
         }
 
         // If no good passing option is found and we're close to goal, consid-er shooting
-        if ctx.ball().distance_to_opponent_goal() < 250.0 && self.should_shoot_instead_of_pass(ctx) {
+        if ctx.ball().distance_to_opponent_goal() < 250.0 && self.should_shoot_instead_of_pass(ctx)
+        {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Shooting,
             ));
@@ -50,16 +50,12 @@ impl StateProcessingHandler for ForwardPassingState {
                     ForwardState::Dribbling,
                 ));
             } else {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Running,
-                ));
+                return Some(StateChangeResult::with_forward_state(ForwardState::Running));
             }
         }
 
         if ctx.in_state_time > MAX_PASS_DURATION {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running
-            ));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         None
@@ -78,15 +74,19 @@ impl StateProcessingHandler for ForwardPassingState {
                     target: self.calculate_better_passing_position(ctx),
                     slowing_distance: 30.0,
                 }
-                    .calculate(ctx.player)
-                    .velocity + ctx.player().separation_velocity(),
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
             );
         }
 
         None
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Passing is low intensity - minimal fatigue
+        ForwardCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl ForwardPassingState {
@@ -111,19 +111,26 @@ impl ForwardPassingState {
         }
 
         // Evaluate each option - forwards prioritize different passes than other positions
-        pass_options.into_iter()
+        pass_options
+            .into_iter()
             .map(|teammate| {
                 let score = self.evaluate_forward_pass(ctx, &teammate);
                 (teammate, score)
             })
             .max_by(|(_, score_a), (_, score_b)| {
-                score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
+                score_a
+                    .partial_cmp(score_b)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(teammate, _)| teammate)
     }
 
     /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
-    fn evaluate_forward_pass(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> f32 {
+    fn evaluate_forward_pass(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
         // Start with the basic pass evaluator score
         let base_score = PassEvaluator::evaluate_pass(ctx, ctx.player, teammate);
 
@@ -132,7 +139,8 @@ impl ForwardPassingState {
 
         // Goal distance factors - forwards prioritize passes that get closer to goal
         let forward_to_goal_dist = ctx.ball().distance_to_opponent_goal();
-        let teammate_to_goal_dist = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+        let teammate_to_goal_dist =
+            (teammate.position - ctx.player().opponent_goal_position()).magnitude();
 
         // Significantly boost passes that advance toward goal - key forward priority
         if teammate_to_goal_dist < forward_to_goal_dist {
@@ -176,7 +184,10 @@ impl ForwardPassingState {
         let pass_distance = (teammate_pos - player_pos).magnitude();
 
         // Look for opponents between the player and teammate
-        let opponents_in_line = ctx.players().opponents().all()
+        let opponents_in_line = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opponent| {
                 // Project opponent onto pass line
                 let to_opponent = opponent.position - player_pos;
@@ -201,7 +212,11 @@ impl ForwardPassingState {
     }
 
     /// Check if a teammate is viable for receiving a pass
-    fn is_viable_pass_target(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn is_viable_pass_target(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         // Basic viability criteria
         let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
         let not_heavily_marked = !self.is_heavily_marked(ctx, teammate);
@@ -214,7 +229,11 @@ impl ForwardPassingState {
     }
 
     /// Check if a pass would create a good attacking opportunity
-    fn pass_creates_opportunity(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn pass_creates_opportunity(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         // Passing backwards is generally not a good option for forwards
         // unless under heavy pressure
         if teammate.position.x < ctx.player.position.x && !self.is_under_heavy_pressure(ctx) {
@@ -222,7 +241,8 @@ impl ForwardPassingState {
         }
 
         // Check if the teammate is in a good shooting position
-        let distance_to_goal = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+        let distance_to_goal =
+            (teammate.position - ctx.player().opponent_goal_position()).magnitude();
         if distance_to_goal < 200.0 {
             return true;
         }
@@ -242,7 +262,10 @@ impl ForwardPassingState {
         const MARKING_DISTANCE: f32 = 10.0;
         const MAX_MARKERS: usize = 2;
 
-        let markers = ctx.players().opponents().all()
+        let markers = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opponent| {
                 (opponent.position - teammate.position).magnitude() <= MARKING_DISTANCE
             })
@@ -252,18 +275,20 @@ impl ForwardPassingState {
     }
 
     /// Determine if teammate has a clear shot on goal
-    fn teammate_has_clear_shot(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
+    fn teammate_has_clear_shot(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
         let teammate_pos = teammate.position;
         let goal_pos = ctx.player().opponent_goal_position();
         let shot_direction = (goal_pos - teammate_pos).normalize();
         let shot_distance = (goal_pos - teammate_pos).magnitude();
 
-        let ray_cast_result = ctx.tick_context.space.cast_ray(
-            teammate_pos,
-            shot_direction,
-            shot_distance,
-            false,
-        );
+        let ray_cast_result =
+            ctx.tick_context
+                .space
+                .cast_ray(teammate_pos, shot_direction, shot_distance, false);
 
         ray_cast_result.is_none() && shot_distance < 300.0
     }
@@ -291,8 +316,8 @@ impl ForwardPassingState {
     /// Check if player should shoot instead of pass
     fn should_shoot_instead_of_pass(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let shooting_skill = (ctx.player.skills.technical.finishing +
-            ctx.player.skills.technical.technique) / 40.0;
+        let shooting_skill =
+            (ctx.player.skills.technical.finishing + ctx.player.skills.technical.technique) / 40.0;
 
         // Forwards are more likely to shoot than midfielders
         // They'll shoot from further out and with less clear sight of goal
@@ -368,13 +393,19 @@ impl ForwardPassingState {
     }
 
     /// Look for space between defenders toward the goal
-    fn find_space_between_opponents_toward_goal(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+    fn find_space_between_opponents_toward_goal(
+        &self,
+        ctx: &StateProcessingContext,
+    ) -> Option<Vector3<f32>> {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
         let to_goal_direction = (goal_pos - player_pos).normalize();
 
         // Get opponents between player and goal
-        let opponents_between = ctx.players().opponents().all()
+        let opponents_between = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opp| {
                 let to_opp = opp.position - player_pos;
                 let projection = to_opp.dot(&to_goal_direction);

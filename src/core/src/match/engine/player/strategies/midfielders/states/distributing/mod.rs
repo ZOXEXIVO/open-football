@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
@@ -36,7 +37,10 @@ impl StateProcessingHandler for MidfielderDistributingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Distributing is moderate intensity
+        MidfielderCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl MidfielderDistributingState {

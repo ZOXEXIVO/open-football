@@ -1,12 +1,12 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const TAKEBALL_TIMEOUT: u64 = 1000; // Give up after 1000 ticks
-const MAX_TAKEBALL_DISTANCE: f32 = 500.0; // Don't chase balls further than this - increased to ensure someone always goes
+const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
 
 #[derive(Default)]
 pub struct DefenderTakeBallState {}
@@ -86,7 +86,7 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // BUT reduce separation when very close to ball to allow claiming
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 10.0; // Reduce separation within this distance to ball
+        const BALL_CLAIM_DISTANCE: f32 = 10.0;
 
         let distance_to_ball = (ctx.player.position - target).magnitude();
         let separation_factor = if distance_to_ball < BALL_CLAIM_DISTANCE {
@@ -135,5 +135,8 @@ impl StateProcessingHandler for DefenderTakeBallState {
         Some(arrive_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Taking ball involves movement towards ball - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }

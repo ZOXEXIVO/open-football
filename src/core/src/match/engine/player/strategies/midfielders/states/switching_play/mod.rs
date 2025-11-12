@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
@@ -55,7 +56,10 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Switching play is low intensity - tactical passing
+        MidfielderCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl MidfielderSwitchingPlayState {

@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,10 +11,10 @@ pub struct MidfielderDribblingState {}
 
 impl StateProcessingHandler for MidfielderDribblingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Add timeout to avoid getting stuck
-        if ctx.in_state_time > 60 {
+        // Add timeout to avoid getting stuck - reduced from 60 to 30 ticks
+        if ctx.in_state_time > 30 {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running
+                MidfielderState::Passing // Force decision instead of just running
             ));
         }
 
@@ -47,22 +48,18 @@ impl StateProcessingHandler for MidfielderDribblingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Instead of returning zero velocity, actually dribble toward goal
         if ctx.player.has_ball(ctx) {
-            // Dribble toward the goal with some variance
+            // Dribble toward the goal (REMOVED random jitter that causes circular movement)
             let goal_pos = ctx.player().opponent_goal_position();
             let player_pos = ctx.player.position;
             let direction = (goal_pos - player_pos).normalize();
-
-            // Add some randomness to dribbling direction for realism
-            let jitter_x = (rand::random::<f32>() - 0.5) * 0.2;
-            let jitter_y = (rand::random::<f32>() - 0.5) * 0.2;
-            let jitter = Vector3::new(jitter_x, jitter_y, 0.0);
 
             // Calculate speed based on player's dribbling and pace
             let dribble_skill = ctx.player.skills.technical.dribbling / 20.0;
             let pace = ctx.player.skills.physical.pace / 20.0;
             let speed = 3.0 * (0.7 * dribble_skill + 0.3 * pace);
 
-            Some((direction + jitter).normalize() * speed)
+            // Add separation to avoid teammates clustering
+            Some(direction * speed + ctx.player().separation_velocity() * 2.0)
         } else {
             // If player doesn't have the ball anymore, move toward it
             let ball_pos = ctx.tick_context.positions.ball.position;
@@ -74,7 +71,10 @@ impl StateProcessingHandler for MidfielderDribblingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Dribbling is moderate intensity
+        MidfielderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl MidfielderDribblingState {

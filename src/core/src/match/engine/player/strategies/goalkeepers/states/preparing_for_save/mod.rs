@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -33,7 +34,12 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let ball_speed = ball_velocity.norm();
 
         // Check if we should attempt a save
-        if ball_distance < CATCH_DISTANCE {
+        // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
+        // This prevents catching balls at center field
+        let distance_from_goal = ctx.player().distance_from_start_position();
+        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 40.0; // Only catch within ~40 units of goal
+
+        if ball_distance < CATCH_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -89,7 +95,10 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Preparing for save requires high intensity as goalkeeper moves into position
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl GoalkeeperPreparingForSaveState {
@@ -152,8 +161,6 @@ impl GoalkeeperPreparingForSaveState {
         // Goalkeeper skills
         // Use first_touch as proxy for handling, physical.jumping for aerial reach
         let handling = ctx.player.skills.technical.first_touch / 20.0;
-        let aerial_reach = ctx.player.skills.physical.jumping / 20.0;
-        let command_of_area = ctx.player.skills.mental.vision / 20.0;
 
         // Check if ball is high (would need to punch rather than catch)
         let ball_height = ball_position.z;

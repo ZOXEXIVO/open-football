@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -6,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const TAKEBALL_TIMEOUT: u64 = 200; // Give up after 200 ticks (~3.3 seconds)
-const MAX_TAKEBALL_DISTANCE: f32 = 500.0; // Don't chase balls further than this - increased to ensure someone always goes
+const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
 
 #[derive(Default)]
 pub struct ForwardTakeBallState {}
@@ -90,7 +91,7 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // Add separation force to prevent player stacking
         // BUT reduce separation MUCH more aggressively when close to ball
         const SEPARATION_RADIUS: f32 = 25.0;
-        const SEPARATION_WEIGHT: f32 = 0.25; // Reduced from 0.4
+        const SEPARATION_WEIGHT: f32 = 0.4; // Reduced from 0.4
         const BALL_CLAIM_DISTANCE: f32 = 15.0; // Increased from 10.0
         const BALL_PRIORITY_DISTANCE: f32 = 5.0; // New: disable separation when very close
 
@@ -148,5 +149,8 @@ impl StateProcessingHandler for ForwardTakeBallState {
         Some(arrive_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Taking ball is very high intensity - explosive action to claim possession
+        ForwardCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }

@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -58,8 +59,9 @@ impl StateProcessingHandler for ForwardInterceptingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Intercepting is moderate intensity - reading and reacting
+        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
     }
 }
 

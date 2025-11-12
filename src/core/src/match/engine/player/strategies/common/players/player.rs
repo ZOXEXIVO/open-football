@@ -6,6 +6,7 @@ use crate::r#match::{
 use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::Rng;
+use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -52,27 +53,96 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     pub fn shooting_direction(&self) -> Vector3<f32> {
         let goal_position = self.opponent_goal_position();
+        let distance_to_goal = self.goal_distance();
 
-        let goal_height = self.ctx.context.field_size.height as f32;
+        // Get player skills
+        let finishing = self.skills(self.ctx.player.id).technical.finishing;
+        let technique = self.skills(self.ctx.player.id).technical.technique;
+        let composure = self.skills(self.ctx.player.id).mental.composure;
+        let long_shots = self.skills(self.ctx.player.id).technical.long_shots;
 
-        let shooting_technique = self.skills(self.ctx.player.id).technical.technique;
-        let shooting_accuracy = self.skills(self.ctx.player.id).technical.finishing;
+        // Normalize skills (0.0 to 1.0)
+        let finishing_factor = (finishing - 1.0) / 19.0;
+        let technique_factor = (technique - 1.0) / 19.0;
+        let composure_factor = (composure - 1.0) / 19.0;
+        let long_shots_factor = (long_shots - 1.0) / 19.0;
 
-        // Normalize the skill values to a range between 0 and 1
-        let technique_factor = (shooting_technique as f32 - 1.0) / 19.0;
-        let accuracy_factor = (shooting_accuracy as f32 - 1.0) / 19.0;
+        // Check pressure from defenders
+        let nearby_defenders = self.ctx.players().opponents().nearby(10.0).count();
+        let pressure_factor = 1.0 - (nearby_defenders as f32 * 0.15).min(0.5);
 
-        // Calculate the maximum deviation in the y-direction based on the goal height and player skills
-        let max_y_deviation = goal_height * 0.15 * (1.0 - technique_factor * accuracy_factor);
+        // Distance factor (closer = more accurate)
+        let distance_factor = if distance_to_goal < 150.0 {
+            1.0 - (distance_to_goal / 300.0)
+        } else {
+            // For long shots, use long_shots skill
+            0.5 * long_shots_factor
+        };
+
+        // Overall accuracy (0.0 to 1.0, higher = more accurate)
+        let accuracy = (finishing_factor * 0.4
+                      + technique_factor * 0.25
+                      + composure_factor * 0.2
+                      + distance_factor * 0.15)
+                      * pressure_factor;
+
+        // Goal dimensions (using goal post standard size)
+        let goal_width = 73.0; // Standard goal width in decimeters
 
         let mut rng = rand::rng();
-        let y_offset = rng.random_range(-max_y_deviation..max_y_deviation);
 
-        let mut shooting_target = goal_position;
+        // Determine shot type based on distance and skills
+        let is_placement_shot = distance_to_goal < 150.0 && finishing > 12.0;
 
-        shooting_target.y += y_offset;
+        let mut target = goal_position;
 
-        shooting_target
+        if is_placement_shot {
+            // Close range: Aim for corners (like real strikers)
+            // Choose a corner based on angle and randomness
+            let aim_preference = rng.random_range(0.0..1.0);
+
+            // Determine horizontal target (Y-axis - width)
+            let y_target = if aim_preference < 0.5 {
+                // Aim for left post area
+                -goal_width * 0.35
+            } else {
+                // Aim for right post area
+                goal_width * 0.35
+            };
+
+            // Determine vertical target (Z-axis - height, if supported)
+            // For now, shots are 2D so we focus on Y placement
+
+            // Add accuracy-based deviation from intended corner
+            let y_deviation = rng.random_range(-goal_width * 0.2..goal_width * 0.2) * (1.0 - accuracy);
+            target.y += y_target + y_deviation;
+
+        } else {
+            // Long range: More central but with larger deviation
+            // Players try to keep it on target rather than picking corners
+            let y_base = rng.random_range(-goal_width * 0.15..goal_width * 0.15);
+
+            // Larger deviation for long shots based on accuracy
+            let y_deviation = rng.random_range(-goal_width * 0.35..goal_width * 0.35) * (1.0 - accuracy);
+            target.y += y_base + y_deviation;
+        }
+
+        // Add slight depth deviation (X-axis) based on technique
+        // Poor technique can cause shots to go over or fall short
+        let x_deviation = rng.random_range(-5.0..5.0) * (1.0 - technique_factor);
+        target.x += x_deviation;
+
+        // Mental composure affects shot under pressure
+        if nearby_defenders > 0 {
+            let panic_factor = 1.0 - composure_factor;
+            let panic_deviation_y = rng.random_range(-goal_width * 0.15..goal_width * 0.15) * panic_factor;
+            let panic_deviation_x = rng.random_range(-8.0..8.0) * panic_factor;
+
+            target.y += panic_deviation_y;
+            target.x += panic_deviation_x;
+        }
+
+        target
     }
 
     pub fn opponent_goal_position(&self) -> Vector3<f32> {
@@ -343,10 +413,40 @@ impl<'p> PlayerOperationsImpl<'p> {
         const MAX_SEPARATION_FORCE: f32 = 15.0;
         let separation_magnitude = separation.magnitude();
         if separation_magnitude > MAX_SEPARATION_FORCE {
-            separation = separation * (MAX_SEPARATION_FORCE / separation_magnitude);
+            separation = separation * MAX_SEPARATION_FORCE / separation_magnitude;
         }
 
         separation
+    }
+
+    /// Get pressure operations for assessing game pressure
+    pub fn pressure(&self) -> PressureOperationsImpl<'p> {
+        PressureOperationsImpl::new(self.ctx)
+    }
+
+    /// Get shooting operations for shooting decisions
+    pub fn shooting(&self) -> ShootingOperationsImpl<'p> {
+        ShootingOperationsImpl::new(self.ctx)
+    }
+
+    /// Get passing operations for passing decisions
+    pub fn passing(&self) -> PassingOperationsImpl<'p> {
+        PassingOperationsImpl::new(self.ctx)
+    }
+
+    /// Get defensive operations for defensive positioning
+    pub fn defensive(&self) -> DefensiveOperationsImpl<'p> {
+        DefensiveOperationsImpl::new(self.ctx)
+    }
+
+    /// Get movement operations for space-finding and positioning
+    pub fn movement(&self) -> MovementOperationsImpl<'p> {
+        MovementOperationsImpl::new(self.ctx)
+    }
+
+    /// Get skill operations for skill-based calculations
+    pub fn skill(&self) -> SkillOperationsImpl<'p> {
+        SkillOperationsImpl::new(self.ctx)
     }
 }
 

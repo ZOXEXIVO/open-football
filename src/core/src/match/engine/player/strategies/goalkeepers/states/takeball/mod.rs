@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,7 +11,7 @@ pub struct GoalkeeperTakeBallState {}
 
 impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.ball().is_owned() {
+        if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ));
@@ -36,7 +37,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // BUT reduce separation when very close to ball to allow claiming
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 10.0; // Reduce separation within this distance to ball
+        const BALL_CLAIM_DISTANCE: f32 = 6.7; // Reduced by 1.5x from 10.0
 
         let target = ctx.tick_context.positions.ball.position;
         let distance_to_ball = (ctx.player.position - target).magnitude();
@@ -86,5 +87,8 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         Some(arrive_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Taking ball requires high intensity as goalkeeper moves to claim the ball
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }

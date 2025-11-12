@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -28,10 +29,7 @@ impl StateProcessingHandler for GoalkeeperClearingState {
             ));
         }
 
-        // If clearance failed for some reason, return to standing
-        Some(StateChangeResult::with_goalkeeper_state(
-            GoalkeeperState::Standing,
-        ))
+        None
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
@@ -43,7 +41,10 @@ impl StateProcessingHandler for GoalkeeperClearingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Clearing requires moderate intensity with focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl GoalkeeperClearingState {

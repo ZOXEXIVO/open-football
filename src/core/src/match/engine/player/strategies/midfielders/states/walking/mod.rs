@@ -1,4 +1,6 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -14,6 +16,24 @@ impl StateProcessingHandler for MidfielderWalkingState {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
+            ));
+        }
+
+        // CRITICAL: Check for opponent with ball first (highest priority)
+        // Using new chaining syntax: nearby(100.0).with_ball(ctx)
+        if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
+            let opponent_distance = (opponent.position - ctx.player.position).magnitude();
+
+            // If opponent with ball is very close, tackle immediately
+            if opponent_distance < 30.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Tackling,
+                ));
+            }
+
+            // If opponent with ball is nearby, press them (already filtered by nearby(100.0))
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Pressing,
             ));
         }
 
@@ -122,7 +142,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Walking is low intensity - minimal fatigue
+        MidfielderCondition::with_velocity(ActivityIntensity::Low).process(ctx);
     }
 }

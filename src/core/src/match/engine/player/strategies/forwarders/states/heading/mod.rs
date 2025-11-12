@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::result::VectorExtensions;
@@ -41,7 +42,10 @@ impl StateProcessingHandler for ForwardHeadingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Heading is very high intensity - explosive jumping action
+        ForwardCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl ForwardHeadingState {

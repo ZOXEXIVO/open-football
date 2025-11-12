@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -124,8 +125,9 @@ impl StateProcessingHandler for DefenderTacklingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Tackling is explosive and very demanding physically
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

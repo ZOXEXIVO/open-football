@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -6,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const TAKEBALL_TIMEOUT: u64 = 200; // Give up after 200 ticks (~3.3 seconds)
-const MAX_TAKEBALL_DISTANCE: f32 = 500.0; // Don't chase balls further than this - increased to ensure someone always goes
+const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
 
 #[derive(Default)]
 pub struct MidfielderTakeBallState {}
@@ -92,9 +93,9 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         // Add separation force to prevent player stacking
         // BUT reduce separation MUCH more aggressively when close to ball
         const SEPARATION_RADIUS: f32 = 25.0;
-        const SEPARATION_WEIGHT: f32 = 0.25; // Reduced from 0.4
-        const BALL_CLAIM_DISTANCE: f32 = 15.0; // Increased from 10.0
-        const BALL_PRIORITY_DISTANCE: f32 = 5.0; // New: disable separation when very close
+        const SEPARATION_WEIGHT: f32 = 0.4;
+        const BALL_CLAIM_DISTANCE: f32 = 15.0;
+        const BALL_PRIORITY_DISTANCE: f32 = 5.0;
 
         let distance_to_ball = (ctx.player.position - target).magnitude();
 
@@ -135,20 +136,29 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         if neighbor_count > 0 {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
-            separation_force = separation_force * ctx.player.skills.max_speed() * SEPARATION_WEIGHT * separation_factor;
+            let max_speed = ctx.player.skills.max_speed_with_condition(
+                ctx.player.player_attributes.condition,
+                ctx.player.player_attributes.fitness,
+                ctx.player.player_attributes.jadedness,
+            );
+
+            separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;
 
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
-            if magnitude > ctx.player.skills.max_speed() {
-                arrive_velocity = arrive_velocity * (ctx.player.skills.max_speed() / magnitude);
+            if magnitude > max_speed {
+                arrive_velocity = arrive_velocity * (max_speed / magnitude);
             }
         }
 
         Some(arrive_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Taking ball is very high intensity - explosive action to claim possession
+        MidfielderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }

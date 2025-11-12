@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions};
 use crate::IntegerUtils;
@@ -149,8 +150,9 @@ impl StateProcessingHandler for DefenderWalkingState {
         Some(direction * speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Walking at low speed allows some recovery, velocity-based to account for pace
+        DefenderCondition::with_velocity(ActivityIntensity::Low).process(ctx);
     }
 }
 

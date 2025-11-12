@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
@@ -65,8 +66,9 @@ impl StateProcessingHandler for DefenderInterceptingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Intercepting involves high-intensity sprinting to reach the ball
+        DefenderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

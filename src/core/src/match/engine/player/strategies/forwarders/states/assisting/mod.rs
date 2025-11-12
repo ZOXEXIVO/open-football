@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -77,7 +78,10 @@ impl StateProcessingHandler for ForwardAssistingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Assisting is moderate intensity - supporting movement
+        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl ForwardAssistingState {
