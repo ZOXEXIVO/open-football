@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -5,7 +6,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const CLAIM_BALL_DISTANCE: f32 = 15.0; // Distance at which goalkeeper claims the ball
+const CLAIM_BALL_DISTANCE: f32 = 15.0;
 const MAX_COMING_OUT_DISTANCE: f32 = 120.0; // Maximum distance to pursue ball
 
 #[derive(Default)]
@@ -24,7 +25,12 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         }
 
         // If goalkeeper has reached the ball, claim it immediately
-        if ball_distance < CLAIM_BALL_DISTANCE {
+        // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
+        // This prevents catching balls at center field
+        let distance_from_goal = ctx.player().distance_from_start_position();
+        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 45.0; // Only catch within ~45 units of goal (slightly more lenient for ComingOut)
+
+        if ball_distance < CLAIM_BALL_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
@@ -110,20 +116,6 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             }
         }
 
-        // For moving balls, be more aggressive about pursuing
-        if ball_speed > 1.0 {
-            // Moving ball - check if we can intercept
-            if ball_distance < 50.0 {
-                return None; // Pursue moving ball
-            }
-        } else {
-            // Stationary ball - pursue if within range
-            if ball_distance < 60.0 {
-                return None; // Pursue stationary ball
-            }
-        }
-
-        // Default: continue pursuit if we haven't hit any abort conditions
         None
     }
 
@@ -208,7 +200,10 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Coming out requires high intensity as goalkeeper moves out of penalty area aggressively
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl GoalkeeperComingOutState {

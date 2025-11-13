@@ -1,6 +1,7 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
 const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 50.0;  // Maximum distance from line before switching to Running
@@ -95,7 +96,10 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Holding line involves minimal movement - allows for recovery
+        DefenderCondition::with_velocity(ActivityIntensity::Recovery).process(ctx);
+    }
 }
 
 impl DefenderHoldingLineState {

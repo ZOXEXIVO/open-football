@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -79,7 +80,10 @@ impl StateProcessingHandler for DefenderPushingUpState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Pushing up involves moving forward with the team - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl DefenderPushingUpState {

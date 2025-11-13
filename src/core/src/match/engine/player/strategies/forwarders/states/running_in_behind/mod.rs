@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -78,7 +79,10 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         Some(direction * sprint_speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Running in behind is very high intensity - explosive sprinting
+        ForwardCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl ForwardRunningInBehindState {

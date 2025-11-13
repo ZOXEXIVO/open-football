@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -7,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MAX_DIVE_TIME: f32 = 1.5; // Maximum time to stay in diving state (in seconds)
-const BALL_CLAIM_DISTANCE: f32 = 2.0; // Distance to claim the ball after a dive (in meters)
+const BALL_CLAIM_DISTANCE: f32 = 4.0;
 
 #[derive(Default)]
 pub struct GoalkeeperDivingState {}
@@ -58,7 +59,10 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         Some(dive_direction * dive_speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Diving is a very high intensity activity requiring maximum energy expenditure
+        GoalkeeperCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl GoalkeeperDivingState {
@@ -95,6 +99,12 @@ impl GoalkeeperDivingState {
     }
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {
+        // CRITICAL: Goalkeeper can only catch balls that are flying TOWARDS them
+        // If the ball is flying away, they cannot catch it (e.g., their own pass/kick)
+        if !ctx.ball().is_towards_player_with_angle(0.8) {
+            return false; // Ball is flying away from goalkeeper - cannot catch
+        }
+
         let ball_distance = ctx.ball().distance();
         let ball_speed = ctx.tick_context.positions.ball.velocity.magnitude();
 

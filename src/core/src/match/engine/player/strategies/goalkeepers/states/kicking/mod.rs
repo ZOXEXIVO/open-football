@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
@@ -40,7 +41,10 @@ impl StateProcessingHandler for GoalkeeperKickingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Kicking requires moderate intensity with focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl GoalkeeperKickingState {

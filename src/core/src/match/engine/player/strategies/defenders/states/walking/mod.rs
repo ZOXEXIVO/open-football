@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior, VectorExtensions};
 use crate::IntegerUtils;
@@ -17,11 +18,11 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
-        // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+        // Emergency: if ball is nearby, slow-moving, and unowned, go for it immediately
         if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
             let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 1.0 {
-                // Ball is stopped or nearly stopped - take it directly
+            if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
+                // Ball is stopped or slow-moving - take it directly
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::TakeBall,
                 ));
@@ -149,8 +150,9 @@ impl StateProcessingHandler for DefenderWalkingState {
         Some(direction * speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Walking at low speed allows some recovery, velocity-based to account for pace
+        DefenderCondition::with_velocity(ActivityIntensity::Low).process(ctx);
     }
 }
 

@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide, StateChangeResult,
@@ -19,7 +20,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         if ctx.player.has_ball(ctx) {
             return if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
                 Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Passing,
+                    GoalkeeperState::Distributing,
                 ))
             } else {
                 Some(StateChangeResult::with_goalkeeper_state(
@@ -171,8 +172,9 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Standing goalkeepers recover condition well due to low activity
+        GoalkeeperCondition::new(ActivityIntensity::Recovery).process(ctx);
     }
 }
 

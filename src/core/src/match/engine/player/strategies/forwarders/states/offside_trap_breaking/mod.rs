@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -51,7 +52,10 @@ impl StateProcessingHandler for ForwardOffsideTrapBreakingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Offside trap breaking is very high intensity - explosive sprint timing
+        ForwardCondition::with_velocity(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl ForwardOffsideTrapBreakingState {

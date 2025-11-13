@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::{
@@ -97,5 +98,8 @@ impl StateProcessingHandler for DefenderClearingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Clearing involves powerful kicking action - explosive effort
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }

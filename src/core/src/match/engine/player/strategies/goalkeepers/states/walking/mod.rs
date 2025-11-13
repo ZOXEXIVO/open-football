@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
@@ -16,7 +17,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // If goalkeeper has the ball, immediately transition to passing
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
+                GoalkeeperState::Distributing,
             ));
         }
 
@@ -105,7 +106,10 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Walking state has low intensity but more activity than standing
+        GoalkeeperCondition::with_velocity(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl GoalkeeperWalkingState {

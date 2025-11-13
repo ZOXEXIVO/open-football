@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -163,7 +164,10 @@ impl StateProcessingHandler for ForwardTacklingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Tackling is very high intensity - explosive action
+        ForwardCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl ForwardTacklingState {

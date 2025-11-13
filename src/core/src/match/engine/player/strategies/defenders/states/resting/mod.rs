@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -58,8 +59,9 @@ impl StateProcessingHandler for DefenderRestingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Resting provides maximum recovery - dedicated recovery state
+        DefenderCondition::new(ActivityIntensity::Recovery).process(ctx);
     }
 }
 

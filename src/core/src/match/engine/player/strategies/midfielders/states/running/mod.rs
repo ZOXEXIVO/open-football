@@ -1,10 +1,15 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 350.0;
+// Shooting distance constants for midfielders
+const MAX_SHOOTING_DISTANCE: f32 = 100.0; // Midfielders rarely shoot from beyond ~50m
+const STANDARD_SHOOTING_DISTANCE: f32 = 70.0; // Standard shooting range for midfielders
+const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -12,8 +17,8 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            // Priority: Clear ball if congested in corner/boundary
-            if self.is_congested_near_boundary(ctx) {
+            // Priority: Clear ball if congested anywhere (not just boundaries)
+            if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
                 // Force a long clearance pass to any teammate (furthest away preferred)
                 if let Some(target_teammate) = ctx.players().teammates().all().max_by(|a, b| {
                     let dist_a = (a.position - ctx.player.position).magnitude();
@@ -32,16 +37,29 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Quick shooting checks
+            // Shooting evaluation for midfielders
             let goal_dist = ctx.ball().distance_to_opponent_goal();
+            let long_shots = ctx.player.skills.technical.long_shots / 20.0;
+            let finishing = ctx.player.skills.technical.finishing / 20.0;
 
-            if goal_dist < MAX_SHOOTING_DISTANCE {
-                // Simplified clear shot check
-                if goal_dist < 100.0 || (goal_dist < 200.0 && !ctx.players().opponents().exists(30.0)) {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::Shooting,
-                    ));
-                }
+            // Standard shooting - close enough with clear shot
+            if goal_dist <= STANDARD_SHOOTING_DISTANCE
+                && ctx.player().has_clear_shot()
+                && finishing > 0.55 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+
+            // Distance shooting - long range with good skills and minimal pressure
+            if goal_dist <= MAX_SHOOTING_DISTANCE
+                && ctx.player().has_clear_shot()
+                && long_shots > 0.6
+                && finishing > 0.5
+                && !ctx.players().opponents().exists(PRESSURE_CHECK_DISTANCE) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::DistanceShooting,
+                ));
             }
 
             // Enhanced passing decision based on skills and pressing
@@ -59,7 +77,25 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
         } else {
-            // Without ball - use simpler checks
+            // Without ball - check for opponent with ball first (highest priority)
+            // CRITICAL: Tackle opponent with ball if close enough
+            // Using new chaining syntax: nearby(100.0).with_ball(ctx)
+            if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
+                let opponent_distance = (opponent.position - ctx.player.position).magnitude();
+
+                // If opponent with ball is very close, tackle immediately
+                if opponent_distance < 30.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Tackling,
+                    ));
+                }
+
+                // If opponent with ball is nearby, press them (already filtered by nearby(100.0))
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+
             // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
             if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
@@ -74,13 +110,6 @@ impl StateProcessingHandler for MidfielderRunningState {
             if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
-                ));
-            }
-
-            // Check every 10 ticks for less critical states
-            if !ctx.team().is_control_ball() && ctx.ball().distance() < 100.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
                 ));
             }
         }
@@ -119,7 +148,11 @@ impl StateProcessingHandler for MidfielderRunningState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Midfielders cover the most ground during a match - box to box running
+        // High intensity with velocity-based adjustment
+        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl MidfielderRunningState {

@@ -189,6 +189,50 @@ impl<'b> BallOperationsImpl<'b> {
     pub fn is_player_notified(&self) -> bool {
         self.ctx.tick_context.ball.notified_players.contains(&self.ctx.player.id)
     }
+
+    /// Check if ball should be taken immediately (emergency situation)
+    /// Common pattern: ball is nearby/notified, unowned, and stopped/slow-moving
+    /// Increased distance and velocity thresholds to catch slow rolling balls
+    pub fn should_take_ball_immediately(&self) -> bool {
+        self.should_take_ball_immediately_with_distance(50.0) // Increased from 33.3
+    }
+
+    /// Check if ball should be taken immediately with custom distance threshold
+    pub fn should_take_ball_immediately_with_distance(&self, distance_threshold: f32) -> bool {
+        let is_nearby = self.distance() < distance_threshold;
+        let is_notified = self.is_player_notified();
+
+        if (is_nearby || is_notified) && !self.is_owned() {
+            let ball_velocity = self.speed();
+            if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check if ball is nearby and available (unowned or slow moving)
+    pub fn is_nearby_and_available(&self, distance: f32) -> bool {
+        self.distance() < distance && (!self.is_owned() || self.speed() < 2.0)
+    }
+
+    /// Check if ball is in attacking third relative to player's team
+    pub fn in_attacking_third(&self) -> bool {
+        let field_length = self.ctx.context.field_size.width as f32;
+        self.distance_to_opponent_goal() < field_length / 3.0
+    }
+
+    /// Check if ball is in middle third of the field
+    pub fn in_middle_third(&self) -> bool {
+        !self.on_own_third() && !self.in_attacking_third()
+    }
+
+    /// Get field position as percentage (0.0 = own goal, 1.0 = opponent goal)
+    pub fn field_position_percentage(&self) -> f32 {
+        let field_length = self.ctx.context.field_size.width as f32;
+        let distance_to_own = self.distance_to_own_goal();
+        (distance_to_own / field_length).clamp(0.0, 1.0)
+    }
 }
 
 pub struct MatchBallLogic;

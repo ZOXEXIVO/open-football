@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -30,11 +31,23 @@ impl StateProcessingHandler for ForwardHeadingUpPlayState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Instead of standing completely still, shield the ball with subtle movement
+        // Move away from nearest defender to protect possession
+        if let Some(nearest_opponent) = ctx.players().opponents().nearby(10.0).next() {
+            let away_from_opponent = (ctx.player.position - nearest_opponent.position).normalize();
+            // Slow, controlled movement to shield the ball (like a real forward holding up play)
+            return Some(away_from_opponent * 1.0 + ctx.player().separation_velocity() * 0.5);
+        }
+
+        // If no immediate pressure, use slight separation to avoid collisions
+        Some(ctx.player().separation_velocity() * 0.3)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Heading up play is low intensity - holding and distributing
+        ForwardCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl ForwardHeadingUpPlayState {

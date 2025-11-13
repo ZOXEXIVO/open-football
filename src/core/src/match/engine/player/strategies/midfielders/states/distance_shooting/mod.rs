@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -20,7 +21,7 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        if ctx.player().goal_distance() > 300.0 {
+        if ctx.player().goal_distance() > 250.0 {
             // Too far from the goal, consider other options
             if self.should_pass(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
@@ -65,7 +66,10 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Distance shooting is very high intensity - explosive action
+        MidfielderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
 
 impl MidfielderDistanceShootingState {
@@ -74,12 +78,16 @@ impl MidfielderDistanceShootingState {
         let distance_to_goal = ctx.player().goal_distance();
         let angle_to_goal = ctx.player().goal_angle();
         let has_clear_shot = self.has_clear_shot(ctx);
+        let long_shots = ctx.player.skills.technical.long_shots / 20.0;
 
-        // Adjust the thresholds based on your game's balance
-        let distance_threshold = 300.0; // Maximum favorable shooting distance
+        // Distance shooting only for skilled players from reasonable distance
+        let distance_threshold = 100.0; // Maximum ~50m for long shots
         let angle_threshold = std::f32::consts::PI / 6.0; // 30 degrees
 
-        distance_to_goal <= distance_threshold && angle_to_goal <= angle_threshold && has_clear_shot
+        distance_to_goal <= distance_threshold
+            && angle_to_goal <= angle_threshold
+            && has_clear_shot
+            && long_shots > 0.55 // Reduced from 0.7 to 0.55 - more players can take long shots
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {

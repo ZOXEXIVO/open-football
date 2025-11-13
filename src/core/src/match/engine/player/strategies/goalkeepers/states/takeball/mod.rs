@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -10,6 +11,12 @@ pub struct GoalkeeperTakeBallState {}
 
 impl StateProcessingHandler for GoalkeeperTakeBallState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ReturningToGoal,
+            ));
+        }
+
         if ctx.ball().is_owned() {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
@@ -36,7 +43,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // BUT reduce separation when very close to ball to allow claiming
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 10.0; // Reduce separation within this distance to ball
+        const BALL_CLAIM_DISTANCE: f32 = 6.7; // Reduced by 1.5x from 10.0
 
         let target = ctx.tick_context.positions.ball.position;
         let distance_to_ball = (ctx.player.position - target).magnitude();
@@ -71,20 +78,35 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         if neighbor_count > 0 {
             // Average and scale the separation force
             separation_force = separation_force / (neighbor_count as f32);
-            separation_force = separation_force * ctx.player.skills.max_speed() * SEPARATION_WEIGHT * separation_factor;
+            separation_force = separation_force * ctx.player.skills.max_speed_with_condition(
+                ctx.player.player_attributes.condition,
+                ctx.player.player_attributes.fitness,
+                ctx.player.player_attributes.jadedness,
+            ) * SEPARATION_WEIGHT * separation_factor;
 
             // Blend arrive and separation velocities
             arrive_velocity = arrive_velocity + separation_force;
 
             // Limit to max speed
             let magnitude = arrive_velocity.magnitude();
-            if magnitude > ctx.player.skills.max_speed() {
-                arrive_velocity = arrive_velocity * (ctx.player.skills.max_speed() / magnitude);
+            if magnitude > ctx.player.skills.max_speed_with_condition(
+                ctx.player.player_attributes.condition,
+                ctx.player.player_attributes.fitness,
+                ctx.player.player_attributes.jadedness,
+            ) {
+                arrive_velocity = arrive_velocity * (ctx.player.skills.max_speed_with_condition(
+                    ctx.player.player_attributes.condition,
+                    ctx.player.player_attributes.fitness,
+                    ctx.player.player_attributes.jadedness,
+                ) / magnitude);
             }
         }
 
         Some(arrive_velocity)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Taking ball requires high intensity as goalkeeper moves to claim the ball
+        GoalkeeperCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }

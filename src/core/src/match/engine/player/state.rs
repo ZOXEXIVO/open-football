@@ -63,8 +63,12 @@ impl PlayerMatchState {
         }
 
         if let Some(velocity) = state_change_result.velocity {
-            // Safety clamp: ensure velocity never exceeds player's max speed
-            let max_speed = player.skills.max_speed();
+            // Safety clamp: ensure velocity never exceeds player's max speed (factoring in condition)
+            let max_speed = player.skills.max_speed_with_condition(
+                player.player_attributes.condition,
+                player.player_attributes.fitness,
+                player.player_attributes.jadedness,
+            );
             let velocity_magnitude = velocity.norm();
 
             if velocity_magnitude > max_speed && velocity_magnitude > 0.0 {

@@ -1,4 +1,6 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -44,9 +46,13 @@ impl StateProcessingHandler for MidfielderPressingState {
             }
         }
 
-        // Only tackle if an opponent has the ball nearby
-        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
-            if ctx.ball().distance() < 15.0 {
+        // CRITICAL: Tackle if an opponent has the ball nearby
+        // Using new chaining syntax: nearby(30.0).with_ball(ctx)
+        if let Some(opponent) = ctx.players().opponents().nearby(30.0).with_ball(ctx).next() {
+            let opponent_distance = (opponent.position - ctx.player.position).magnitude();
+
+            // This prevents the midfielder from just circling without tackling
+            if opponent_distance < 30.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
@@ -83,7 +89,7 @@ impl StateProcessingHandler for MidfielderPressingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Only pursue if opponent has the ball
-        if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+        if let Some(_opponent) = ctx.players().opponents().nearby(500.0).with_ball(ctx).next() {
             // Pursue the ball (which is with the opponent)
             Some(
                 SteeringBehavior::Pursuit {
@@ -100,8 +106,9 @@ impl StateProcessingHandler for MidfielderPressingState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Pressing is high intensity - sustained running and pressure
+        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

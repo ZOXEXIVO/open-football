@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -11,7 +12,7 @@ pub struct ForwardReturningState {}
 impl StateProcessingHandler for ForwardReturningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         if ctx.team().is_control_ball(){
@@ -74,5 +75,8 @@ impl StateProcessingHandler for ForwardReturningState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Returning is moderate intensity - getting back to position
+        ForwardCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }

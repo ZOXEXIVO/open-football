@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
@@ -59,8 +60,9 @@ impl StateProcessingHandler for DefenderHeadingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Heading involves jumping and explosive neck/body movement
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

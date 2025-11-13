@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PlayerEvent, PassingEventContext};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
@@ -101,7 +102,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         }
 
         // Timeout - just do something
-        if ctx.in_state_time > 20 {
+        if ctx.in_state_time > 30 {
             // Default to clearance after waiting too long
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Clearing,
@@ -119,7 +120,10 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Passing requires moderate intensity with focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl GoalkeeperPassingState {

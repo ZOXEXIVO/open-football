@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
@@ -111,8 +112,9 @@ impl StateProcessingHandler for DefenderSlidingTackleState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Sliding tackle is explosive and very demanding - high energy output
+        DefenderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

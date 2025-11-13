@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler};
@@ -25,9 +26,9 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ))
         }
 
-        if ctx.in_state_time > 200 {
+        if ctx.in_state_time > 100 {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Running,
+                GoalkeeperState::Distributing,
             ));
         }
 
@@ -48,16 +49,26 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         Some(direction * speed)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Catching is a moderate intensity activity requiring focused effort
+        GoalkeeperCondition::new(ActivityIntensity::Moderate).process(ctx);
+    }
 }
 
 impl GoalkeeperCatchingState {
     fn is_catch_successful(&self, ctx: &StateProcessingContext) -> bool {
-        // Prevent catching ball that was just kicked by this goalkeeper
-        if let Some(last_owner_id) = ctx.tick_context.ball.last_owner {
-            if last_owner_id == ctx.player.id {
-                return false;
-            }
+        // CRITICAL: Hard maximum catch distance - no teleporting the ball!
+        const MAX_CATCH_DISTANCE: f32 = 6.0; // Realistic goalkeeper reach (arms extended)
+        let distance_to_ball = ctx.ball().distance();
+
+        if distance_to_ball > MAX_CATCH_DISTANCE {
+            return false; // Ball too far away to physically catch
+        }
+
+        // CRITICAL: Goalkeeper can only catch balls that are flying TOWARDS them
+        // If the ball is flying away, they cannot catch it (e.g., their own pass/kick)
+        if !ctx.ball().is_towards_player_with_angle(0.8) {
+            return false; // Ball is flying away from goalkeeper - cannot catch
         }
 
         // Use goalkeeper-specific skills (handling is key for catching!)
@@ -77,7 +88,6 @@ impl GoalkeeperCatchingState {
                           scaled_positioning * 0.2 + scaled_agility * 0.1);
 
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        let distance_to_ball = ctx.ball().distance();
         let ball_height = ctx.tick_context.positions.ball.position.z;
 
         // Base success rate should be high for skilled keepers (0.6 - 0.95 range)

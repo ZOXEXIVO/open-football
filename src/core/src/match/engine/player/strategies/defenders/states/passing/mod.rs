@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
@@ -21,8 +22,8 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // Under heavy pressure - make a quick decision
-        if self.is_under_heavy_pressure(ctx) {
-            return if let Some(safe_option) = self.find_safe_pass_option(ctx) {
+        if ctx.player().pressure().is_under_heavy_pressure() {
+            return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
@@ -41,7 +42,7 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // Normal passing situation - evaluate options more carefully
-        if let Some(best_target) = self.find_best_pass_option(ctx) {
+        if let Some(best_target) = ctx.player().passing().find_best_pass_option() {
             // Execute the pass
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
@@ -55,7 +56,7 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // If no good passing option and close to own goal, consider clearing
-        if self.is_in_dangerous_position(ctx) {
+        if ctx.player().defensive().in_dangerous_position() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Clearing,
             ));
@@ -73,7 +74,7 @@ impl StateProcessingHandler for DefenderPassingState {
             // If we've been in this state for a while, make a decision
 
             // Try to find ANY teammate to pass to
-            if let Some(any_teammate) = self.find_any_teammate(ctx) {
+            if let Some(any_teammate) = ctx.player().passing().find_any_teammate() {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
@@ -111,7 +112,7 @@ impl StateProcessingHandler for DefenderPassingState {
         // If player should adjust position to find better passing angles
         if self.should_adjust_position(ctx) {
             // Calculate target position based on the defensive situation
-            if let Some(target_position) = self.calculate_better_passing_position(ctx) {
+            if let Some(target_position) = ctx.player().movement().calculate_better_passing_position() {
                 return Some(
                     SteeringBehavior::Arrive {
                         target: target_position,
@@ -127,96 +128,13 @@ impl StateProcessingHandler for DefenderPassingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Passing is a quick action with minimal physical effort - very low intensity
+        DefenderCondition::new(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl DefenderPassingState {
-    /// Find ANY teammate as a last resort option
-    fn find_any_teammate<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        // Get the closest teammate regardless of quality
-        ctx.players()
-            .teammates()
-            .nearby(200.0) // Increased range
-            .min_by(|a, b| {
-                let dist_a = (a.position - ctx.player.position).magnitude();
-                let dist_b = (b.position - ctx.player.position).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-            })
-    }
-
-    /// Find the best pass option using an improved evaluation system
-    fn find_best_pass_option<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        PassEvaluator::find_best_pass_option(ctx, 300.0)
-    }
-
-    /// Find a safe pass option when under pressure
-    fn find_safe_pass_option<'a>(
-        &self,
-        ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
-        let teammates = ctx.players().teammates();
-
-        // Prioritize closest teammates with clear passing lanes
-        let safe_options: Vec<MatchPlayerLite> = teammates
-            .nearby(50.0) // Closer range for urgent passes
-            .filter(|t| ctx.player().has_clear_pass(t.id) && !self.is_under_pressure(ctx, t))
-            .collect();
-
-        // Find the safest option by direction and pressure
-        safe_options.into_iter()
-            .min_by(|a, b| {
-                // Compare how "away from danger" the pass would be
-                let a_safety = self.calculate_pass_safety(ctx, a);
-                let b_safety = self.calculate_pass_safety(ctx, b);
-                b_safety.partial_cmp(&a_safety).unwrap_or(std::cmp::Ordering::Equal)
-            })
-    }
-
-    /// Calculate how safe a pass would be based on direction and receiver situation
-    fn calculate_pass_safety(&self, ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
-        // Get vectors for calculations
-        let pass_vector = target.position - ctx.player.position;
-        let to_own_goal = ctx.ball().direction_to_own_goal() - ctx.player.position;
-
-        // Calculate how much this pass moves away from own goal (higher is better)
-        let pass_away_from_goal = -(pass_vector.normalize().dot(&to_own_goal.normalize()));
-
-        // Calculate space around target player
-        let space_factor = 1.0 - (ctx.players().opponents()
-            .nearby(15.0)
-            .filter(|o| (o.position - target.position).magnitude() < 10.0)
-            .count() as f32 * 0.2).min(0.8);
-
-        // Return combined safety score
-        pass_away_from_goal + space_factor
-    }
-
-    /// Check if player is under heavy pressure from opponents
-    fn is_under_heavy_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        const PRESSURE_DISTANCE: f32 = 8.0;
-        const PRESSURE_THRESHOLD: usize = 2;
-
-        let pressing_opponents = ctx.players().opponents().nearby(PRESSURE_DISTANCE).count();
-        pressing_opponents >= PRESSURE_THRESHOLD
-    }
-
-    /// Check if teammate is under pressure
-    fn is_under_pressure(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        ctx.players().opponents().all()
-            .filter(|o| (o.position - teammate.position).magnitude() < 10.0)
-            .count() >= 1
-    }
-
-    /// Determine if player is in a dangerous position (near own goal)
-    fn is_in_dangerous_position(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = (ctx.player.position - ctx.ball().direction_to_own_goal()).magnitude();
-        let danger_threshold = ctx.context.field_size.width as f32 * 0.15; // 15% of field width
-
-        distance_to_goal < danger_threshold
-    }
 
     /// Determine if player can effectively dribble out of the current situation
     fn can_dribble_effectively(&self, ctx: &StateProcessingContext) -> bool {
@@ -238,44 +156,9 @@ impl DefenderPassingState {
         }
 
         let under_immediate_pressure = ctx.players().opponents().exists(5.0);
-        let has_clear_option = self.find_best_pass_option(ctx).is_some();
+        let has_clear_option = ctx.player().passing().find_best_pass_option().is_some();
 
         // Adjust position if not under immediate pressure and no clear options
         !under_immediate_pressure && !has_clear_option
-    }
-
-    /// Calculate a better position for finding passing angles
-    fn calculate_better_passing_position(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Get current position and key references
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.ball().direction_to_own_goal();
-
-        // Find positions of nearby opponents creating pressure
-        let nearby_opponents: Vec<MatchPlayerLite> = ctx.players()
-            .opponents()
-            .nearby(15.0)
-            .collect();
-
-        if nearby_opponents.is_empty() {
-            return None;
-        }
-
-        // Calculate average position of pressing opponents
-        let avg_opponent_pos = nearby_opponents.iter()
-            .fold(Vector3::zeros(), |acc, p| acc + p.position)
-            / nearby_opponents.len() as f32;
-
-        // Calculate direction away from pressure and perpendicular to goal line
-        let away_from_pressure = (player_pos - avg_opponent_pos).normalize();
-        let to_goal = (goal_pos - player_pos).normalize();
-
-        // Create a movement perpendicular to goal line
-        let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0).normalize();
-
-        // Blend the two directions (more weight to away from pressure)
-        let direction = (away_from_pressure * 0.7 + perpendicular * 0.3).normalize();
-
-        // Move slightly in the calculated direction
-        Some(player_pos + direction * 5.0)
     }
 }

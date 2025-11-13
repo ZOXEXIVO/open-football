@@ -1,6 +1,7 @@
 use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -12,11 +13,15 @@ const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
 const MARKING_DISTANCE: f32 = 15.0;
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
-const PRESSING_DISTANCE: f32 = 100.0;
+const PRESSING_DISTANCE: f32 = 45.0; // Reduced from 100.0 - more realistic press trigger
+const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 35.0; // Even tighter in own defensive third
 const TACKLE_DISTANCE: f32 = 30.0;
 const BLOCKING_DISTANCE: f32 = 15.0;
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
+const THREAT_SCAN_DISTANCE: f32 = 70.0; // Extended range for detecting dangerous runs
+const DANGEROUS_RUN_SPEED: f32 = 3.0; // Minimum speed to consider a run dangerous
+const DANGEROUS_RUN_ANGLE: f32 = 0.7; // Dot product threshold for running toward goal
 
 #[derive(Default)]
 pub struct DefenderStandingState {}
@@ -24,7 +29,6 @@ pub struct DefenderStandingState {}
 impl StateProcessingHandler for DefenderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
-        let team_ops = ctx.team();
 
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_defender_state(
@@ -33,18 +37,10 @@ impl StateProcessingHandler for DefenderStandingState {
         }
 
         // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-        // OR if player is notified to take the ball (no distance limit when notified)
-        let is_nearby = ball_ops.distance() < 50.0;
-        let is_notified = ball_ops.is_player_notified();
-
-        if (is_nearby || is_notified) && !ball_ops.is_owned() {
-            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 1.0 {
-                // Ball is stopped or nearly stopped - take it directly
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::TakeBall,
-                ));
-            }
+        if ball_ops.should_take_ball_immediately() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
         }
 
         // Check for nearby opponents with the ball - press them aggressively
@@ -57,7 +53,15 @@ impl StateProcessingHandler for DefenderStandingState {
                 ));
             }
 
-            if distance_to_opponent < PRESSING_DISTANCE {
+            // Context-aware pressing distance: tighter in defensive third
+            let pressing_threshold = if ctx.ball().on_own_side()
+                && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {
+                PRESSING_DISTANCE_DEFENSIVE_THIRD
+            } else {
+                PRESSING_DISTANCE
+            };
+
+            if distance_to_opponent < pressing_threshold {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Pressing,
                 ));
@@ -110,6 +114,14 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // Check for dangerous runs before covering space
+        // This ensures defenders pick up attacking threats early
+        if let Some(_dangerous_runner) = self.scan_for_dangerous_runs(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Marking,
+            ));
+        }
+
         if self.should_cover_space(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Covering,
@@ -156,8 +168,9 @@ impl StateProcessingHandler for DefenderStandingState {
         Some(Vector3::zeros())
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // Implement condition processing if needed
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Standing still allows for condition recovery
+        DefenderCondition::with_velocity(ActivityIntensity::Recovery).process(ctx);
     }
 }
 
@@ -205,15 +218,7 @@ impl DefenderStandingState {
     }
 
     fn should_hold_defensive_line(&self, ctx: &StateProcessingContext) -> bool {
-        let ball_ops = ctx.ball();
-
-        let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
-        let avg_defender_x =
-            defenders.iter().map(|d| d.position.x).sum::<f32>() / defenders.len() as f32;
-
-        (ctx.player.position.x - avg_defender_x).abs() < 5.0
-            && ball_ops.distance() > INTERCEPTION_DISTANCE
-            && !ctx.team().is_control_ball()
+        ctx.player().defensive().should_hold_defensive_line()
     }
 
     fn should_cover_space(&self, ctx: &StateProcessingContext) -> bool {
@@ -225,7 +230,7 @@ impl DefenderStandingState {
             && ball_ops.distance_to_own_goal()
                 > ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
 
-        // Fixed: inverted logic - should check if there are NO nearby threats
+        // Check for both immediate threats AND dangerous runs
         let no_immediate_threat = ctx
             .players()
             .opponents()
@@ -233,17 +238,21 @@ impl DefenderStandingState {
             .next()
             .is_none();
 
+        let no_dangerous_runs = self.scan_for_dangerous_runs(ctx).is_none();
+
         let not_in_optimal_position =
             player_ops.distance_from_start_position() > WALK_DISTANCE_THRESHOLD;
 
-        ball_in_middle_third && no_immediate_threat && not_in_optimal_position
+        ball_in_middle_third && no_immediate_threat && no_dangerous_runs && not_in_optimal_position
+    }
+
+    /// Scan for opponents making dangerous runs toward goal
+    fn scan_for_dangerous_runs(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        ctx.player().defensive().scan_for_dangerous_runs()
     }
 
     fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players()
-            .teammates()
-            .defenders()
-            .all(|d| d.position.x >= ctx.player.position.x)
+        ctx.player().defensive().is_last_defender()
     }
 
     fn should_head_ball(&self, ctx: &StateProcessingContext) -> bool {

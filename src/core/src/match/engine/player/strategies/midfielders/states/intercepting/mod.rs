@@ -1,3 +1,4 @@
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
@@ -53,8 +54,9 @@ impl StateProcessingHandler for MidfielderInterceptingState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Intercepting is high intensity - sustained running to catch the ball
+        MidfielderCondition::with_velocity(ActivityIntensity::High).process(ctx);
     }
 }
 

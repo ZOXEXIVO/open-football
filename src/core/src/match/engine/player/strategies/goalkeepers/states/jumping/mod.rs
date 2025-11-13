@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
@@ -69,8 +70,9 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         Some(combined_velocity * attribute_scaling)
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Jumping is a very high intensity activity requiring significant energy expenditure
+        GoalkeeperCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

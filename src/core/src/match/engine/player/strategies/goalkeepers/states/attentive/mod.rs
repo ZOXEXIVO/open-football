@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
@@ -42,11 +43,6 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
                     GoalkeeperState::ComingOut,
                 ));
             }
-        } else {
-            // If the ball is on the opponent's side, transition to Walking state
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Walking,
-            ));
         }
 
         // Check if the goalkeeper is out of position and needs to return
@@ -113,7 +109,10 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Attentive state requires low intensity with focused attention, includes movement
+        GoalkeeperCondition::with_velocity(ActivityIntensity::Low).process(ctx);
+    }
 }
 
 impl GoalkeeperAttentiveState {

@@ -1,3 +1,4 @@
+use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
@@ -63,8 +64,9 @@ impl StateProcessingHandler for GoalkeeperPenaltyState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {
-        // No additional conditions to process in this state
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Penalty saves require very high intensity with explosive effort
+        GoalkeeperCondition::new(ActivityIntensity::VeryHigh).process(ctx);
     }
 }
 

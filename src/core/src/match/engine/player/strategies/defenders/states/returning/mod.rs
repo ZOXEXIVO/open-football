@@ -1,4 +1,5 @@
 use crate::r#match::defenders::states::DefenderState;
+use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior, MATCH_TIME_MS,
@@ -81,5 +82,8 @@ impl StateProcessingHandler for DefenderReturningState {
         )
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Returning to position involves jogging back - moderate intensity
+        DefenderCondition::with_velocity(ActivityIntensity::Moderate).process(ctx);
+    }
 }

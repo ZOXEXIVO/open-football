@@ -1,3 +1,4 @@
+use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
@@ -6,11 +7,20 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 350.0;
-const MIN_SHOOTING_DISTANCE: f32 = 10.0;
-const MAX_LONG_SHOOTING_DISTANCE: f32 = 400.0;
-const MIN_LONG_SHOOTING_DISTANCE: f32 = 200.0;
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 200.0;
+// Realistic shooting distances (field is 840 units)
+const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
+const MIN_SHOOTING_DISTANCE: f32 = 5.0;
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
+const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
+
+// Passing decision thresholds for forwards
+const PASSING_DISABLED_DISTANCE: f32 = 100.0; // Within this distance, very restrictive passing
+const SHOOTING_ZONE_DISTANCE: f32 = 150.0; // Enhanced shooting priority zone
+const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.4; // Teammate must be 40% of distance closer
+
+// Performance thresholds
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 
 #[derive(Default)]
@@ -20,25 +30,25 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Priority 0: Clear ball if congested in corner/boundary
-            if self.is_congested_near_boundary(ctx) {
-                // Force a long clearance pass to any teammate
-                if let Some(target_teammate) = ctx.players().teammates().all().next() {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                }
-            }
-
-            // Priority 1: Clear shooting opportunity
-            if self.has_excellent_shooting_opportunity(ctx) {
+            // Priority 0: Clear shooting opportunity
+            if ctx.player().shooting().has_excellent_opportunity() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
+            // Priority 1: Clear ball if congested anywhere (not just boundaries)
+            if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
+                // Force a long clearance pass to any teammate
+                if let Some(_) = ctx.players().teammates().all().next() {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+            }
+
             // Priority 2: In shooting range with good angle
-            if self.in_shooting_range(ctx) && self.has_good_shooting_angle(ctx) {
+            if ctx.player().shooting().in_shooting_range() && ctx.player().shooting().has_good_angle() {
                 // Consider shooting vs passing based on situation
-                if self.should_shoot_over_pass(ctx) {
+                if ctx.player().shooting().should_shoot_over_pass() {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
@@ -52,8 +62,26 @@ impl StateProcessingHandler for ForwardRunningState {
                 return None;
             }
 
+            // Priority 2b: In shooting range but wider angle - still shoot if good long shot ability
+            if ctx.player().shooting().in_shooting_range() {
+                let long_shots = ctx.player.skills.technical.long_shots / 20.0;
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                let distance = ctx.ball().distance_to_opponent_goal();
+
+                // Allow shooting from wider angles if player has good long shot skills
+                if distance <= OPTIMAL_SHOOTING_DISTANCE
+                    && long_shots > 0.6
+                    && finishing > 0.5
+                    && ctx.player().has_clear_shot()
+                    && !ctx.players().opponents().exists(8.0) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
+            }
+
             // Priority 3: Under pressure - quick decision needed
-            if self.is_under_immediate_pressure(ctx) {
+            if ctx.player().pressure().is_under_immediate_pressure() {
                 if self.should_pass_under_pressure(ctx) {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 } else if self.can_dribble_out_of_pressure(ctx) {
@@ -80,14 +108,10 @@ impl StateProcessingHandler for ForwardRunningState {
         // Handle cases when player doesn't have the ball
         else {
             // Priority 0: Emergency - if ball is nearby, stopped, and unowned, go for it immediately
-            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 1.0 {
-                    // Ball is stopped or nearly stopped - take it directly
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::TakeBall,
-                    ));
-                }
+            if ctx.ball().should_take_ball_immediately() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::TakeBall,
+                ));
             }
 
             // Priority 1: Ball interception opportunity
@@ -200,83 +224,13 @@ impl StateProcessingHandler for ForwardRunningState {
         }
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Forwards do a lot of intense running - high intensity with velocity
+        ForwardCondition::with_velocity(ActivityIntensity::High).process(ctx);
+    }
 }
 
 impl ForwardRunningState {
-    /// Check for excellent shooting opportunity (clear sight, good distance, no pressure)
-    fn has_excellent_shooting_opportunity(&self, ctx: &StateProcessingContext) -> bool {
-        let distance = ctx.ball().distance_to_opponent_goal();
-
-        // Optimal shooting range
-        if distance > OPTIMAL_SHOOTING_DISTANCE - 50.0
-            && distance < OPTIMAL_SHOOTING_DISTANCE + 50.0
-        {
-            // Check for clear shot and minimal pressure
-            let clear_shot = ctx.player().has_clear_shot();
-            let low_pressure = !ctx.players().opponents().exists(10.0);
-            let good_angle = self.has_good_shooting_angle(ctx);
-
-            return clear_shot && low_pressure && good_angle;
-        }
-
-        false
-    }
-
-    /// Improved shooting range check with skill consideration
-    fn in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let shooting_skill = ctx.player.skills.technical.finishing / 20.0;
-        let long_shot_skill = ctx.player.skills.technical.long_shots / 20.0;
-
-        // Adjust range based on skills
-        let effective_max_distance = MAX_SHOOTING_DISTANCE * (0.8 + shooting_skill * 0.4);
-        let effective_long_distance = MAX_LONG_SHOOTING_DISTANCE * (0.7 + long_shot_skill * 0.6);
-
-        (distance_to_goal >= MIN_SHOOTING_DISTANCE && distance_to_goal <= effective_max_distance)
-            || (distance_to_goal >= MIN_LONG_SHOOTING_DISTANCE
-            && distance_to_goal <= effective_long_distance
-            && long_shot_skill > 0.7)
-    }
-
-    /// Check shooting angle quality
-    fn has_good_shooting_angle(&self, ctx: &StateProcessingContext) -> bool {
-        let goal_angle = ctx.player().goal_angle();
-        // Good angle is less than 45 degrees off center
-        goal_angle < std::f32::consts::PI / 4.0
-    }
-
-    /// Determine if should shoot instead of looking for pass
-    fn should_shoot_over_pass(&self, ctx: &StateProcessingContext) -> bool {
-        let distance = ctx.ball().distance_to_opponent_goal();
-        let has_clear_shot = ctx.player().has_clear_shot();
-        let confidence = ctx.player.skills.mental.composure / 20.0;
-        let finishing = ctx.player.skills.technical.finishing / 20.0;
-
-        // Very close to goal - almost always shoot
-        if distance < 150.0 && has_clear_shot {
-            return true;
-        }
-
-        // Good position and skills - INCREASED RANGE
-        if distance < 300.0 && has_clear_shot && (confidence + finishing) / 2.0 > 0.5 {
-            return true;
-        }
-
-        // Medium distance with good skills - shoot anyway
-        if distance < 250.0 && finishing > 0.6 {
-            return true;
-        }
-
-        // Check if teammates are in worse positions
-        let better_positioned_teammate = ctx.players().teammates().nearby(150.0).any(|t| {
-            let t_dist = (t.position - ctx.player().opponent_goal_position()).magnitude();
-            t_dist < distance * 0.7 // Significantly closer
-        });
-
-        !better_positioned_teammate && has_clear_shot
-    }
-
     /// Special passing logic when in shooting zone - only forward passes to much better positioned players
     fn should_pass_in_shooting_zone(&self, ctx: &StateProcessingContext) -> bool {
         let distance = ctx.ball().distance_to_opponent_goal();
@@ -304,9 +258,9 @@ impl ForwardRunningState {
                 return false; // Never pass backward in shooting zone
             }
 
-            // Teammate must be SIGNIFICANTLY closer to goal (50% closer)
+            // Teammate must be SIGNIFICANTLY closer to goal
             let teammate_distance = (teammate.position - goal_pos).magnitude();
-            let is_much_closer = teammate_distance < distance * 0.5;
+            let is_much_closer = teammate_distance < distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
 
             // Must have clear pass lane
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
@@ -692,24 +646,26 @@ impl ForwardRunningState {
 
         if let Some(holder) = ball_holder {
             // Make intelligent supporting run
-            let support_position = self.calculate_support_run_position(ctx, holder.position);
+            let support_position = ctx.player().movement().calculate_support_run_position(holder.position);
 
+            // Increased separation multiplier (1.0 → 3.0) to prevent clustering behind ball carrier
             SteeringBehavior::Arrive {
                 target: support_position,
                 slowing_distance: 30.0,
             }
                 .calculate(ctx.player)
                 .velocity
-                + ctx.player().separation_velocity()
+                + ctx.player().separation_velocity() * 3.0
         } else {
             // Move toward ball if no clear holder
+            // Increased separation (1.0 → 2.5) to prevent everyone rushing to loose ball
             SteeringBehavior::Arrive {
                 target: ctx.tick_context.positions.ball.position,
                 slowing_distance: 50.0,
             }
                 .calculate(ctx.player)
                 .velocity
-                + ctx.player().separation_velocity()
+                + ctx.player().separation_velocity() * 2.5
         }
     }
 
@@ -752,9 +708,10 @@ impl ForwardRunningState {
             field_height * 0.9 // Right wing
         };
 
+        // Increased distance from ball carrier (40 → 80 units) to prevent clustering
         let target_x = match ctx.player.side {
-            Some(PlayerSide::Left) => holder_pos.x + 40.0,
-            Some(PlayerSide::Right) => holder_pos.x - 40.0,
+            Some(PlayerSide::Left) => holder_pos.x + 80.0,
+            Some(PlayerSide::Right) => holder_pos.x - 80.0,
             None => holder_pos.x,
         };
 
@@ -768,19 +725,21 @@ impl ForwardRunningState {
         holder_pos: Vector3<f32>,
     ) -> Vector3<f32> {
         let field_height = ctx.context.field_size.height as f32;
+        let player_pos = ctx.player.position;
 
-        // Move into space between defenders
+        // Move into space between defenders - increased distance (50 → 90 units)
         let target_x = match ctx.player.side {
-            Some(PlayerSide::Left) => holder_pos.x + 50.0,
-            Some(PlayerSide::Right) => holder_pos.x - 50.0,
+            Some(PlayerSide::Left) => holder_pos.x + 90.0,
+            Some(PlayerSide::Right) => holder_pos.x - 90.0,
             None => holder_pos.x,
         };
 
-        // Vary position slightly to create unpredictability
-        let y_variation = (ctx.in_state_time as f32 * 0.1).sin() * 20.0;
-        let target_y = field_height / 2.0 + y_variation;
+        // Use player's current Y position with slight adjustment toward center
+        // REMOVED oscillating sine wave that caused left-right cycling
+        let center_pull = (field_height / 2.0 - player_pos.y) * 0.2; // Gentle pull toward center
+        let target_y = player_pos.y + center_pull;
 
-        Vector3::new(target_x, target_y, 0.0)
+        Vector3::new(target_x, target_y.clamp(field_height * 0.3, field_height * 0.7), 0.0)
     }
 
     /// Calculate defensive movement
@@ -829,10 +788,14 @@ impl ForwardRunningState {
             return self.has_safe_passing_option(ctx, &teammates);
         }
 
-        // 2. PREFER TO RUN/SHOOT: Very close to goal with space
-        if distance_to_goal < 150.0 && !under_pressure {
-            // Don't pass backward when close to goal!
-            // Only pass forward to teammate in significantly better position
+        // 2. PREFER TO RUN/SHOOT: Close to goal - very restrictive passing
+        if distance_to_goal < PASSING_DISABLED_DISTANCE && !under_pressure {
+            // Within shooting zone - only pass to teammates in much better positions
+            return false;
+        }
+
+        if distance_to_goal < SHOOTING_ZONE_DISTANCE && !under_pressure {
+            // Enhanced shooting zone - only forward passes to significantly better teammates
             return self.has_forward_pass_to_better_teammate(ctx, &teammates, distance_to_goal);
         }
 
@@ -909,7 +872,7 @@ impl ForwardRunningState {
             // Teammate must be much closer to goal
             let teammate_distance =
                 (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            let is_much_closer = teammate_distance < current_distance * 0.6;
+            let is_much_closer = teammate_distance < current_distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
             let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
 

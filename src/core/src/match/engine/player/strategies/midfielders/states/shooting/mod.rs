@@ -1,4 +1,5 @@
 use crate::r#match::events::Event;
+use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
@@ -37,5 +38,8 @@ impl StateProcessingHandler for MidfielderShootingState {
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
-    fn process_conditions(&self, _ctx: ConditionContext) {}
+    fn process_conditions(&self, ctx: ConditionContext) {
+        // Shooting is very high intensity - explosive action
+        MidfielderCondition::new(ActivityIntensity::VeryHigh).process(ctx);
+    }
 }
