@@ -113,8 +113,8 @@ impl DefenderRunningState {
             return true;
         }
 
-        // New: Clear if congested in corner/boundary
-        if self.is_congested_near_boundary(ctx) {
+        // Clear if congested anywhere (not just boundaries)
+        if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
             return true;
         }
 

@@ -151,8 +151,8 @@ impl Ball {
                 self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
-            // Check if any notified player reached the ball
-            const CLAIM_DISTANCE: f32 = 10.0;
+            // Check if any notified player reached the ball (increased for easier claiming)
+            const CLAIM_DISTANCE: f32 = 20.0;
 
             // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
@@ -269,21 +269,32 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        const DEADLOCK_VELOCITY_THRESHOLD: f32 = 10.0; // Catch slow-rolling balls in duels (increased from 3.0)
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 0.5; // Ball must be low to ground
+        const DEADLOCK_TICK_THRESHOLD: u32 = 5; // Faster intervention (reduced from 10)
+        const DEADLOCK_SEARCH_RADIUS: f32 = 200.0; // Increased search radius for force claiming
+
         // Check if ball is slow-moving/stopped and unowned
-        let is_stopped = self.velocity.norm() < 1.0 && self.position.z < 0.5; // Increased from 0.1 to 1.0 to catch slow rolling balls
+        let is_slow = self.velocity.norm() < DEADLOCK_VELOCITY_THRESHOLD;
+        let is_low = self.position.z < DEADLOCK_HEIGHT_THRESHOLD;
         let is_unowned = self.current_owner.is_none();
 
-        if is_stopped && is_unowned {
+        if is_slow && is_low && is_unowned {
             self.unowned_stopped_ticks += 1;
 
-            // If ball has been stopped and unowned for 10 ticks (~0.16 seconds), FORCE claiming
-            if self.unowned_stopped_ticks >= 10 {
-                // Find the absolute nearest player to the ball (ignoring all other logic)
-                if let Some(nearest_player) = players.iter().min_by(|a, b| {
-                    let dist_a = (a.position - self.position).magnitude();
-                    let dist_b = (b.position - self.position).magnitude();
-                    dist_a.partial_cmp(&dist_b).unwrap()
-                }) {
+            // If ball has been slow and unowned for 5 ticks (~0.08 seconds), FORCE claiming
+            if self.unowned_stopped_ticks >= DEADLOCK_TICK_THRESHOLD {
+                // Find the nearest player within search radius
+                if let Some(nearest_player) = players.iter()
+                    .filter(|p| {
+                        let distance = (p.position - self.position).magnitude();
+                        distance <= DEADLOCK_SEARCH_RADIUS
+                    })
+                    .min_by(|a, b| {
+                        let dist_a = (a.position - self.position).magnitude();
+                        let dist_b = (b.position - self.position).magnitude();
+                        dist_a.partial_cmp(&dist_b).unwrap()
+                    }) {
                     // FORCE this player to go for the ball
                     events.add_ball_event(BallEvent::TakeMe(nearest_player.id));
 
@@ -295,7 +306,7 @@ impl Ball {
                 }
             }
         } else {
-            // Ball is moving or owned - reset counter
+            // Ball is moving fast, airborne, or owned - reset counter
             self.unowned_stopped_ticks = 0;
         }
     }
@@ -392,8 +403,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Reduced by 1.5x from 8.0 to make possession more realistic and closer to the player
-        const BALL_DISTANCE_THRESHOLD: f32 = 8.0;
+        // Increased to 15.0 for easier ball claiming - players can claim from further away
+        const BALL_DISTANCE_THRESHOLD: f32 = 15.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -505,8 +516,8 @@ impl Ball {
         }
 
         // Ownership stability constants
-        const MIN_OWNERSHIP_DURATION: u32 = 15; // Minimum ticks before ownership can change easily
-        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.3; // Challenger must be 30% better
+        const MIN_OWNERSHIP_DURATION: u32 = 8; // Minimum ticks before ownership can change (reduced from 15 to prevent stuck duels)
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.08; // Challenger must be 8% better (reduced from 1.15 to resolve duels faster)
 
         // Determine the best tackler from nearby players
         let best_tackler = if nearby_players.len() == 1 {

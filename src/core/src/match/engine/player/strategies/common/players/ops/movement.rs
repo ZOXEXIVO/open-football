@@ -213,6 +213,21 @@ impl<'p> MovementOperationsImpl<'p> {
         total_nearby >= 3
     }
 
+    /// Check if player is in general congestion (anywhere on field)
+    /// This prevents mid-field clustering where multiple players get stuck
+    pub fn is_congested(&self) -> bool {
+        const CONGESTION_RADIUS: f32 = 12.0; // Check within 12 units
+        const CONGESTION_THRESHOLD: usize = 4; // 4+ players = congested
+
+        // Count all nearby players (teammates + opponents)
+        let nearby_teammates = self.ctx.players().teammates().nearby(CONGESTION_RADIUS).count();
+        let nearby_opponents = self.ctx.players().opponents().nearby(CONGESTION_RADIUS).count();
+        let total_nearby = nearby_teammates + nearby_opponents;
+
+        // If 4 or more players clustered together
+        total_nearby >= CONGESTION_THRESHOLD
+    }
+
     /// Calculate better passing position to escape pressure
     pub fn calculate_better_passing_position(&self) -> Option<Vector3<f32>> {
         let player_pos = self.ctx.player.position;

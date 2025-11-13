@@ -30,8 +30,8 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Priority 0: Clear ball if congested in corner/boundary
-            if ctx.player().movement().is_congested_near_boundary() {
+            // Priority 0: Clear ball if congested anywhere (not just boundaries)
+            if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
                 // Force a long clearance pass to any teammate
                 if let Some(target_teammate) = ctx.players().teammates().all().next() {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Passing));

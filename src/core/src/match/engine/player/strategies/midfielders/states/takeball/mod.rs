@@ -6,8 +6,11 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TAKEBALL_TIMEOUT: u64 = 200; // Give up after 200 ticks (~3.3 seconds)
+// TakeBall timeout and distance constants
+const TAKEBALL_TIMEOUT: u64 = 120; // Give up after 120 ticks (~2 seconds) - reduced from 200
 const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
+const OPPONENT_ADVANTAGE_THRESHOLD: f32 = 20.0; // Opponent must be this much closer to give up
+const TEAMMATE_ADVANTAGE_THRESHOLD: f32 = 8.0; // Teammate must be this much closer to give up (reduced from 15.0)
 
 #[derive(Default)]
 pub struct MidfielderTakeBallState {}
@@ -46,8 +49,8 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         }) {
             let opponent_distance = (closest_opponent.position - ball_position).magnitude();
 
-            // If opponent is significantly closer (by 20+ units), give up and prepare to defend
-            if opponent_distance < ball_distance - 20.0 {
+            // If opponent is significantly closer, give up and prepare to defend
+            if opponent_distance < ball_distance - OPPONENT_ADVANTAGE_THRESHOLD {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
@@ -62,8 +65,8 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         }) {
             let teammate_distance = (closest_teammate.position - ball_position).magnitude();
 
-            // If teammate is significantly closer (by 15+ units), let them take it
-            if teammate_distance < ball_distance - 15.0 {
+            // If teammate is significantly closer, let them take it (stricter threshold)
+            if teammate_distance < ball_distance - TEAMMATE_ADVANTAGE_THRESHOLD {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::AttackSupporting,
                 ));
@@ -91,25 +94,27 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         .velocity;
 
         // Add separation force to prevent player stacking
-        // BUT reduce separation MUCH more aggressively when close to ball
+        // Reduce separation when approaching ball, but keep minimum to prevent clustering
         const SEPARATION_RADIUS: f32 = 25.0;
-        const SEPARATION_WEIGHT: f32 = 0.4;
+        const SEPARATION_WEIGHT: f32 = 0.5; // Increased from 0.4 for stronger separation
         const BALL_CLAIM_DISTANCE: f32 = 15.0;
         const BALL_PRIORITY_DISTANCE: f32 = 5.0;
+        const MIN_SEPARATION_FACTOR: f32 = 0.25; // Minimum 25% separation - allows closer approach with larger claiming radius
+        const MAX_SEPARATION_FACTOR: f32 = 1.0; // Maximum 100% separation when far
 
         let distance_to_ball = (ctx.player.position - target).magnitude();
 
-        // Much more aggressive separation reduction
+        // Progressive separation reduction - minimum 25% to allow claiming with larger radius
         let separation_factor = if distance_to_ball < BALL_PRIORITY_DISTANCE {
-            // Within claiming distance - almost no separation (0-5% depending on distance)
-            (distance_to_ball / BALL_PRIORITY_DISTANCE) * 0.05
+            // Very close to ball - minimum separation (25%)
+            MIN_SEPARATION_FACTOR
         } else if distance_to_ball < BALL_CLAIM_DISTANCE {
-            // Approaching claim distance - reduced separation (5-30%)
+            // Approaching ball - lerp from 25% to 60%
             let ratio = (distance_to_ball - BALL_PRIORITY_DISTANCE) / (BALL_CLAIM_DISTANCE - BALL_PRIORITY_DISTANCE);
-            0.05 + (ratio * 0.25)
+            MIN_SEPARATION_FACTOR + (ratio * 0.35)
         } else {
-            // Far from ball - normal separation
-            0.30
+            // Far from ball - full separation
+            MAX_SEPARATION_FACTOR
         };
 
         let mut separation_force = Vector3::zeros();

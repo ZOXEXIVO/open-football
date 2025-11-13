@@ -17,8 +17,8 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            // Priority: Clear ball if congested in corner/boundary
-            if self.is_congested_near_boundary(ctx) {
+            // Priority: Clear ball if congested anywhere (not just boundaries)
+            if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
                 // Force a long clearance pass to any teammate (furthest away preferred)
                 if let Some(target_teammate) = ctx.players().teammates().all().max_by(|a, b| {
                     let dist_a = (a.position - ctx.player.position).magnitude();
