@@ -71,10 +71,10 @@ impl SteeringBehavior {
                 let distance = to_target.norm();
 
                 // Stop if very close to target
-                const ARRIVAL_DEADZONE: f32 = 0.5;
+                const ARRIVAL_DEADZONE: f32 = 1.0; // Increased from 0.5 for better stability
                 if distance < ARRIVAL_DEADZONE {
-                    // Apply gentle braking
-                    let braking_force = -player.velocity * 0.3;
+                    // Apply strong braking to prevent oscillation
+                    let braking_force = -player.velocity * 0.6; // Increased from 0.3 for better stopping
                     let new_velocity = player.velocity + braking_force;
                     return SteeringOutput {
                         velocity: new_velocity,
@@ -86,8 +86,8 @@ impl SteeringBehavior {
                 let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                // Ensure slowing_distance is never zero
-                let safe_slowing_distance = slowing_distance.max(5.0);
+                // Ensure slowing_distance is never zero (increased for smoother deceleration)
+                let safe_slowing_distance = slowing_distance.max(8.0); // Increased from 5.0
 
                 // Calculate desired speed based on distance (with condition factor)
                 let max_speed = player.skills.max_speed_with_condition(
@@ -96,9 +96,9 @@ impl SteeringBehavior {
                     player.player_attributes.jadedness,
                 ) * pace_normalized;
                 let desired_speed = if distance < safe_slowing_distance {
-                    // Smooth quadratic deceleration as we approach target
+                    // Smooth cubic deceleration for better control (changed from quadratic)
                     let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
-                    max_speed * ratio * ratio
+                    max_speed * ratio * ratio * ratio
                 } else {
                     max_speed
                 };

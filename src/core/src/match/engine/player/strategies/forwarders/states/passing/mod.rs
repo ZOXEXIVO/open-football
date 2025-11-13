@@ -9,6 +9,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MAX_PASS_DURATION: u64 = 30; // Ticks before trying alternative action (reduced for faster decision-making)
+const MIN_POSITION_ADJUSTMENT_TIME: u64 = 5; // Minimum ticks before adjusting position (prevents immediate twitching)
+const MAX_POSITION_ADJUSTMENT_TIME: u64 = 20; // Maximum ticks to spend adjusting position
 
 #[derive(Default)]
 pub struct ForwardPassingState {}
@@ -69,15 +71,17 @@ impl StateProcessingHandler for ForwardPassingState {
         // If the player should adjust position to find better passing angles
         if self.should_adjust_position(ctx) {
             // Look for space to move into
-            return Some(
-                SteeringBehavior::Arrive {
-                    target: self.calculate_better_passing_position(ctx),
-                    slowing_distance: 30.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity(),
-            );
+            let steering_velocity = SteeringBehavior::Arrive {
+                target: self.calculate_better_passing_position(ctx),
+                slowing_distance: 30.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            // Apply reduced separation to avoid interference with deliberate movement
+            let separation = ctx.player().separation_velocity() * 0.3;
+
+            return Some(steering_velocity + separation);
         }
 
         None
@@ -352,8 +356,14 @@ impl ForwardPassingState {
 
     /// Determine if player should adjust position to find better passing angles
     fn should_adjust_position(&self, ctx: &StateProcessingContext) -> bool {
-        // If no good passing option and not under immediate pressure
-        self.find_best_pass_option(ctx).is_none() && !self.is_under_heavy_pressure(ctx)
+        // Only adjust position within a specific time window to prevent endless twitching
+        let in_adjustment_window = ctx.in_state_time >= MIN_POSITION_ADJUSTMENT_TIME
+            && ctx.in_state_time <= MAX_POSITION_ADJUSTMENT_TIME;
+
+        // If no good passing option and not under immediate pressure and within time window
+        in_adjustment_window
+            && self.find_best_pass_option(ctx).is_none()
+            && !self.is_under_heavy_pressure(ctx)
     }
 
     /// Calculate a better position for finding passing angles - forwards look for
@@ -381,7 +391,7 @@ impl ForwardPassingState {
 
             // Move slightly perpendicular to create a better angle
             let perpendicular = Vector3::new(-teammate_direction.y, teammate_direction.x, 0.0);
-            let adjustment = perpendicular * 8.0; // More aggressive movement for forwards
+            let adjustment = perpendicular * 5.0; // Reduced from 8.0 to prevent excessive twitching
 
             return player_pos + adjustment;
         }
@@ -389,7 +399,7 @@ impl ForwardPassingState {
         // Default to moving toward goal if no better option
         let to_goal = goal_pos - player_pos;
         let goal_direction = to_goal.normalize();
-        player_pos + goal_direction * 10.0
+        player_pos + goal_direction * 5.0 // Reduced from 10.0 to prevent excessive movement
     }
 
     /// Look for space between defenders toward the goal

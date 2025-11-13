@@ -42,15 +42,15 @@ impl StateProcessingHandler for ForwardStandingState {
                 //return Some(StateChangeResult::with_forward_state(ForwardState::HoldingPossession));
             }
         } else {
-            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
+            // Emergency: if ball is nearby, slow-moving, and unowned, go for it immediately
             // OR if player is notified to take the ball (no distance limit when notified)
             let is_nearby = ctx.ball().distance() < 50.0;
             let is_notified = ctx.ball().is_player_notified();
 
             if (is_nearby || is_notified) && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 1.0 {
-                    // Ball is stopped or nearly stopped - take it directly
+                if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
+                    // Ball is stopped or slow-moving - take it directly
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::TakeBall,
                     ));

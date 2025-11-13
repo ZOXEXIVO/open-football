@@ -191,10 +191,10 @@ impl<'b> BallOperationsImpl<'b> {
     }
 
     /// Check if ball should be taken immediately (emergency situation)
-    /// Common pattern: ball is nearby/notified, unowned, and stopped
-    /// Distance reduced by 1.5x from 50.0 to 33.3 for more realistic possession
+    /// Common pattern: ball is nearby/notified, unowned, and stopped/slow-moving
+    /// Increased distance and velocity thresholds to catch slow rolling balls
     pub fn should_take_ball_immediately(&self) -> bool {
-        self.should_take_ball_immediately_with_distance(33.3)
+        self.should_take_ball_immediately_with_distance(50.0) // Increased from 33.3
     }
 
     /// Check if ball should be taken immediately with custom distance threshold
@@ -204,7 +204,7 @@ impl<'b> BallOperationsImpl<'b> {
 
         if (is_nearby || is_notified) && !self.is_owned() {
             let ball_velocity = self.speed();
-            if ball_velocity < 1.0 {
+            if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
                 return true;
             }
         }

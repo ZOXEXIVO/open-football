@@ -116,7 +116,7 @@ impl Ball {
         // Check if ball has moved significantly from last boundary position
         let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
             let distance_from_boundary = (self.position - last_pos).magnitude();
-            distance_from_boundary > 5.0 // Must move at least 5 units away from boundary
+            distance_from_boundary > 2.0 // Reduced from 5.0 to allow re-notification for slow rolling balls
         } else {
             true // No previous boundary position recorded
         };
@@ -134,7 +134,7 @@ impl Ball {
 
                 // If ball is at boundary, set cooldown and record position
                 if self.is_ball_outside() {
-                    self.notification_cooldown = 30; // 30 tick cooldown (~0.5 seconds)
+                    self.notification_cooldown = 10; // Reduced from 30 to 10 ticks (~0.16 seconds) for faster response
                     self.last_boundary_position = Some(self.position);
                 }
             }
@@ -245,14 +245,13 @@ impl Ball {
 
     pub fn is_stands_outside(&self) -> bool {
         self.is_ball_outside()
-            && self.velocity.x == 0.0
-            && self.velocity.y == 0.0
+            && self.velocity.norm() < 0.5 // Changed from exact 0.0 to allow tiny velocities from physics
             && self.current_owner.is_none()
     }
 
     pub fn is_ball_stopped_on_field(&self) -> bool {
         !self.is_ball_outside()
-            && self.velocity.norm() < 0.1 // Nearly zero velocity (stopped or rolling very slowly)
+            && self.velocity.norm() < 1.0 // Increased from 0.1 to catch slow rolling balls
             && self.current_owner.is_none()
     }
 
@@ -270,8 +269,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Check if ball is stopped and unowned
-        let is_stopped = self.velocity.norm() < 0.1 && self.position.z < 0.5;
+        // Check if ball is slow-moving/stopped and unowned
+        let is_stopped = self.velocity.norm() < 1.0 && self.position.z < 0.5; // Increased from 0.1 to 1.0 to catch slow rolling balls
         let is_unowned = self.current_owner.is_none();
 
         if is_stopped && is_unowned {

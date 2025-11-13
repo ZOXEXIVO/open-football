@@ -356,10 +356,10 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let mut separation = Vector3::zeros();
 
-        // Increased parameters for better separation
-        const SEPARATION_RADIUS: f32 = 30.0; // Increased from 25.0
-        const SEPARATION_STRENGTH: f32 = 25.0; // Increased from 20.0
-        const MIN_SEPARATION_DISTANCE: f32 = 5.0; // New minimum distance to enforce
+        // Balanced parameters to prevent oscillation while maintaining separation
+        const SEPARATION_RADIUS: f32 = 30.0;
+        const SEPARATION_STRENGTH: f32 = 20.0; // Reduced from 25.0 to prevent excessive force
+        const MIN_SEPARATION_DISTANCE: f32 = 3.0; // Reduced threshold for emergency separation
 
         // Apply separation from teammates
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
@@ -367,15 +367,15 @@ impl<'p> PlayerOperationsImpl<'p> {
             let distance = to_other.magnitude();
 
             if distance > 0.0 && distance < SEPARATION_RADIUS {
-                // Using quartic falloff for stronger close-range separation
+                // Using cubic falloff for smoother separation (reduced from quartic)
                 let direction = -to_other.normalize();
-                let strength = SEPARATION_STRENGTH * (1.0f32 - distance / SEPARATION_RADIUS).powf(4.0);
+                let strength = SEPARATION_STRENGTH * (1.0f32 - distance / SEPARATION_RADIUS).powf(3.0);
                 separation += direction * strength;
 
-                // Extra strong separation when very close
+                // Gentle emergency separation when very close (reduced multiplier to prevent oscillation)
                 if distance < MIN_SEPARATION_DISTANCE {
-                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(3.0); // Capped at 3x
-                    separation += direction * SEPARATION_STRENGTH * emergency_multiplier;
+                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(1.5); // Reduced from 3.0x to 1.5x
+                    separation += direction * SEPARATION_STRENGTH * emergency_multiplier * 0.5; // Half strength
                 }
             }
         }
@@ -390,19 +390,19 @@ impl<'p> PlayerOperationsImpl<'p> {
                 let strength = SEPARATION_STRENGTH * 0.8 * (1.0f32 - distance / (SEPARATION_RADIUS * 0.8)).powf(3.0);
                 separation += direction * strength;
 
-                // Extra strong separation when very close
+                // Gentle emergency separation when very close (reduced to prevent oscillation)
                 if distance < MIN_SEPARATION_DISTANCE {
-                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(2.5); // Capped at 2.5x
-                    separation += direction * SEPARATION_STRENGTH * 0.7 * emergency_multiplier;
+                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE / distance).min(1.5); // Reduced from 2.5x to 1.5x
+                    separation += direction * SEPARATION_STRENGTH * 0.4 * emergency_multiplier; // Reduced strength
                 }
             }
         }
 
-        // Add slight random jitter to separation for natural movement
+        // Add minimal random jitter to separation for natural movement (reduced to prevent twitching)
         if separation.magnitude() > 0.1 {
             let jitter = Vector3::new(
-                (rand::random::<f32>() - 0.5) * 0.8,
-                (rand::random::<f32>() - 0.5) * 0.8,
+                (rand::random::<f32>() - 0.5) * 0.3, // Reduced from 0.8 to 0.3
+                (rand::random::<f32>() - 0.5) * 0.3, // Reduced from 0.8 to 0.3
                 0.0,
             );
             separation += jitter;

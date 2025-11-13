@@ -5,9 +5,10 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 3.0; // Distance within which the defender can tackle
+const TACKLING_DISTANCE_THRESHOLD: f32 = 5.0; // Distance within which the defender can tackle (increased from 3.0)
 const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Max distance to consider pressing
 const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 35.0; // Tighter in defensive third
+const CLOSE_PRESSING_DISTANCE: f32 = 15.0; // Distance for aggressive pressing
 const STAMINA_THRESHOLD: f32 = 40.0; // Increased from 30.0 - prevent overexertion
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
@@ -83,14 +84,26 @@ impl StateProcessingHandler for DefenderPressingState {
         let mut opponent_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponent_with_ball.next() {
+            let distance_to_opponent = opponent.distance(ctx);
+
             // Calculate direction towards the opponent
             let direction = (opponent.position - ctx.player.position).normalize();
             // Set speed based on player's acceleration and pace
             let speed = ctx.player.skills.physical.pace; // Use pace attribute
-            
-            return Some(direction * speed + ctx.player().separation_velocity());
-        } 
-        
+
+            let pressing_velocity = direction * speed;
+
+            // Reduce separation velocity when actively pressing to allow close approach
+            // When very close, disable separation entirely to enable tackling
+            let separation = if distance_to_opponent < CLOSE_PRESSING_DISTANCE {
+                ctx.player().separation_velocity() * 0.2 // Minimal separation when close
+            } else {
+                ctx.player().separation_velocity() * 0.5 // Reduced separation when pressing
+            };
+
+            return Some(pressing_velocity + separation);
+        }
+
         None
     }
 
