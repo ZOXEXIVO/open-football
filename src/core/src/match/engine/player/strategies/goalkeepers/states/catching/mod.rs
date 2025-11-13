@@ -84,8 +84,8 @@ impl GoalkeeperCatchingState {
         let scaled_agility = (agility - 1.0) / 19.0;
 
         // Base catch skill (weighted toward handling and reflexes)
-        let base_skill = (scaled_handling * 0.4 + scaled_reflexes * 0.3 +
-                          scaled_positioning * 0.2 + scaled_agility * 0.1);
+        let base_skill = scaled_handling * 0.4 + scaled_reflexes * 0.3 +
+                          scaled_positioning * 0.2 + scaled_agility * 0.1;
 
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
         let ball_height = ctx.tick_context.positions.ball.position.z;

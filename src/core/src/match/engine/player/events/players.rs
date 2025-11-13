@@ -726,7 +726,7 @@ impl PlayerEventDispatcher {
             (finishing_skill * 0.4 + technique_skill * 0.3 + long_shot_skill * 0.3) * composure_skill
         } else {
             // Close range - finishing is key
-            (finishing_skill * 0.6 + technique_skill * 0.2 + composure_skill * 0.2)
+            finishing_skill * 0.6 + technique_skill * 0.2 + composure_skill * 0.2
         };
 
         // Calculate target point within goal (aim for corners/areas based on skill)

@@ -168,7 +168,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         let pressure_factor = self.pressure_factor();
 
         // Combine factors
-        let skill_factor = (finishing * 0.5 + composure * 0.3 + technique * 0.2);
+        let skill_factor = finishing * 0.5 + composure * 0.3 + technique * 0.2;
 
         (skill_factor * distance_factor * pressure_factor).clamp(0.0, 1.0)
     }

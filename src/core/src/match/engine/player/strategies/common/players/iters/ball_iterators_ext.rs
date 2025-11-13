@@ -1,11 +1,6 @@
 use crate::r#match::{MatchPlayerLite, StateProcessingContext};
 
 /// Extension trait for Iterator<Item = MatchPlayerLite> to enable chaining filters
-///
-/// This allows for fluent API calls like:
-/// ```
-/// ctx.players().opponents().nearby(30.0).with_ball()
-/// ```
 pub trait MatchPlayerIteratorExt<'a>: Iterator<Item = MatchPlayerLite> + Sized {
     /// Filter players who have the ball
     fn with_ball(self, ctx: &'a StateProcessingContext<'a>) -> WithBallIterator<'a, Self> {
