@@ -10,8 +10,17 @@ use nalgebra::Vector3;
 // Realistic shooting distances (field is 840 units)
 const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 50.0; // ~25m - ideal shooting distance
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
+
+// Passing decision thresholds for forwards
+const PASSING_DISABLED_DISTANCE: f32 = 100.0; // Within this distance, very restrictive passing
+const SHOOTING_ZONE_DISTANCE: f32 = 150.0; // Enhanced shooting priority zone
+const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.4; // Teammate must be 40% of distance closer
+
+// Performance thresholds
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 
 #[derive(Default)]
@@ -51,6 +60,24 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
                 // Stay with ball and keep running toward goal
                 return None;
+            }
+
+            // Priority 2b: In shooting range but wider angle - still shoot if good long shot ability
+            if ctx.player().shooting().in_shooting_range() {
+                let long_shots = ctx.player.skills.technical.long_shots / 20.0;
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                let distance = ctx.ball().distance_to_opponent_goal();
+
+                // Allow shooting from wider angles if player has good long shot skills
+                if distance <= OPTIMAL_SHOOTING_DISTANCE
+                    && long_shots > 0.6
+                    && finishing > 0.5
+                    && ctx.player().has_clear_shot()
+                    && !ctx.players().opponents().exists(8.0) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
             }
 
             // Priority 3: Under pressure - quick decision needed
@@ -231,9 +258,9 @@ impl ForwardRunningState {
                 return false; // Never pass backward in shooting zone
             }
 
-            // Teammate must be SIGNIFICANTLY closer to goal (50% closer)
+            // Teammate must be SIGNIFICANTLY closer to goal
             let teammate_distance = (teammate.position - goal_pos).magnitude();
-            let is_much_closer = teammate_distance < distance * 0.5;
+            let is_much_closer = teammate_distance < distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
 
             // Must have clear pass lane
             let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
@@ -761,10 +788,14 @@ impl ForwardRunningState {
             return self.has_safe_passing_option(ctx, &teammates);
         }
 
-        // 2. PREFER TO RUN/SHOOT: Very close to goal with space
-        if distance_to_goal < 150.0 && !under_pressure {
-            // Don't pass backward when close to goal!
-            // Only pass forward to teammate in significantly better position
+        // 2. PREFER TO RUN/SHOOT: Close to goal - very restrictive passing
+        if distance_to_goal < PASSING_DISABLED_DISTANCE && !under_pressure {
+            // Within shooting zone - only pass to teammates in much better positions
+            return false;
+        }
+
+        if distance_to_goal < SHOOTING_ZONE_DISTANCE && !under_pressure {
+            // Enhanced shooting zone - only forward passes to significantly better teammates
             return self.has_forward_pass_to_better_teammate(ctx, &teammates, distance_to_goal);
         }
 
@@ -841,7 +872,7 @@ impl ForwardRunningState {
             // Teammate must be much closer to goal
             let teammate_distance =
                 (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-            let is_much_closer = teammate_distance < current_distance * 0.6;
+            let is_much_closer = teammate_distance < current_distance * TEAMMATE_ADVANTAGE_STRICT_RATIO;
             let not_heavily_marked = !self.is_teammate_heavily_marked(ctx, teammate);
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
 

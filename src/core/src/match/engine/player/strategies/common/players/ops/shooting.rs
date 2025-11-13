@@ -8,8 +8,18 @@ pub struct ShootingOperationsImpl<'p> {
 // Realistic shooting distances (field is typically 840 units)
 const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 50.0; // ~25m - ideal shooting distance
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
+
+// Shooting decision thresholds
+const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 60.0; // Always prefer shooting if closer than this
+const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 70.0; // Shoot over pass for decent finishers
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 60.0; // Distance for close-range excellent opportunity
+
+// Teammate advantage thresholds (multipliers)
+const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot
 
 impl<'p> ShootingOperationsImpl<'p> {
     pub fn new(ctx: &'p StateProcessingContext<'p>) -> Self {
@@ -22,7 +32,12 @@ impl<'p> ShootingOperationsImpl<'p> {
         let shooting_skill = self.ctx.player.skills.technical.finishing / 20.0;
         let long_shot_skill = self.ctx.player.skills.technical.long_shots / 20.0;
 
-        // Close range shots (most common)
+        // Very close range - even poor finishers should shoot!
+        if distance_to_goal <= VERY_CLOSE_RANGE_DISTANCE {
+            return true;
+        }
+
+        // Close range shots (most common) - almost anyone can shoot from close range
         if distance_to_goal >= MIN_SHOOTING_DISTANCE && distance_to_goal <= CLOSE_RANGE_DISTANCE {
             return true;
         }
@@ -32,10 +47,18 @@ impl<'p> ShootingOperationsImpl<'p> {
             return true;
         }
 
-        // Long range shots - only for skilled players
+        // Medium-long range shots - moderate skill requirement (new tier)
+        if distance_to_goal <= MEDIUM_RANGE_DISTANCE
+            && long_shot_skill > 0.5
+            && shooting_skill > 0.45
+        {
+            return true;
+        }
+
+        // Long range shots - skilled players (reduced from 0.75/0.65 to 0.6/0.5)
         if distance_to_goal <= MAX_SHOOTING_DISTANCE
-            && long_shot_skill > 0.75
-            && shooting_skill > 0.65
+            && long_shot_skill > 0.6
+            && shooting_skill > 0.5
         {
             return true;
         }
@@ -46,13 +69,16 @@ impl<'p> ShootingOperationsImpl<'p> {
     /// Check for excellent shooting opportunity (clear sight, good distance, no pressure)
     pub fn has_excellent_opportunity(&self) -> bool {
         let distance = self.ctx.ball().distance_to_opponent_goal();
+        let clear_shot = self.ctx.player().has_clear_shot();
 
-        // Optimal shooting range
-        if distance > OPTIMAL_SHOOTING_DISTANCE - 50.0
-            && distance < OPTIMAL_SHOOTING_DISTANCE + 50.0
-        {
-            // Check for clear shot and minimal pressure
-            let clear_shot = self.ctx.player().has_clear_shot();
+        // Very close to goal - excellent opportunity if any space
+        if distance <= EXCELLENT_OPPORTUNITY_CLOSE_RANGE {
+            let low_pressure = !self.ctx.players().opponents().exists(5.0);
+            return clear_shot && low_pressure;
+        }
+
+        // Medium to optimal range - need good angle too
+        if distance > MIN_SHOOTING_DISTANCE && distance <= MEDIUM_RANGE_DISTANCE {
             let low_pressure = !self.ctx.players().opponents().exists(10.0);
             let good_angle = self.has_good_angle();
 
@@ -75,21 +101,32 @@ impl<'p> ShootingOperationsImpl<'p> {
         let has_clear_shot = self.ctx.player().has_clear_shot();
         let confidence = self.ctx.player.skills.mental.composure / 20.0;
         let finishing = self.ctx.player.skills.technical.finishing / 20.0;
+        let long_shots = self.ctx.player.skills.technical.long_shots / 20.0;
 
-        // Very close to goal - almost always shoot if clear
-        if distance < 40.0 && has_clear_shot {
+        // Close range - almost always shoot if clear
+        if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && has_clear_shot {
+            return finishing > 0.5 || distance <= VERY_CLOSE_RANGE_DISTANCE;
+        }
+
+        // Medium range - shoot if decent skills
+        if distance <= SHOOT_OVER_PASS_MEDIUM_THRESHOLD && has_clear_shot && finishing > 0.55 {
             return true;
         }
 
-        // Close range with good skills - prefer shooting
-        if distance < CLOSE_RANGE_DISTANCE && has_clear_shot && finishing > 0.6 {
-            return true;
-        }
-
-        // Medium distance with excellent skills - consider shooting
-        if distance < OPTIMAL_SHOOTING_DISTANCE
+        // Optimal distance with good overall ability
+        if distance <= OPTIMAL_SHOOTING_DISTANCE
             && has_clear_shot
-            && (confidence + finishing) / 2.0 > 0.7
+            && (confidence + finishing) / 2.0 > 0.6
+        {
+            return true;
+        }
+
+        // Medium-long range with good long shot skills
+        if distance <= MEDIUM_RANGE_DISTANCE
+            && has_clear_shot
+            && long_shots > 0.5
+            && finishing > 0.45
+            && !self.ctx.players().opponents().exists(10.0)
         {
             return true;
         }
@@ -102,11 +139,11 @@ impl<'p> ShootingOperationsImpl<'p> {
             .nearby(100.0)
             .any(|t| {
                 let t_dist = (t.position - self.ctx.player().opponent_goal_position()).magnitude();
-                t_dist < distance * 0.6 // Significantly closer (60% of our distance)
+                t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
             });
 
-        // Shoot if no better teammate and clear shot within reasonable range
-        !better_positioned_teammate && has_clear_shot && distance < OPTIMAL_SHOOTING_DISTANCE
+        // Shoot if no better teammate and clear shot within medium range
+        !better_positioned_teammate && has_clear_shot && distance <= MEDIUM_RANGE_DISTANCE
     }
 
     /// Check if in close range for finishing

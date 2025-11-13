@@ -87,7 +87,7 @@ impl MidfielderDistanceShootingState {
         distance_to_goal <= distance_threshold
             && angle_to_goal <= angle_threshold
             && has_clear_shot
-            && long_shots > 0.7 // Require good long shot skill
+            && long_shots > 0.55 // Reduced from 0.7 to 0.55 - more players can take long shots
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {

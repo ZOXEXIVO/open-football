@@ -13,7 +13,7 @@ impl PlayerSkills {
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
         let balance_factor = (self.physical.balance as f32 - 1.0) / 19.0;
 
-        let base_speed = 2.6; // Increased by 2x from 1.3 to 2.6 for faster gameplay
+        let base_speed = 1.1; // Increased by 2x from 1.3 to 2.6 for faster gameplay
         let max_speed = base_speed
             * (0.6 * pace_factor
                 + 0.2 * acceleration_factor

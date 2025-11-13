@@ -6,7 +6,10 @@ use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
+// Shooting distance constants for midfielders
 const MAX_SHOOTING_DISTANCE: f32 = 100.0; // Midfielders rarely shoot from beyond ~50m
+const STANDARD_SHOOTING_DISTANCE: f32 = 70.0; // Standard shooting range for midfielders
+const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -34,24 +37,26 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // More selective shooting checks for midfielders
+            // Shooting evaluation for midfielders
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             let long_shots = ctx.player.skills.technical.long_shots / 20.0;
             let finishing = ctx.player.skills.technical.finishing / 20.0;
 
-            // Only shoot if close enough AND have clear shot AND good skills
-            if goal_dist < 70.0 && ctx.player().has_clear_shot() && finishing > 0.6 {
+            // Standard shooting - close enough with clear shot
+            if goal_dist <= STANDARD_SHOOTING_DISTANCE
+                && ctx.player().has_clear_shot()
+                && finishing > 0.55 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
             }
 
-            // Long range shots - only for very skilled players in good positions
-            if goal_dist < MAX_SHOOTING_DISTANCE
+            // Distance shooting - long range with good skills and minimal pressure
+            if goal_dist <= MAX_SHOOTING_DISTANCE
                 && ctx.player().has_clear_shot()
-                && long_shots > 0.75
-                && finishing > 0.65
-                && !ctx.players().opponents().exists(20.0) {
+                && long_shots > 0.6
+                && finishing > 0.5
+                && !ctx.players().opponents().exists(PRESSURE_CHECK_DISTANCE) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
                 ));

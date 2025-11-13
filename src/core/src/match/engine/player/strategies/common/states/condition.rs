@@ -24,7 +24,7 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
     }
 
     /// Process condition changes based on activity intensity and player attributes
-    /// Calculation: 80% velocity-based, 20% intensity-based
+    /// Calculation: 75% velocity-based, 25% intensity-based
     pub fn process(self, ctx: ConditionContext) {
         let stamina_skill = ctx.player.skills.physical.stamina;
         let natural_fitness = ctx.player.skills.physical.natural_fitness;
@@ -36,9 +36,13 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // Natural fitness affects recovery and fatigue resistance
         let fitness_factor = 1.3 - (natural_fitness / 20.0) * 0.6;
 
-        // Calculate velocity-based fatigue (80% of total effect)
+        // Calculate velocity-based fatigue (75% of total effect)
         let velocity_magnitude = ctx.player.velocity.norm();
-        let max_speed = ctx.player.skills.max_speed();
+        let max_speed = ctx.player.skills.max_speed_with_condition(
+            ctx.player.player_attributes.condition,
+            ctx.player.player_attributes.fitness,
+            ctx.player.player_attributes.jadedness,
+        );
 
         let velocity_fatigue = if velocity_magnitude < 0.3 {
             // Resting - recovery
@@ -69,14 +73,14 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             }
         };
 
-        // Calculate intensity-based fatigue modifier (20% of total effect)
+        // Calculate intensity-based fatigue modifier (25% of total effect)
         let base_intensity_fatigue = self.intensity.base_fatigue::<T>();
 
         // Normalize intensity contribution to be smaller
         let intensity_fatigue = base_intensity_fatigue * 0.3;
 
-        // Combine: 80% velocity + 20% intensity
-        let combined_fatigue = velocity_fatigue * 0.8 + intensity_fatigue * 0.2;
+        // Combine: 75% velocity + 25% intensity
+        let combined_fatigue = velocity_fatigue * 0.75 + intensity_fatigue * 0.25;
 
         // Apply rate multiplier based on whether it's fatigue or recovery
         let rate_multiplier = if combined_fatigue < 0.0 {
