@@ -17,6 +17,12 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
+        if ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ReturningToGoal,
+            ));
+        }
+
         None
     }
 

@@ -2,12 +2,11 @@
 pub const MAX_CONDITION: i16 = 10000;
 
 /// Global fatigue rate multiplier (lower = slower condition decrease)
-/// Set to 0.267 (0.4 / 1.5) to make condition decrease 3.75x slower
-pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.267;
+pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.200;
 
 /// Recovery rate multiplier (lower = slower condition recovery)
 /// Set to 0.333 (0.5 / 1.5) to make condition recovery 3x slower
-pub const RECOVERY_RATE_MULTIPLIER: f32 = 0.333;
+pub const RECOVERY_RATE_MULTIPLIER: f32 = 0.233;
 
 /// Condition threshold below which jadedness increases
 pub const LOW_CONDITION_THRESHOLD: i16 = 2000;

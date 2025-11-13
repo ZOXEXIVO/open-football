@@ -30,19 +30,19 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Priority 0: Clear ball if congested anywhere (not just boundaries)
-            if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
-                // Force a long clearance pass to any teammate
-                if let Some(target_teammate) = ctx.players().teammates().all().next() {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                }
-            }
-
-            // Priority 1: Clear shooting opportunity
+            // Priority 0: Clear shooting opportunity
             if ctx.player().shooting().has_excellent_opportunity() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
+            }
+
+            // Priority 1: Clear ball if congested anywhere (not just boundaries)
+            if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
+                // Force a long clearance pass to any teammate
+                if let Some(_) = ctx.players().teammates().all().next() {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
             }
 
             // Priority 2: In shooting range with good angle

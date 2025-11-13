@@ -7,7 +7,6 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 // TakeBall timeout and distance constants
-const TAKEBALL_TIMEOUT: u64 = 120; // Give up after 120 ticks (~2 seconds) - reduced from 200
 const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
 const OPPONENT_ADVANTAGE_THRESHOLD: f32 = 20.0; // Opponent must be this much closer to give up
 const TEAMMATE_ADVANTAGE_THRESHOLD: f32 = 8.0; // Teammate must be this much closer to give up (reduced from 15.0)
@@ -25,21 +24,14 @@ impl StateProcessingHandler for ForwardTakeBallState {
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.landing_position;
 
-        // 1. Timeout check - give up after too long
-        if ctx.in_state_time > TAKEBALL_TIMEOUT {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
-        }
-
-        // 2. Distance check - ball too far away
+        // 1. Distance check - ball too far away
         if ball_distance > MAX_TAKEBALL_DISTANCE {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,
             ));
         }
 
-        // 3. Check if opponent will reach ball first
+        // 2. Check if opponent will reach ball first
         if let Some(closest_opponent) = ctx.players().opponents().all().min_by(|a, b| {
             let dist_a = (a.position - ball_position).magnitude();
             let dist_b = (b.position - ball_position).magnitude();

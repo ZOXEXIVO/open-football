@@ -716,7 +716,9 @@ fn draw_players(
 
         // ID
 
-        let distance_to_opponent_goal = &format!("c = {}", player.player_attributes.condition);
+        let max_speed = player.skills.max_speed_with_condition(player.player_attributes.condition,player.player_attributes.fitness,player.player_attributes.jadedness);
+
+        let distance_to_opponent_goal = &format!("c = {} ({})", player.player_attributes.condition, max_speed);
 
         let distance_to_opponent_goal_font_size = 13.0 * scale;
         let distance_to_opponent_goal_text_dimensions = measure_text(

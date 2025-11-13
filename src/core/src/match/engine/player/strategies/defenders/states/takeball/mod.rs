@@ -80,7 +80,7 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // Calculate base Arrive behavior
         let mut arrive_velocity = SteeringBehavior::Arrive {
             target,
-            slowing_distance: 15.0,
+            slowing_distance: 0.0,
         }
         .calculate(ctx.player)
         .velocity;

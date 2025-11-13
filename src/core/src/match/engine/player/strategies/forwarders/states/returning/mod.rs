@@ -12,7 +12,7 @@ pub struct ForwardReturningState {}
 impl StateProcessingHandler for ForwardReturningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         if ctx.team().is_control_ball(){

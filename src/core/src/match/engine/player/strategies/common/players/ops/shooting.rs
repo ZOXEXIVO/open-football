@@ -6,17 +6,17 @@ pub struct ShootingOperationsImpl<'p> {
 }
 
 // Realistic shooting distances (field is typically 840 units)
-const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
-const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
-const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
+const MAX_SHOOTING_DISTANCE: f32 = 250.0; // ~60m - absolute max for long shots
+const MIN_SHOOTING_DISTANCE: f32 = 1.0;
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 50.0; // ~20m - anyone can shoot
+const CLOSE_RANGE_DISTANCE: f32 = 70.0; // ~30m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 110.0; // ~40m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 150.0; // ~45m - medium range shots
 
 // Shooting decision thresholds
 const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 60.0; // Always prefer shooting if closer than this
 const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 70.0; // Shoot over pass for decent finishers
-const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 60.0; // Distance for close-range excellent opportunity
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 130.0; // Distance for close-range excellent opportunity
 
 // Teammate advantage thresholds (multipliers)
 const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot

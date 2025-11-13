@@ -272,7 +272,7 @@ impl Ball {
         const DEADLOCK_VELOCITY_THRESHOLD: f32 = 10.0; // Catch slow-rolling balls in duels (increased from 3.0)
         const DEADLOCK_HEIGHT_THRESHOLD: f32 = 0.5; // Ball must be low to ground
         const DEADLOCK_TICK_THRESHOLD: u32 = 5; // Faster intervention (reduced from 10)
-        const DEADLOCK_SEARCH_RADIUS: f32 = 200.0; // Increased search radius for force claiming
+        const DEADLOCK_SEARCH_RADIUS: f32 = 300.0; // Increased search radius for force claiming
 
         // Check if ball is slow-moving/stopped and unowned
         let is_slow = self.velocity.norm() < DEADLOCK_VELOCITY_THRESHOLD;

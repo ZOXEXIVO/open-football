@@ -12,6 +12,18 @@ pub struct ForwardWalkingState {}
 
 impl StateProcessingHandler for ForwardWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        if ctx.ball().is_owned() {
+            if ctx.team().is_control_ball() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::CreatingSpace
+                ));
+            } else {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Running
+                ));
+            }
+        }
+        
         // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
         if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
             let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
