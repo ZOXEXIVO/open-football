@@ -18,13 +18,14 @@ impl StateProcessingHandler for GoalkeeperKickingState {
         }
 
         // 2. Find the best teammate to kick the ball to
-        if let Some(teammate) = self.find_best_pass_option(ctx) {
+        if let Some((teammate, reason)) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
+                        .with_reason(format!("GK_KICKING: {}", reason))
                         .build(ctx),
                 )),
             ));
@@ -51,7 +52,7 @@ impl GoalkeeperKickingState {
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
+    ) -> Option<(MatchPlayerLite, String)> {
         // Kicking allows for extreme long passes - search maximum range including 300m+
         let max_distance = ctx.context.field_size.width as f32 * 3.0;
 
@@ -170,7 +171,7 @@ impl GoalkeeperKickingState {
         if best_option.is_none() || best_score < 1.0 {
             PassEvaluator::find_best_pass_option(ctx, max_distance)
         } else {
-            best_option
+            best_option.map(|teammate| (teammate, format!("GK custom long kick evaluation, score: {:.2}", best_score)))
         }
     }
 }

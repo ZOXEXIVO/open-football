@@ -23,37 +23,27 @@ impl PlayerSkills {
         max_speed
     }
 
-    /// Calculate maximum speed with condition/stamina factor (real-time performance)
+    /// Calculate maximum speed with condition factor (real-time performance)
     /// This is what should be used during match for actual speed calculation
-    /// Conditioning now has a significant impact - even small drops reduce speed noticeably
-    pub fn max_speed_with_condition(&self, condition: i16, fitness: i16, jadedness: i16) -> f32 {
+    /// Speed depends primarily (90%) on condition, with minimal stamina influence (10%)
+    pub fn max_speed_with_condition(&self, condition: i16) -> f32 {
         let base_max_speed = self.max_speed();
 
-        // Direct condition percentage (condition out of 10000)
+        // Condition is the primary factor (0-10000 scale)
         let condition_percentage = (condition as f32 / 10000.0).clamp(0.0, 1.0);
 
-        // Apply exponential curve to make high conditioning more valuable
-        // This makes the drop-off steeper at higher conditioning levels
-        let condition_curve = condition_percentage.powf(1.5);
+        // Stamina provides minimal resistance to fatigue (0-10% boost when tired)
+        // High stamina players maintain 90-100% speed at low condition
+        // Low stamina players drop to 80-100% speed at low condition
+        let stamina_normalized = (self.physical.stamina / 20.0).clamp(0.0, 1.0);
+        let stamina_protection = stamina_normalized * 0.10; // Max 10% protection
 
-        // Fitness affects how condition translates to performance (less impact now)
-        let fitness_factor = (fitness as f32 / 10000.0).clamp(0.85, 1.0);
-
-        // Jadedness reduces performance (up to 25% penalty at max jadedness, reduced from 30%)
-        let jadedness_penalty = (jadedness as f32 / 10000.0) * 0.25;
-
-        // Stamina skill helps maintain performance when tired (5-12% bonus, reduced from 25%)
-        let stamina_bonus = (self.physical.stamina / 20.0).clamp(0.0, 0.12);
-
-        // Final condition factor applies conditioning more directly
-        // At 100% condition: ~1.0 speed (100%)
-        // At 90% condition: ~0.87 speed (87%)
-        // At 80% condition: ~0.73 speed (73%)
-        // At 70% condition: ~0.60 speed (60%)
-        // At 50% condition: ~0.38 speed (38%)
-        // At 0% condition: minimum 15% speed
-        let condition_factor = (condition_curve + stamina_bonus * condition_percentage - jadedness_penalty)
-            .clamp(0.15, 1.0) * fitness_factor;
+        // Simple linear condition curve with stamina protection
+        // At 100% condition: 100% speed (regardless of stamina)
+        // At 50% condition: 50-60% speed (depending on stamina)
+        // At 0% condition: 10-20% speed (minimum + stamina protection)
+        let condition_factor = (condition_percentage * (1.0 - stamina_protection) + stamina_protection)
+            .clamp(0.10, 1.0);
 
         base_max_speed * condition_factor
     }

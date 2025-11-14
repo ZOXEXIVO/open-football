@@ -40,8 +40,6 @@ impl SteeringBehavior {
                 let to_target = *target - player.position;
                 let max_speed = player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 );
                 let desired_velocity = if to_target.norm() > 0.0 {
                     to_target.normalize() * max_speed
@@ -92,8 +90,6 @@ impl SteeringBehavior {
                 // Calculate desired speed based on distance (with condition factor)
                 let max_speed = player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ) * pace_normalized;
                 let desired_speed = if distance < safe_slowing_distance {
                     // Smooth cubic deceleration for better control (changed from quadratic)
@@ -116,8 +112,6 @@ impl SteeringBehavior {
                 // Limit steering force based on agility (with condition)
                 let max_force = player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ) * agility_normalized * 0.7;
                 let steering = Self::limit_magnitude(steering, max_force);
 
@@ -158,8 +152,6 @@ impl SteeringBehavior {
 
                 let max_speed = player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ) * pace_normalized * acceleration_normalized;
 
                 // Calculate interception point
@@ -202,8 +194,6 @@ impl SteeringBehavior {
                     let steering = desired_velocity - player.velocity;
                     let max_acceleration = player.skills.max_speed_with_condition(
                         player.player_attributes.condition,
-                        player.player_attributes.fitness,
-                        player.player_attributes.jadedness,
                     ) * agility_normalized * acceleration_normalized;
                     let limited_steering = Self::limit_magnitude(steering, max_acceleration);
 
@@ -222,8 +212,6 @@ impl SteeringBehavior {
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * player.skills.max_speed_with_condition(
                         player.player_attributes.condition,
-                        player.player_attributes.fitness,
-                        player.player_attributes.jadedness,
                     )
                 } else {
                     Vector3::zeros()
@@ -239,8 +227,6 @@ impl SteeringBehavior {
                 let new_velocity = player.velocity + steering;
                 let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ));
 
                 SteeringOutput {
@@ -273,8 +259,6 @@ impl SteeringBehavior {
                 let desired_velocity = if to_target.norm() > 0.0 {
                     to_target.normalize() * player.skills.max_speed_with_condition(
                         player.player_attributes.condition,
-                        player.player_attributes.fitness,
-                        player.player_attributes.jadedness,
                     ) * 0.3 // Reduced speed for wandering
                 } else {
                     Vector3::zeros()
@@ -290,8 +274,6 @@ impl SteeringBehavior {
                 let new_velocity = player.velocity + steering;
                 let wander_max_speed = player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ) * 0.3; // Wandering is slower
                 let final_velocity = Self::limit_magnitude(new_velocity, wander_max_speed);
 
@@ -311,8 +293,6 @@ impl SteeringBehavior {
                 let desired_velocity = if to_player.norm() > 0.0 {
                     to_player.normalize() * player.skills.max_speed_with_condition(
                         player.player_attributes.condition,
-                        player.player_attributes.fitness,
-                        player.player_attributes.jadedness,
                     )
                 } else {
                     Vector3::zeros()
@@ -326,8 +306,6 @@ impl SteeringBehavior {
                 let new_velocity = player.velocity + steering;
                 let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ));
 
                 SteeringOutput {
@@ -375,8 +353,6 @@ impl SteeringBehavior {
 
                 let desired_velocity = (direction + offset_direction.normalize() * 0.1) * player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 );
                 let steering = desired_velocity - player.velocity;
 
@@ -388,8 +364,6 @@ impl SteeringBehavior {
                 let new_velocity = player.velocity + steering;
                 let final_velocity = Self::limit_magnitude(new_velocity, player.skills.max_speed_with_condition(
                     player.player_attributes.condition,
-                    player.player_attributes.fitness,
-                    player.player_attributes.jadedness,
                 ));
 
                 SteeringOutput {

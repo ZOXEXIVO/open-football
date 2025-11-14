@@ -9,6 +9,9 @@ pub struct MatchField {
     pub players: Vec<MatchPlayer>,
     pub substitutes: Vec<MatchPlayer>,
 
+    pub home_team_id: u32,
+    pub away_team_id: u32,
+
     pub left_side_players: Option<FieldSquad>,
     pub left_team_tactics: Tactics,
 
@@ -23,6 +26,9 @@ impl MatchField {
         left_team_squad: MatchSquad,
         right_team_squad: MatchSquad,
     ) -> Self {
+        let home_team_id = left_team_squad.team_id;
+        let away_team_id = right_team_squad.team_id;
+
         let left_squad = FieldSquad::from_team(&left_team_squad);
         let away_squad = FieldSquad::from_team(&right_team_squad);
 
@@ -37,6 +43,8 @@ impl MatchField {
             ball: Ball::with_coord(width as f32, height as f32),
             players: players_on_field,
             substitutes,
+            home_team_id,
+            away_team_id,
             left_side_players: Some(left_squad),
             left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),

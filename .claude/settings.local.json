@@ -3,7 +3,9 @@
     "allow": [
       "Bash(tree:*)",
       "Bash(cargo build:*)",
-      "Bash(find:*)"
+      "Bash(find:*)",
+      "Bash(git show:*)",
+      "Bash(cargo check:*)"
     ],
     "deny": [],
     "ask": []

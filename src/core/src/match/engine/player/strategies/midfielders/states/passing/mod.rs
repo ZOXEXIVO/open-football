@@ -28,6 +28,19 @@ impl StateProcessingHandler for MidfielderPassingState {
         if !ctx.ball().on_own_side() {
             // First, look for high-value breakthrough passes (for skilled players)
             if let Some(breakthrough_target) = self.find_breakthrough_pass_option(ctx) {
+                let distance = (breakthrough_target.position - ctx.player.position).magnitude();
+                let position_type = match breakthrough_target.tactical_positions.position_group() {
+                    crate::PlayerFieldPositionGroup::Goalkeeper => "GK",
+                    crate::PlayerFieldPositionGroup::Defender => "DEF",
+                    crate::PlayerFieldPositionGroup::Midfielder => "MID",
+                    crate::PlayerFieldPositionGroup::Forward => "FWD",
+                };
+                let reason = format!(
+                    "BREAKTHROUGH_PASS - Vision/Flair pass to {} #{} ({}m)",
+                    position_type,
+                    breakthrough_target.id,
+                    distance as u32
+                );
                 // Execute the high-quality breakthrough pass
                 return Some(StateChangeResult::with_midfielder_state_and_event(
                     MidfielderState::Standing,
@@ -35,6 +48,7 @@ impl StateProcessingHandler for MidfielderPassingState {
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(breakthrough_target.id)
+                            .with_reason(reason)
                             .build(ctx),
                     )),
                 ));
@@ -42,13 +56,14 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // Find the best regular pass option with improved logic
-        if let Some(target_teammate) = self.find_best_pass_option(ctx) {
+        if let Some((target_teammate, reason)) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(target_teammate.id)
+                        .with_reason(format!("PASSING_STATE: {}", reason))
                         .build(ctx),
                 )),
             ));
@@ -157,7 +172,7 @@ impl MidfielderPassingState {
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
+    ) -> Option<(MatchPlayerLite, String)> {
         PassEvaluator::find_best_pass_option(ctx, 400.0)
     }
 

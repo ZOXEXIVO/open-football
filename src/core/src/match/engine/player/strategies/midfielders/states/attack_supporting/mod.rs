@@ -439,8 +439,6 @@ impl MidfielderAttackSupportingState {
                 .calculate(ctx.player)
                 .velocity * (drive_speed / ctx.player.skills.max_speed_with_condition(
                     ctx.player.player_attributes.condition,
-                    ctx.player.player_attributes.fitness,
-                    ctx.player.player_attributes.jadedness,
                 ))
         } else {
             // Space blocked - move laterally to find space

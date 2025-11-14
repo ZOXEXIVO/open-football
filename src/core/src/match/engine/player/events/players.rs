@@ -330,7 +330,6 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
-        field.ball.flags.in_flight_state = 30;
 
         // Increase in_flight_state based on pass distance to prevent immediate reclaim
         // Short passes (< 30m): 20 ticks (~0.33s)

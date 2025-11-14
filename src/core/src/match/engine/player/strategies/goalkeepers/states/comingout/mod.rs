@@ -15,8 +15,6 @@ pub struct GoalkeeperComingOutState {}
 impl StateProcessingHandler for GoalkeeperComingOutState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_distance = ctx.ball().distance();
-        let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let ball_speed = ball_velocity.norm();
 
         if self.should_dive(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(

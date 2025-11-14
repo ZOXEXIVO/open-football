@@ -216,8 +216,8 @@ impl<'p> MovementOperationsImpl<'p> {
     /// Check if player is in general congestion (anywhere on field)
     /// This prevents mid-field clustering where multiple players get stuck
     pub fn is_congested(&self) -> bool {
-        const CONGESTION_RADIUS: f32 = 20.0; // Check within 12 units
-        const CONGESTION_THRESHOLD: usize = 2; // 4+ players = congested
+        const CONGESTION_RADIUS: f32 = 20.0; // Check within 20 units
+        const CONGESTION_THRESHOLD: usize = 4; // 4+ players = congested
 
         // Count all nearby players (teammates + opponents)
         let nearby_teammates = self.ctx.players().teammates().nearby(CONGESTION_RADIUS).count();

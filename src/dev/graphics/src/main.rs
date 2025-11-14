@@ -716,7 +716,7 @@ fn draw_players(
 
         // ID
 
-        let max_speed = player.skills.max_speed_with_condition(player.player_attributes.condition,player.player_attributes.fitness,player.player_attributes.jadedness);
+        let max_speed = player.skills.max_speed_with_condition(player.player_attributes.condition);
 
         let distance_to_opponent_goal = &format!("c = {} ({})", player.player_attributes.condition, max_speed);
 

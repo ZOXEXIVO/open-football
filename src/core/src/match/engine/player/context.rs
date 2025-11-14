@@ -27,6 +27,8 @@ pub struct BallMetadata {
     pub current_owner: Option<u32>,
     pub last_owner: Option<u32>,
     pub notified_players: Vec<u32>,
+
+    pub ownership_duration: u32,
 }
 
 impl From<&MatchField> for BallMetadata {
@@ -37,6 +39,7 @@ impl From<&MatchField> for BallMetadata {
             current_owner: field.ball.current_owner,
             last_owner: field.ball.previous_owner,
             notified_players: field.ball.take_ball_notified_players.clone(),
+            ownership_duration: field.ball.ownership_duration,
         }
     }
 }

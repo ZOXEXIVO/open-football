@@ -18,19 +18,41 @@ impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             // Priority: Clear ball if congested anywhere (not just boundaries)
+            // Allow emergency clearances even without stable possession
             if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
-                // Force a long clearance pass to any teammate (furthest away preferred)
-                if let Some(target_teammate) = ctx.players().teammates().all().max_by(|a, b| {
-                    let dist_a = (a.position - ctx.player.position).magnitude();
-                    let dist_b = (b.position - ctx.player.position).magnitude();
-                    dist_a.partial_cmp(&dist_b).unwrap()
-                }) {
+                // Try to find a good pass option first using the standard evaluator
+                if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
+                    let distance = (target_teammate.position - ctx.player.position).magnitude();
+                    let reason = format!(
+                        "EMERGENCY_CLEARANCE - Congested, passing to best available teammate ({}m)",
+                        distance as u32
+                    );
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(
                             PassingEventContext::new()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target_teammate.id)
+                                .with_reason(reason)
+                                .build(ctx),
+                        )),
+                    ));
+                }
+
+                // Fallback: find any nearby teammate within reasonable distance
+                if let Some(target_teammate) = ctx.players().teammates().nearby(100.0).next() {
+                    let distance = (target_teammate.position - ctx.player.position).magnitude();
+                    let reason = format!(
+                        "EMERGENCY_CLEARANCE - Congested, clearing to nearby teammate ({}m)",
+                        distance as u32
+                    );
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target_teammate.id)
+                                .with_reason(reason)
                                 .build(ctx),
                         )),
                     ));
@@ -63,14 +85,16 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             // Enhanced passing decision based on skills and pressing
-            if self.should_pass(ctx) {
-                if let Some(target_teammate) = self.find_best_pass_option(ctx) {
+            // Require stable possession before allowing passes (prevents instant pass after claiming ball)
+            if ctx.ball().has_stable_possession() && self.should_pass(ctx) {
+                if let Some((target_teammate, reason)) = self.find_best_pass_option(ctx) {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Running,
                         Event::PlayerEvent(PlayerEvent::PassTo(
                             PassingEventContext::new()
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(target_teammate.id)
+                                .with_reason(format!("RUNNING_STATE: {}", reason))
                                 .build(ctx),
                         )),
                     ));
@@ -159,7 +183,7 @@ impl MidfielderRunningState {
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
+    ) -> Option<(MatchPlayerLite, String)> {
         PassEvaluator::find_best_pass_option(ctx, 300.0)
     }
 

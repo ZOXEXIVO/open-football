@@ -64,6 +64,7 @@ impl MatchResultRaw {
 
 #[derive(Debug, Clone)]
 pub struct FieldSquad {
+    pub team_id: u32,
     pub main: Vec<u32>,
     pub substitutes: Vec<u32>,
 }
@@ -71,6 +72,7 @@ pub struct FieldSquad {
 impl FieldSquad {
     pub fn new() -> Self {
         FieldSquad {
+            team_id: 0,
             main: Vec::new(),
             substitutes: Vec::new(),
         }
@@ -78,6 +80,7 @@ impl FieldSquad {
 
     pub fn from(field_squad: &FieldSquad) -> Self {
         FieldSquad {
+            team_id: field_squad.team_id,
             main: field_squad.main.to_vec(),
             substitutes: field_squad.substitutes.to_vec(),
         }
@@ -85,6 +88,7 @@ impl FieldSquad {
 
     pub fn from_team(squad: &MatchSquad) -> Self {
         FieldSquad {
+            team_id: squad.team_id,
             main: squad.main_squad.iter().map(|p| p.id).collect(),
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
         }

@@ -413,7 +413,9 @@ impl PassEvaluator {
             position_value * 0.15 +       // Reduced from 0.25
             long_pass_bonus * 0.10;       // Reduced from 0.15
 
-        tactical_value.clamp(0.1, 1.3)
+        // Allow negative tactical values for backward passes (don't clamp to 0.1 minimum)
+        // This properly penalizes backward passes to GK
+        tactical_value.clamp(-0.5, 1.3)
     }
 
     /// Calculate overall success probability from factors
@@ -496,12 +498,14 @@ impl PassEvaluator {
     }
 
     /// Find the best pass option from available teammates with skill-based personality
+    /// Returns (teammate, reason) tuple
     pub fn find_best_pass_option(
         ctx: &StateProcessingContext,
         max_distance: f32,
-    ) -> Option<MatchPlayerLite> {
+    ) -> Option<(MatchPlayerLite, String)> {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
+        let mut best_reason = String::new();
 
         // Determine player's passing personality based on skills
         let pass_skill = ctx.player.skills.technical.passing / 20.0;
@@ -520,13 +524,15 @@ impl PassEvaluator {
         let is_pragmatic = decision_skill > 0.75 && pass_skill > 0.6; // Smart, calculated passes
 
         // Calculate minimum pass distance based on pressure
+        // NOTE: This filter prevents "too short" passes that don't progress the ball
         let is_under_pressure = ctx.players().opponents().exists(25.0);
         let min_pass_distance = if is_under_pressure {
-            // Under pressure, allow shorter passes
-            50.0
+            // Under pressure, allow any distance
+            0.0
         } else {
-            // Not under pressure, prefer passes with some distance
-            150.0
+            // Not under pressure, discourage very short passes (but allow them)
+            // This is handled by scoring bonuses instead of hard filtering
+            0.0
         };
 
         // Get previous ball owner to prevent ping-pong passes
@@ -677,44 +683,94 @@ impl PassEvaluator {
                 1.0
             };
 
+            // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
+            let is_goalkeeper = matches!(
+                teammate.tactical_positions.position_group(),
+                crate::PlayerFieldPositionGroup::Goalkeeper
+            );
+
+            let goalkeeper_penalty = if is_goalkeeper {
+                // Calculate if this is a backward pass
+                let forward_direction_multiplier = match ctx.player.side {
+                    Some(PlayerSide::Left) => 1.0,
+                    Some(PlayerSide::Right) => -1.0,
+                    None => 1.0,
+                };
+                let is_backward_pass = ((teammate.position.x - ctx.player.position.x) * forward_direction_multiplier) < 0.0;
+
+                // Check if player is in attacking third
+                let field_width = ctx.context.field_size.width as f32;
+                let player_field_position = (ctx.player.position.x * forward_direction_multiplier) / field_width;
+                let in_attacking_third = player_field_position > 0.66;
+
+                if in_attacking_third && is_backward_pass {
+                    // In attacking third, passing backward to GK is NEVER acceptable
+                    0.00001  // Virtually zero
+                } else if is_backward_pass {
+                    // Backward pass to GK in middle/defensive third - still very bad
+                    0.0001
+                } else if evaluation.factors.pressure_factor < 0.2 {
+                    // Forward/sideways pass under EXTREME pressure - GK is emergency option
+                    0.02
+                } else {
+                    // Normal play - virtually eliminate GK passes
+                    0.0005
+                }
+            } else {
+                1.0  // No penalty for non-GK
+            };
+
             // Calculate final score with personality-based weighting
             let score = if evaluation.factors.pressure_factor < 0.5 {
                 // Under heavy pressure - personality affects decision
                 if is_conservative {
                     // Conservative: safety is paramount
-                    (evaluation.success_probability * 2.0 + positioning_bonus) * interception_penalty * space_quality * optimal_distance_bonus
+                    (evaluation.success_probability * 2.0 + positioning_bonus) * interception_penalty * space_quality * optimal_distance_bonus * goalkeeper_penalty
                 } else if is_direct {
                     // Direct: still look for forward options
-                    (evaluation.expected_value * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.expected_value * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else {
                     // Others: prioritize safety AND space
-                    (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3 * optimal_distance_bonus
+                    (evaluation.success_probability + positioning_bonus) * interception_penalty * space_quality * 1.3 * optimal_distance_bonus * goalkeeper_penalty
                 }
             } else {
                 // Normal situation - personality-based preferences apply
                 if is_playmaker {
                     // Playmakers prioritize tactical value and vision
-                    (evaluation.expected_value * 1.3 + positioning_bonus * 0.4) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.expected_value * 1.3 + positioning_bonus * 0.4) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else if is_direct {
                     // Direct players maximize attack
-                    (evaluation.expected_value * 1.4 + evaluation.factors.tactical_value * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.expected_value * 1.4 + evaluation.factors.tactical_value * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else if is_team_player {
                     // Team players maximize receiver's situation
-                    (evaluation.success_probability + positioning_bonus * 0.8) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.success_probability + positioning_bonus * 0.8) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else if is_conservative {
                     // Conservative: success probability is key
-                    (evaluation.success_probability * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.success_probability * 1.5 + positioning_bonus * 0.3) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else if is_pragmatic {
                     // Pragmatic: balanced approach
-                    (evaluation.expected_value * 1.2 + positioning_bonus * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus
+                    (evaluation.expected_value * 1.2 + positioning_bonus * 0.5) * interception_penalty * space_quality * distance_preference * optimal_distance_bonus * goalkeeper_penalty
                 } else {
                     // Standard scoring
-                    (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality * optimal_distance_bonus
+                    (evaluation.expected_value + positioning_bonus * 0.5) * interception_penalty * space_quality * optimal_distance_bonus * goalkeeper_penalty
                 }
             };
 
             // Personality-based acceptance threshold
-            let is_acceptable = if is_conservative {
+            let is_acceptable = if is_goalkeeper {
+                // Goalkeeper passes should be extremely rare
+                // Only accept under extreme pressure AND if highly safe AND not in attacking third
+                let player_field_position = (ctx.player.position.x * match ctx.player.side {
+                    Some(PlayerSide::Left) => 1.0,
+                    Some(PlayerSide::Right) => -1.0,
+                    None => 1.0,
+                }) / ctx.context.field_size.width as f32;
+                let in_defensive_third = player_field_position < 0.33;
+
+                evaluation.factors.pressure_factor < 0.2 &&
+                evaluation.success_probability > 0.85 &&
+                in_defensive_third  // Only allow GK passes from defensive third
+            } else if is_conservative {
                 evaluation.success_probability > 0.7 && evaluation.factors.receiver_positioning > 0.75
             } else if is_direct {
                 evaluation.success_probability > 0.5 && evaluation.factors.tactical_value > 0.5
@@ -727,9 +783,64 @@ impl PassEvaluator {
             if score > best_score && is_acceptable {
                 best_score = score;
                 best_option = Some(teammate);
+
+                // Generate detailed reason for this selection
+                let distance = (teammate.position - ctx.player.position).norm();
+                let position_type = match teammate.tactical_positions.position_group() {
+                    crate::PlayerFieldPositionGroup::Goalkeeper => "GK",
+                    crate::PlayerFieldPositionGroup::Defender => "DEF",
+                    crate::PlayerFieldPositionGroup::Midfielder => "MID",
+                    crate::PlayerFieldPositionGroup::Forward => "FWD",
+                };
+
+                let personality = if is_playmaker {
+                    "Playmaker"
+                } else if is_direct {
+                    "Direct"
+                } else if is_conservative {
+                    "Conservative"
+                } else if is_team_player {
+                    "TeamPlayer"
+                } else if is_pragmatic {
+                    "Pragmatic"
+                } else {
+                    "Standard"
+                };
+
+                let field_position = {
+                    let forward_mult = match ctx.player.side {
+                        Some(crate::r#match::PlayerSide::Left) => 1.0,
+                        Some(crate::r#match::PlayerSide::Right) => -1.0,
+                        None => 1.0,
+                    };
+                    let normalized_pos = (ctx.player.position.x * forward_mult) / ctx.context.field_size.width as f32;
+                    if normalized_pos < 0.33 { "DefThird" } else if normalized_pos < 0.66 { "MidThird" } else { "AttThird" }
+                };
+
+                let forward_direction_multiplier = match ctx.player.side {
+                    Some(crate::r#match::PlayerSide::Left) => 1.0,
+                    Some(crate::r#match::PlayerSide::Right) => -1.0,
+                    None => 1.0,
+                };
+                let is_forward_pass = ((teammate.position.x - ctx.player.position.x) * forward_direction_multiplier) > 0.0;
+                let direction = if is_forward_pass { "FWD" } else { "BACK" };
+
+                best_reason = format!(
+                    "{} pass: {} #{} @{}m | Score:{:.2} ExpVal:{:.2} Space:{:.2} | Personality:{} | Position:{} | {}",
+                    direction,
+                    position_type,
+                    teammate.id,
+                    distance as u32,
+                    best_score,
+                    evaluation.expected_value,
+                    evaluation.factors.receiver_positioning,
+                    personality,
+                    field_position,
+                    if is_goalkeeper { "⚠️ GOALKEEPER SELECTED!" } else { "" }
+                );
             }
         }
 
-        best_option
+        best_option.map(|teammate| (teammate, best_reason))
     }
 }

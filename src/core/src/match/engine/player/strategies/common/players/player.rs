@@ -301,13 +301,13 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn goal_position(&self) -> Vector3<f32> {
-        let field_length = self.ctx.context.field_size.width as f32;
         let field_width = self.ctx.context.field_size.width as f32;
+        let field_height = self.ctx.context.field_size.height as f32;
 
         if self.ctx.player.side == Some(PlayerSide::Left) {
-            Vector3::new(field_length, field_width / 2.0, 0.0)
+            Vector3::new(field_width, field_height / 2.0, 0.0)
         } else {
-            Vector3::new(0.0, field_width / 2.0, 0.0)
+            Vector3::new(0.0, field_height / 2.0, 0.0)
         }
     }
 

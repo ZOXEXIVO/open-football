@@ -12,6 +12,10 @@ pub struct MatchContext {
     pub goal_positions: GoalPosition,
     pub tactics: TeamsTactics,
 
+    // Team IDs for determining which goal to shoot at
+    pub field_home_team_id: u32,
+    pub field_away_team_id: u32,
+
     pub(crate) logging_enabled: bool,
 
     // Track cumulative time across all match states
@@ -28,6 +32,8 @@ impl MatchContext {
             players,
             goal_positions: GoalPosition::from(&field.size),
             tactics: TeamsTactics::from_field(field),
+            field_home_team_id: field.home_team_id,
+            field_away_team_id: field.away_team_id,
             logging_enabled: false,
             total_match_time: 0,
         }

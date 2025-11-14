@@ -1,4 +1,4 @@
-use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+use crate::r#match::{StateProcessingContext};
 
 /// Operations for shooting decision-making
 pub struct ShootingOperationsImpl<'p> {

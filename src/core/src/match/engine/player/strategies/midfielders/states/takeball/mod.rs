@@ -135,8 +135,6 @@ impl StateProcessingHandler for MidfielderTakeBallState {
             separation_force = separation_force / (neighbor_count as f32);
             let max_speed = ctx.player.skills.max_speed_with_condition(
                 ctx.player.player_attributes.condition,
-                ctx.player.player_attributes.fitness,
-                ctx.player.player_attributes.jadedness,
             );
 
             separation_force = separation_force * max_speed * SEPARATION_WEIGHT * separation_factor;

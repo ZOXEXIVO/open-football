@@ -68,6 +68,19 @@ impl<'b> BallOperationsImpl<'b> {
         self.ctx.tick_context.ball.last_owner
     }
 
+    /// Check if the current player has had stable possession long enough to make controlled actions
+    /// Returns true if the player has owned the ball for at least MIN_POSSESSION_FOR_ACTIONS ticks
+    #[inline]
+    pub fn has_stable_possession(&self) -> bool {
+        const MIN_POSSESSION_FOR_ACTIONS: u32 = 2; // Require at least 2 ticks (~0.03 seconds) of possession
+
+        if self.owner_id() == Some(self.ctx.player.id) {
+            self.ctx.tick_context.ball.ownership_duration >= MIN_POSSESSION_FOR_ACTIONS
+        } else {
+            false
+        }
+    }
+
     pub fn is_towards_player(&self) -> bool {
         let (is_towards, _) = MatchBallLogic::is_heading_towards_player(
             &self.ctx.tick_context.positions.ball.position,
@@ -115,7 +128,7 @@ impl<'b> BallOperationsImpl<'b> {
         match self.ctx.player.side {
             Some(PlayerSide::Left) => self.ctx.context.goal_positions.left,
             Some(PlayerSide::Right) => self.ctx.context.goal_positions.right,
-            _ => Vector3::new(0.0, 0.0, 0.0),
+            _ =>  panic!("no player side"),
         }
     }
 

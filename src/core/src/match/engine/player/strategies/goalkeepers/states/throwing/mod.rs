@@ -18,13 +18,14 @@ impl StateProcessingHandler for GoalkeeperThrowingState {
         }
 
         // 2. Find the best teammate to kick the ball to
-        if let Some(teammate) = self.find_best_pass_option(ctx) {
+        if let Some((teammate, reason)) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state_and_event(
                 GoalkeeperState::Standing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
+                        .with_reason(format!("GK_THROWING: {}", reason))
                         .build(ctx),
                 )),
             ));
@@ -53,7 +54,7 @@ impl GoalkeeperThrowingState {
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
-    ) -> Option<MatchPlayerLite> {
+    ) -> Option<(MatchPlayerLite, String)> {
         // Throwing has limited range, but still prefer longer throws
         PassEvaluator::find_best_pass_option(ctx, 150.0)
     }

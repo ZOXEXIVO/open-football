@@ -80,8 +80,6 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             separation_force = separation_force / (neighbor_count as f32);
             separation_force = separation_force * ctx.player.skills.max_speed_with_condition(
                 ctx.player.player_attributes.condition,
-                ctx.player.player_attributes.fitness,
-                ctx.player.player_attributes.jadedness,
             ) * SEPARATION_WEIGHT * separation_factor;
 
             // Blend arrive and separation velocities
@@ -91,13 +89,9 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             let magnitude = arrive_velocity.magnitude();
             if magnitude > ctx.player.skills.max_speed_with_condition(
                 ctx.player.player_attributes.condition,
-                ctx.player.player_attributes.fitness,
-                ctx.player.player_attributes.jadedness,
             ) {
                 arrive_velocity = arrive_velocity * (ctx.player.skills.max_speed_with_condition(
                     ctx.player.player_attributes.condition,
-                    ctx.player.player_attributes.fitness,
-                    ctx.player.player_attributes.jadedness,
                 ) / magnitude);
             }
         }

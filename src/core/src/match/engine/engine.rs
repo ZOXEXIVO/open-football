@@ -49,8 +49,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         result.score = Some(context.score.clone());
 
-        result.left_team_players = field.left_side_players.expect("left team players");
-        result.right_team_players = field.right_side_players.expect("right team players");
+        // Assign squads based on team IDs, not field positions
+        // left_team_players and right_team_players in result represent home and away teams
+        let left_side_squad = field.left_side_players.expect("left team players");
+        let right_side_squad = field.right_side_players.expect("right team players");
+
+        // Check which field side has the home team using FieldSquad's team_id
+        if left_side_squad.team_id == field.home_team_id {
+            // Home team is on the left side
+            result.left_team_players = left_side_squad;
+            result.right_team_players = right_side_squad;
+        } else {
+            // Home team is on the right side (after swap)
+            result.left_team_players = right_side_squad;
+            result.right_team_players = left_side_squad;
+        }
 
         result.position_data = match_position_data;
 

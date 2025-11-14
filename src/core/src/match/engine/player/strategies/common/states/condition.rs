@@ -40,8 +40,6 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         let velocity_magnitude = ctx.player.velocity.norm();
         let max_speed = ctx.player.skills.max_speed_with_condition(
             ctx.player.player_attributes.condition,
-            ctx.player.player_attributes.fitness,
-            ctx.player.player_attributes.jadedness,
         );
 
         let velocity_fatigue = if velocity_magnitude < 0.3 {
