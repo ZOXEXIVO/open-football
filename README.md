@@ -59,18 +59,18 @@ open chrome at http://localhost:18000
 
 [Match page example (click on any goals)](https://open-football.org/leagues/italian-serie-a)
 
-![alt text](docs/images/match.jpg "Match page")
+![alt text](.docs/images/match.avif "Match page")
 
 [Player page example (click on any player)](https://open-football.org/teams/juventus)
-![alt text](docs/images/player.jpg "Player page")
+![alt text](.docs/images/player.jpg "Player page")
 
 [Club page example](https://open-football.org/teams/juventus)
 
-![alt text](docs/images/club.jpg "Club page")
+![alt text](.docs/images/club.jpg "Club page")
 
 [League page example](https://open-football.org/leagues/italian-serie-a)
 
-![alt text](docs/images/league.jpg "League page")
+![alt text](.docs/images/league.jpg "League page")
 
 #### Project structure
 
@@ -82,7 +82,7 @@ open chrome at http://localhost:18000
 
 Match dev looks like (cross-platform)
 
-![alt text](docs/images/match_dev.png "Match dev tools")
+![alt text](.docs/images/match_dev.png "Match dev tools")
 
 /src/dev/neural - Dev utils for training NN for using in match, etc
 
