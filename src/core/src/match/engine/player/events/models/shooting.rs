@@ -5,7 +5,8 @@ use nalgebra::Vector3;
 pub struct ShootingEventContext {
     pub from_player_id: u32,
     pub target: Vector3<f32>,
-    pub force: f64
+    pub force: f64,
+    pub reason: &'static str,
 }
 
 impl ShootingEventContext {
@@ -16,7 +17,8 @@ impl ShootingEventContext {
 
 pub struct ShootingEventBuilder {
     from_player_id: Option<u32>,
-    target: Option<Vector3<f32>>
+    target: Option<Vector3<f32>>,
+    reason: Option<&'static str>,
 }
 
 impl Default for ShootingEventBuilder {
@@ -29,7 +31,8 @@ impl ShootingEventBuilder {
     pub fn new() -> Self {
         ShootingEventBuilder {
             from_player_id: None,
-            target: None
+            target: None,
+            reason: None,
         }
     }
     
@@ -43,11 +46,17 @@ impl ShootingEventBuilder {
         self
     }
 
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
+        self
+    }
+
     pub fn build(self, ctx: &StateProcessingContext) -> ShootingEventContext {
         ShootingEventContext {
             from_player_id: self.from_player_id.unwrap(),
             target: self.target.unwrap(),
             force: ctx.player().shoot_goal_power(),
+            reason: self.reason.unwrap_or("No reason specified"),
         }
     }
 }

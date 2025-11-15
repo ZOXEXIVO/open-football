@@ -32,6 +32,7 @@ impl StateProcessingHandler for ForwardPassingState {
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(target_teammate.id)
+                        .with_reason("FWD_PASSING_STATE")
                         .build(ctx),
                 )),
             ));
