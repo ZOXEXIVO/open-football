@@ -502,10 +502,9 @@ impl PassEvaluator {
     pub fn find_best_pass_option(
         ctx: &StateProcessingContext,
         max_distance: f32,
-    ) -> Option<(MatchPlayerLite, String)> {
+    ) -> Option<(MatchPlayerLite, &'static str)> {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
-        let mut best_reason = String::new();
 
         // Determine player's passing personality based on skills
         let pass_skill = ctx.player.skills.technical.passing / 20.0;
@@ -783,64 +782,9 @@ impl PassEvaluator {
             if score > best_score && is_acceptable {
                 best_score = score;
                 best_option = Some(teammate);
-
-                // Generate detailed reason for this selection
-                let distance = (teammate.position - ctx.player.position).norm();
-                let position_type = match teammate.tactical_positions.position_group() {
-                    crate::PlayerFieldPositionGroup::Goalkeeper => "GK",
-                    crate::PlayerFieldPositionGroup::Defender => "DEF",
-                    crate::PlayerFieldPositionGroup::Midfielder => "MID",
-                    crate::PlayerFieldPositionGroup::Forward => "FWD",
-                };
-
-                let personality = if is_playmaker {
-                    "Playmaker"
-                } else if is_direct {
-                    "Direct"
-                } else if is_conservative {
-                    "Conservative"
-                } else if is_team_player {
-                    "TeamPlayer"
-                } else if is_pragmatic {
-                    "Pragmatic"
-                } else {
-                    "Standard"
-                };
-
-                let field_position = {
-                    let forward_mult = match ctx.player.side {
-                        Some(crate::r#match::PlayerSide::Left) => 1.0,
-                        Some(crate::r#match::PlayerSide::Right) => -1.0,
-                        None => 1.0,
-                    };
-                    let normalized_pos = (ctx.player.position.x * forward_mult) / ctx.context.field_size.width as f32;
-                    if normalized_pos < 0.33 { "DefThird" } else if normalized_pos < 0.66 { "MidThird" } else { "AttThird" }
-                };
-
-                let forward_direction_multiplier = match ctx.player.side {
-                    Some(crate::r#match::PlayerSide::Left) => 1.0,
-                    Some(crate::r#match::PlayerSide::Right) => -1.0,
-                    None => 1.0,
-                };
-                let is_forward_pass = ((teammate.position.x - ctx.player.position.x) * forward_direction_multiplier) > 0.0;
-                let direction = if is_forward_pass { "FWD" } else { "BACK" };
-
-                best_reason = format!(
-                    "{} pass: {} #{} @{}m | Score:{:.2} ExpVal:{:.2} Space:{:.2} | Personality:{} | Position:{} | {}",
-                    direction,
-                    position_type,
-                    teammate.id,
-                    distance as u32,
-                    best_score,
-                    evaluation.expected_value,
-                    evaluation.factors.receiver_positioning,
-                    personality,
-                    field_position,
-                    if is_goalkeeper { "⚠️ GOALKEEPER SELECTED!" } else { "" }
-                );
             }
         }
 
-        best_option.map(|teammate| (teammate, best_reason))
+        best_option.map(|teammate| (teammate, "PASS_EVALUATOR"))
     }
 }

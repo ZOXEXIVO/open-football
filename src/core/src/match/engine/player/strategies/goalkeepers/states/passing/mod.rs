@@ -58,6 +58,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(2.5) // Gentle pass
+                                .with_reason("GK_PASSING_SHORT")
                                 .build(ctx)
                         )),
                     ));
@@ -72,6 +73,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(4.5) // Medium power
+                                .with_reason("GK_PASSING_MEDIUM")
                                 .build(ctx)
                         )),
                     ));
@@ -94,6 +96,7 @@ impl StateProcessingHandler for GoalkeeperPassingState {
                                 .with_from_player_id(ctx.player.id)
                                 .with_to_player_id(teammate.id)
                                 .with_pass_force(3.5) // Throw power
+                                .with_reason("GK_PASSING_THROW")
                                 .build(ctx)
                         )),
                     ));
@@ -388,6 +391,7 @@ impl GoalkeeperPassingState {
                     .with_from_player_id(ctx.player.id)
                     .with_to_player_id(target.id)
                     .with_pass_force(kick_force)
+                    .with_reason("GK_PASSING_LONG_KICK")
                     .build(ctx)
             )))
         } else {

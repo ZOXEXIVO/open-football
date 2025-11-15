@@ -24,18 +24,13 @@ impl StateProcessingHandler for DefenderPassingState {
         // Under heavy pressure - make a quick decision
         if ctx.player().pressure().is_under_heavy_pressure() {
             return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
-                let reason = format!(
-                    "DEFENDER_UNDER_PRESSURE - Safe pass to #{} ({}m)",
-                    safe_option.id,
-                    (safe_option.position - ctx.player.position).magnitude() as u32
-                );
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(safe_option.id)
-                            .with_reason(reason)
+                            .with_reason("DEF_PASSING_UNDER_PRESSURE")
                             .build(ctx),
                     )),
                 ))
@@ -48,7 +43,7 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // Normal passing situation - evaluate options more carefully
-        if let Some((best_target, reason)) = ctx.player().passing().find_best_pass_option() {
+        if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option() {
             // Execute the pass
             return Some(StateChangeResult::with_defender_state_and_event(
                 DefenderState::Standing,
@@ -56,7 +51,7 @@ impl StateProcessingHandler for DefenderPassingState {
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(best_target.id)
-                        .with_reason(format!("DEFENDER_PASSING: {}", reason))
+                        .with_reason("DEF_PASSING_NORMAL")
                         .build(ctx),
                 )),
             ));
@@ -82,18 +77,13 @@ impl StateProcessingHandler for DefenderPassingState {
 
             // Try to find ANY teammate to pass to
             if let Some(any_teammate) = ctx.player().passing().find_any_teammate() {
-                let reason = format!(
-                    "DEFENDER_TIMEOUT - Last resort pass to #{} ({}m)",
-                    any_teammate.id,
-                    (any_teammate.position - ctx.player.position).magnitude() as u32
-                );
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(any_teammate.id)
-                            .with_reason(reason)
+                            .with_reason("DEF_PASSING_TIMEOUT")
                             .build(ctx),
                     )),
                 ));

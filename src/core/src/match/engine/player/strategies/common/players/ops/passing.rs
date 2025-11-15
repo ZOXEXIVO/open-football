@@ -55,12 +55,12 @@ impl<'p> PassingOperationsImpl<'p> {
     }
 
     /// Find the best pass option using the PassEvaluator
-    pub fn find_best_pass_option(&self) -> Option<(MatchPlayerLite, String)> {
+    pub fn find_best_pass_option(&self) -> Option<(MatchPlayerLite, &'static str)> {
         PassEvaluator::find_best_pass_option(self.ctx, 300.0)
     }
 
     /// Find the best pass option with custom max distance
-    pub fn find_best_pass_option_with_distance(&self, max_distance: f32) -> Option<(MatchPlayerLite, String)> {
+    pub fn find_best_pass_option_with_distance(&self, max_distance: f32) -> Option<(MatchPlayerLite, &'static str)> {
         PassEvaluator::find_best_pass_option(self.ctx, max_distance)
     }
 

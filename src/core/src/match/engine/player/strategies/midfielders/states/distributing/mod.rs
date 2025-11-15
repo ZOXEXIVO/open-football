@@ -21,6 +21,7 @@ impl StateProcessingHandler for MidfielderDistributingState {
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
+                        .with_reason("MID_DISTRIBUTING")
                         .build(ctx),
                 )),
             ));
