@@ -125,8 +125,8 @@ impl MidfielderPassingState {
         let vision_skill = ctx.player.skills.mental.vision;
         let passing_skill = ctx.player.skills.technical.passing;
 
-        // Only exceptional players can make breakthrough passes
-        if vision_skill < 15.0 || passing_skill < 14.0 {
+        // Lowered thresholds from 15.0/14.0 to allow more players to attempt through balls
+        if vision_skill < 12.0 || passing_skill < 11.0 {
             return None;
         }
 

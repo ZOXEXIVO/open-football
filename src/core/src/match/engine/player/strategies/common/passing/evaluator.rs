@@ -408,28 +408,29 @@ impl PassEvaluator {
 
         // Weighted combination - heavily favor forward progress and good distance
         let tactical_value =
-            forward_value * 0.50 +        // Increased from 0.35 - heavily favor forward
-            distance_value * 0.25 +       // New - prefer medium-distance passes
-            position_value * 0.15 +       // Reduced from 0.25
-            long_pass_bonus * 0.10;       // Reduced from 0.15
+            forward_value * 0.55 +        // Increased from 0.50 - even more favor for forward passes
+            distance_value * 0.22 +       // Slightly reduced from 0.25
+            position_value * 0.13 +       // Reduced from 0.15
+            long_pass_bonus * 0.10;       // Keep same
 
         // Allow negative tactical values for backward passes (don't clamp to 0.1 minimum)
         // This properly penalizes backward passes to GK
-        tactical_value.clamp(-0.5, 1.3)
+        // Increased cap from 1.3 to 1.8 to better reward excellent penetrating opportunities
+        tactical_value.clamp(-0.5, 1.8)
     }
 
     /// Calculate overall success probability from factors
     fn calculate_success_probability(factors: &PassFactors) -> f32 {
         // Weighted combination of all factors
-        // Receiver positioning is now much more important - free players are better targets
+        // Reduced receiver positioning weight to allow passes to marked attackers
         let probability =
             factors.distance_factor * 0.15 +
                 factors.angle_factor * 0.12 +
                 factors.pressure_factor * 0.12 +
-                factors.receiver_positioning * 0.30 +  // Significantly increased from 0.10
-                factors.passer_ability * 0.13 +
+                factors.receiver_positioning * 0.25 +  // Reduced from 0.30 to allow penetrating passes
+                factors.passer_ability * 0.15 +        // Increased from 0.13
                 factors.receiver_ability * 0.10 +
-                factors.tactical_value * 0.08;  // Also consider tactical value
+                factors.tactical_value * 0.11;         // Increased from 0.08 to reward forward play
 
         probability.clamp(0.1, 0.99)
     }
@@ -560,40 +561,46 @@ impl PassEvaluator {
 
             // Skill-based space quality evaluation
             let space_quality = if is_conservative {
-                // Conservative players HEAVILY penalize any crowding
-                if evaluation.factors.receiver_positioning > 0.9 {
-                    2.0 // Only completely free players
-                } else if evaluation.factors.receiver_positioning > 0.7 {
-                    1.2
+                // Conservative players prefer free receivers but less extreme
+                if evaluation.factors.receiver_positioning > 0.85 {
+                    1.8 // Reduced from 2.0 - completely free players
+                } else if evaluation.factors.receiver_positioning > 0.65 {
+                    1.3 // Increased from 1.2 - good space
+                } else if evaluation.factors.receiver_positioning > 0.45 {
+                    0.8 // New tier - acceptable space
                 } else {
-                    0.3 // Avoid any pressure
+                    0.4 // Increased from 0.3 - will attempt if needed
                 }
             } else if is_playmaker {
                 // Playmakers trust teammates to handle some pressure
-                if evaluation.factors.receiver_positioning > 0.8 {
-                    1.6
+                if evaluation.factors.receiver_positioning > 0.75 {
+                    1.7 // Increased from 1.6
                 } else if evaluation.factors.receiver_positioning > 0.5 {
-                    1.3 // Still okay with moderate space
+                    1.4 // Increased from 1.3 - still okay with moderate space
+                } else if evaluation.factors.receiver_positioning > 0.3 {
+                    1.0 // New tier - willing to attempt tighter passes
                 } else {
-                    0.8
+                    0.7 // Reduced penalty for very tight spaces
                 }
             } else if is_direct {
                 // Direct players less concerned about space, more about attacking position
                 if evaluation.factors.receiver_positioning > 0.6 {
-                    1.5
+                    1.6 // Increased from 1.5
+                } else if evaluation.factors.receiver_positioning > 0.4 {
+                    1.2 // New tier
                 } else {
-                    1.0 // Will attempt tighter passes
+                    0.9 // Reduced from 1.0 - will attempt most passes
                 }
             } else {
-                // Standard space evaluation
-                if evaluation.factors.receiver_positioning > 0.8 {
-                    1.5
-                } else if evaluation.factors.receiver_positioning > 0.6 {
-                    1.2
-                } else if evaluation.factors.receiver_positioning > 0.4 {
-                    1.0
+                // Standard space evaluation - slightly more aggressive
+                if evaluation.factors.receiver_positioning > 0.75 {
+                    1.6 // Increased from 1.5
+                } else if evaluation.factors.receiver_positioning > 0.55 {
+                    1.3 // Increased from 1.2
+                } else if evaluation.factors.receiver_positioning > 0.35 {
+                    1.0 // Improved threshold from 0.4
                 } else {
-                    0.6
+                    0.7 // Increased from 0.6
                 }
             };
 
@@ -610,18 +617,24 @@ impl PassEvaluator {
 
             let interception_penalty = 1.0 - (interception_risk * risk_tolerance);
 
-            // Add distance preference bonus - reward passes in the 15-40m range
+            // Add distance preference bonus - widened optimal range to encourage penetration
             let optimal_distance_bonus = if is_under_pressure {
                 // Under pressure, all safe passes are good
                 1.0
-            } else if pass_distance >= 15.0 && pass_distance <= 40.0 {
-                // Optimal passing range for build-up play
-                1.3
+            } else if pass_distance >= 20.0 && pass_distance <= 70.0 {
+                // Widened optimal range (was 15-40m, now 20-70m) for penetrating passes
+                1.4 // Increased from 1.3
+            } else if pass_distance >= 15.0 && pass_distance < 20.0 {
+                // Short passes - acceptable
+                1.1 // New tier
             } else if pass_distance < 15.0 {
-                // Too short - discouraged unless necessary
+                // Very short - discouraged unless necessary
                 0.7
+            } else if pass_distance <= 100.0 {
+                // Long passes (70-100m) - still valuable
+                1.2 // New tier - was implicitly 1.0
             } else {
-                // Longer passes - still good but not optimal
+                // Very long passes - situational
                 1.0
             };
 
@@ -755,7 +768,7 @@ impl PassEvaluator {
                 }
             };
 
-            // Personality-based acceptance threshold
+            // Personality-based acceptance threshold - more aggressive to encourage penetration
             let is_acceptable = if is_goalkeeper {
                 // Goalkeeper passes should be extremely rare
                 // Only accept under extreme pressure AND if highly safe AND not in attacking third
@@ -770,13 +783,17 @@ impl PassEvaluator {
                 evaluation.success_probability > 0.85 &&
                 in_defensive_third  // Only allow GK passes from defensive third
             } else if is_conservative {
-                evaluation.success_probability > 0.7 && evaluation.factors.receiver_positioning > 0.75
+                // Reduced thresholds from 0.7/0.75 to allow more passes
+                evaluation.success_probability > 0.65 && evaluation.factors.receiver_positioning > 0.65
             } else if is_direct {
-                evaluation.success_probability > 0.5 && evaluation.factors.tactical_value > 0.5
+                // Reduced from 0.5/0.5 to encourage more penetrating passes
+                evaluation.success_probability > 0.45 && evaluation.factors.tactical_value > 0.4
             } else if is_playmaker {
-                evaluation.success_probability > 0.55 || (evaluation.factors.tactical_value > 0.7 && pass_distance > 60.0)
+                // More willing to attempt through balls
+                evaluation.success_probability > 0.50 || (evaluation.factors.tactical_value > 0.65 && pass_distance > 50.0)
             } else {
-                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.7 && evaluation.success_probability > 0.5)
+                // Standard - slightly more aggressive
+                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.6 && evaluation.success_probability > 0.48)
             };
 
             if score > best_score && is_acceptable {
