@@ -35,7 +35,10 @@ impl BallEventDispatcher {
         let mut remaining_events = Vec::new();
 
         if context.logging_enabled {
-            debug!("Ball event: {:?}", event);
+            match event {
+                BallEvent::TakeMe(_) => {},
+                _ => debug!("Ball event: {:?}", event)
+            }
         }
 
         match event {
