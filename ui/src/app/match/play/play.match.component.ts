@@ -69,12 +69,15 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
     }
 
     ngOnInit(): void {
-        this.matchPlayService.timeChanged$.subscribe(time => {
+        this.matchPlayService.timeChanged$.subscribe(async time => {
             this.currentTime = time;
 
             // Load chunk if needed during playback
+            // Don't await during playback to avoid stuttering
             if (this.totalChunks > 0) {
-                this.loadChunkIfNeeded(time);
+                this.loadChunkIfNeeded(time).catch(err => {
+                    console.error('Failed to load chunk during playback:', err);
+                });
             }
 
             // Trigger change detection to update slider position
@@ -241,33 +244,58 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         await this.setupGraphics(matchData);
     }
 
-    private loadChunkIfNeeded(timestamp: number): void {
+    private loadChunkIfNeeded(timestamp: number): Promise<void> {
         const chunkNumber = this.matchDataService.getChunkNumberForTime(timestamp);
 
-        // Check if chunk is already loaded or being loaded
-        if (this.matchDataService.isChunkLoaded(chunkNumber) || this.isLoadingChunk) {
-            return;
+        // Check if chunk is already loaded
+        if (this.matchDataService.isChunkLoaded(chunkNumber)) {
+            return Promise.resolve();
         }
 
         // Validate chunk number
         if (chunkNumber < 0 || chunkNumber >= this.totalChunks) {
-            return;
+            return Promise.resolve();
+        }
+
+        // If already loading this chunk, wait for it
+        if (this.isLoadingChunk) {
+            return new Promise((resolve) => {
+                const checkInterval = setInterval(() => {
+                    if (!this.isLoadingChunk) {
+                        clearInterval(checkInterval);
+                        resolve();
+                    }
+                }, 50);
+            });
         }
 
         console.log(`Loading chunk ${chunkNumber} for time ${timestamp}ms`);
         this.isLoadingChunk = true;
 
-        this.matchService.chunk(this.leagueSlug, this.matchId, chunkNumber).subscribe(
-            chunkData => {
-                console.log(`Chunk ${chunkNumber} loaded successfully`);
-                this.matchDataService.mergeMatchData(chunkData, chunkNumber);
-                this.isLoadingChunk = false;
-            },
-            error => {
-                console.error(`Failed to load chunk ${chunkNumber}:`, error);
-                this.isLoadingChunk = false;
-            }
-        );
+        return new Promise((resolve, reject) => {
+            this.matchService.chunk(this.leagueSlug, this.matchId, chunkNumber).subscribe(
+                chunkData => {
+                    console.log(`Chunk ${chunkNumber} loaded successfully`);
+                    this.matchDataService.mergeMatchData(chunkData, chunkNumber);
+                    this.isLoadingChunk = false;
+
+                    // CRITICAL FIX: Refresh display if we're currently viewing a time in this chunk
+                    // This ensures ball and players sync properly after chunk loads
+                    const currentChunk = this.matchDataService.getChunkNumberForTime(this.currentTime);
+                    if (currentChunk === chunkNumber) {
+                        console.log(`Refreshing display for current time ${this.currentTime}ms in loaded chunk ${chunkNumber}`);
+                        this.matchDataService.refreshData(this.currentTime);
+                    }
+
+                    resolve();
+                },
+                error => {
+                    console.error(`Failed to load chunk ${chunkNumber}:`, error);
+                    this.isLoadingChunk = false;
+                    reject(error);
+                }
+            );
+        });
     }
 
     forceRedraw() {
@@ -646,7 +674,7 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         document.addEventListener('mouseup', onMouseUp);
     }
 
-    private seekToPosition(event: MouseEvent): void {
+    private async seekToPosition(event: MouseEvent): Promise<void> {
         if (!this.timeScrollbar || this.matchTimeMs <= 0) return;
 
         const rect = this.timeScrollbar.nativeElement.getBoundingClientRect();
@@ -654,8 +682,9 @@ export class MatchPlayComponent implements AfterViewInit, OnInit, OnDestroy {
         const percentage = Math.max(0, Math.min(1, x / rect.width));
         const newTime = percentage * this.matchTimeMs;
 
-        // Load chunk if needed before seeking
-        this.loadChunkIfNeeded(newTime);
+        // Load chunk if needed and WAIT for it to complete before seeking
+        // This ensures ball and players are synchronized when seeking
+        await this.loadChunkIfNeeded(newTime);
 
         this.matchPlayService.seekToTime(newTime);
     }

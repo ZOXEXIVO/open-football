@@ -159,9 +159,10 @@ export class MatchDataService {
 
         let ts = ballData.timestamp;
 
-        // If seeking backward, reset to beginning and search forward
-        if (ts > timestamp) {
-            console.log('Seeking backward: resetting ball index from', this.match!.ball.currentCoordIdx, 'to 0');
+        // If seeking backward OR if current timestamp is way ahead, reset to beginning
+        // This handles both backward seeks and chunk loading issues
+        if (ts > timestamp || (timestamp - ts) > 60000) {
+            console.log('Seeking backward or large gap detected: resetting ball index from', this.match!.ball.currentCoordIdx, 'to 0');
             this.match!.ball.currentCoordIdx = 0;
             ballData = this.matchData!.ball[0];
             ts = ballData.timestamp;
@@ -172,6 +173,7 @@ export class MatchDataService {
             this.match!.ball.currentCoordIdx++;
             const data = this.matchData!.ball[this.match!.ball.currentCoordIdx];
             if(!data) {
+                console.warn('Missing ball data at index', this.match!.ball.currentCoordIdx);
                 break;
             }
             ts = data.timestamp;
@@ -180,6 +182,11 @@ export class MatchDataService {
         // Use current index, but ensure it's valid
         const ballIndex = Math.min(this.match!.ball.currentCoordIdx, this.matchData!.ball.length - 1);
         const ballResult = this.matchData!.ball[ballIndex];
+
+        // Warn if we're showing data from a significantly different time
+        if (Math.abs(ballResult.timestamp - timestamp) > 5000) {
+            console.warn(`Ball position mismatch: requested ${timestamp}ms, showing ${ballResult.timestamp}ms (diff: ${Math.abs(ballResult.timestamp - timestamp)}ms)`);
+        }
 
         let players_results: PlayerDataResultModel[] = [];
 
@@ -199,9 +206,10 @@ export class MatchDataService {
                 if(dt) {
                     let pts = dt.timestamp;
 
-                    // If seeking backward, reset to beginning and search forward
-                    if (pts > timestamp) {
-                        console.log('Seeking backward: resetting player', player.id, 'index from', player.currentCoordIdx, 'to 0');
+                    // If seeking backward OR if current timestamp is way ahead, reset to beginning
+                    // This handles both backward seeks and chunk loading issues
+                    if (pts > timestamp || (timestamp - pts) > 60000) {
+                        console.log('Seeking backward or large gap detected: resetting player', player.id, 'index from', player.currentCoordIdx, 'to 0');
                         player.currentCoordIdx = 0;
                         dt = value[0];
                         pts = dt.timestamp;
@@ -214,6 +222,9 @@ export class MatchDataService {
 
                         if(dt) {
                             pts = dt.timestamp;
+                        } else {
+                            console.warn('Missing player data for player', player.id, 'at index', player.currentCoordIdx);
+                            break;
                         }
                     }
 
@@ -222,6 +233,10 @@ export class MatchDataService {
                     const playerPosition = value[playerIndex];
 
                     if(playerPosition) {
+                        // Warn if we're showing data from a significantly different time
+                        if (Math.abs(playerPosition.timestamp - timestamp) > 5000) {
+                            console.warn(`Player ${player.id} position mismatch: requested ${timestamp}ms, showing ${playerPosition.timestamp}ms`);
+                        }
                         players_results.push(new PlayerDataResultModel(player.id, playerPosition));
                     }
                 }
