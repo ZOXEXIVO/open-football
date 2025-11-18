@@ -26,6 +26,7 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate.id)
+                        .with_reason("GK_DISTRIBUTING")
                         .build(ctx)
                 )),
             ));

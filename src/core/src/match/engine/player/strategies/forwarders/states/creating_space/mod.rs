@@ -20,8 +20,8 @@ use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 15.0;
-const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0; // Ideal passing range start
-const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 45.0; // Ideal passing range end
+const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 15.0; // Wider ideal passing range start (was 20.0)
+const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 60.0; // Wider ideal passing range end (was 45.0)
 const SPACE_SCAN_RADIUS: f32 = 100.0;
 const CONGESTION_THRESHOLD: f32 = 3.0;
 const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lanes
@@ -193,30 +193,48 @@ impl ForwardCreatingSpaceState {
             );
         }
 
-        // Find gaps between opponents using Voronoi-like approach
-        let mut candidate_positions = Vec::with_capacity(20);
+        // Find gaps between opponents using improved multi-strategy approach
+        let mut candidate_positions = Vec::with_capacity(40);
 
-        // Add midpoints between adjacent opponents as candidates
+        // Strategy 1: Midpoints between adjacent opponents (existing)
         for i in 0..opponents.len() {
             for j in (i + 1)..opponents.len() {
                 let midpoint = (opponents[i] + opponents[j]) * 0.5;
                 let gap_width = (opponents[i] - opponents[j]).magnitude();
 
-                // Only consider significant gaps
-                if gap_width > 15.0 && gap_width < 60.0 {
+                // Widened gap consideration (was 15-60, now 12-80)
+                if gap_width > 12.0 && gap_width < 80.0 {
                     candidate_positions.push(midpoint);
+
+                    // NEW: Also add positions pushed forward through the gap
+                    let to_goal = (goal_pos - midpoint).normalize();
+                    candidate_positions.push(midpoint + to_goal * 10.0);
                 }
             }
         }
 
-        // Add positions slightly offset from each opponent (to exploit space beside them)
+        // Strategy 2: Positions offset from opponents (existing, improved)
         for &opp_pos in &opponents {
             let to_goal = (goal_pos - opp_pos).normalize();
             let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0);
 
-            // Create positions on both sides and ahead of opponent
-            candidate_positions.push(opp_pos + perpendicular * 20.0 + to_goal * 15.0);
-            candidate_positions.push(opp_pos - perpendicular * 20.0 + to_goal * 15.0);
+            // Wider lateral positions and deeper runs
+            candidate_positions.push(opp_pos + perpendicular * 25.0 + to_goal * 20.0);
+            candidate_positions.push(opp_pos - perpendicular * 25.0 + to_goal * 20.0);
+
+            // NEW: Positions directly behind defenders (in space behind)
+            candidate_positions.push(opp_pos + to_goal * 15.0);
+        }
+
+        // Strategy 3: NEW - Grid-based open space detection
+        // Create grid of positions in attacking third and find truly open ones
+        let forward_direction = (goal_pos - player_pos).normalize();
+        for x_offset in [20.0, 35.0, 50.0] {
+            for y_offset in [-30.0, -15.0, 0.0, 15.0, 30.0] {
+                let lateral = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
+                let candidate = player_pos + forward_direction * x_offset + lateral * y_offset;
+                candidate_positions.push(candidate);
+            }
         }
 
         // Add current player position as fallback

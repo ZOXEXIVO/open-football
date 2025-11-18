@@ -12,14 +12,14 @@ pub struct GoalkeeperRunningState {}
 impl StateProcessingHandler for GoalkeeperRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            if let Some((teammate, reason)) = self.find_best_pass_option(ctx) {
+            if let Some((teammate, _reason)) = self.find_best_pass_option(ctx) {
                 Some(StateChangeResult::with_goalkeeper_state_and_event(
                     GoalkeeperState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(teammate.id)
-                            .with_reason(format!("GK_RUNNING: {}", reason))
+                            .with_reason("GK_RUNNING")
                             .build(ctx),
                     )),
                 ))
@@ -94,7 +94,7 @@ impl GoalkeeperRunningState {
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,
-    ) -> Option<(MatchPlayerLite, String)> {
+    ) -> Option<(MatchPlayerLite, &'static str)> {
         PassEvaluator::find_best_pass_option(ctx, 500.0)
     }
 }

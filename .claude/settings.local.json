@@ -5,7 +5,8 @@
       "Bash(cargo build:*)",
       "Bash(find:*)",
       "Bash(git show:*)",
-      "Bash(cargo check:*)"
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)"
     ],
     "deny": [],
     "ask": []

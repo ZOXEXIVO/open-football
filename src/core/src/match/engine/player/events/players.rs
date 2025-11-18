@@ -127,7 +127,10 @@ impl PlayerEventDispatcher {
         let remaining_events = Vec::new();
 
         if context.logging_enabled {
-            debug!("Player event: {:?}", event);
+            match event {
+                PlayerEvent::TakeBall(_) => {},
+                _ => debug!("Player event: {:?}", event)
+            }
         }       
 
         match event {

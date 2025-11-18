@@ -18,6 +18,7 @@ impl StateProcessingHandler for ForwardShootingState {
                 ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
+                    .with_reason("FWD_SHOOTING")
                     .build(ctx)
             )),
         ))

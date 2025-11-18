@@ -25,6 +25,7 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::new()
             .with_player_id(ctx.player.id)
             .with_target(ctx.player().shooting_direction())
+            .with_reason("GK_SHOOTING")
             .build(ctx)));
 
         Some(StateChangeResult::with_events(events))

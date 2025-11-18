@@ -7,7 +7,7 @@ pub struct PassingEventContext {
     pub to_player_id: u32,
     pub pass_target: Vector3<f32>,
     pub pass_force: f32,
-    pub reason: String,
+    pub reason: &'static str,
 }
 
 impl PassingEventContext {
@@ -20,7 +20,7 @@ pub struct PassingEventBuilder {
     from_player_id: Option<u32>,
     to_player_id: Option<u32>,
     pass_force: Option<f32>,
-    reason: Option<String>,
+    reason: Option<&'static str>,
 }
 
 impl Default for PassingEventBuilder {
@@ -54,8 +54,8 @@ impl PassingEventBuilder {
         self
     }
 
-    pub fn with_reason(mut self, reason: impl Into<String>) -> Self {
-        self.reason = Some(reason.into());
+    pub fn with_reason(mut self, reason: &'static str) -> Self {
+        self.reason = Some(reason);
         self
     }
 
@@ -67,7 +67,7 @@ impl PassingEventBuilder {
             to_player_id,
             pass_target: ctx.tick_context.positions.players.position(to_player_id),
             pass_force: self.pass_force.unwrap_or_else(|| ctx.player().pass_teammate_power(to_player_id)),
-            reason: self.reason.unwrap_or_else(|| "No reason specified".to_string()),
+            reason: self.reason.unwrap_or("No reason specified"),
         }
     }
 }

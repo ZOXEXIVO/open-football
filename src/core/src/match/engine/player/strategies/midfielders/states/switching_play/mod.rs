@@ -28,6 +28,7 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
                     PassingEventContext::new()
                         .with_from_player_id(ctx.player.id)
                         .with_to_player_id(teammate_id)
+                        .with_reason("MID_SWITCHING_PLAY")
                         .build(ctx)
                 )),
             ));
