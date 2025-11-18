@@ -132,9 +132,9 @@ impl Ball {
                 self.take_ball_notified_players = notified_players;
                 self.notification_timeout = 0; // Reset timeout when new players are notified
 
-                // If ball is at boundary, set cooldown and record position
+                // If ball is at boundary, set short cooldown and record position
                 if self.is_ball_outside() {
-                    self.notification_cooldown = 10; // Reduced from 30 to 10 ticks (~0.16 seconds) for faster response
+                    self.notification_cooldown = 5; // Short cooldown to prevent spam
                     self.last_boundary_position = Some(self.position);
                 }
             }
@@ -143,10 +143,11 @@ impl Ball {
             self.notification_timeout += 1;
 
             // If players haven't claimed the ball within reasonable time, reset and try again
-            const MAX_NOTIFICATION_TIMEOUT: u32 = 200; // ~3.2 seconds - increased to give players more time
+            const MAX_NOTIFICATION_TIMEOUT: u32 = 60; // ~1 second - reduced from 200 for faster response
             if self.notification_timeout > MAX_NOTIFICATION_TIMEOUT {
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
+                self.notification_cooldown = 0; // Clear cooldown to allow immediate re-notification
                 // Clear boundary position to allow re-notification even if ball hasn't moved
                 self.last_boundary_position = None;
                 return; // Will re-notify on next tick
@@ -269,45 +270,112 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        const DEADLOCK_VELOCITY_THRESHOLD: f32 = 10.0; // Catch slow-rolling balls in duels (increased from 3.0)
-        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 0.5; // Ball must be low to ground
-        const DEADLOCK_TICK_THRESHOLD: u32 = 5; // Faster intervention (reduced from 10)
-        const DEADLOCK_SEARCH_RADIUS: f32 = 300.0; // Increased search radius for force claiming
+        // Use hysteresis to avoid oscillation: stricter threshold to enter, looser to exit
+        const DEADLOCK_VELOCITY_ENTER: f32 = 3.0; // Enter deadlock detection when velocity drops below this (lowered to avoid catching passes)
+        const DEADLOCK_VELOCITY_EXIT: f32 = 5.0; // Exit deadlock detection when velocity exceeds this
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.0; // Increased from 0.5 to catch mid-air stuck balls
+        const DEADLOCK_TICK_THRESHOLD: u32 = 40; // Force claim after 40 ticks (~0.67 seconds) - backup for notification system
+        const DEADLOCK_SEARCH_RADIUS: f32 = 300.0; // Initial search radius
+        const DEADLOCK_EXTENDED_RADIUS: f32 = 600.0; // Extended radius if no one found
+        const DEADLOCK_TICK_EXTENDED: u32 = 70; // Use extended radius after 70 ticks (~1.2 seconds)
 
-        // Check if ball is slow-moving/stopped and unowned
-        let is_slow = self.velocity.norm() < DEADLOCK_VELOCITY_THRESHOLD;
-        let is_low = self.position.z < DEADLOCK_HEIGHT_THRESHOLD;
+        // Check if ball is unowned
         let is_unowned = self.current_owner.is_none();
 
-        if is_slow && is_low && is_unowned {
+        if !is_unowned {
+            // Ball is owned - reset counter
+            self.unowned_stopped_ticks = 0;
+            return;
+        }
+
+        // CRITICAL: Don't interfere with passed/kicked balls
+        // If ball is in flight (pass protection), skip deadlock detection entirely
+        if self.flags.in_flight_state > 0 {
+            self.unowned_stopped_ticks = 0;
+            return;
+        }
+
+        // Determine velocity threshold based on current state (hysteresis)
+        let velocity_threshold = if self.unowned_stopped_ticks > 0 {
+            DEADLOCK_VELOCITY_EXIT // Already tracking - use looser threshold
+        } else {
+            DEADLOCK_VELOCITY_ENTER // Not tracking - use stricter threshold
+        };
+
+        let velocity_norm = self.velocity.norm();
+        let is_slow = velocity_norm < velocity_threshold;
+        let is_low = self.position.z < DEADLOCK_HEIGHT_THRESHOLD;
+
+        if is_slow && is_low {
             self.unowned_stopped_ticks += 1;
 
-            // If ball has been slow and unowned for 5 ticks (~0.08 seconds), FORCE claiming
+            // If ball has been slow and unowned for threshold ticks, FORCE claiming
             if self.unowned_stopped_ticks >= DEADLOCK_TICK_THRESHOLD {
+                // Determine search radius based on how long we've been waiting
+                let search_radius = if self.unowned_stopped_ticks >= DEADLOCK_TICK_EXTENDED {
+                    DEADLOCK_EXTENDED_RADIUS
+                } else {
+                    DEADLOCK_SEARCH_RADIUS
+                };
+
                 // Find the nearest player within search radius
                 if let Some(nearest_player) = players.iter()
                     .filter(|p| {
-                        let distance = (p.position - self.position).magnitude();
-                        distance <= DEADLOCK_SEARCH_RADIUS
+                        let dx = p.position.x - self.position.x;
+                        let dy = p.position.y - self.position.y;
+                        let distance = (dx * dx + dy * dy).sqrt();
+                        distance <= search_radius
                     })
                     .min_by(|a, b| {
                         let dist_a = (a.position - self.position).magnitude();
                         let dist_b = (b.position - self.position).magnitude();
                         dist_a.partial_cmp(&dist_b).unwrap()
                     }) {
-                    // FORCE this player to go for the ball
-                    events.add_ball_event(BallEvent::TakeMe(nearest_player.id));
+
+                    // DIRECTLY CLAIM the ball - don't use TakeMe event which might fail
+                    self.current_owner = Some(nearest_player.id);
+                    self.previous_owner = None; // Clear previous owner to avoid conflicts
+                    self.ownership_duration = 0;
+
+                    // CRITICAL: Reset in_flight_state to prevent ownership blocking
+                    self.flags.in_flight_state = 0;
+
+                    // Clear any existing notifications to avoid conflicts
+                    self.take_ball_notified_players.clear();
+                    self.notification_timeout = 0;
+
+                    // Force ball to ground if slightly aerial (but keep horizontal velocity)
+                    if self.position.z > 0.1 && self.position.z < DEADLOCK_HEIGHT_THRESHOLD {
+                        self.position.z = 0.0;
+                        self.velocity.z = 0.0;
+                    }
 
                     // Reset counter
                     self.unowned_stopped_ticks = 0;
 
-                    // Clear any existing notifications to avoid conflicts
-                    self.take_ball_notified_players.clear();
+                    // Emit claimed event for logging/tracking
+                    events.add_ball_event(BallEvent::Claimed(nearest_player.id));
+                } else {
+                    // No players found even with extended radius
+                    // This shouldn't normally happen, but if it does, force ball to ground and stop it
+                    if self.unowned_stopped_ticks > DEADLOCK_TICK_EXTENDED + 20 {
+                        self.position.z = 0.0;
+                        self.velocity = Vector3::zeros();
+                        self.unowned_stopped_ticks = 0; // Reset to try again
+
+                        // Clear notifications so system can restart fresh
+                        self.take_ball_notified_players.clear();
+                        self.notification_timeout = 0;
+                    }
                 }
             }
         } else {
-            // Ball is moving fast, airborne, or owned - reset counter
-            self.unowned_stopped_ticks = 0;
+            // Ball is moving fast or airborne - reset counter only if it's clearly moving
+            // Use hysteresis: only reset if velocity is above exit threshold
+            if velocity_norm >= velocity_threshold {
+                self.unowned_stopped_ticks = 0;
+            }
+            // Otherwise keep counting - this handles oscillating velocities
         }
     }
 
