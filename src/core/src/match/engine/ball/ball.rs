@@ -152,8 +152,9 @@ impl Ball {
                 self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
-            // Check if any notified player reached the ball (increased for easier claiming)
-            const CLAIM_DISTANCE: f32 = 20.0;
+            // Check if any notified player reached the ball - must be very close to claim
+            const CLAIM_DISTANCE: f32 = 1.5;
+            const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow to claim via notification system
 
             // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
@@ -161,6 +162,10 @@ impl Ball {
             } else {
                 self.position
             };
+
+            // Check ball velocity - don't allow claiming fast-moving balls
+            let ball_speed = self.velocity.norm();
+            let can_claim_by_speed = ball_speed < MAX_CLAIM_VELOCITY;
 
             // Find the first player who reached the ball
             let mut claiming_player_id: Option<u32> = None;
@@ -176,7 +181,26 @@ impl Ball {
                     let dz = target_position.z;
                     let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
-                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
+                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() && can_claim_by_speed {
+                        // Check if ball is moving away from player
+                        if ball_speed > 1.0 {
+                            // Vector from ball to player (horizontal only for 2D check)
+                            let to_player_x = dx;
+                            let to_player_y = dy;
+
+                            // Ball direction (normalized)
+                            let ball_dir_x = self.velocity.x / ball_speed;
+                            let ball_dir_y = self.velocity.y / ball_speed;
+
+                            // Dot product: positive means ball moving towards player
+                            let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
+
+                            // If ball is moving away (negative dot), player can't claim it
+                            if dot_product < 0.0 {
+                                continue; // Skip this player
+                            }
+                        }
+
                         // Player reached the ball (or landing position), give them ownership when ball arrives
                         // For aerial balls, only claim when ball is low enough
                         if !self.is_aerial() || self.position.z < 2.5 {
@@ -275,8 +299,8 @@ impl Ball {
         const DEADLOCK_VELOCITY_EXIT: f32 = 5.0; // Exit deadlock detection when velocity exceeds this
         const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.0; // Increased from 0.5 to catch mid-air stuck balls
         const DEADLOCK_TICK_THRESHOLD: u32 = 40; // Force claim after 40 ticks (~0.67 seconds) - backup for notification system
-        const DEADLOCK_SEARCH_RADIUS: f32 = 300.0; // Initial search radius
-        const DEADLOCK_EXTENDED_RADIUS: f32 = 600.0; // Extended radius if no one found
+        const DEADLOCK_SEARCH_RADIUS: f32 = 10.0; // Initial search radius - realistic distance for deadlock situations
+        const DEADLOCK_EXTENDED_RADIUS: f32 = 25.0; // Extended radius if no one found nearby
         const DEADLOCK_TICK_EXTENDED: u32 = 70; // Use extended radius after 70 ticks (~1.2 seconds)
 
         // Check if ball is unowned
@@ -471,8 +495,8 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Increased to 15.0 for easier ball claiming - players can claim from further away
-        const BALL_DISTANCE_THRESHOLD: f32 = 15.0;
+        // Realistic distance threshold - players can only claim ball when it's very close to their feet
+        const BALL_DISTANCE_THRESHOLD: f32 = 1.2;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -522,6 +546,13 @@ impl Ball {
             }
         }
 
+        // Velocity threshold - if ball is moving faster than this, players can't just "catch" it
+        const MAX_CLAIMABLE_VELOCITY: f32 = 8.0; // Ball moving faster than 8 m/s is hard to claim
+        const SLOW_BALL_VELOCITY: f32 = 3.0; // Ball moving slower than 3 m/s is easy to claim
+
+        let ball_speed = self.velocity.norm();
+        let is_ball_fast = ball_speed > MAX_CLAIMABLE_VELOCITY;
+
         // Find all players within ball distance threshold with proper 3D collision detection
         let nearby_players: Vec<&MatchPlayer> = players
             .iter()
@@ -536,13 +567,44 @@ impl Ball {
                     return false;
                 }
 
+                // If ball is moving fast, check if it's moving towards or away from the player
+                if ball_speed > SLOW_BALL_VELOCITY {
+                    // Vector from ball to player
+                    let to_player_x = dx;
+                    let to_player_y = dy;
+
+                    // Normalize ball velocity (direction ball is moving)
+                    let ball_vel_norm = ball_speed;
+                    if ball_vel_norm > 0.01 {
+                        let ball_dir_x = self.velocity.x / ball_vel_norm;
+                        let ball_dir_y = self.velocity.y / ball_vel_norm;
+
+                        // Dot product: positive means ball is moving towards player, negative means away
+                        let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
+
+                        // If ball is moving away from player (negative dot product), they can't claim it
+                        // unless they're VERY close (within 0.5m - basically already touching)
+                        if dot_product < 0.0 && horizontal_distance > 0.5 {
+                            return false;
+                        }
+
+                        // If ball is very fast and not moving directly at the player, make it harder to claim
+                        if is_ball_fast {
+                            // Require player to be very close (0.6m) and ball to be moving towards them
+                            if horizontal_distance > 0.6 || dot_product < 0.5 * ball_vel_norm * horizontal_distance {
+                                return false;
+                            }
+                        }
+                    }
+                }
+
                 // Calculate reachable height based on horizontal distance
                 // Closer = easier to reach higher balls (can jump)
                 // Further = harder to reach higher balls
-                let effective_reach_height = if horizontal_distance < 1.5 {
+                let effective_reach_height = if horizontal_distance < 0.8 {
                     // Very close - can jump and reach high
                     PLAYER_JUMP_REACH
-                } else if horizontal_distance < 3.0 {
+                } else if horizontal_distance < 1.2 {
                     // Medium distance - can reach with feet/body
                     PLAYER_REACH_HEIGHT
                 } else {
