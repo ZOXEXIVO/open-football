@@ -418,34 +418,50 @@ impl ForwardRunningState {
 
     /// Determine if should create space
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        // Don't create space if you're the closest to ball
+        // Don't create space if you're the ball carrier or very close to ball
+        let ball_distance = ctx.ball().distance();
+        if ball_distance < 5.0 {
+            return false;
+        }
+
+        // Check if another teammate has the ball - if so, we MUST create space
+        if let Some(owner_id) = ctx.ball().owner_id() {
+            if owner_id != ctx.player.id {
+                // Teammate has ball - check if they're on our team
+                if let Some(owner) = ctx.context.players.by_id(owner_id) {
+                    if owner.team_id == ctx.player.team_id {
+                        // Teammate has ball! We should create space to help them
+                        // ALWAYS return true - forwards must support ball carrier
+                        return true;
+                    }
+                }
+            }
+        }
+
+        // No teammate has ball - still try to create space if we're not closest
         let closest_to_ball = !ctx.players().teammates().all().any(|t| {
             let t_dist = (t.position - ctx.tick_context.positions.ball.position).magnitude();
-            let p_dist = ctx.ball().distance();
-            t_dist < p_dist * 0.9
+            t_dist < ball_distance * 0.9
         });
 
-        if closest_to_ball {
-            return false;
-        }
-
-        // Check if in good attacking position already
-        if self.is_in_good_attacking_position(ctx) {
-            return false;
-        }
-
-        // Create space if team has possession and player isn't needed for pressing
-        true
+        !closest_to_ball
     }
 
     /// Check if should make run in behind defense
     fn should_make_run_in_behind(&self, ctx: &StateProcessingContext) -> bool {
-        // Check player attributes
+        // Don't make runs on own half
+        if ctx.player().on_own_side() {
+            return false;
+        }
+
+        // Check player attributes - relaxed requirements
         let pace = ctx.player.skills.physical.pace / 20.0;
         let off_ball = ctx.player.skills.mental.off_the_ball / 20.0;
         let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
 
-        if pace < 0.7 || off_ball < 0.6 || stamina < 0.4 {
+        // Combined skill check - if player is good at any of these, allow the run
+        let skill_score = pace * 0.4 + off_ball * 0.4 + stamina * 0.2;
+        if skill_score < 0.4 {
             return false;
         }
 
@@ -453,15 +469,19 @@ impl ForwardRunningState {
         let defensive_line = self.find_defensive_line(ctx);
         let space_behind = self.check_space_behind_defense(ctx, defensive_line);
 
-        // Check if teammate can make the pass
-        let capable_passer_has_ball = ctx
+        // Check if a teammate has the ball (any teammate, not just good passers)
+        let teammate_has_ball = ctx
             .ball()
             .owner_id()
             .and_then(|id| ctx.context.players.by_id(id))
-            .map(|p| p.skills.technical.passing > 12.0)
+            .map(|p| p.team_id == ctx.player.team_id)
             .unwrap_or(false);
 
-        space_behind && capable_passer_has_ball && !ctx.player().on_own_side()
+        // More aggressive: make runs even if space is limited, as long as teammate has ball
+        // and we're in attacking third
+        let in_attacking_third = self.is_in_good_attacking_position(ctx);
+
+        (space_behind || in_attacking_third) && teammate_has_ball
     }
 
     /// Find opponent defensive line position
@@ -645,26 +665,75 @@ impl ForwardRunningState {
             .filter(|p| p.team_id == ctx.player.team_id);
 
         if let Some(holder) = ball_holder {
-            // Make intelligent supporting run
-            let support_position = ctx.player().movement().calculate_support_run_position(holder.position);
+            let player_pos = ctx.player.position;
+            let holder_pos = holder.position;
+            let goal_pos = ctx.player().opponent_goal_position();
+            let field_width = ctx.context.field_size.width as f32;
+            let field_height = ctx.context.field_size.height as f32;
 
-            // Increased separation multiplier (1.0 → 3.0) to prevent clustering behind ball carrier
-            SteeringBehavior::Arrive {
-                target: support_position,
-                slowing_distance: 30.0,
+            // Calculate direction toward goal
+            let attacking_direction = match ctx.player.side {
+                Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),
+                Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0),
+                None => (goal_pos - player_pos).normalize(),
+            };
+
+            // Determine if we're already ahead of the ball holder
+            let is_ahead_of_holder = match ctx.player.side {
+                Some(PlayerSide::Left) => player_pos.x > holder_pos.x,
+                Some(PlayerSide::Right) => player_pos.x < holder_pos.x,
+                None => false,
+            };
+
+            // Calculate target position based on role
+            let target_position = if is_ahead_of_holder {
+                // Already ahead - make run toward goal, creating passing option
+                let forward_run_distance = 60.0; // Run toward goal
+                let lateral_offset = if player_pos.y < field_height / 2.0 {
+                    -20.0 // Stay on left side
+                } else {
+                    20.0 // Stay on right side
+                };
+
+                Vector3::new(
+                    (player_pos.x + attacking_direction.x * forward_run_distance)
+                        .clamp(20.0, field_width - 20.0),
+                    (player_pos.y + lateral_offset).clamp(30.0, field_height - 30.0),
+                    0.0,
+                )
+            } else {
+                // Behind ball holder - get ahead of them toward goal
+                let overtake_distance = 80.0;
+                let lateral_spread = if player_pos.y < field_height / 2.0 {
+                    -30.0 // Spread left
+                } else {
+                    30.0 // Spread right
+                };
+
+                Vector3::new(
+                    (holder_pos.x + attacking_direction.x * overtake_distance)
+                        .clamp(20.0, field_width - 20.0),
+                    (holder_pos.y + lateral_spread).clamp(30.0, field_height - 30.0),
+                    0.0,
+                )
+            };
+
+            // Use Pursuit behavior for more aggressive movement toward target
+            SteeringBehavior::Pursuit {
+                target: target_position,
+                target_velocity: Vector3::zeros(),
             }
-                .calculate(ctx.player)
-                .velocity
-                + ctx.player().separation_velocity() * 3.0
+            .calculate(ctx.player)
+            .velocity
+                + ctx.player().separation_velocity() * 2.0
         } else {
             // Move toward ball if no clear holder
-            // Increased separation (1.0 → 2.5) to prevent everyone rushing to loose ball
             SteeringBehavior::Arrive {
                 target: ctx.tick_context.positions.ball.position,
                 slowing_distance: 50.0,
             }
-                .calculate(ctx.player)
-                .velocity
+            .calculate(ctx.player)
+            .velocity
                 + ctx.player().separation_velocity() * 2.5
         }
     }

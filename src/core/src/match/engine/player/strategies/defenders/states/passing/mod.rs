@@ -1,9 +1,9 @@
+use crate::r#match::defenders::states::common::{ActivityIntensity, DefenderCondition};
 use crate::r#match::defenders::states::DefenderState;
-use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
+    ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -138,7 +138,6 @@ impl StateProcessingHandler for DefenderPassingState {
 }
 
 impl DefenderPassingState {
-
     /// Determine if player can effectively dribble out of the current situation
     fn can_dribble_effectively(&self, ctx: &StateProcessingContext) -> bool {
         // Check player's dribbling skill

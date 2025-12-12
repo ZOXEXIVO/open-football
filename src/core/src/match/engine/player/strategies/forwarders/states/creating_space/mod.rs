@@ -72,21 +72,98 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Find optimal free zone for a forward
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // PRIORITY: When teammate has ball, make aggressive run toward goal
+        if let Some(ball_holder) = self.get_ball_holder(ctx) {
+            let holder_pos = ball_holder.position;
+
+            // Calculate attacking direction
+            let attacking_direction = match ctx.player.side {
+                Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),
+                Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0),
+                None => (goal_pos - player_pos).normalize(),
+            };
+
+            // Determine if we're ahead of or behind ball holder
+            let is_ahead = match ctx.player.side {
+                Some(PlayerSide::Left) => player_pos.x > holder_pos.x + 10.0,
+                Some(PlayerSide::Right) => player_pos.x < holder_pos.x - 10.0,
+                None => false,
+            };
+
+            // Calculate target: run TOWARD the goal with lateral spread
+            let target_position = if is_ahead {
+                // Already ahead - run further toward goal
+                let forward_distance = 80.0;
+                let lateral_offset = if player_pos.y < field_height / 2.0 {
+                    -25.0 // Stay on left side
+                } else {
+                    25.0 // Stay on right side
+                };
+
+                Vector3::new(
+                    (player_pos.x + attacking_direction.x * forward_distance)
+                        .clamp(50.0, field_width - 50.0),
+                    (player_pos.y + lateral_offset).clamp(50.0, field_height - 50.0),
+                    0.0,
+                )
+            } else {
+                // Behind ball holder - get ahead of them quickly
+                let overtake_distance = 100.0;
+                let lateral_spread = if player_pos.y < field_height / 2.0 {
+                    -40.0 // Spread to left
+                } else {
+                    40.0 // Spread to right
+                };
+
+                Vector3::new(
+                    (holder_pos.x + attacking_direction.x * overtake_distance)
+                        .clamp(50.0, field_width - 50.0),
+                    (holder_pos.y + lateral_spread).clamp(50.0, field_height - 50.0),
+                    0.0,
+                )
+            };
+
+            // Check for offside - if would be offside, come back slightly
+            let final_target = if self.would_be_offside(ctx, target_position) {
+                // Stay just onside
+                let defensive_line = self.get_defensive_line_position(ctx);
+                let safe_x = match ctx.player.side {
+                    Some(PlayerSide::Left) => defensive_line - 5.0,
+                    Some(PlayerSide::Right) => defensive_line + 5.0,
+                    None => defensive_line,
+                };
+                Vector3::new(safe_x, target_position.y, 0.0)
+            } else {
+                target_position
+            };
+
+            // Use Pursuit for aggressive movement
+            let base_velocity = SteeringBehavior::Pursuit {
+                target: final_target,
+                target_velocity: Vector3::zeros(),
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            // Add separation to avoid clustering
+            return Some(base_velocity + ctx.player().separation_velocity() * 1.5);
+        }
+
+        // Fallback: use the existing complex logic when no teammate has ball
         let target_position = self.find_optimal_free_zone(ctx);
-
-        // Calculate congestion avoidance
         let avoidance_vector = self.calculate_dynamic_avoidance(ctx);
-
-        // Determine movement pattern based on situation
         let movement_pattern = self.get_intelligent_movement_pattern(ctx);
 
         match movement_pattern {
             ForwardMovementPattern::DirectRun => {
-                // Direct aggressive run to free space
                 let base_velocity = SteeringBehavior::Pursuit {
                     target: target_position,
-                    target_velocity: Vector3::zeros(), // Static target position
+                    target_velocity: Vector3::zeros(),
                 }
                     .calculate(ctx.player)
                     .velocity;
@@ -94,7 +171,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 Some(base_velocity + avoidance_vector * 1.2 + ctx.player().separation_velocity())
             }
             ForwardMovementPattern::DiagonalRun => {
-                // Diagonal run to create space and angles
                 let diagonal_target = self.calculate_diagonal_run_target(ctx, target_position);
                 let base_velocity = SteeringBehavior::Arrive {
                     target: diagonal_target,
@@ -106,19 +182,17 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 Some(base_velocity + avoidance_vector)
             }
             ForwardMovementPattern::ChannelRun => {
-                // Run between defenders into channels
                 let channel_target = self.find_defensive_channel(ctx);
                 Some(
                     SteeringBehavior::Pursuit {
                         target: channel_target,
-                        target_velocity: Vector3::zeros(), // Static target position
+                        target_velocity: Vector3::zeros(),
                     }
                         .calculate(ctx.player)
                         .velocity + avoidance_vector * 0.8
                 )
             }
             ForwardMovementPattern::DriftWide => {
-                // Drift wide to create space centrally
                 let wide_target = self.calculate_wide_position(ctx);
                 Some(
                     SteeringBehavior::Arrive {
@@ -130,7 +204,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 )
             }
             ForwardMovementPattern::CheckToFeet => {
-                // Come short to receive to feet
                 let check_target = self.calculate_check_position(ctx);
                 Some(
                     SteeringBehavior::Arrive {
@@ -142,7 +215,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
                 )
             }
             ForwardMovementPattern::OppositeMovement => {
-                // Move opposite to defensive line shift
                 let opposite_target = self.calculate_opposite_movement(ctx);
                 Some(
                     SteeringBehavior::Arrive {
@@ -640,6 +712,18 @@ impl ForwardCreatingSpaceState {
         } else {
             position.x < last_defender_x - 2.0
         }
+    }
+
+    /// Get the defensive line X position
+    fn get_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
+        let attacking_direction = self.get_attacking_direction(ctx);
+        let is_attacking_left = attacking_direction.x > 0.0;
+
+        ctx.players().opponents().all()
+            .filter(|p| p.tactical_positions.is_defender())
+            .map(|p| p.position.x)
+            .fold(if is_attacking_left { f32::MIN } else { f32::MAX },
+                  |acc, x| if is_attacking_left { acc.max(x) } else { acc.min(x) })
     }
 
     fn would_be_offside_now(&self, ctx: &StateProcessingContext) -> bool {

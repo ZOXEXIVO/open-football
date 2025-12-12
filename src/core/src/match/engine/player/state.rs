@@ -7,10 +7,8 @@ use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use crate::PlayerFieldPositionGroup;
 use log::error;
 
-#[cfg(debug_assertions)]
-use log::warn;
-
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
+use std::fmt::Formatter;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum PlayerState {

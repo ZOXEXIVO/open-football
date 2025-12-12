@@ -152,8 +152,9 @@ impl Ball {
                 self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
-            // Check if any notified player reached the ball (increased for easier claiming)
-            const CLAIM_DISTANCE: f32 = 20.0;
+            // Check if any notified player reached the ball - must be very close to claim
+            const CLAIM_DISTANCE: f32 = 1.8; // Increased from 1.5 for easier claiming
+            const MAX_CLAIM_VELOCITY: f32 = 6.0; // Increased from 5.0 - ball must be reasonably slow to claim
 
             // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
@@ -161,6 +162,10 @@ impl Ball {
             } else {
                 self.position
             };
+
+            // Check ball velocity - allow claiming slower balls
+            let ball_speed = self.velocity.norm();
+            let can_claim_by_speed = ball_speed < MAX_CLAIM_VELOCITY;
 
             // Find the first player who reached the ball
             let mut claiming_player_id: Option<u32> = None;
@@ -176,7 +181,26 @@ impl Ball {
                     let dz = target_position.z;
                     let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
-                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() {
+                    if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() && can_claim_by_speed {
+                        // Check if ball is moving away from player
+                        if ball_speed > 1.0 {
+                            // Vector from ball to player (horizontal only for 2D check)
+                            let to_player_x = dx;
+                            let to_player_y = dy;
+
+                            // Ball direction (normalized)
+                            let ball_dir_x = self.velocity.x / ball_speed;
+                            let ball_dir_y = self.velocity.y / ball_speed;
+
+                            // Dot product: positive means ball moving towards player
+                            let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
+
+                            // If ball is moving away (negative dot), player can't claim it
+                            if dot_product < 0.0 {
+                                continue; // Skip this player
+                            }
+                        }
+
                         // Player reached the ball (or landing position), give them ownership when ball arrives
                         // For aerial balls, only claim when ball is low enough
                         if !self.is_aerial() || self.position.z < 2.5 {
@@ -252,7 +276,7 @@ impl Ball {
 
     pub fn is_ball_stopped_on_field(&self) -> bool {
         !self.is_ball_outside()
-            && self.velocity.norm() < 1.0 // Increased from 0.1 to catch slow rolling balls
+            && self.velocity.norm() < 2.5 // Increased to catch slow rolling balls that need claiming
             && self.current_owner.is_none()
     }
 
@@ -271,13 +295,13 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         // Use hysteresis to avoid oscillation: stricter threshold to enter, looser to exit
-        const DEADLOCK_VELOCITY_ENTER: f32 = 3.0; // Enter deadlock detection when velocity drops below this (lowered to avoid catching passes)
-        const DEADLOCK_VELOCITY_EXIT: f32 = 5.0; // Exit deadlock detection when velocity exceeds this
-        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.0; // Increased from 0.5 to catch mid-air stuck balls
-        const DEADLOCK_TICK_THRESHOLD: u32 = 40; // Force claim after 40 ticks (~0.67 seconds) - backup for notification system
-        const DEADLOCK_SEARCH_RADIUS: f32 = 300.0; // Initial search radius
-        const DEADLOCK_EXTENDED_RADIUS: f32 = 600.0; // Extended radius if no one found
-        const DEADLOCK_TICK_EXTENDED: u32 = 70; // Use extended radius after 70 ticks (~1.2 seconds)
+        const DEADLOCK_VELOCITY_ENTER: f32 = 4.0; // Enter deadlock detection when velocity drops below this (increased to catch more cases)
+        const DEADLOCK_VELOCITY_EXIT: f32 = 6.0; // Exit deadlock detection when velocity exceeds this
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5; // Catch low aerial balls too
+        const DEADLOCK_TICK_THRESHOLD: u32 = 25; // Force claim after 25 ticks (~0.4 seconds) - faster response
+        const DEADLOCK_SEARCH_RADIUS: f32 = 15.0; // Increased initial search radius
+        const DEADLOCK_EXTENDED_RADIUS: f32 = 30.0; // Extended radius if no one found nearby
+        const DEADLOCK_TICK_EXTENDED: u32 = 45; // Use extended radius after 45 ticks (~0.75 seconds)
 
         // Check if ball is unowned
         let is_unowned = self.current_owner.is_none();
@@ -471,13 +495,63 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Increased to 15.0 for easier ball claiming - players can claim from further away
-        const BALL_DISTANCE_THRESHOLD: f32 = 15.0;
+        // Realistic distance threshold - players can only claim ball when it's very close to their feet
+        const BALL_DISTANCE_THRESHOLD: f32 = 1.2;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
         const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.0; // Player can reach ~2.8m when jumping
         const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
+
+        // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
+        // This catches cases where ball flies away from owner but ownership wasn't properly cleared
+        // Only applies when ball has velocity - if ball is stopped (e.g., at boundary), let normal mechanics handle it
+        const MAX_OWNERSHIP_DISTANCE: f32 = 3.0; // Maximum distance when ball is moving
+        const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
+        const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 1.0; // Only check distance if ball is moving faster than this
+
+        if let Some(current_owner_id) = self.current_owner {
+            if let Some(owner) = context.players.by_id(current_owner_id) {
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let distance_squared = dx * dx + dy * dy;
+                let ball_speed = self.velocity.norm();
+
+                // Only clear ownership if ball is moving AND far from owner
+                // This prevents interference with deadlock claiming and boundary situations
+                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED && ball_speed > MIN_VELOCITY_FOR_DISTANCE_CHECK {
+                    // Check if ball is moving AWAY from owner (not towards them)
+                    let ball_dir_x = self.velocity.x / ball_speed;
+                    let ball_dir_y = self.velocity.y / ball_speed;
+
+                    // Vector from ball to owner
+                    let to_owner_x = dx;
+                    let to_owner_y = dy;
+                    let to_owner_dist = (dx * dx + dy * dy).sqrt();
+
+                    if to_owner_dist > 0.1 {
+                        let to_owner_norm_x = to_owner_x / to_owner_dist;
+                        let to_owner_norm_y = to_owner_y / to_owner_dist;
+
+                        // Dot product: negative means ball is moving away from owner
+                        let dot = ball_dir_x * to_owner_norm_x + ball_dir_y * to_owner_norm_y;
+
+                        if dot < -0.3 { // Ball is clearly moving away from owner
+                            // Owner is too far and ball is flying away - clear ownership
+                            self.previous_owner = self.current_owner;
+                            self.current_owner = None;
+                            self.ownership_duration = 0;
+                            // Don't return - continue to allow new ownership claim
+                        }
+                    }
+                }
+            } else {
+                // Owner player not found - clear ownership
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
+                self.ownership_duration = 0;
+            }
+        }
 
         // Ball is too high to be claimed by any player (flying over everyone's heads)
         if self.position.z > MAX_BALL_HEIGHT {
@@ -488,39 +562,49 @@ impl Ball {
         // This prevents immediate ball reclaim after passing/shooting
         // BUT: Allow opponents to contest the ball even if previous owner is still close
         if let Some(previous_owner_id) = self.previous_owner {
-            let owner = context.players.by_id(previous_owner_id).unwrap();
+            if let Some(owner) = context.players.by_id(previous_owner_id) {
+                // Calculate proper 3D distance
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let dz = self.position.z; // Ball height from ground (player is at z=0)
+                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
-            // Calculate proper 3D distance
-            let dx = owner.position.x - self.position.x;
-            let dy = owner.position.y - self.position.y;
-            let dz = self.position.z; // Ball height from ground (player is at z=0)
-            let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if distance_3d > BALL_DISTANCE_THRESHOLD {
+                    self.previous_owner = None;
+                } else {
+                    // Previous owner still in range
+                    // Check if there are any opponents nearby who might contest the ball
+                    let has_opponent_contesting = players
+                        .iter()
+                        .filter(|p| p.team_id != owner.team_id)  // Opponents only
+                        .any(|opponent| {
+                            let dx = opponent.position.x - self.position.x;
+                            let dy = opponent.position.y - self.position.y;
+                            let horizontal_distance_squared = dx * dx + dy * dy;
 
-            if distance_3d > BALL_DISTANCE_THRESHOLD {
-                self.previous_owner = None;
-            } else {
-                // Previous owner still in range
-                // Check if there are any opponents nearby who might contest the ball
-                let has_opponent_contesting = players
-                    .iter()
-                    .filter(|p| p.team_id != owner.team_id)  // Opponents only
-                    .any(|opponent| {
-                        let dx = opponent.position.x - self.position.x;
-                        let dy = opponent.position.y - self.position.y;
-                        let horizontal_distance_squared = dx * dx + dy * dy;
+                            // Check if opponent is close enough to contest
+                            horizontal_distance_squared <= BALL_DISTANCE_THRESHOLD_SQUARED
+                        });
 
-                        // Check if opponent is close enough to contest
-                        horizontal_distance_squared <= BALL_DISTANCE_THRESHOLD_SQUARED
-                    });
-
-                // If no opponents are contesting, return early to prevent previous owner from reclaiming
-                // If opponents ARE contesting, continue to ownership check to allow fair challenge
-                if !has_opponent_contesting {
-                    return;
+                    // If no opponents are contesting, return early to prevent previous owner from reclaiming
+                    // If opponents ARE contesting, continue to ownership check to allow fair challenge
+                    if !has_opponent_contesting {
+                        return;
+                    }
+                    // Otherwise, continue to normal ownership check below
                 }
-                // Otherwise, continue to normal ownership check below
+            } else {
+                // Previous owner not found - clear it
+                self.previous_owner = None;
             }
         }
+
+        // Velocity threshold - if ball is moving faster than this, players can't just "catch" it
+        const MAX_CLAIMABLE_VELOCITY: f32 = 8.0; // Ball moving faster than 8 m/s is hard to claim
+        const SLOW_BALL_VELOCITY: f32 = 3.0; // Ball moving slower than 3 m/s is easy to claim
+
+        let ball_speed = self.velocity.norm();
+        let is_ball_fast = ball_speed > MAX_CLAIMABLE_VELOCITY;
 
         // Find all players within ball distance threshold with proper 3D collision detection
         let nearby_players: Vec<&MatchPlayer> = players
@@ -536,13 +620,46 @@ impl Ball {
                     return false;
                 }
 
+                // For slow balls (< 3 m/s), allow claiming regardless of direction
+                // This prevents balls from being unclaimed when rolling slowly
+                if ball_speed > SLOW_BALL_VELOCITY {
+                    // Vector from ball to player
+                    let to_player_x = dx;
+                    let to_player_y = dy;
+
+                    // Normalize ball velocity (direction ball is moving)
+                    let ball_vel_norm = ball_speed;
+                    if ball_vel_norm > 0.01 {
+                        let ball_dir_x = self.velocity.x / ball_vel_norm;
+                        let ball_dir_y = self.velocity.y / ball_vel_norm;
+
+                        // Dot product: positive means ball is moving towards player, negative means away
+                        let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
+
+                        // If ball is moving away from player (negative dot product), they can't claim it
+                        // unless they're close enough (within 0.8m) - relaxed from 0.5m
+                        if dot_product < 0.0 && horizontal_distance > 0.8 {
+                            return false;
+                        }
+
+                        // If ball is very fast and not moving directly at the player, make it harder to claim
+                        if is_ball_fast {
+                            // Require player to be close (0.8m) and ball to be moving towards them
+                            if horizontal_distance > 0.8 || dot_product < 0.3 * ball_vel_norm * horizontal_distance {
+                                return false;
+                            }
+                        }
+                    }
+                }
+                // For slow balls, skip direction check entirely - always allow claiming if close enough
+
                 // Calculate reachable height based on horizontal distance
                 // Closer = easier to reach higher balls (can jump)
                 // Further = harder to reach higher balls
-                let effective_reach_height = if horizontal_distance < 1.5 {
+                let effective_reach_height = if horizontal_distance < 0.8 {
                     // Very close - can jump and reach high
                     PLAYER_JUMP_REACH
-                } else if horizontal_distance < 3.0 {
+                } else if horizontal_distance < 1.2 {
                     // Medium distance - can reach with feet/body
                     PLAYER_REACH_HEIGHT
                 } else {
@@ -692,41 +809,84 @@ impl Ball {
     fn update_velocity(&mut self) {
         const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
-        const DRAG_COEFFICIENT: f32 = 0.25;
-        const ROLLING_RESISTANCE_COEFFICIENT: f32 = 0.02;
-        const STOPPING_THRESHOLD: f32 = 0.1;
-        const TIME_STEP: f32 = 0.01;
+        const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
         const BOUNCE_COEFFICIENT: f32 = 0.6; // Ball keeps 60% of velocity when bouncing
+        const MAX_VELOCITY: f32 = 15.0; // Maximum realistic ball velocity per tick
+
+        // Physics constants for realistic ball behavior
+        // Air drag: affects aerial balls (proportional to v²)
+        const AIR_DRAG_COEFFICIENT: f32 = 0.04; // Reduced for more realistic air resistance
+
+        // Ground friction: affects rolling balls (proportional to v for smooth deceleration)
+        // A real football on grass decelerates at about 0.5-1.5 m/s² depending on grass conditions
+        const GROUND_FRICTION_COEFFICIENT: f32 = 0.015; // Smooth velocity-proportional friction
+
+        // CRITICAL: Global velocity sanity check - prevent cosmic-speed balls
+        // Check for NaN or infinity and reset to zero
+        if self.velocity.x.is_nan() || self.velocity.y.is_nan() || self.velocity.z.is_nan()
+            || self.velocity.x.is_infinite() || self.velocity.y.is_infinite() || self.velocity.z.is_infinite()
+        {
+            self.velocity = Vector3::zeros();
+            return;
+        }
+
+        let velocity_norm = self.velocity.norm();
+
+        // Clamp velocity if it exceeds maximum
+        if velocity_norm > MAX_VELOCITY {
+            self.velocity = self.velocity * (MAX_VELOCITY / velocity_norm);
+        }
 
         let velocity_norm = self.velocity.norm();
 
         if velocity_norm > STOPPING_THRESHOLD {
-            // Apply air drag when ball is in the air or rolling
-            let drag_force =
-                -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
+            let is_on_ground = self.position.z <= 0.1;
 
-            // Apply rolling resistance only when ball is on the ground (z ~= 0)
-            let rolling_resistance_force = if self.position.z <= 0.1 {
-                Vector3::new(
-                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.x.signum(),
-                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.y.signum(),
-                    0.0
-                )
+            if is_on_ground {
+                // GROUND PHYSICS: Rolling friction proportional to velocity (smooth deceleration)
+                // This creates exponential decay: v(t) = v0 * e^(-kt), which is very smooth
+                let horizontal_velocity = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+                let horizontal_speed = horizontal_velocity.norm();
+
+                if horizontal_speed > STOPPING_THRESHOLD {
+                    // Apply friction as a multiplier for smooth exponential decay
+                    // friction_factor < 1.0 means the ball gradually slows down
+                    let friction_factor = 1.0 - GROUND_FRICTION_COEFFICIENT;
+                    self.velocity.x *= friction_factor;
+                    self.velocity.y *= friction_factor;
+                }
+
+                // Keep ball on ground
+                self.velocity.z = 0.0;
+                self.position.z = 0.0;
             } else {
-                Vector3::zeros()
-            };
+                // AERIAL PHYSICS: Air drag (proportional to v²) + gravity
+                // Air drag is gentler than ground friction for realistic flight
 
-            // Apply gravity force in z-direction (downward)
-            let gravity_force = Vector3::new(0.0, 0.0, -BALL_MASS * GRAVITY);
+                // Air drag force: F = -0.5 * C * v² * direction
+                let air_drag_force = if velocity_norm > 0.1 {
+                    -AIR_DRAG_COEFFICIENT * velocity_norm * self.velocity
+                } else {
+                    Vector3::zeros()
+                };
 
-            let total_force = drag_force + rolling_resistance_force + gravity_force;
-            let acceleration = total_force / BALL_MASS;
+                // Gravity force (constant downward)
+                let gravity_force = Vector3::new(0.0, 0.0, -GRAVITY);
 
-            self.velocity += acceleration * TIME_STEP;
+                // Apply forces
+                let acceleration = air_drag_force / BALL_MASS + gravity_force;
+                self.velocity += acceleration * 0.016; // ~60fps timestep
+            }
         } else {
-            // Ball has stopped - zero velocity and settle on ground
-            self.velocity = Vector3::zeros();
-            self.position.z = 0.0;
+            // Ball has nearly stopped - bring to complete rest smoothly
+            // Use gradual decay instead of instant stop
+            self.velocity = self.velocity * 0.8; // Smooth final decay
+
+            // Only fully stop when truly negligible
+            if self.velocity.norm() < 0.01 {
+                self.velocity = Vector3::zeros();
+                self.position.z = 0.0;
+            }
         }
 
         // Check ground collision and bounce
@@ -735,8 +895,12 @@ impl Ball {
             self.position.z = 0.0;
             self.velocity.z = -self.velocity.z * BOUNCE_COEFFICIENT;
 
+            // Apply some horizontal speed loss on bounce (realistic)
+            self.velocity.x *= 0.95;
+            self.velocity.y *= 0.95;
+
             // If bounce is too small, stop vertical movement
-            if self.velocity.z.abs() < 0.5 {
+            if self.velocity.z.abs() < 0.3 {
                 self.velocity.z = 0.0;
             }
         }
@@ -757,9 +921,14 @@ impl Ball {
         }
 
         if let Some(owner_player_id) = self.current_owner {
-            self.position = tick_context.positions.players.position(owner_player_id);
+            let owner_position = tick_context.positions.players.position(owner_player_id);
+
+            // Ball follows owner - teleport to their position
+            self.position = owner_position;
             // When player has the ball, it should be at ground level (or slightly above for dribbling)
             self.position.z = 0.0;
+            // Clear velocity since ball is being carried
+            self.velocity = Vector3::zeros();
         } else {
             self.position.x += self.velocity.x;
             self.position.y += self.velocity.y;
