@@ -153,8 +153,8 @@ impl Ball {
                 return; // Will re-notify on next tick
             }
             // Check if any notified player reached the ball - must be very close to claim
-            const CLAIM_DISTANCE: f32 = 1.5;
-            const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow to claim via notification system
+            const CLAIM_DISTANCE: f32 = 1.8; // Increased from 1.5 for easier claiming
+            const MAX_CLAIM_VELOCITY: f32 = 6.0; // Increased from 5.0 - ball must be reasonably slow to claim
 
             // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
@@ -163,7 +163,7 @@ impl Ball {
                 self.position
             };
 
-            // Check ball velocity - don't allow claiming fast-moving balls
+            // Check ball velocity - allow claiming slower balls
             let ball_speed = self.velocity.norm();
             let can_claim_by_speed = ball_speed < MAX_CLAIM_VELOCITY;
 
@@ -276,7 +276,7 @@ impl Ball {
 
     pub fn is_ball_stopped_on_field(&self) -> bool {
         !self.is_ball_outside()
-            && self.velocity.norm() < 1.0 // Increased from 0.1 to catch slow rolling balls
+            && self.velocity.norm() < 2.5 // Increased to catch slow rolling balls that need claiming
             && self.current_owner.is_none()
     }
 
@@ -295,13 +295,13 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         // Use hysteresis to avoid oscillation: stricter threshold to enter, looser to exit
-        const DEADLOCK_VELOCITY_ENTER: f32 = 3.0; // Enter deadlock detection when velocity drops below this (lowered to avoid catching passes)
-        const DEADLOCK_VELOCITY_EXIT: f32 = 5.0; // Exit deadlock detection when velocity exceeds this
-        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.0; // Increased from 0.5 to catch mid-air stuck balls
-        const DEADLOCK_TICK_THRESHOLD: u32 = 40; // Force claim after 40 ticks (~0.67 seconds) - backup for notification system
-        const DEADLOCK_SEARCH_RADIUS: f32 = 10.0; // Initial search radius - realistic distance for deadlock situations
-        const DEADLOCK_EXTENDED_RADIUS: f32 = 25.0; // Extended radius if no one found nearby
-        const DEADLOCK_TICK_EXTENDED: u32 = 70; // Use extended radius after 70 ticks (~1.2 seconds)
+        const DEADLOCK_VELOCITY_ENTER: f32 = 4.0; // Enter deadlock detection when velocity drops below this (increased to catch more cases)
+        const DEADLOCK_VELOCITY_EXIT: f32 = 6.0; // Exit deadlock detection when velocity exceeds this
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5; // Catch low aerial balls too
+        const DEADLOCK_TICK_THRESHOLD: u32 = 25; // Force claim after 25 ticks (~0.4 seconds) - faster response
+        const DEADLOCK_SEARCH_RADIUS: f32 = 15.0; // Increased initial search radius
+        const DEADLOCK_EXTENDED_RADIUS: f32 = 30.0; // Extended radius if no one found nearby
+        const DEADLOCK_TICK_EXTENDED: u32 = 45; // Use extended radius after 45 ticks (~0.75 seconds)
 
         // Check if ball is unowned
         let is_unowned = self.current_owner.is_none();
@@ -620,7 +620,8 @@ impl Ball {
                     return false;
                 }
 
-                // If ball is moving fast, check if it's moving towards or away from the player
+                // For slow balls (< 3 m/s), allow claiming regardless of direction
+                // This prevents balls from being unclaimed when rolling slowly
                 if ball_speed > SLOW_BALL_VELOCITY {
                     // Vector from ball to player
                     let to_player_x = dx;
@@ -636,20 +637,21 @@ impl Ball {
                         let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
 
                         // If ball is moving away from player (negative dot product), they can't claim it
-                        // unless they're VERY close (within 0.5m - basically already touching)
-                        if dot_product < 0.0 && horizontal_distance > 0.5 {
+                        // unless they're close enough (within 0.8m) - relaxed from 0.5m
+                        if dot_product < 0.0 && horizontal_distance > 0.8 {
                             return false;
                         }
 
                         // If ball is very fast and not moving directly at the player, make it harder to claim
                         if is_ball_fast {
-                            // Require player to be very close (0.6m) and ball to be moving towards them
-                            if horizontal_distance > 0.6 || dot_product < 0.5 * ball_vel_norm * horizontal_distance {
+                            // Require player to be close (0.8m) and ball to be moving towards them
+                            if horizontal_distance > 0.8 || dot_product < 0.3 * ball_vel_norm * horizontal_distance {
                                 return false;
                             }
                         }
                     }
                 }
+                // For slow balls, skip direction check entirely - always allow claiming if close enough
 
                 // Calculate reachable height based on horizontal distance
                 // Closer = easier to reach higher balls (can jump)
