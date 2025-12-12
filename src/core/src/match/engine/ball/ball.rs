@@ -503,6 +503,56 @@ impl Ball {
         const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.0; // Player can reach ~2.8m when jumping
         const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
 
+        // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
+        // This catches cases where ball flies away from owner but ownership wasn't properly cleared
+        // Only applies when ball has velocity - if ball is stopped (e.g., at boundary), let normal mechanics handle it
+        const MAX_OWNERSHIP_DISTANCE: f32 = 3.0; // Maximum distance when ball is moving
+        const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
+        const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 1.0; // Only check distance if ball is moving faster than this
+
+        if let Some(current_owner_id) = self.current_owner {
+            if let Some(owner) = context.players.by_id(current_owner_id) {
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let distance_squared = dx * dx + dy * dy;
+                let ball_speed = self.velocity.norm();
+
+                // Only clear ownership if ball is moving AND far from owner
+                // This prevents interference with deadlock claiming and boundary situations
+                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED && ball_speed > MIN_VELOCITY_FOR_DISTANCE_CHECK {
+                    // Check if ball is moving AWAY from owner (not towards them)
+                    let ball_dir_x = self.velocity.x / ball_speed;
+                    let ball_dir_y = self.velocity.y / ball_speed;
+
+                    // Vector from ball to owner
+                    let to_owner_x = dx;
+                    let to_owner_y = dy;
+                    let to_owner_dist = (dx * dx + dy * dy).sqrt();
+
+                    if to_owner_dist > 0.1 {
+                        let to_owner_norm_x = to_owner_x / to_owner_dist;
+                        let to_owner_norm_y = to_owner_y / to_owner_dist;
+
+                        // Dot product: negative means ball is moving away from owner
+                        let dot = ball_dir_x * to_owner_norm_x + ball_dir_y * to_owner_norm_y;
+
+                        if dot < -0.3 { // Ball is clearly moving away from owner
+                            // Owner is too far and ball is flying away - clear ownership
+                            self.previous_owner = self.current_owner;
+                            self.current_owner = None;
+                            self.ownership_duration = 0;
+                            // Don't return - continue to allow new ownership claim
+                        }
+                    }
+                }
+            } else {
+                // Owner player not found - clear ownership
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
+                self.ownership_duration = 0;
+            }
+        }
+
         // Ball is too high to be claimed by any player (flying over everyone's heads)
         if self.position.z > MAX_BALL_HEIGHT {
             return;
@@ -512,37 +562,40 @@ impl Ball {
         // This prevents immediate ball reclaim after passing/shooting
         // BUT: Allow opponents to contest the ball even if previous owner is still close
         if let Some(previous_owner_id) = self.previous_owner {
-            let owner = context.players.by_id(previous_owner_id).unwrap();
+            if let Some(owner) = context.players.by_id(previous_owner_id) {
+                // Calculate proper 3D distance
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let dz = self.position.z; // Ball height from ground (player is at z=0)
+                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
-            // Calculate proper 3D distance
-            let dx = owner.position.x - self.position.x;
-            let dy = owner.position.y - self.position.y;
-            let dz = self.position.z; // Ball height from ground (player is at z=0)
-            let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+                if distance_3d > BALL_DISTANCE_THRESHOLD {
+                    self.previous_owner = None;
+                } else {
+                    // Previous owner still in range
+                    // Check if there are any opponents nearby who might contest the ball
+                    let has_opponent_contesting = players
+                        .iter()
+                        .filter(|p| p.team_id != owner.team_id)  // Opponents only
+                        .any(|opponent| {
+                            let dx = opponent.position.x - self.position.x;
+                            let dy = opponent.position.y - self.position.y;
+                            let horizontal_distance_squared = dx * dx + dy * dy;
 
-            if distance_3d > BALL_DISTANCE_THRESHOLD {
-                self.previous_owner = None;
-            } else {
-                // Previous owner still in range
-                // Check if there are any opponents nearby who might contest the ball
-                let has_opponent_contesting = players
-                    .iter()
-                    .filter(|p| p.team_id != owner.team_id)  // Opponents only
-                    .any(|opponent| {
-                        let dx = opponent.position.x - self.position.x;
-                        let dy = opponent.position.y - self.position.y;
-                        let horizontal_distance_squared = dx * dx + dy * dy;
+                            // Check if opponent is close enough to contest
+                            horizontal_distance_squared <= BALL_DISTANCE_THRESHOLD_SQUARED
+                        });
 
-                        // Check if opponent is close enough to contest
-                        horizontal_distance_squared <= BALL_DISTANCE_THRESHOLD_SQUARED
-                    });
-
-                // If no opponents are contesting, return early to prevent previous owner from reclaiming
-                // If opponents ARE contesting, continue to ownership check to allow fair challenge
-                if !has_opponent_contesting {
-                    return;
+                    // If no opponents are contesting, return early to prevent previous owner from reclaiming
+                    // If opponents ARE contesting, continue to ownership check to allow fair challenge
+                    if !has_opponent_contesting {
+                        return;
+                    }
+                    // Otherwise, continue to normal ownership check below
                 }
-                // Otherwise, continue to normal ownership check below
+            } else {
+                // Previous owner not found - clear it
+                self.previous_owner = None;
             }
         }
 
@@ -819,9 +872,14 @@ impl Ball {
         }
 
         if let Some(owner_player_id) = self.current_owner {
-            self.position = tick_context.positions.players.position(owner_player_id);
+            let owner_position = tick_context.positions.players.position(owner_player_id);
+
+            // Ball follows owner - teleport to their position
+            self.position = owner_position;
             // When player has the ball, it should be at ground level (or slightly above for dribbling)
             self.position.z = 0.0;
+            // Clear velocity since ball is being carried
+            self.velocity = Vector3::zeros();
         } else {
             self.position.x += self.velocity.x;
             self.position.y += self.velocity.y;
