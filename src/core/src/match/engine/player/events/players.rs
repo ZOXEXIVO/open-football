@@ -324,12 +324,37 @@ impl PlayerEventDispatcher {
         let max_z_velocity = Self::calculate_max_z_velocity(actual_horizontal_distance, &skills);
         let final_z_velocity = z_velocity.min(max_z_velocity);
 
-        // Apply ball physics
-        field.ball.velocity = Vector3::new(
+        // Calculate final velocity
+        let mut final_velocity = Vector3::new(
             horizontal_velocity.x,
             horizontal_velocity.y,
             final_z_velocity,
         );
+
+        // CRITICAL: Validate velocity to prevent cosmic-speed passes
+        const MAX_PASS_VELOCITY: f32 = 10.0; // Maximum realistic pass velocity per tick
+
+        // Check for NaN or infinity
+        if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
+            || final_velocity.x.is_infinite() || final_velocity.y.is_infinite() || final_velocity.z.is_infinite()
+        {
+            // Fallback to a safe default velocity
+            let safe_direction = actual_pass_vector.normalize();
+            final_velocity = Vector3::new(
+                safe_direction.x * 3.0,
+                safe_direction.y * 3.0,
+                0.5
+            );
+        }
+
+        // Clamp velocity magnitude to maximum
+        let velocity_magnitude = final_velocity.norm();
+        if velocity_magnitude > MAX_PASS_VELOCITY {
+            final_velocity = final_velocity * (MAX_PASS_VELOCITY / velocity_magnitude);
+        }
+
+        // Apply ball physics
+        field.ball.velocity = final_velocity;
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
@@ -695,6 +720,8 @@ impl PlayerEventDispatcher {
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
         const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
+        const MAX_SHOT_VELOCITY: f32 = 12.0; // Maximum realistic shot velocity per tick (~40 m/s at 60fps)
+        const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
 
@@ -718,6 +745,20 @@ impl PlayerEventDispatcher {
         let ball_to_goal_vector = goal_center - field.ball.position;
         let horizontal_distance = (ball_to_goal_vector.x * ball_to_goal_vector.x +
                                    ball_to_goal_vector.y * ball_to_goal_vector.y).sqrt();
+
+        // Safety check: if ball is already at/very near the goal, just give it a gentle push
+        if horizontal_distance < MIN_SHOT_DISTANCE {
+            let direction = if ball_to_goal_vector.x.abs() > 0.01 {
+                Vector3::new(ball_to_goal_vector.x.signum(), 0.0, 0.0)
+            } else {
+                Vector3::new(1.0, 0.0, 0.0) // Default direction
+            };
+            field.ball.previous_owner = Some(shoot_event_model.from_player_id);
+            field.ball.current_owner = None;
+            field.ball.velocity = direction * 2.0; // Gentle push
+            field.ball.flags.in_flight_state = 20;
+            return;
+        }
 
         // Calculate overall shooting accuracy (0.0 to 1.0)
         let base_accuracy = if horizontal_distance > 100.0 {
@@ -821,13 +862,36 @@ impl PlayerEventDispatcher {
         let vertical_spin_variation = rng.random_range(0.94..1.06);
         let z_velocity = (base_z_velocity * height_variation * vertical_spin_variation).min(3.0);
 
-        field.ball.previous_owner = Some(shoot_event_model.from_player_id);
-        field.ball.current_owner = None;
-        field.ball.velocity = Vector3::new(
+        // Calculate final velocity
+        let mut final_velocity = Vector3::new(
             horizontal_velocity.x,
             horizontal_velocity.y,
             z_velocity
         );
+
+        // CRITICAL: Validate and clamp velocity to prevent cosmic-speed shots
+        // Check for NaN or infinity
+        if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
+            || final_velocity.x.is_infinite() || final_velocity.y.is_infinite() || final_velocity.z.is_infinite()
+        {
+            // Fallback to a safe default velocity toward the goal
+            let safe_direction = (goal_center - field.ball.position).normalize();
+            final_velocity = Vector3::new(
+                safe_direction.x * 5.0,
+                safe_direction.y * 5.0,
+                1.0
+            );
+        }
+
+        // Clamp velocity magnitude to maximum realistic shot speed
+        let velocity_magnitude = final_velocity.norm();
+        if velocity_magnitude > MAX_SHOT_VELOCITY {
+            final_velocity = final_velocity * (MAX_SHOT_VELOCITY / velocity_magnitude);
+        }
+
+        field.ball.previous_owner = Some(shoot_event_model.from_player_id);
+        field.ball.current_owner = None;
+        field.ball.velocity = final_velocity;
 
         field.ball.flags.in_flight_state = 100;
     }

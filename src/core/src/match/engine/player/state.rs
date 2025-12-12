@@ -8,7 +8,6 @@ use crate::PlayerFieldPositionGroup;
 use log::error;
 
 #[cfg(debug_assertions)]
-use log::warn;
 
 use std::fmt::{Display, Formatter};
 

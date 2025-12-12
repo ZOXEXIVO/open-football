@@ -807,41 +807,84 @@ impl Ball {
     fn update_velocity(&mut self) {
         const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
-        const DRAG_COEFFICIENT: f32 = 0.25;
-        const ROLLING_RESISTANCE_COEFFICIENT: f32 = 0.02;
-        const STOPPING_THRESHOLD: f32 = 0.1;
-        const TIME_STEP: f32 = 0.01;
+        const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
         const BOUNCE_COEFFICIENT: f32 = 0.6; // Ball keeps 60% of velocity when bouncing
+        const MAX_VELOCITY: f32 = 15.0; // Maximum realistic ball velocity per tick
+
+        // Physics constants for realistic ball behavior
+        // Air drag: affects aerial balls (proportional to v²)
+        const AIR_DRAG_COEFFICIENT: f32 = 0.04; // Reduced for more realistic air resistance
+
+        // Ground friction: affects rolling balls (proportional to v for smooth deceleration)
+        // A real football on grass decelerates at about 0.5-1.5 m/s² depending on grass conditions
+        const GROUND_FRICTION_COEFFICIENT: f32 = 0.015; // Smooth velocity-proportional friction
+
+        // CRITICAL: Global velocity sanity check - prevent cosmic-speed balls
+        // Check for NaN or infinity and reset to zero
+        if self.velocity.x.is_nan() || self.velocity.y.is_nan() || self.velocity.z.is_nan()
+            || self.velocity.x.is_infinite() || self.velocity.y.is_infinite() || self.velocity.z.is_infinite()
+        {
+            self.velocity = Vector3::zeros();
+            return;
+        }
+
+        let velocity_norm = self.velocity.norm();
+
+        // Clamp velocity if it exceeds maximum
+        if velocity_norm > MAX_VELOCITY {
+            self.velocity = self.velocity * (MAX_VELOCITY / velocity_norm);
+        }
 
         let velocity_norm = self.velocity.norm();
 
         if velocity_norm > STOPPING_THRESHOLD {
-            // Apply air drag when ball is in the air or rolling
-            let drag_force =
-                -0.5 * DRAG_COEFFICIENT * velocity_norm * velocity_norm * self.velocity.normalize();
+            let is_on_ground = self.position.z <= 0.1;
 
-            // Apply rolling resistance only when ball is on the ground (z ~= 0)
-            let rolling_resistance_force = if self.position.z <= 0.1 {
-                Vector3::new(
-                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.x.signum(),
-                    -ROLLING_RESISTANCE_COEFFICIENT * BALL_MASS * GRAVITY * self.velocity.y.signum(),
-                    0.0
-                )
+            if is_on_ground {
+                // GROUND PHYSICS: Rolling friction proportional to velocity (smooth deceleration)
+                // This creates exponential decay: v(t) = v0 * e^(-kt), which is very smooth
+                let horizontal_velocity = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
+                let horizontal_speed = horizontal_velocity.norm();
+
+                if horizontal_speed > STOPPING_THRESHOLD {
+                    // Apply friction as a multiplier for smooth exponential decay
+                    // friction_factor < 1.0 means the ball gradually slows down
+                    let friction_factor = 1.0 - GROUND_FRICTION_COEFFICIENT;
+                    self.velocity.x *= friction_factor;
+                    self.velocity.y *= friction_factor;
+                }
+
+                // Keep ball on ground
+                self.velocity.z = 0.0;
+                self.position.z = 0.0;
             } else {
-                Vector3::zeros()
-            };
+                // AERIAL PHYSICS: Air drag (proportional to v²) + gravity
+                // Air drag is gentler than ground friction for realistic flight
 
-            // Apply gravity force in z-direction (downward)
-            let gravity_force = Vector3::new(0.0, 0.0, -BALL_MASS * GRAVITY);
+                // Air drag force: F = -0.5 * C * v² * direction
+                let air_drag_force = if velocity_norm > 0.1 {
+                    -AIR_DRAG_COEFFICIENT * velocity_norm * self.velocity
+                } else {
+                    Vector3::zeros()
+                };
 
-            let total_force = drag_force + rolling_resistance_force + gravity_force;
-            let acceleration = total_force / BALL_MASS;
+                // Gravity force (constant downward)
+                let gravity_force = Vector3::new(0.0, 0.0, -GRAVITY);
 
-            self.velocity += acceleration * TIME_STEP;
+                // Apply forces
+                let acceleration = air_drag_force / BALL_MASS + gravity_force;
+                self.velocity += acceleration * 0.016; // ~60fps timestep
+            }
         } else {
-            // Ball has stopped - zero velocity and settle on ground
-            self.velocity = Vector3::zeros();
-            self.position.z = 0.0;
+            // Ball has nearly stopped - bring to complete rest smoothly
+            // Use gradual decay instead of instant stop
+            self.velocity = self.velocity * 0.8; // Smooth final decay
+
+            // Only fully stop when truly negligible
+            if self.velocity.norm() < 0.01 {
+                self.velocity = Vector3::zeros();
+                self.position.z = 0.0;
+            }
         }
 
         // Check ground collision and bounce
@@ -850,8 +893,12 @@ impl Ball {
             self.position.z = 0.0;
             self.velocity.z = -self.velocity.z * BOUNCE_COEFFICIENT;
 
+            // Apply some horizontal speed loss on bounce (realistic)
+            self.velocity.x *= 0.95;
+            self.velocity.y *= 0.95;
+
             // If bounce is too small, stop vertical movement
-            if self.velocity.z.abs() < 0.5 {
+            if self.velocity.z.abs() < 0.3 {
                 self.velocity.z = 0.0;
             }
         }
