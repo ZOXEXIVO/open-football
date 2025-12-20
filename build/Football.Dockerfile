@@ -31,7 +31,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/home/root/app/target \
-    cargo build -p web --release
+    cargo build --release
 
 FROM rust:${RUST_VERSION}-slim
 WORKDIR /app
