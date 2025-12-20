@@ -23,11 +23,15 @@ COPY ./ ./
 
 # RUN TESTS
 
-RUN cargo test -p core
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/home/root/app/target \
+    cargo test -p core
 
 # BUILD RELEASE
 
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/home/root/app/target \
+    cargo build -p web --release
 
 FROM rust:${RUST_VERSION}-slim
 WORKDIR /app
