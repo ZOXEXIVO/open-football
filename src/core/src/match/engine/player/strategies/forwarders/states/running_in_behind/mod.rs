@@ -100,9 +100,23 @@ impl ForwardRunningInBehindState {
     }
 
     fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
-        let space_threshold = 10.0;
+        // Increased threshold - forwards should be more willing to make runs
+        // even with defenders nearby, as long as they have a pace advantage
+        let space_threshold = 8.0;
+        let close_opponents = ctx.players().opponents().nearby(space_threshold).count();
 
-        !ctx.players().opponents().exists(space_threshold)
+        // Allow runs even with one defender if the forward is fast
+        if close_opponents == 0 {
+            return true;
+        }
+
+        if close_opponents == 1 {
+            // Check if we're faster than the average defender
+            let pace = ctx.player.skills.physical.pace;
+            return pace > 70.0;
+        }
+
+        false
     }
 
     fn in_passing_lane(&self, ctx: &StateProcessingContext) -> bool {
@@ -121,12 +135,14 @@ impl ForwardRunningInBehindState {
         if let Some(teammate) = teammate_with_ball {
             let direction_to_player = (ctx.player.position - teammate.position).normalize();
             let direction_to_goal =
-                (ctx.ball().direction_to_own_goal() - teammate.position).normalize();
+                (ctx.ball().direction_to_opponent_goal() - teammate.position).normalize();
 
-            // Check if the player is running towards the goal
-            direction_to_player.dot(&direction_to_goal) > 0.7
+            // Check if the player is running towards the opponent's goal
+            // More lenient angle check to allow diagonal runs
+            direction_to_player.dot(&direction_to_goal) > 0.5
         } else {
-            false
+            // If no teammate has the ball, still allow the run if we're in a good position
+            true
         }
     }
 

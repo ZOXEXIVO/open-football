@@ -258,13 +258,13 @@ impl<'p> PlayerOperationsImpl<'p> {
         let strength_factor = 0.3 + (player_strength / 20.0) * 0.7;
 
         // Calculate distance factor that increases power for longer distances
-        // Close shots: ~1.0, Long shots: ~1.5
+        // Close shots: ~1.0, Long shots: ~1.6
         let max_field_distance = self.ctx.context.field_size.width as f32;
-        let distance_factor = 1.0 + (goal_distance / max_field_distance).min(1.0) * 0.5;
+        let distance_ratio = (goal_distance / max_field_distance).clamp(0.0, 1.0);
+        let distance_factor = 1.0 + distance_ratio * 0.6;
 
-        // Calculate the shooting power - skills have impact now
-        // Reduced base power significantly to keep speeds reasonable (20% above original)
-        let base_power = 2.4; // Reduced from 8.0 to get closer to original speeds with 20% increase
+        // Calculate the shooting power - moderate increase from original
+        let base_power = 3.5; // Moderate increase from 2.4
         let skill_multiplier = (technique_factor * 0.3)
             + (power_factor * 0.35)
             + (finishing_factor * 0.2)
@@ -273,9 +273,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let shooting_power = base_power * skill_multiplier * distance_factor;
 
         // Ensure the shooting power is within a reasonable range
-        // Target: original was ~0.5-2.5, now aiming for ~0.6-3.0 (20% increase)
-        let min_power = 0.6;
-        let max_power = 3.0;
+        let min_power = 2.0;
+        let max_power = 5.5;
 
         shooting_power.clamp(min_power, max_power) as f64
     }

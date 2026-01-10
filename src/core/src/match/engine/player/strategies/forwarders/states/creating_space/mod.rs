@@ -77,7 +77,21 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
-        // PRIORITY: When teammate has ball, make aggressive run toward goal
+        // PRIORITY 1: Coordinate with other forwards if needed
+        if self.should_coordinate_with_other_forwards(ctx) {
+            if let Some(coordinated_pos) = self.get_coordinated_forward_position(ctx) {
+                let base_velocity = SteeringBehavior::Arrive {
+                    target: coordinated_pos,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity;
+
+                return Some(base_velocity + ctx.player().separation_velocity() * 1.2);
+            }
+        }
+
+        // PRIORITY 2: When teammate has ball, make aggressive run toward goal
         if let Some(ball_holder) = self.get_ball_holder(ctx) {
             let holder_pos = ball_holder.position;
 
@@ -339,28 +353,44 @@ impl ForwardCreatingSpaceState {
     /// Evaluate a position for forward play
     fn evaluate_forward_position(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         let mut score = 0.0;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let distance_to_goal = (position - goal_pos).magnitude();
 
         // Space score (inverse of congestion)
         let congestion = self.calculate_position_congestion(ctx, position);
         score += (10.0 - congestion.min(10.0)) * 3.0;
 
-        // Goal threat score
+        // Goal threat score - INCREASED weight for dangerous positions
         let goal_threat = self.calculate_goal_threat(ctx, position);
-        score += goal_threat * 4.0;
+        score += goal_threat * 6.0; // Increased from 4.0
+
+        // MAJOR bonus for being in the box area (very dangerous)
+        if distance_to_goal < 180.0 {
+            score += 30.0;
+        } else if distance_to_goal < 250.0 {
+            score += 20.0;
+        }
 
         // Offside avoidance
         if !self.would_be_offside(ctx, position) {
             score += 15.0;
+        } else {
+            score -= 50.0; // Heavy penalty for offside positions
         }
 
-        // Channel positioning bonus
+        // Channel positioning bonus - INCREASED for central dangerous areas
         if self.is_in_dangerous_channel(ctx, position) {
-            score += 10.0;
+            score += 20.0; // Increased from 10.0
+
+            // Extra bonus for central positions close to goal
+            if distance_to_goal < 300.0 {
+                score += 15.0;
+            }
         }
 
-        // Behind defensive line bonus
+        // Behind defensive line bonus - INCREASED
         if self.is_behind_defensive_line(ctx, position) {
-            score += 20.0;
+            score += 30.0; // Increased from 20.0
         }
 
         // IMPROVED: Ball holder awareness - CRITICAL for receiving passes
@@ -926,14 +956,103 @@ impl ForwardCreatingSpaceState {
 
     // Keep existing helper methods for compatibility
     fn has_created_good_space(&self, ctx: &StateProcessingContext) -> bool {
-        let space_created = !ctx.players().opponents().exists(20.0);
+        // Reduced strictness - forwards should transition to assisting more often
+        let space_created = !ctx.players().opponents().exists(12.0); // Reduced from 20.0
         let in_support_position = self.is_in_good_support_position(ctx);
         let has_clear_lane = self.has_clear_passing_lane_from_ball_holder(ctx);
-        let minimum_time_in_state = 30;
+        let minimum_time_in_state = 15; // Reduced from 30
         let reasonable_distance = ctx.ball().distance() < MAX_DISTANCE_FROM_BALL;
 
-        space_created && in_support_position && has_clear_lane
-            && ctx.in_state_time > minimum_time_in_state && reasonable_distance
+        // More lenient check - any 3 of the 4 conditions is enough
+        let conditions_met = [
+            space_created,
+            in_support_position,
+            has_clear_lane,
+            reasonable_distance,
+        ].iter().filter(|&&c| c).count();
+
+        conditions_met >= 3 && ctx.in_state_time > minimum_time_in_state
+    }
+
+    /// Check if this forward should coordinate with other forwards to create space
+    fn should_coordinate_with_other_forwards(&self, ctx: &StateProcessingContext) -> bool {
+        // Find other forwards on the team
+        let other_forwards: Vec<_> = ctx.players()
+            .teammates()
+            .all()
+            .filter(|t| t.tactical_positions.is_forward() && t.id != ctx.player.id)
+            .collect();
+
+        if other_forwards.is_empty() {
+            return false;
+        }
+
+        // Check if forwards are too close together (poor spacing)
+        for forward in &other_forwards {
+            let distance = (ctx.player.position - forward.position).magnitude();
+            if distance < 25.0 {
+                return true; // Need to coordinate - too close
+            }
+        }
+
+        // Check if ball holder is looking for a pass
+        if let Some(holder) = self.get_ball_holder(ctx) {
+            if self.is_ball_holder_under_pressure(ctx, holder.id) {
+                return true; // Need to offer option
+            }
+        }
+
+        false
+    }
+
+    /// Get coordinated position relative to other forwards
+    fn get_coordinated_forward_position(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let other_forwards: Vec<_> = ctx.players()
+            .teammates()
+            .all()
+            .filter(|t| t.tactical_positions.is_forward() && t.id != ctx.player.id)
+            .collect();
+
+        if other_forwards.is_empty() {
+            return None;
+        }
+
+        let field_height = ctx.context.field_size.height as f32;
+        let player_pos = ctx.player.position;
+
+        // Calculate average position of other forwards
+        let avg_forward_y: f32 = other_forwards.iter()
+            .map(|f| f.position.y)
+            .sum::<f32>() / other_forwards.len() as f32;
+
+        // Position ourselves on the opposite side for better width
+        let target_y = if avg_forward_y < field_height / 2.0 {
+            // Other forwards are on the left, move right
+            (field_height * 0.65).min(field_height - 50.0)
+        } else {
+            // Other forwards are on the right, move left
+            (field_height * 0.35).max(50.0)
+        };
+
+        // Stay in a dangerous attacking position
+        let attacking_direction = self.get_attacking_direction(ctx);
+        let target_x = if let Some(holder) = self.get_ball_holder(ctx) {
+            // Stay ahead of ball holder but not offside
+            let defensive_line = self.get_defensive_line_position(ctx);
+            let ideal_x = holder.position.x + attacking_direction.x * 40.0;
+
+            // Clamp to just behind defensive line
+            match ctx.player.side {
+                Some(crate::r#match::PlayerSide::Left) => ideal_x.min(defensive_line - 3.0),
+                Some(crate::r#match::PlayerSide::Right) => ideal_x.max(defensive_line + 3.0),
+                None => ideal_x,
+            }
+        } else {
+            // Default: advance toward goal
+            player_pos.x + attacking_direction.x * 20.0
+        };
+
+        Some(Vector3::new(target_x, target_y, 0.0))
     }
 
     fn should_make_forward_run(&self, ctx: &StateProcessingContext) -> bool {
@@ -952,7 +1071,23 @@ impl ForwardCreatingSpaceState {
 
     fn is_in_good_support_position(&self, ctx: &StateProcessingContext) -> bool {
         let ball_distance = ctx.ball().distance();
-        ball_distance >= MIN_DISTANCE_FROM_BALL && ball_distance <= MAX_DISTANCE_FROM_BALL
+        let goal_distance = ctx.ball().distance_to_opponent_goal();
+
+        // Standard support position check
+        let in_normal_range = ball_distance >= MIN_DISTANCE_FROM_BALL && ball_distance <= MAX_DISTANCE_FROM_BALL;
+
+        // Also good if in dangerous position close to goal
+        let in_dangerous_area = goal_distance < 300.0 && ball_distance < MAX_DISTANCE_FROM_BALL + 20.0;
+
+        // Good if in passing range from ball holder
+        let in_passing_range = if let Some(holder) = self.get_ball_holder(ctx) {
+            let holder_distance = (ctx.player.position - holder.position).magnitude();
+            holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX
+        } else {
+            false
+        };
+
+        in_normal_range || in_dangerous_area || in_passing_range
     }
 
     fn has_clear_passing_lane_from_ball_holder(&self, ctx: &StateProcessingContext) -> bool {
