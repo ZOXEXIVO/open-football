@@ -6,7 +6,16 @@
       "Bash(find:*)",
       "Bash(git show:*)",
       "Bash(cargo check:*)",
-      "Bash(cargo test:*)"
+      "Bash(cargo test:*)",
+      "WebSearch",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:burn.dev)",
+      "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''use burn::train::\\\\{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep\\\\};'', ''use burn::train::{LearnerBuilder, LearningStrategy, RegressionOutput, TrainOutput, TrainStep, ValidStep};'' | Set-Content ''src/main.rs''\")",
+      "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''#\\\\[derive\\\\\\(Config\\\\\\)\\\\]'', ''#[derive\\(Config, Debug\\)]'' | Set-Content ''src/main.rs''\")",
+      "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''B::seed\\\\\\(config\\\\.seed\\\\\\);'', ''B::seed\\(&device, config.seed\\);'' | Set-Content ''src/main.rs''\")",
+      "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''\\\\.devices\\\\\\(vec!\\\\[device\\\\.clone\\\\\\(\\\\\\)\\\\]\\\\\\)'', ''.learning_strategy\\(LearningStrategy::SingleDevice\\(device.clone\\(\\)\\)\\)'' | Set-Content ''src/main.rs''\")",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []
