@@ -333,6 +333,8 @@ impl PassEvaluator {
         let ball_position = ctx.tick_context.positions.ball.position;
         let receiver_position = receiver.position;
         let passer_position = ctx.player.position;
+        let field_height = ctx.context.field_size.height as f32;
+        let field_center_y = field_height / 2.0;
 
         // Determine which direction is forward based on player side
         let forward_direction_multiplier = match ctx.player.side {
@@ -378,6 +380,69 @@ impl PassEvaluator {
             0.4 * vision_skill
         };
 
+        // === WIDTH AND FLANKS BONUS ===
+        // Reward passes to wide positions - creates more varied play
+        let receiver_distance_from_center = (receiver_position.y - field_center_y).abs();
+        let passer_distance_from_center = (passer_position.y - field_center_y).abs();
+
+        // How wide is the receiver? (0.0 = center, 1.0 = touchline)
+        let receiver_width_ratio = (receiver_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
+        let passer_width_ratio = (passer_distance_from_center / (field_height / 2.0)).clamp(0.0, 1.0);
+
+        // Width bonus - reward passes to wide areas
+        // Extra bonus if passer is central and receiver is wide (spreading play)
+        let spreading_play_bonus = if passer_width_ratio < 0.4 && receiver_width_ratio > 0.5 {
+            0.15 // Central player finding wide teammate
+        } else {
+            0.0
+        };
+
+        let width_bonus = if receiver_width_ratio > 0.7 {
+            // Very wide (near touchline) - excellent for stretching play
+            0.4 + spreading_play_bonus
+        } else if receiver_width_ratio > 0.5 {
+            // Wide areas - good for creating space
+            0.25 + spreading_play_bonus
+        } else if receiver_width_ratio > 0.3 {
+            // Half-spaces - valuable attacking zones
+            0.15
+        } else {
+            // Central - no bonus (already gets forward progress bonus usually)
+            0.0
+        };
+
+        // === SWITCHING PLAY BONUS ===
+        // Reward passes that switch the play from one side to the other
+        let lateral_change = (receiver_position.y - passer_position.y).abs();
+        let is_switching_play = lateral_change > field_height * 0.3; // Significant lateral movement
+
+        let switch_play_bonus = if is_switching_play {
+            let vision_skill = ctx.player.skills.mental.vision / 20.0;
+            // Big bonus for switching play - opens up space
+            0.3 + (vision_skill * 0.2)
+        } else {
+            0.0
+        };
+
+        // === OVERLOADED SIDE PENALTY ===
+        // Penalize passes that keep ball on already crowded side
+        let ball_side = if ball_position.y > field_center_y { 1.0 } else { -1.0 };
+        let receiver_side = if receiver_position.y > field_center_y { 1.0 } else { -1.0 };
+
+        let teammates_on_ball_side = ctx.players().teammates().all()
+            .filter(|t| {
+                let t_side = if t.position.y > field_center_y { 1.0 } else { -1.0 };
+                t_side == ball_side
+            })
+            .count();
+
+        let overload_penalty = if ball_side == receiver_side && teammates_on_ball_side > 4 {
+            // Too many players on one side - encourage switching
+            -0.15
+        } else {
+            0.0
+        };
+
         // Long cross-field passes - reward vision players for switching play
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
         let technique_skill = ctx.player.skills.technical.technique / 20.0;
@@ -406,16 +471,17 @@ impl PassEvaluator {
             crate::PlayerFieldPositionGroup::Goalkeeper => 0.2,
         };
 
-        // Weighted combination - heavily favor forward progress and good distance
+        // Weighted combination - includes width and switching bonuses
         let tactical_value =
-            forward_value * 0.55 +        // Increased from 0.50 - even more favor for forward passes
-            distance_value * 0.22 +       // Slightly reduced from 0.25
-            position_value * 0.13 +       // Reduced from 0.15
-            long_pass_bonus * 0.10;       // Keep same
+            forward_value * 0.45 +         // Reduced from 0.55 to make room for width
+            distance_value * 0.18 +        // Reduced from 0.22
+            position_value * 0.10 +        // Reduced from 0.13
+            long_pass_bonus * 0.07 +       // Reduced from 0.10
+            width_bonus * 0.10 +           // NEW: reward wide passes
+            switch_play_bonus * 0.10 +     // NEW: reward switching play
+            overload_penalty;              // NEW: penalize crowded side
 
-        // Allow negative tactical values for backward passes (don't clamp to 0.1 minimum)
-        // This properly penalizes backward passes to GK
-        // Increased cap from 1.3 to 1.8 to better reward excellent penetrating opportunities
+        // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
     }
 

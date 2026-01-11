@@ -5,11 +5,11 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 5.0; // Distance within which the defender can tackle (increased from 3.0)
-const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Max distance to consider pressing
-const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 35.0; // Tighter in defensive third
-const CLOSE_PRESSING_DISTANCE: f32 = 15.0; // Distance for aggressive pressing
-const STAMINA_THRESHOLD: f32 = 40.0; // Increased from 30.0 - prevent overexertion
+const TACKLING_DISTANCE_THRESHOLD: f32 = 6.0; // Increased from 5.0 - slightly earlier tackles
+const PRESSING_DISTANCE_THRESHOLD: f32 = 65.0; // Increased from 50.0 - more aggressive pressing
+const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 55.0; // Increased from 35.0 - tighter in defensive third
+const CLOSE_PRESSING_DISTANCE: f32 = 20.0; // Increased from 15.0 - wider close pressing zone
+const STAMINA_THRESHOLD: f32 = 35.0; // Reduced from 40.0 - press more aggressively
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
 #[derive(Default)]
@@ -20,7 +20,6 @@ impl StateProcessingHandler for DefenderPressingState {
         // 1. Check if the defender has enough stamina to continue pressing
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina < STAMINA_THRESHOLD {
-            // Transition to Resting state if stamina is low
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Resting,
             ));
@@ -30,7 +29,7 @@ impl StateProcessingHandler for DefenderPressingState {
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // 4. If close enough to tackle, transition to Tackling state
+            // If close enough to tackle, transition to Tackling state
             if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
@@ -45,27 +44,54 @@ impl StateProcessingHandler for DefenderPressingState {
                 PRESSING_DISTANCE_THRESHOLD
             };
 
-            // 5. If the opponent is too far away, stop pressing
+            // If the opponent is too far away, stop pressing
             if distance_to_opponent > pressing_threshold {
-                // Transition back to HoldingLine or appropriate state
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::HoldingLine,
                 ));
             }
 
-            // 6. Check if pressing is creating dangerous gaps
+            // COORDINATION: Check if another defender is already pressing and closer
+            // If so, drop back to cover instead of double-pressing
+            if !ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
+                // Another defender is better positioned - switch to covering
+                // Check if there are unmarked threats we should handle instead
+                if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(60.0) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Marking,
+                    ));
+                }
+                // No unmarked threats, drop back to cover
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Covering,
+                ));
+            }
+
+            // Check if pressing is creating dangerous gaps
             if self.is_creating_dangerous_gap(ctx, opponent.position) {
-                // Drop back to maintain defensive shape
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::HoldingLine,
                 ));
             }
 
-            // 7. Continue pressing (no state change)
+            // Check if we would leave space uncovered
+            if ctx.player().defensive().would_leave_space_uncovered(&opponent) {
+                // Too risky to press - stay back
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Covering,
+                ));
+            }
+
+            // Continue pressing
             None
         } else {
-            // No opponent with the ball found (perhaps ball is free)
-            // Transition back to appropriate state
+            // No opponent with the ball - ball might be loose
+            // Check if we should intercept
+            if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Intercepting,
+                ));
+            }
             Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
             ))

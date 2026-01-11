@@ -11,17 +11,17 @@ const INTERCEPTION_DISTANCE: f32 = 200.0;
 const CLEARING_DISTANCE: f32 = 50.0;
 const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
-const MARKING_DISTANCE: f32 = 15.0;
+const MARKING_DISTANCE: f32 = 25.0; // Increased from 15.0 - pick up attackers earlier
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
-const PRESSING_DISTANCE: f32 = 45.0; // Reduced from 100.0 - more realistic press trigger
-const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 35.0; // Even tighter in own defensive third
+const PRESSING_DISTANCE: f32 = 60.0; // Increased from 45.0 - more proactive pressing
+const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 50.0; // Increased from 35.0 - tighter in own third
 const TACKLE_DISTANCE: f32 = 30.0;
-const BLOCKING_DISTANCE: f32 = 15.0;
+const BLOCKING_DISTANCE: f32 = 20.0; // Increased from 15.0 - earlier shot blocking
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
-const THREAT_SCAN_DISTANCE: f32 = 70.0; // Extended range for detecting dangerous runs
-const DANGEROUS_RUN_SPEED: f32 = 3.0; // Minimum speed to consider a run dangerous
-const DANGEROUS_RUN_ANGLE: f32 = 0.7; // Dot product threshold for running toward goal
+const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - earlier detection of dangerous runs
+const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower dangerous runs too
+const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle detection
 
 #[derive(Default)]
 pub struct DefenderStandingState {}
@@ -43,7 +43,7 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Check for nearby opponents with the ball - press them aggressively
+        // Check for nearby opponents with the ball - press them if we're best positioned
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
@@ -61,10 +61,20 @@ impl StateProcessingHandler for DefenderStandingState {
                 PRESSING_DISTANCE
             };
 
+            // Only press if we're the best defender for this opponent (coordination)
             if distance_to_opponent < pressing_threshold {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
+                if ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                } else {
+                    // Another defender is better positioned - look for unmarked opponents
+                    if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Marking,
+                        ));
+                    }
+                }
             }
         }
 

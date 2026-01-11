@@ -6,15 +6,15 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MARKING_DISTANCE: f32 = 15.0;
-const INTERCEPTION_DISTANCE: f32 = 100.0;
+const MARKING_DISTANCE: f32 = 25.0; // Increased from 15.0 - pick up attackers earlier
+const INTERCEPTION_DISTANCE: f32 = 120.0; // Increased from 100.0
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const PUSH_UP_HYSTERESIS: f32 = 0.05;
-const THREAT_SCAN_DISTANCE: f32 = 70.0;
-const DANGEROUS_RUN_SPEED: f32 = 3.0;
-const DANGEROUS_RUN_ANGLE: f32 = 0.7;
-const MIN_STATE_TIME_DEFAULT: u64 = 200; // Reduced from 300
-const MIN_STATE_TIME_WITH_THREAT: u64 = 50; // Fast reaction when threats detected
+const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - wider threat detection
+const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower runs
+const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
+const MIN_STATE_TIME_DEFAULT: u64 = 100; // Reduced from 200 - faster reactions
+const MIN_STATE_TIME_WITH_THREAT: u64 = 30; // Reduced from 50 - very fast reaction to threats
 
 #[derive(Default)]
 pub struct DefenderCoveringState {}
@@ -33,6 +33,17 @@ impl StateProcessingHandler for DefenderCoveringState {
         }
 
         let ball_ops = ctx.ball();
+
+        // Priority: Press ball carrier if we're closest and in range
+        if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
+            let distance = opponent_with_ball.distance(ctx);
+            if distance < 40.0 && ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+        }
+
         if ball_ops.on_own_side() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
@@ -48,6 +59,17 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
+        // Look for unmarked dangerous opponents first (coordination)
+        if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE) {
+            // Only mark if we're well positioned for this opponent
+            if ctx.player().defensive().is_best_defender_for_opponent(&unmarked) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
+            }
+        }
+
+        // Fall back to basic marking check
         if let Some(_) = ctx.players().opponents().nearby(MARKING_DISTANCE).next() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Marking,

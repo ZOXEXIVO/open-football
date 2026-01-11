@@ -285,7 +285,7 @@ impl PlayerEventDispatcher {
 
         // Calculate pass force with power variation
         // Reduced variation to make passes more consistent
-        let power_consistency = 0.9 + (skills.technique * skills.stamina * 0.1);
+        let power_consistency = 1.0 + (skills.technique * skills.stamina * 0.1);
         let power_variation_range = (1.0 - overall_quality) * 0.11;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
@@ -697,9 +697,40 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_claim_ball_event(player_id: u32, field: &mut MatchField) {
+        // CLAIM COOLDOWN: Prevent rapid ping-pong between players
+        // If the ball was just claimed by someone else, reject this claim
+        const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
+
+        // If there's a cooldown active and this player doesn't already own the ball
+        if field.ball.claim_cooldown > 0 {
+            if let Some(current_owner) = field.ball.current_owner {
+                if current_owner != player_id {
+                    // Ball was just claimed by someone else - reject this claim
+                    return;
+                }
+            }
+        }
+
+        // If there's already an owner and they're different from the claimer
+        // Only allow the claim if enough time has passed (ownership_duration check)
+        if let Some(current_owner) = field.ball.current_owner {
+            if current_owner != player_id {
+                // Different player trying to claim - this is a tackle/interception
+                // Allow it but set cooldown to prevent immediate re-claim
+                field.ball.previous_owner = Some(current_owner);
+                field.ball.current_owner = Some(player_id);
+                field.ball.ownership_duration = 0;
+                field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
+                field.ball.flags.in_flight_state = 30;
+                return;
+            }
+        }
+
+        // No current owner or same owner - normal claim
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
-
+        field.ball.ownership_duration = 0;
+        field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
         field.ball.flags.in_flight_state = 30;
     }
 

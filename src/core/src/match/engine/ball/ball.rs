@@ -23,6 +23,7 @@ pub struct Ball {
     pub last_boundary_position: Option<Vector3<f32>>,
     pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
     pub ownership_duration: u32,  // How many ticks current owner has had the ball
+    pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
 }
 
 #[derive(Default)]
@@ -59,6 +60,7 @@ impl Ball {
             last_boundary_position: None,
             unowned_stopped_ticks: 0,
             ownership_duration: 0,
+            claim_cooldown: 0,
         }
     }
 
@@ -69,6 +71,11 @@ impl Ball {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        // Decrement claim cooldown
+        if self.claim_cooldown > 0 {
+            self.claim_cooldown -= 1;
+        }
+
         self.update_velocity();
         self.check_goal(context, events);
         self.check_boundary_collision(context);
@@ -462,6 +469,14 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // COOLDOWN CHECK: If cooldown is active and there's an owner, skip ownership checks
+        // This prevents rapid ping-pong between players
+        if self.claim_cooldown > 0 && self.current_owner.is_some() {
+            // Just increment ownership duration and return
+            self.ownership_duration += 1;
+            return;
+        }
+
         // Distance threshold for claiming ball
         const BALL_DISTANCE_THRESHOLD: f32 = 2.0; // Players can claim within 2m
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
@@ -662,10 +677,11 @@ impl Ball {
                     }
                 }
 
-                // Ownership change approved - reset duration
+                // Ownership change approved - reset duration and set cooldown
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
                 self.ownership_duration = 0;
+                self.claim_cooldown = 15; // Same as CLAIM_COOLDOWN_TICKS
                 events.add_ball_event(BallEvent::Claimed(player.id));
             } else {
                 // Same owner - just increment duration
