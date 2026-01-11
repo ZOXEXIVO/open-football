@@ -8,6 +8,9 @@ const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 40.0;  // Reduced from 50.0 - tighter 
 const BALL_PROXIMITY_THRESHOLD: f32 = 120.0; // Increased from 100.0 - react earlier to ball
 const MARKING_DISTANCE_THRESHOLD: f32 = 40.0; // Increased from 30.0 - pick up attackers earlier
 const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Distance to start pressing ball carrier
+const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 80.0; // Distance to scan for dangerous runs
+const DANGEROUS_RUN_SPEED: f32 = 2.5; // Minimum speed to consider a dangerous run
+const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Minimum alignment toward goal
 
 #[derive(Default)]
 pub struct DefenderHoldingLineState {}
@@ -37,6 +40,21 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                         DefenderState::Pressing,
                     ));
                 }
+            }
+        }
+
+        // CRITICAL: Check for dangerous runs - break from line to track attackers
+        // This prevents defenders from standing still while attackers run past
+        if let Some(dangerous_runner) = self.scan_for_dangerous_runs(ctx) {
+            let distance_to_runner = dangerous_runner.distance(ctx);
+            // Track if we're the best positioned defender OR if runner is very close (< 25m)
+            // The close distance check ensures someone tracks even if coordination disagrees
+            if ctx.player().defensive().is_best_defender_for_opponent(&dangerous_runner)
+                || distance_to_runner < 25.0
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
             }
         }
 
@@ -194,6 +212,55 @@ impl DefenderHoldingLineState {
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.
     fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players().opponents().exists(MARKING_DISTANCE_THRESHOLD)
+    }
+
+    /// Scan for opponents making dangerous runs toward goal
+    fn scan_for_dangerous_runs(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let own_goal_position = ctx.ball().direction_to_own_goal();
+
+        let dangerous_runners: Vec<MatchPlayerLite> = ctx
+            .players()
+            .opponents()
+            .nearby(DANGEROUS_RUN_SCAN_DISTANCE)
+            .filter(|opp| {
+                let velocity = opp.velocity(ctx);
+                let speed = velocity.norm();
+
+                // Must be moving at significant speed
+                if speed < DANGEROUS_RUN_SPEED {
+                    return false;
+                }
+
+                // Check if running toward our goal
+                let to_goal = (own_goal_position - opp.position).normalize();
+                let velocity_dir = velocity.normalize();
+                let alignment = velocity_dir.dot(&to_goal);
+
+                if alignment < DANGEROUS_RUN_ANGLE {
+                    return false;
+                }
+
+                // Check if attacker is in dangerous position relative to this defender
+                let defender_x = ctx.player.position.x;
+                let is_ahead_or_close = if own_goal_position.x < ctx.context.field_size.width as f32 / 2.0 {
+                    opp.position.x < defender_x + 30.0 // Attacker is ahead or close
+                } else {
+                    opp.position.x > defender_x - 30.0
+                };
+
+                alignment >= DANGEROUS_RUN_ANGLE && is_ahead_or_close
+            })
+            .collect();
+
+        // Return the closest dangerous runner
+        dangerous_runners
+            .iter()
+            .min_by(|a, b| {
+                let dist_a = a.distance(ctx);
+                let dist_b = b.distance(ctx);
+                dist_a.partial_cmp(&dist_b).unwrap()
+            })
+            .copied()
     }
 
     /// Determines if the team should set up an offside trap.

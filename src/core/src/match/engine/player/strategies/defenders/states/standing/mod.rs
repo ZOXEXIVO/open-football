@@ -74,6 +74,12 @@ impl StateProcessingHandler for DefenderStandingState {
                             DefenderState::Marking,
                         ));
                     }
+                    // No unmarked opponent but ball is close - track back or cover
+                    if ctx.ball().on_own_side() {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::TrackingBack,
+                        ));
+                    }
                 }
             }
         }

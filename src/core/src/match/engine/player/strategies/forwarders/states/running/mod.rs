@@ -10,6 +10,7 @@ use nalgebra::Vector3;
 // Realistic shooting distances (field is 840 units)
 const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
+const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
 const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
@@ -30,7 +31,16 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Priority 0: Clear shooting opportunity
+            // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
+            // This prevents forwards from colliding with goalkeeper instead of shooting
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
+            }
+
+            // Priority 1: Clear shooting opportunity
             if ctx.player().shooting().has_excellent_opportunity() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,

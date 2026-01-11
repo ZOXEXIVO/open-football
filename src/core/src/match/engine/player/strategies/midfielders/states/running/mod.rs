@@ -10,6 +10,8 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 100.0; // Midfielders rarely shoot from beyond ~50m
 const STANDARD_SHOOTING_DISTANCE: f32 = 70.0; // Standard shooting range for midfielders
 const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
+const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
+const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -17,6 +19,15 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
+            // This prevents players from colliding with goalkeeper instead of shooting
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+
             // Priority: Clear ball if congested anywhere (not just boundaries)
             // Allow emergency clearances even without stable possession
             if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
