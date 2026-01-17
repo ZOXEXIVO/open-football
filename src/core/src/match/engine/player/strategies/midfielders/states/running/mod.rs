@@ -10,6 +10,8 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 100.0; // Midfielders rarely shoot from beyond ~50m
 const STANDARD_SHOOTING_DISTANCE: f32 = 70.0; // Standard shooting range for midfielders
 const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
+const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
+const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
 #[derive(Default)]
 pub struct MidfielderRunningState {}
@@ -17,6 +19,15 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
+            // This prevents players from colliding with goalkeeper instead of shooting
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+
             // Priority: Clear ball if congested anywhere (not just boundaries)
             // Allow emergency clearances even without stable possession
             if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
@@ -202,45 +213,149 @@ impl MidfielderRunningState {
             .velocity + ctx.player().separation_velocity()
     }
 
-    /// Simplified support movement
+    /// Support movement that respects tactical positions and spreads wide
     fn calculate_simple_support_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let player_pos = ctx.player.position;
+        let start_pos = ctx.player.start_position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
 
-        // Simple triangle formation with ball
-        let angle = if player_pos.y < ctx.context.field_size.height as f32 / 2.0 {
-            -45.0_f32.to_radians()
-        } else {
-            45.0_f32.to_radians()
+        // Use starting Y position to determine player's tactical width
+        // This keeps wide midfielders wide and central midfielders more central
+        let tactical_y = start_pos.y;
+        let is_wide_player = (tactical_y - field_height / 2.0).abs() > field_height * 0.2;
+
+        // Determine attacking direction
+        let attacking_direction = match ctx.player.side {
+            Some(crate::r#match::PlayerSide::Left) => 1.0,
+            Some(crate::r#match::PlayerSide::Right) => -1.0,
+            None => 0.0,
         };
 
-        let support_offset = Vector3::new(
-            angle.cos() * 30.0,
-            angle.sin() * 30.0,
+        // Calculate target based on whether player is wide or central
+        let target = if is_wide_player {
+            // Wide midfielder - maintain width and make overlapping runs
+            let flank_y = if tactical_y < field_height / 2.0 {
+                field_height * 0.12 // Stay on left flank
+            } else {
+                field_height * 0.88 // Stay on right flank
+            };
+
+            // Advance with the ball but stay wide
+            let advance_x = ball_pos.x + attacking_direction * 40.0;
+
+            Vector3::new(
+                advance_x.clamp(50.0, field_width - 50.0),
+                flank_y,
+                0.0,
+            )
+        } else {
+            // Central midfielder - support play but avoid clustering
+            // Check if other midfielders are nearby
+            let other_midfielders_near_ball = ctx.players().teammates().all()
+                .filter(|t| {
+                    t.tactical_positions.is_midfielder() &&
+                    t.id != ctx.player.id &&
+                    (t.position - ball_pos).magnitude() < 50.0
+                })
+                .count();
+
+            if other_midfielders_near_ball >= 2 {
+                // Too many midfielders near ball - spread out
+                let spread_y = if player_pos.y < field_height / 2.0 {
+                    field_height * 0.25
+                } else {
+                    field_height * 0.75
+                };
+
+                Vector3::new(
+                    ball_pos.x + attacking_direction * 30.0,
+                    spread_y,
+                    0.0,
+                )
+            } else {
+                // Support position - create triangle but not too close
+                let offset_angle = if player_pos.y < field_height / 2.0 {
+                    -40.0_f32.to_radians()
+                } else {
+                    40.0_f32.to_radians()
+                };
+
+                let support_distance = 45.0; // Increased from 30 to spread more
+                let support_offset = Vector3::new(
+                    support_distance * offset_angle.cos() * attacking_direction,
+                    support_distance * offset_angle.sin(),
+                    0.0,
+                );
+
+                ball_pos + support_offset
+            }
+        };
+
+        // Clamp to field
+        let clamped_target = Vector3::new(
+            target.x.clamp(20.0, field_width - 20.0),
+            target.y.clamp(20.0, field_height - 20.0),
             0.0,
         );
 
-        let target = ball_pos + support_offset;
-
         SteeringBehavior::Arrive {
-            target,
+            target: clamped_target,
             slowing_distance: 15.0,
         }
             .calculate(ctx.player)
-            .velocity + ctx.player().separation_velocity()
+            .velocity + ctx.player().separation_velocity() * 1.5
     }
 
-    /// Simplified defensive movement
+    /// Defensive movement that returns to tactical position
     fn calculate_simple_defensive_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Move toward midpoint between ball and starting position
         let ball_pos = ctx.tick_context.positions.ball.position;
         let start_pos = ctx.player.start_position;
+        let player_pos = ctx.player.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
 
-        let target = (ball_pos + start_pos) * 0.5;
+        // Calculate how far ball is into our half
+        let our_goal = ctx.ball().direction_to_own_goal();
+        let ball_threat = (ball_pos - our_goal).magnitude() / field_width;
+
+        // Determine target based on ball threat level
+        let target = if ball_threat < 0.3 {
+            // Ball is in our defensive third - get back to position quickly
+            start_pos
+        } else if ball_threat < 0.5 {
+            // Ball is in middle - position between ball and start position
+            // But maintain tactical width (Y position from start)
+            Vector3::new(
+                (ball_pos.x + start_pos.x) * 0.5,
+                start_pos.y, // Keep tactical Y position
+                0.0,
+            )
+        } else {
+            // Ball is far - move slightly toward ball but maintain shape
+            let blend_factor = 0.3; // 30% toward ball, 70% start position
+            Vector3::new(
+                start_pos.x + (ball_pos.x - start_pos.x) * blend_factor,
+                start_pos.y, // Keep tactical Y position
+                0.0,
+            )
+        };
+
+        // Ensure we stay in reasonable bounds
+        let clamped_target = Vector3::new(
+            target.x.clamp(30.0, field_width - 30.0),
+            target.y.clamp(30.0, field_height - 30.0),
+            0.0,
+        );
+
+        // More urgent return if far from position
+        let distance_from_start = (player_pos - start_pos).magnitude();
+        let urgency = if distance_from_start > 100.0 { 10.0 } else { 20.0 };
 
         SteeringBehavior::Arrive {
-            target,
-            slowing_distance: 20.0,
+            target: clamped_target,
+            slowing_distance: urgency,
         }
             .calculate(ctx.player)
             .velocity + ctx.player().separation_velocity()

@@ -16,30 +16,64 @@ impl StateProcessingHandler for ForwardDribblingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+
+        // PRIORITY 1: Very close to goal - ALWAYS try to shoot (inside 6-yard box)
+        if distance_to_goal < 60.0 {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+        }
+
+        // PRIORITY 2: Inside penalty area - shoot aggressively
+        if distance_to_goal < 165.0 {
+            let finishing = ctx.player.skills.technical.finishing;
+            let has_clear_shot = ctx.player().has_clear_shot();
+            let close_blockers = ctx.players().opponents().nearby(5.0).count();
+
+            // Shoot if clear shot OR good finishing skill with minimal blocking
+            if has_clear_shot || (finishing > 12.0 && close_blockers <= 1) {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
+        }
+
+        // PRIORITY 3: Edge of box - shoot with good skills
+        if distance_to_goal < 250.0 && ctx.player().has_clear_shot() {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+        }
+
         // Prevent infinite dribbling - timeout after 40 ticks to reassess
         if ctx.in_state_time > 40 {
-            // Check for shooting opportunity first
-            if ctx.ball().distance_to_opponent_goal() < 250.0 && ctx.player().has_clear_shot() {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            // Check for shooting opportunity first - be aggressive
+            if distance_to_goal < 300.0 {
+                let finishing = ctx.player.skills.technical.finishing;
+                let close_blockers = ctx.players().opponents().nearby(6.0).count();
+                if ctx.player().has_clear_shot() || (finishing > 13.0 && close_blockers <= 1) {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+                }
             }
             // Otherwise try passing
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
-        if ctx.ball().distance_to_opponent_goal() < 35.0 && ctx.player().has_clear_shot() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-        }
-
         // Check if the player is under pressure from multiple defenders
-        // Reduced check from nearby_raw to more accurate close defenders
         let close_defenders = ctx.players().opponents().nearby(8.0).count();
         if close_defenders >= 2 {
+            // Under heavy pressure in dangerous area - try to shoot anyway
+            if distance_to_goal < 200.0 {
+                let finishing = ctx.player.skills.technical.finishing;
+                if finishing > 11.0 {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+                }
+            }
             // Transition to Passing state if under pressure from multiple close defenders
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
         // Check if there's space to dribble forward
         if !self.has_space_to_dribble(ctx) {
+            // In dangerous area with no space - try shooting
+            if distance_to_goal < 250.0 {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
             // Transition to HoldingUpPlay state if there's no space to dribble
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::HoldingUpPlay,

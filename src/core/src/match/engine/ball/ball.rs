@@ -23,6 +23,7 @@ pub struct Ball {
     pub last_boundary_position: Option<Vector3<f32>>,
     pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
     pub ownership_duration: u32,  // How many ticks current owner has had the ball
+    pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
 }
 
 #[derive(Default)]
@@ -59,6 +60,7 @@ impl Ball {
             last_boundary_position: None,
             unowned_stopped_ticks: 0,
             ownership_duration: 0,
+            claim_cooldown: 0,
         }
     }
 
@@ -69,6 +71,11 @@ impl Ball {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        // Decrement claim cooldown
+        if self.claim_cooldown > 0 {
+            self.claim_cooldown -= 1;
+        }
+
         self.update_velocity();
         self.check_goal(context, events);
         self.check_boundary_collision(context);
@@ -152,22 +159,19 @@ impl Ball {
                 self.last_boundary_position = None;
                 return; // Will re-notify on next tick
             }
-            // Check if any notified player reached the ball - must be very close to claim
-            const CLAIM_DISTANCE: f32 = 1.8; // Increased from 1.5 for easier claiming
-            const MAX_CLAIM_VELOCITY: f32 = 6.0; // Increased from 5.0 - ball must be reasonably slow to claim
+            // Check if any notified player reached the ball
+            const CLAIM_DISTANCE: f32 = 2.5; // Claim distance for notified players
+            const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow enough to claim
 
-            // For aerial balls, check distance to landing position
             let target_position = if self.is_aerial() {
                 self.calculate_landing_position()
             } else {
                 self.position
             };
 
-            // Check ball velocity - allow claiming slower balls
             let ball_speed = self.velocity.norm();
             let can_claim_by_speed = ball_speed < MAX_CLAIM_VELOCITY;
 
-            // Find the first player who reached the ball
             let mut claiming_player_id: Option<u32> = None;
             let mut all_players_missing = true;
 
@@ -175,37 +179,16 @@ impl Ball {
                 if let Some(player) = players.iter().find(|p| p.id == *notified_player_id) {
                     all_players_missing = false;
 
-                    // Calculate proper 3D distance
                     let dx = player.position.x - target_position.x;
                     let dy = player.position.y - target_position.y;
                     let dz = target_position.z;
                     let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
+                    // Simple distance check - if close enough and ball is slow, claim it
                     if distance_3d < CLAIM_DISTANCE && self.current_owner.is_none() && can_claim_by_speed {
-                        // Check if ball is moving away from player
-                        if ball_speed > 1.0 {
-                            // Vector from ball to player (horizontal only for 2D check)
-                            let to_player_x = dx;
-                            let to_player_y = dy;
-
-                            // Ball direction (normalized)
-                            let ball_dir_x = self.velocity.x / ball_speed;
-                            let ball_dir_y = self.velocity.y / ball_speed;
-
-                            // Dot product: positive means ball moving towards player
-                            let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
-
-                            // If ball is moving away (negative dot), player can't claim it
-                            if dot_product < 0.0 {
-                                continue; // Skip this player
-                            }
-                        }
-
-                        // Player reached the ball (or landing position), give them ownership when ball arrives
-                        // For aerial balls, only claim when ball is low enough
                         if !self.is_aerial() || self.position.z < 2.5 {
                             claiming_player_id = Some(*notified_player_id);
-                            break; // Ball claimed, no need to check other players
+                            break;
                         }
                     }
                 }
@@ -287,43 +270,46 @@ impl Ball {
             || self.position.y >= self.field_height
     }
 
-    /// NUCLEAR OPTION: Force the nearest player to claim the ball if it's been sitting unowned for too long
-    /// This is a last-resort failsafe to prevent deadlocks where no one claims the ball
+    /// Deadlock resolution: Force the nearest player to claim the ball if it's been sitting unowned for too long
+    /// Uses progressive radius - starts strict, expands if stuck to ensure game never deadlocks
     fn force_claim_if_deadlock(
         &mut self,
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Use hysteresis to avoid oscillation: stricter threshold to enter, looser to exit
-        const DEADLOCK_VELOCITY_ENTER: f32 = 4.0; // Enter deadlock detection when velocity drops below this (increased to catch more cases)
-        const DEADLOCK_VELOCITY_EXIT: f32 = 6.0; // Exit deadlock detection when velocity exceeds this
-        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5; // Catch low aerial balls too
-        const DEADLOCK_TICK_THRESHOLD: u32 = 25; // Force claim after 25 ticks (~0.4 seconds) - faster response
-        const DEADLOCK_SEARCH_RADIUS: f32 = 15.0; // Increased initial search radius
-        const DEADLOCK_EXTENDED_RADIUS: f32 = 30.0; // Extended radius if no one found nearby
-        const DEADLOCK_TICK_EXTENDED: u32 = 45; // Use extended radius after 45 ticks (~0.75 seconds)
+        const DEADLOCK_VELOCITY_ENTER: f32 = 3.0;
+        const DEADLOCK_VELOCITY_EXIT: f32 = 4.0;
+        const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5;
 
-        // Check if ball is unowned
+        // Progressive timing thresholds
+        const TICK_PHASE_1: u32 = 30;   // ~0.5s - try close range first
+        const TICK_PHASE_2: u32 = 60;   // ~1.0s - expand range
+        const TICK_PHASE_3: u32 = 100;  // ~1.6s - further expand
+        const TICK_PHASE_4: u32 = 150;  // ~2.5s - last resort
+
+        // Progressive claim distances - balance realism vs avoiding deadlock
+        const CLAIM_DISTANCE_PHASE_1: f32 = 3.0;   // Close range - looks natural
+        const CLAIM_DISTANCE_PHASE_2: f32 = 5.0;   // Medium range - acceptable
+        const CLAIM_DISTANCE_PHASE_3: f32 = 8.0;   // Extended range - noticeable but not terrible
+        const CLAIM_DISTANCE_PHASE_4: f32 = 12.0;  // Last resort - better than stuck forever
+
         let is_unowned = self.current_owner.is_none();
 
         if !is_unowned {
-            // Ball is owned - reset counter
             self.unowned_stopped_ticks = 0;
             return;
         }
 
-        // CRITICAL: Don't interfere with passed/kicked balls
-        // If ball is in flight (pass protection), skip deadlock detection entirely
+        // Don't interfere with passed/kicked balls
         if self.flags.in_flight_state > 0 {
             self.unowned_stopped_ticks = 0;
             return;
         }
 
-        // Determine velocity threshold based on current state (hysteresis)
         let velocity_threshold = if self.unowned_stopped_ticks > 0 {
-            DEADLOCK_VELOCITY_EXIT // Already tracking - use looser threshold
+            DEADLOCK_VELOCITY_EXIT
         } else {
-            DEADLOCK_VELOCITY_ENTER // Not tracking - use stricter threshold
+            DEADLOCK_VELOCITY_ENTER
         };
 
         let velocity_norm = self.velocity.norm();
@@ -333,73 +319,61 @@ impl Ball {
         if is_slow && is_low {
             self.unowned_stopped_ticks += 1;
 
-            // If ball has been slow and unowned for threshold ticks, FORCE claiming
-            if self.unowned_stopped_ticks >= DEADLOCK_TICK_THRESHOLD {
-                // Determine search radius based on how long we've been waiting
-                let search_radius = if self.unowned_stopped_ticks >= DEADLOCK_TICK_EXTENDED {
-                    DEADLOCK_EXTENDED_RADIUS
-                } else {
-                    DEADLOCK_SEARCH_RADIUS
-                };
+            // Determine claim distance based on how long we've been waiting
+            let (should_claim, claim_distance) = if self.unowned_stopped_ticks >= TICK_PHASE_4 {
+                (true, CLAIM_DISTANCE_PHASE_4)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_3 {
+                (true, CLAIM_DISTANCE_PHASE_3)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_2 {
+                (true, CLAIM_DISTANCE_PHASE_2)
+            } else if self.unowned_stopped_ticks >= TICK_PHASE_1 {
+                (true, CLAIM_DISTANCE_PHASE_1)
+            } else {
+                (false, 0.0)
+            };
 
-                // Find the nearest player within search radius
+            if should_claim {
+                // Find nearest player within current claim distance
                 if let Some(nearest_player) = players.iter()
-                    .filter(|p| {
+                    .filter_map(|p| {
                         let dx = p.position.x - self.position.x;
                         let dy = p.position.y - self.position.y;
                         let distance = (dx * dx + dy * dy).sqrt();
-                        distance <= search_radius
+                        if distance <= claim_distance {
+                            Some((p, distance))
+                        } else {
+                            None
+                        }
                     })
-                    .min_by(|a, b| {
-                        let dist_a = (a.position - self.position).magnitude();
-                        let dist_b = (b.position - self.position).magnitude();
-                        dist_a.partial_cmp(&dist_b).unwrap()
-                    }) {
-
-                    // DIRECTLY CLAIM the ball - don't use TakeMe event which might fail
+                    .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap())
+                    .map(|(p, _)| p)
+                {
+                    // Grant ownership
                     self.current_owner = Some(nearest_player.id);
-                    self.previous_owner = None; // Clear previous owner to avoid conflicts
+                    self.previous_owner = None;
                     self.ownership_duration = 0;
-
-                    // CRITICAL: Reset in_flight_state to prevent ownership blocking
                     self.flags.in_flight_state = 0;
-
-                    // Clear any existing notifications to avoid conflicts
                     self.take_ball_notified_players.clear();
                     self.notification_timeout = 0;
 
-                    // Force ball to ground if slightly aerial (but keep horizontal velocity)
                     if self.position.z > 0.1 && self.position.z < DEADLOCK_HEIGHT_THRESHOLD {
                         self.position.z = 0.0;
                         self.velocity.z = 0.0;
                     }
 
-                    // Reset counter
                     self.unowned_stopped_ticks = 0;
-
-                    // Emit claimed event for logging/tracking
                     events.add_ball_event(BallEvent::Claimed(nearest_player.id));
-                } else {
-                    // No players found even with extended radius
-                    // This shouldn't normally happen, but if it does, force ball to ground and stop it
-                    if self.unowned_stopped_ticks > DEADLOCK_TICK_EXTENDED + 20 {
-                        self.position.z = 0.0;
-                        self.velocity = Vector3::zeros();
-                        self.unowned_stopped_ticks = 0; // Reset to try again
-
-                        // Clear notifications so system can restart fresh
-                        self.take_ball_notified_players.clear();
-                        self.notification_timeout = 0;
-                    }
+                } else if self.unowned_stopped_ticks >= TICK_PHASE_2 && self.take_ball_notified_players.is_empty() {
+                    // No one close enough - notify nearest players to come get it
+                    let notified = self.notify_nearest_player(players, events);
+                    self.take_ball_notified_players = notified;
+                    self.notification_timeout = 0;
                 }
             }
         } else {
-            // Ball is moving fast or airborne - reset counter only if it's clearly moving
-            // Use hysteresis: only reset if velocity is above exit threshold
             if velocity_norm >= velocity_threshold {
                 self.unowned_stopped_ticks = 0;
             }
-            // Otherwise keep counting - this handles oscillating velocities
         }
     }
 
@@ -495,8 +469,16 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // Realistic distance threshold - players can only claim ball when it's very close to their feet
-        const BALL_DISTANCE_THRESHOLD: f32 = 1.2;
+        // COOLDOWN CHECK: If cooldown is active and there's an owner, skip ownership checks
+        // This prevents rapid ping-pong between players
+        if self.claim_cooldown > 0 && self.current_owner.is_some() {
+            // Just increment ownership duration and return
+            self.ownership_duration += 1;
+            return;
+        }
+
+        // Distance threshold for claiming ball
+        const BALL_DISTANCE_THRESHOLD: f32 = 2.0; // Players can claim within 2m
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -505,10 +487,9 @@ impl Ball {
 
         // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
         // This catches cases where ball flies away from owner but ownership wasn't properly cleared
-        // Only applies when ball has velocity - if ball is stopped (e.g., at boundary), let normal mechanics handle it
-        const MAX_OWNERSHIP_DISTANCE: f32 = 3.0; // Maximum distance when ball is moving
+        const MAX_OWNERSHIP_DISTANCE: f32 = 2.0; // Maximum distance to maintain ownership (tightened)
         const MAX_OWNERSHIP_DISTANCE_SQUARED: f32 = MAX_OWNERSHIP_DISTANCE * MAX_OWNERSHIP_DISTANCE;
-        const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 1.0; // Only check distance if ball is moving faster than this
+        const MIN_VELOCITY_FOR_DISTANCE_CHECK: f32 = 0.5; // Check distance if ball is moving at all
 
         if let Some(current_owner_id) = self.current_owner {
             if let Some(owner) = context.players.by_id(current_owner_id) {
@@ -558,55 +539,32 @@ impl Ball {
             return;
         }
 
-        // Check if previous owner is still within range (use 3D distance)
-        // This prevents immediate ball reclaim after passing/shooting
-        // BUT: Allow opponents to contest the ball even if previous owner is still close
+        // Check if previous owner is still within range
+        // Clear previous_owner once they're far enough away to allow normal claiming
         if let Some(previous_owner_id) = self.previous_owner {
             if let Some(owner) = context.players.by_id(previous_owner_id) {
-                // Calculate proper 3D distance
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
-                let dz = self.position.z; // Ball height from ground (player is at z=0)
+                let dz = self.position.z;
                 let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
 
+                // Clear previous owner once they're far enough - allow normal claiming to proceed
                 if distance_3d > BALL_DISTANCE_THRESHOLD {
                     self.previous_owner = None;
-                } else {
-                    // Previous owner still in range
-                    // Check if there are any opponents nearby who might contest the ball
-                    let has_opponent_contesting = players
-                        .iter()
-                        .filter(|p| p.team_id != owner.team_id)  // Opponents only
-                        .any(|opponent| {
-                            let dx = opponent.position.x - self.position.x;
-                            let dy = opponent.position.y - self.position.y;
-                            let horizontal_distance_squared = dx * dx + dy * dy;
-
-                            // Check if opponent is close enough to contest
-                            horizontal_distance_squared <= BALL_DISTANCE_THRESHOLD_SQUARED
-                        });
-
-                    // If no opponents are contesting, return early to prevent previous owner from reclaiming
-                    // If opponents ARE contesting, continue to ownership check to allow fair challenge
-                    if !has_opponent_contesting {
-                        return;
-                    }
-                    // Otherwise, continue to normal ownership check below
                 }
+                // Don't block claiming - just track who previously had the ball
             } else {
-                // Previous owner not found - clear it
                 self.previous_owner = None;
             }
         }
 
-        // Velocity threshold - if ball is moving faster than this, players can't just "catch" it
-        const MAX_CLAIMABLE_VELOCITY: f32 = 8.0; // Ball moving faster than 8 m/s is hard to claim
-        const SLOW_BALL_VELOCITY: f32 = 3.0; // Ball moving slower than 3 m/s is easy to claim
+        // Velocity thresholds
+        const MAX_CLAIMABLE_VELOCITY: f32 = 10.0; // Ball moving faster than 10 m/s is hard to claim
+        const SLOW_BALL_VELOCITY: f32 = 4.0; // Ball moving slower than 4 m/s is easy to claim
 
         let ball_speed = self.velocity.norm();
-        let is_ball_fast = ball_speed > MAX_CLAIMABLE_VELOCITY;
 
-        // Find all players within ball distance threshold with proper 3D collision detection
+        // Find all players within ball distance threshold
         let nearby_players: Vec<&MatchPlayer> = players
             .iter()
             .filter(|player| {
@@ -615,60 +573,26 @@ impl Ball {
                 let horizontal_distance_squared = dx * dx + dy * dy;
                 let horizontal_distance = horizontal_distance_squared.sqrt();
 
-                // Early exit if horizontally too far
+                // Check if within claiming distance
                 if horizontal_distance_squared > BALL_DISTANCE_THRESHOLD_SQUARED {
                     return false;
                 }
 
-                // For slow balls (< 3 m/s), allow claiming regardless of direction
-                // This prevents balls from being unclaimed when rolling slowly
-                if ball_speed > SLOW_BALL_VELOCITY {
-                    // Vector from ball to player
-                    let to_player_x = dx;
-                    let to_player_y = dy;
+                // For slow/stopped balls, always allow claiming if close enough
+                if ball_speed <= SLOW_BALL_VELOCITY {
+                    return self.position.z <= PLAYER_JUMP_REACH;
+                }
 
-                    // Normalize ball velocity (direction ball is moving)
-                    let ball_vel_norm = ball_speed;
-                    if ball_vel_norm > 0.01 {
-                        let ball_dir_x = self.velocity.x / ball_vel_norm;
-                        let ball_dir_y = self.velocity.y / ball_vel_norm;
-
-                        // Dot product: positive means ball is moving towards player, negative means away
-                        let dot_product = ball_dir_x * to_player_x + ball_dir_y * to_player_y;
-
-                        // If ball is moving away from player (negative dot product), they can't claim it
-                        // unless they're close enough (within 0.8m) - relaxed from 0.5m
-                        if dot_product < 0.0 && horizontal_distance > 0.8 {
-                            return false;
-                        }
-
-                        // If ball is very fast and not moving directly at the player, make it harder to claim
-                        if is_ball_fast {
-                            // Require player to be close (0.8m) and ball to be moving towards them
-                            if horizontal_distance > 0.8 || dot_product < 0.3 * ball_vel_norm * horizontal_distance {
-                                return false;
-                            }
-                        }
+                // For fast balls, apply direction check
+                if ball_speed > MAX_CLAIMABLE_VELOCITY {
+                    // Very fast ball - must be very close
+                    if horizontal_distance > 1.0 {
+                        return false;
                     }
                 }
-                // For slow balls, skip direction check entirely - always allow claiming if close enough
 
-                // Calculate reachable height based on horizontal distance
-                // Closer = easier to reach higher balls (can jump)
-                // Further = harder to reach higher balls
-                let effective_reach_height = if horizontal_distance < 0.8 {
-                    // Very close - can jump and reach high
-                    PLAYER_JUMP_REACH
-                } else if horizontal_distance < 1.2 {
-                    // Medium distance - can reach with feet/body
-                    PLAYER_REACH_HEIGHT
-                } else {
-                    // Far distance - only low balls (sliding tackle range)
-                    PLAYER_HEIGHT * 0.6
-                };
-
-                // Check if ball is at reachable height for this horizontal distance
-                self.position.z <= effective_reach_height
+                // Check ball height is reachable
+                self.position.z <= PLAYER_JUMP_REACH
             })
             .collect();
 
@@ -753,10 +677,11 @@ impl Ball {
                     }
                 }
 
-                // Ownership change approved - reset duration
+                // Ownership change approved - reset duration and set cooldown
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
                 self.ownership_duration = 0;
+                self.claim_cooldown = 15; // Same as CLAIM_COOLDOWN_TICKS
                 events.add_ball_event(BallEvent::Claimed(player.id));
             } else {
                 // Same owner - just increment duration
@@ -912,6 +837,11 @@ impl Ball {
         // 2. Ball has an owner (claimed)
         const MOVEMENT_THRESHOLD: f32 = 0.5; // Ball is considered moving above this velocity
 
+        // Maximum distance owner can be from ball - must match deadlock claim distances
+        // This allows deadlock resolution while preventing truly absurd teleports
+        const MAX_OWNER_TELEPORT_DISTANCE: f32 = 15.0;
+        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
+
         let is_moving = self.velocity.norm() > MOVEMENT_THRESHOLD;
         let has_owner = self.current_owner.is_some();
 
@@ -923,12 +853,32 @@ impl Ball {
         if let Some(owner_player_id) = self.current_owner {
             let owner_position = tick_context.positions.players.position(owner_player_id);
 
-            // Ball follows owner - teleport to their position
-            self.position = owner_position;
-            // When player has the ball, it should be at ground level (or slightly above for dribbling)
-            self.position.z = 0.0;
-            // Clear velocity since ball is being carried
-            self.velocity = Vector3::zeros();
+            // SANITY CHECK: Validate owner is actually close to ball before teleporting
+            let dx = owner_position.x - self.position.x;
+            let dy = owner_position.y - self.position.y;
+            let distance_squared = dx * dx + dy * dy;
+
+            if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
+                // Owner is close enough - ball follows owner
+                self.position = owner_position;
+                self.position.z = 0.0;
+                self.velocity = Vector3::zeros();
+            } else {
+                // Owner is too far - this shouldn't happen but is a safety net
+                // Clear ownership and let ball move naturally
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
+                self.ownership_duration = 0;
+
+                // Move ball normally
+                self.position.x += self.velocity.x;
+                self.position.y += self.velocity.y;
+                self.position.z += self.velocity.z;
+
+                if self.position.z < 0.0 {
+                    self.position.z = 0.0;
+                }
+            }
         } else {
             self.position.x += self.velocity.x;
             self.position.y += self.velocity.y;

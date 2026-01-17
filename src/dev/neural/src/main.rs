@@ -1,6 +1,6 @@
 #![recursion_limit = "256"]
 
-use burn::backend::{Autodiff, NdArray};
+use burn::backend::{Autodiff, Wgpu};
 use burn::config::Config;
 use burn::data::dataloader::batcher::Batcher;
 use burn::data::dataloader::DataLoaderBuilder;
@@ -8,22 +8,23 @@ use burn::data::dataset::InMemDataset;
 use burn::nn::loss::MseLoss;
 use burn::nn::loss::Reduction::Mean;
 use burn::optim::AdamConfig;
+use burn::optim::lr_scheduler::constant::ConstantLr;
 use burn::prelude::{Backend, Module, Tensor};
 use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
-use burn::train::metric::LossMetric;
-use burn::train::{LearnerBuilder, RegressionOutput, TrainOutput, TrainStep, ValidStep};
+use burn::train::metric::{LossMetric};
+use burn::train::{Learner, LearningParadigm, RegressionOutput, SupervisedTraining, TrainOutput, TrainStep, TrainingStrategy, ValidStep};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
-use burn::backend::ndarray::NdArrayDevice;
+use burn::backend::wgpu::WgpuDevice;
 
-type NeuralNetworkDevice = NdArrayDevice;
-type NeuralNetworkBackend = NdArray;
+type NeuralNetworkDevice = WgpuDevice;
+type NeuralNetworkBackend = Wgpu;
 type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
 type NeuralNetwork<B> = MidfielderPassingNeural<B>;
 type NeuralNetworkConfig = MidfielderPassingNeuralConfig;
-type NeuralNetworkAutoDiff = MidfielderPassingNeural<NeuralNetworkAutodiffBackend>;
+type NeuralNetworkInner = MidfielderPassingNeural<NeuralNetworkBackend>;
 
 fn main() {
     let device = NeuralNetworkDevice::default();
@@ -46,12 +47,12 @@ fn main() {
         // (90f64, 2f64, 0f64),
     ];
 
-    let model: NeuralNetworkAutoDiff = train::<NeuralNetworkAutodiffBackend>(
+    let model: NeuralNetworkInner = train::<NeuralNetworkAutodiffBackend>(
         "artifacts",
         TrainingConfig {
-            num_epochs: 15000,
-            learning_rate: 1e-3,
-            momentum: 1e-2,
+            num_epochs: 500,
+            learning_rate: 1e-2,
+            momentum: 1e-3,
             seed: 43,
             batch_size: 1,
         },
@@ -84,15 +85,15 @@ fn main() {
         .expect("Should be able to save the model");
 }
 
-#[derive(Config)]
+#[derive(Config, Debug)]
 pub struct TrainingConfig {
-    #[config(default = 1000)]
+    #[config(default = 300)]
     pub num_epochs: usize,
 
     #[config(default = 1e-3)]
     pub learning_rate: f64,
 
-    #[config(default = 1e-2)]
+    #[config(default = 1e-3)]
     pub momentum: f64,
 
     #[config(default = 42)]
@@ -162,23 +163,28 @@ impl<B: Backend> ValidStep<TrainingBatch<B>, RegressionOutput<B>> for NeuralNetw
         self.forward_step(item)
     }
 }
+
 pub fn train<B: AutodiffBackend>(
     artifact_dir: &str,
     config: TrainingConfig,
     training_data: Vec<(f64, f64, f64)>,
     device: B::Device,
-) -> NeuralNetwork<B> {
+) -> NeuralNetwork<B::InnerBackend> {
     create_artifact_dir(artifact_dir);
 
     config
         .save(format!("{artifact_dir}/config.json"))
         .expect("Config should be saved successfully");
 
-    B::seed(config.seed);
+    B::seed(&device, config.seed);
 
     let model: NeuralNetwork<B> = NeuralNetworkConfig::init(&device);
 
     let optimizer = AdamConfig::new().init();
+
+    let lr_scheduler = ConstantLr::new(config.learning_rate);
+
+    let learner = Learner::new(model, optimizer, lr_scheduler);
 
     let train_dataset = InMemDataset::new(training_data.clone());
 
@@ -192,16 +198,15 @@ pub fn train<B: AutodiffBackend>(
         .batch_size(1)
         .build(valid_dataset);
 
-    let learner = LearnerBuilder::new(artifact_dir)
+    let training = SupervisedTraining::new(artifact_dir, train_data, valid_data)
         .metric_train_numeric(LossMetric::new())
         .metric_valid_numeric(LossMetric::new())
-        //.with_file_checkpointer(CompactRecorder::new())
-        .devices(vec![device.clone()])
+        .with_training_strategy(TrainingStrategy::SingleDevice(device.clone()))
         .num_epochs(config.num_epochs)
-        .summary()
-        .build(model, optimizer, config.learning_rate);
+        .summary();
 
-    learner.fit(train_data, valid_data)
+    let result = training.run(learner);
+    result.model
 }
 
 trait NeuralTrait<B: Backend> {

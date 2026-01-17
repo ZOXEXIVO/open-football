@@ -107,10 +107,27 @@ impl ForwardAssistingState {
             .map(|(id, _)| id)
     }
 
-    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, _player_id: u32) -> bool {
-        // TODO
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        distance_to_goal < 20.0
+    fn is_in_good_scoring_position(&self, ctx: &StateProcessingContext, player_id: u32) -> bool {
+        // Find the teammate's actual position
+        if let Some(teammate) = ctx.players().teammates().all().find(|p| p.id == player_id) {
+            let goal_pos = ctx.player().opponent_goal_position();
+            let distance_to_goal = (teammate.position - goal_pos).magnitude();
+
+            // Good scoring position: within 35m of goal
+            if distance_to_goal > 350.0 {
+                return false;
+            }
+
+            // Check if teammate has space (not heavily marked)
+            let close_defenders = ctx.players().opponents().all()
+                .filter(|opp| (opp.position - teammate.position).magnitude() < 10.0)
+                .count();
+
+            // Good if close to goal with some space or is another forward
+            distance_to_goal < 350.0 && (close_defenders < 2 || teammate.tactical_positions.is_forward())
+        } else {
+            false
+        }
     }
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {

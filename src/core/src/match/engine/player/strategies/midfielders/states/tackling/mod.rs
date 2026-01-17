@@ -23,6 +23,12 @@ impl StateProcessingHandler for MidfielderTacklingState {
             ));
         }
 
+        // CRITICAL: Don't try to claim ball if it's in protected flight state
+        // This prevents the flapping issue where two players repeatedly claim
+        if ctx.ball().is_in_flight() {
+            return None;
+        }
+
         let ball_distance = ctx.ball().distance();
 
         if ball_distance > 100.0 {
@@ -51,10 +57,13 @@ impl StateProcessingHandler for MidfielderTacklingState {
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::HoldingPossession,
-                        Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                    ));
+                    // Double-check ball is not in flight before claiming
+                    if !ctx.ball().is_in_flight() {
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::HoldingPossession,
+                            Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                        ));
+                    }
                 } else if committed_foul {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
@@ -63,6 +72,7 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 }
             }
         } else if self.can_intercept_ball(ctx) {
+            // can_intercept_ball already checks is_in_flight
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Running,
                 Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),

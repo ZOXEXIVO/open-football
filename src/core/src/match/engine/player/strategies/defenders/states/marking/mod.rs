@@ -5,12 +5,14 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const MARKING_DISTANCE_THRESHOLD: f32 = 10.0; // Desired distance to maintain from the opponent
-const TACKLING_DISTANCE_THRESHOLD: f32 = 3.0; // Distance within which the defender can tackle
+const MARKING_DISTANCE_THRESHOLD: f32 = 8.0; // Reduced from 10.0 - tighter marking
+const TACKLING_DISTANCE_THRESHOLD: f32 = 4.0; // Increased from 3.0 - tackle earlier
 const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
-const BALL_PROXIMITY_THRESHOLD: f32 = 10.0; // Distance to consider the ball as close
+const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earlier to ball
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
+const GOAL_SIDE_WEIGHT: f32 = 0.6; // How much to prioritize being goal-side
+const SWITCH_OPPONENT_THRESHOLD: f32 = 50.0; // Distance to consider switching marking target
 
 #[derive(Default)]
 pub struct DefenderMarkingState {}
@@ -20,7 +22,6 @@ impl StateProcessingHandler for DefenderMarkingState {
         // 1. Check if the defender has enough stamina to continue marking
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina < STAMINA_THRESHOLD {
-            // Transition to Resting state if stamina is low
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Resting,
             ));
@@ -38,36 +39,59 @@ impl StateProcessingHandler for DefenderMarkingState {
             ));
         }
 
-        // 2. Identify the most dangerous opponent player to mark
-        if let Some(opponent_to_mark) = self.find_most_dangerous_opponent(ctx) {
-            let distance_to_opponent = opponent_to_mark.distance(ctx);
+        // 2. Find best opponent to mark using coordination system
+        // First try to find an unmarked opponent if current target is being engaged by another defender
+        let opponent_to_mark = self.find_best_marking_target(ctx);
 
-            // 4. If the opponent has the ball and is within tackling distance, attempt a tackle
-            if opponent_to_mark.has_ball(ctx) && distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
+        if let Some(opponent) = opponent_to_mark {
+            let distance_to_opponent = opponent.distance(ctx);
+
+            // Priority: If opponent with ball is very close, press/tackle immediately
+            if opponent.has_ball(ctx) {
+                if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                // Press the ball carrier if close enough
+                if distance_to_opponent < 20.0 && ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
             }
 
-            // 5. If the opponent is beyond the marking distance threshold, switch to Running state to catch up
-            if distance_to_opponent > MARKING_DISTANCE_THRESHOLD * 1.5 {
+            // If opponent is too far, switch to running to catch up
+            if distance_to_opponent > MARKING_DISTANCE_THRESHOLD * 2.0 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Running,
                 ));
             }
 
-            // 6. If the ball is close to the defender, consider intercepting
-            if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD && !opponent_to_mark.has_ball(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting,
-                ));
+            // If ball is close and unmarked, consider intercepting
+            if ctx.ball().distance() < BALL_PROXIMITY_THRESHOLD && !opponent.has_ball(ctx) {
+                if ctx.ball().is_towards_player_with_angle(0.7) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Intercepting,
+                    ));
+                }
             }
 
-            // 7. Continue marking (no state change)
+            // Check if another defender is already engaging this opponent
+            // If so, look for unmarked threats
+            if ctx.player().defensive().is_opponent_being_engaged(&opponent) {
+                if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(SWITCH_OPPONENT_THRESHOLD) {
+                    // Switch to covering to find better position
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Covering,
+                    ));
+                }
+            }
+
+            // Continue marking
             None
         } else {
             // No opponent to mark found
-            // Transition back to HoldingLine or appropriate state
             Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
             ))
@@ -81,22 +105,44 @@ impl StateProcessingHandler for DefenderMarkingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Move to maintain position relative to the opponent being marked
+        // Move to maintain goal-side position relative to the opponent being marked
 
-        // Identify the most dangerous opponent player to mark
-        if let Some(opponent_to_mark) = self.find_most_dangerous_opponent(ctx) {
-            // Calculate desired position to maintain proper marking
-            let opponent_future_position = opponent_to_mark.position + opponent_to_mark.velocity(ctx);
-            let desired_position = opponent_future_position
-                - (opponent_to_mark.velocity(ctx).normalize() * MARKING_DISTANCE_THRESHOLD);
+        if let Some(opponent_to_mark) = self.find_best_marking_target(ctx) {
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let opponent_velocity = opponent_to_mark.velocity(ctx);
 
-            let direction = (desired_position - ctx.player.position).normalize();
-            // Set speed based on player's pace
-            let speed = ctx.player.skills.physical.pace; // Use pace attribute
-            Some(direction * speed)
+            // Predict opponent's future position
+            let prediction_time = 0.3; // Look ahead 300ms
+            let opponent_future_position = opponent_to_mark.position + opponent_velocity * prediction_time;
+
+            // Calculate goal-side marking position
+            // Position between opponent and own goal
+            let to_goal = (own_goal - opponent_future_position).normalize();
+            let goal_side_offset = to_goal * MARKING_DISTANCE_THRESHOLD * GOAL_SIDE_WEIGHT;
+
+            // Also consider ball-side positioning
+            let ball_position = ctx.tick_context.positions.ball.position;
+            let to_ball = (ball_position - opponent_future_position).normalize();
+            let ball_side_offset = to_ball * MARKING_DISTANCE_THRESHOLD * (1.0 - GOAL_SIDE_WEIGHT);
+
+            // Blend goal-side and ball-side positioning
+            let desired_position = opponent_future_position + goal_side_offset + ball_side_offset;
+
+            let to_desired = desired_position - ctx.player.position;
+            let distance = to_desired.magnitude();
+
+            if distance < 1.0 {
+                // Close enough, minimal adjustment
+                return Some(to_desired * 0.5);
+            }
+
+            let direction = to_desired.normalize();
+            // Speed based on urgency - faster if far, slower if close
+            let urgency = (distance / MARKING_DISTANCE_THRESHOLD).clamp(0.5, 1.5);
+            let speed = ctx.player.skills.physical.pace * urgency;
+
+            Some(direction * speed + ctx.player().separation_velocity() * 0.3)
         } else {
-            // No opponent to mark found
-            // Remain stationary or return to default position
             Some(Vector3::new(0.0, 0.0, 0.0))
         }
     }
@@ -108,6 +154,29 @@ impl StateProcessingHandler for DefenderMarkingState {
 }
 
 impl DefenderMarkingState {
+    /// Find the best marking target using coordination system
+    /// Prefers unmarked opponents to avoid double-marking
+    fn find_best_marking_target(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
+        // First, try to find an unmarked dangerous opponent
+        if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(100.0) {
+            return Some(unmarked);
+        }
+
+        // If all dangerous opponents are marked, use the traditional scoring
+        // but only if we're the best defender for them
+        let dangerous = self.find_most_dangerous_opponent(ctx);
+
+        if let Some(ref opp) = dangerous {
+            // Only take over marking if we're significantly better positioned
+            if ctx.player().defensive().is_best_defender_for_opponent(opp) {
+                return dangerous;
+            }
+        }
+
+        // Return the dangerous opponent anyway if no other option
+        dangerous
+    }
+
     /// Find the most dangerous opponent to mark based on multiple factors
     fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
         // Extended search range to catch dangerous runs from distance

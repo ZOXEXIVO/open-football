@@ -26,6 +26,12 @@ impl StateProcessingHandler for DefenderTacklingState {
             ));
         }
 
+        // CRITICAL: Don't try to claim ball if it's in protected flight state
+        // This prevents the flapping issue where two players repeatedly claim
+        if ctx.ball().is_in_flight() {
+            return None;
+        }
+
         // Check if there's an opponent with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
@@ -62,7 +68,8 @@ impl StateProcessingHandler for DefenderTacklingState {
             };
         } else {
             // Ball is loose - check for interception
-            if self.can_intercept_ball(ctx) {
+            // Double-check not in flight before claiming
+            if self.can_intercept_ball(ctx) && !ctx.ball().is_in_flight() {
                 // Ball is loose and we can intercept it
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Running,
@@ -79,7 +86,8 @@ impl StateProcessingHandler for DefenderTacklingState {
             }
 
             // Fallback: if ball is loose and very close, try to claim it
-            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 {
+            // Double-check not in flight before claiming
+            if !ctx.tick_context.ball.is_owned && ball_distance < 5.0 && !ctx.ball().is_in_flight() {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Running,
                     Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),

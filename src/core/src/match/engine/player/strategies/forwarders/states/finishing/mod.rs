@@ -25,9 +25,13 @@ impl StateProcessingHandler for ForwardFinishingState {
             ));
         }
 
-        // Check if there's a clear shot on goal
-        if !ctx.player().has_clear_shot() {
-            // Transition to Passing state if there's no clear shot on goal
+        // AGGRESSIVE SHOOTING: In the box, forwards should shoot even without clear shot
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        let has_clear_shot = ctx.player().has_clear_shot();
+        let should_shoot = has_clear_shot || self.should_shoot_anyway(ctx, distance_to_goal);
+
+        if !should_shoot {
+            // Only pass if really no chance to shoot
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
@@ -66,5 +70,44 @@ impl ForwardFinishingState {
         let shooting_power = 1.0; // Adjust based on your game's mechanics
 
         (shooting_direction, shooting_power)
+    }
+
+    /// Determine if forward should shoot even without a completely clear shot
+    fn should_shoot_anyway(&self, ctx: &StateProcessingContext, distance_to_goal: f32) -> bool {
+        // Very close to goal (inside 6-yard box) - always shoot
+        if distance_to_goal < 60.0 {
+            return true;
+        }
+
+        // Inside penalty area - shoot with good finishing skill
+        if distance_to_goal < 165.0 {
+            let finishing = ctx.player.skills.technical.finishing;
+            let composure = ctx.player.skills.mental.composure;
+
+            // Good finishers can score even with defenders nearby
+            if finishing > 12.0 || composure > 14.0 {
+                return true;
+            }
+
+            // Check how many opponents are very close (blocking)
+            let close_blockers = ctx.players().opponents().nearby(5.0).count();
+            // Only 1 blocker and decent skill - take the shot
+            if close_blockers <= 1 && finishing > 10.0 {
+                return true;
+            }
+        }
+
+        // Edge of box - only shoot if good skills and minimal blocking
+        if distance_to_goal < 200.0 {
+            let finishing = ctx.player.skills.technical.finishing;
+            let long_shots = ctx.player.skills.technical.long_shots;
+
+            let close_blockers = ctx.players().opponents().nearby(4.0).count();
+            if close_blockers == 0 && (finishing > 14.0 || long_shots > 14.0) {
+                return true;
+            }
+        }
+
+        false
     }
 }

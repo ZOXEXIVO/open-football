@@ -25,7 +25,6 @@ pub struct MidfielderPassingNeural<B: Backend> {
     linear_a: Linear<B>,
     linear_b: Linear<B>,
     linear_c: Linear<B>,
-    linear_d: Linear<B>,
 
     activation: Relu,
 }
@@ -37,7 +36,6 @@ impl<B: Backend> MidfielderPassingNeural<B> {
         let out = self.activation.forward(self.linear_a.forward(input));
         let out = self.activation.forward(self.linear_b.forward(out));
         let out = self.activation.forward(self.linear_c.forward(out));
-        let out = self.activation.forward(self.linear_d.forward(out));
 
         out
     }
@@ -47,29 +45,25 @@ impl<B: Backend> MidfielderPassingNeural<B> {
 pub struct MidfielderPassingNeuralConfig {
     linear_a: LinearConfig,
     linear_b: LinearConfig,
-    linear_c: LinearConfig,
-    linear_d: LinearConfig,
+    linear_c: LinearConfig
 }
  
 impl MidfielderPassingNeuralConfig {
     pub fn init<B: Backend>(device: &B::Device) -> MidfielderPassingNeural<B> {
         MidfielderPassingNeural {
-            linear_a: LinearConfig::new(2, 32)
+            linear_a: LinearConfig::new(2, 64)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_b: LinearConfig::new(32, 32)
+            linear_b: LinearConfig::new(64, 512)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_c: LinearConfig::new(32,16)
+            linear_c: LinearConfig::new(512, 1)
                 .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
                 .with_bias(true)
                 .init(device),
-            linear_d: LinearConfig::new(16, 1)
-                .with_initializer(Initializer::Uniform { min: 0.0, max: 1.0 })
-                .with_bias(true)
-                .init(device),
+
             activation: Relu::new().to_owned(),
         }
     }

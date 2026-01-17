@@ -25,6 +25,12 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        // CRITICAL: Don't try to claim ball if it's in protected flight state
+        // This prevents the flapping issue where two players repeatedly claim
+        if ctx.ball().is_in_flight() {
+            return None;
+        }
+
         let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
@@ -43,10 +49,13 @@ impl StateProcessingHandler for ForwardTacklingState {
                 }
 
                 if tackle_success {
-                    return Some(StateChangeResult::with_forward_state_and_event(
-                        ForwardState::Running,
-                        Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                    ));
+                    // Double-check ball is not in flight before claiming
+                    if !ctx.ball().is_in_flight() {
+                        return Some(StateChangeResult::with_forward_state_and_event(
+                            ForwardState::Running,
+                            Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                        ));
+                    }
                 }
 
                 // Failed tackle - continue pressuring
@@ -67,10 +76,13 @@ impl StateProcessingHandler for ForwardTacklingState {
                     }
 
                     if tackle_success {
-                        return Some(StateChangeResult::with_forward_state_and_event(
-                            ForwardState::Running,
-                            Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                        ));
+                        // Double-check ball is not in flight before claiming
+                        if !ctx.ball().is_in_flight() {
+                            return Some(StateChangeResult::with_forward_state_and_event(
+                                ForwardState::Running,
+                                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
+                            ));
+                        }
                     }
                 }
 
@@ -85,6 +97,7 @@ impl StateProcessingHandler for ForwardTacklingState {
         }
 
         // Check for loose ball interception opportunities
+        // Already checks is_in_flight in can_intercept_ball
         if !ctx.ball().is_owned() && self.can_intercept_ball(ctx) {
             return Some(StateChangeResult::with_forward_state_and_event(
                 ForwardState::Running,
