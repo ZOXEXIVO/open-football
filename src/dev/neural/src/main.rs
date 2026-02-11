@@ -13,7 +13,7 @@ use burn::prelude::{Backend, Module, Tensor};
 use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
 use burn::train::metric::{LossMetric};
-use burn::train::{Learner, LearningParadigm, RegressionOutput, SupervisedTraining, TrainOutput, TrainStep, TrainingStrategy, ValidStep};
+use burn::train::{Learner, RegressionOutput, SupervisedTraining, TrainOutput, TrainStep, TrainingStrategy};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
 use burn::backend::wgpu::WgpuDevice;

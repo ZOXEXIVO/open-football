@@ -16,7 +16,8 @@
       "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''B::seed\\\\\\(config\\\\.seed\\\\\\);'', ''B::seed\\(&device, config.seed\\);'' | Set-Content ''src/main.rs''\")",
       "Bash(powershell -Command \"\\(Get-Content ''src/main.rs''\\) -replace ''\\\\.devices\\\\\\(vec!\\\\[device\\\\.clone\\\\\\(\\\\\\)\\\\]\\\\\\)'', ''.learning_strategy\\(LearningStrategy::SingleDevice\\(device.clone\\(\\)\\)\\)'' | Set-Content ''src/main.rs''\")",
       "Bash(dir:*)",
-      "Bash(copy:*)"
+      "Bash(copy:*)",
+      "Bash(cargo doc:*)"
     ],
     "deny": [],
     "ask": []
