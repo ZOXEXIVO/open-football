@@ -5,7 +5,7 @@ use crate::r#match::player::events::{PlayerEvent, PassingEventContext};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
 use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// Types of goalkeeper distribution
 #[derive(Debug, Clone, Copy, PartialEq)]

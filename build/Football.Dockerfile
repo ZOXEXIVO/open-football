@@ -1,5 +1,5 @@
 # Define Rust version
-ARG RUST_VERSION=1.92
+ARG RUST_VERSION=1.93
 
 # BUILD FRONTEND
 FROM node:22-alpine3.19 AS build-frontend

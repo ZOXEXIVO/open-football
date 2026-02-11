@@ -7,7 +7,7 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 5.0; // Maximum distance to attempt a tackle (in meters)
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul

@@ -4,7 +4,7 @@ use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer};
 use log::debug;
 use nalgebra::Vector3;
-use rand::Rng;
+use rand::{Rng, RngExt};
 
 /// Helper struct to encapsulate player passing skills and condition
 struct PassSkills {

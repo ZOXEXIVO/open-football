@@ -1,66 +1,56 @@
-<?xml version="1.0" standalone="no"?>
-<svg version="1.0" xmlns="http://www.w3.org/2000/svg"
-     width="2887.000000pt" height="1960.000000pt" viewBox="0 0 2887.000000 1960.000000"
-     preserveAspectRatio="xMidYMid meet">
-    <rect width="100%" height="100%" fill="white"/>
-    <g transform="translate(0.000000,1960.000000) scale(0.100000,-0.100000)"
-       fill="#017d5a" stroke="none">
-        <path d="M2 9803 l3 -9798 14433 -3 14432 -2 0 9800 0 9800 -14435 0 -14435 0
-2 -9797z m27490 4800 l3 -3628 265 -2 265 -2 3 -1170 2 -1171 -267 -2 -268 -3
--3 -3622 -2 -3623 -13055 0 -13055 0 0 3625 0 3625 -270 0 -270 0 0 1170 0
-1170 268 2 267 3 3 3628 2 3627 13055 0 13055 0 2 -3627z"/>
-        <path d="M1470 17915 l0 -216 38 7 c103 19 205 75 273 152 49 55 105 168 115
-230 l7 42 -217 0 -216 0 0 -215z"/>
-        <path d="M1995 18103 c-19 -88 -32 -126 -69 -197 -75 -143 -227 -257 -386
--290 l-65 -13 -3 -856 -2 -857 2495 0 2495 0 0 -1928 0 -1929 99 -81 c442
--366 781 -910 921 -1476 96 -391 105 -843 25 -1236 -127 -625 -460 -1179 -960
--1601 l-85 -71 0 -1929 0 -1929 -2495 0 -2495 0 0 -855 0 -855 28 -5 c91 -20
-122 -29 176 -55 112 -54 209 -151 265 -264 27 -55 36 -85 56 -178 l5 -28 6195
-0 6195 0 0 2758 0 2759 -150 12 c-193 15 -352 42 -525 86 -1019 264 -1827
-1120 -2034 2157 -70 348 -69 768 0 1118 149 748 623 1429 1278 1834 391 242
-851 386 1316 412 l115 7 0 2759 0 2758 -6195 0 -6195 0 -5 -27z"/>
-        <path d="M14480 15371 l0 -2758 123 -7 c920 -52 1760 -561 2244 -1359 332
--548 463 -1214 367 -1865 -84 -578 -348 -1109 -764 -1536 -505 -519 -1127
--803 -1867 -851 l-103 -7 0 -2759 0 -2759 6200 0 6200 0 0 28 c1 130 116 314
-256 407 55 36 177 85 213 85 55 0 51 -61 51 866 l0 854 -2492 2 -2493 3 -3
-1926 -2 1926 -128 111 c-560 487 -899 1153 -962 1892 -76 893 294 1789 979
-2369 l111 95 0 1928 0 1928 2495 0 2495 0 -2 857 -3 856 -65 13 c-141 29 -297
-138 -370 260 -41 68 -79 175 -80 222 l0 32 -6200 0 -6200 0 0 -2759z"/>
-        <path d="M26975 18093 c36 -193 195 -352 388 -388 l37 -7 0 216 0 216 -216 0
--216 0 7 -37z"/>
-        <path d="M1470 14205 l0 -1595 835 0 835 0 0 -2810 0 -2810 -835 0 -835 0 0
--1590 0 -1590 2445 0 2445 0 0 5995 0 5995 -2445 0 -2445 0 0 -1595z m3371
--4314 c33 -33 39 -45 39 -82 0 -53 -28 -102 -69 -124 -118 -60 -242 76 -168
-186 29 43 60 59 116 59 37 0 49 -5 82 -39z"/>
-        <path d="M22510 9805 l0 -5995 2445 0 2445 0 0 1590 0 1590 -835 0 -835 0 0
-2810 0 2810 835 0 835 0 0 1595 0 1595 -2445 0 -2445 0 0 -5995z m1702 87 c24
--23 32 -41 35 -79 5 -58 -10 -89 -56 -120 -116 -78 -256 62 -178 178 31 46 62
-61 120 56 38 -3 56 -11 79 -35z"/>
-        <path d="M1470 9805 l0 -2715 790 0 790 0 0 2715 0 2715 -790 0 -790 0 0
--2715z"/>
-        <path d="M14220 12509 c-627 -50 -1214 -315 -1667 -753 -446 -430 -712 -952
--810 -1586 -22 -143 -25 -566 -5 -705 91 -632 343 -1146 776 -1581 376 -377
-837 -629 1353 -738 151 -32 343 -56 445 -56 l78 0 0 1290 0 1291 -34 30 c-50
-43 -63 89 -41 145 10 27 28 50 46 61 l29 17 0 1298 0 1298 -32 -1 c-18 -1 -80
--6 -138 -10z"/>
-        <path d="M14480 11221 c0 -1285 0 -1300 20 -1306 25 -8 56 -51 64 -91 10 -43
--19 -110 -55 -131 l-29 -17 0 -1295 0 -1294 128 6 c453 22 933 182 1319 440
-169 112 267 191 397 316 695 675 977 1652 750 2599 -111 463 -347 890 -684
-1236 -480 493 -1065 769 -1756 826 -66 5 -127 10 -136 10 -17 0 -18 -68 -18
--1299z"/>
-        <path d="M25820 9805 l0 -2715 790 0 790 0 0 2715 0 2715 -790 0 -790 0 0
--2715z"/>
-        <path d="M6460 9801 l0 -2113 73 63 c216 190 432 452 570 690 490 851 483
-1908 -17 2746 -160 269 -332 469 -603 707 l-23 19 0 -2112z"/>
-        <path d="M22290 11806 c-378 -341 -665 -815 -794 -1308 -198 -753 -68 -1549
-358 -2191 114 -172 229 -309 397 -471 l154 -149 3 1057 c1 581 1 1531 0 2111
-l-3 1055 -115 -104z"/>
-        <path d="M940 9800 l0 -1080 220 0 220 0 0 1080 0 1080 -220 0 -220 0 0 -1080z"/>
-        <path d="M27490 9800 l0 -1080 225 0 225 0 0 1080 0 1080 -225 0 -225 0 0
--1080z"/>
-        <path d="M1470 1685 l0 -215 215 0 c247 0 231 -8 194 103 -49 148 -159 257
--306 306 -111 37 -103 53 -103 -194z"/>
-        <path d="M27308 1884 c-74 -23 -161 -78 -214 -136 -52 -58 -108 -169 -119
--235 l-7 -43 216 0 216 0 0 215 0 215 -22 -1 c-13 0 -44 -7 -70 -15z"/>
-    </g>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="950" viewBox="0 0 1400 950">
+  <rect width="1400" height="950" fill="#206e52"/>
+
+  <!-- Field grass -->
+  <rect x="62" y="60" width="1260" height="810" fill="#206e52"/>
+
+  <!-- Field outline -->
+  <rect x="62" y="60" width="1260" height="810" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center line -->
+  <line x1="692" y1="60" x2="692" y2="870" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center circle (radius ~73 backend units) -->
+  <ellipse cx="692" cy="465" rx="110" ry="109" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center spot -->
+  <circle cx="692" cy="465" r="4" fill="white" fill-opacity="0.7"/>
+
+  <!-- Left penalty area (132 deep x 322 wide in backend) -->
+  <rect x="62" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right penalty area -->
+  <rect x="1124" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Left goal area (44 deep x 146 wide in backend) -->
+  <rect x="62" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right goal area -->
+  <rect x="1256" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Left penalty spot (88 units from goal in backend) -->
+  <circle cx="194" cy="465" r="3" fill="white" fill-opacity="0.7"/>
+
+  <!-- Right penalty spot -->
+  <circle cx="1190" cy="465" r="3" fill="white" fill-opacity="0.7"/>
+
+  <!-- Left penalty arc (outside penalty area) -->
+  <path d="M 260 378 A 110 109 0 0 1 260 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right penalty arc (outside penalty area) -->
+  <path d="M 1124 378 A 110 109 0 0 0 1124 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Goal nets behind goal line -->
+  <!-- Left goal: GOAL_WIDTH=60 => y from 376 to 554 (backend y 212.5..332.5) -->
+  <rect x="42" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
+
+  <!-- Right goal -->
+  <rect x="1322" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
+
+  <!-- Corner arcs -->
+  <path d="M 62 75 A 15 15 0 0 1 77 60" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 1307 60 A 15 15 0 0 1 1322 75" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 77 870 A 15 15 0 0 1 62 855" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 1322 855 A 15 15 0 0 1 1307 870" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 </svg>

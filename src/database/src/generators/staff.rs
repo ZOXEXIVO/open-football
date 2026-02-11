@@ -8,7 +8,7 @@ use core::{
     StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
     StaffPosition, StaffStatus, TechnicalFocusType,
 };
-use rand::Rng;
+use rand::{Rng, RngExt};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{LazyLock};
 

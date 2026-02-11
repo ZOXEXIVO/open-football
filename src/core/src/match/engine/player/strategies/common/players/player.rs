@@ -5,7 +5,7 @@ use crate::r#match::{
 };
 use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
-use rand::Rng;
+use rand::RngExt;
 use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
 
 pub struct PlayerOperationsImpl<'p> {
