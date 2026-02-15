@@ -24,6 +24,7 @@ pub struct Ball {
     pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
     pub ownership_duration: u32,  // How many ticks current owner has had the ball
     pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
+    pub pass_target_player_id: Option<u32>,  // Intended receiver of a pass
 }
 
 #[derive(Default)]
@@ -61,6 +62,7 @@ impl Ball {
             unowned_stopped_ticks: 0,
             ownership_duration: 0,
             claim_cooldown: 0,
+            pass_target_player_id: None,
         }
     }
 
@@ -97,14 +99,79 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
-        // prevent pass tackling
         if self.flags.in_flight_state > 0 {
             self.flags.in_flight_state -= 1;
+            // Allow pass target to claim during flight
+            self.try_pass_target_claim(players, events);
         } else {
             self.check_ball_ownership(context, players, events);
         }
 
         self.flags.running_for_ball = self.is_players_running_to_ball(players);
+    }
+
+    fn try_pass_target_claim(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        // Check if pass target can claim the ball
+        if let Some(target_id) = self.pass_target_player_id {
+            if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
+                // Use landing position for aerial balls, current position for ground balls
+                let effective_ball_pos = if self.is_aerial() {
+                    self.calculate_landing_position()
+                } else {
+                    self.position
+                };
+
+                let dx = target_player.position.x - effective_ball_pos.x;
+                let dy = target_player.position.y - effective_ball_pos.y;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                // Generous claim radius for intended receiver (3.5m vs normal 2.0m)
+                const RECEIVER_CLAIM_DISTANCE: f32 = 3.5;
+                const RECEIVER_MAX_HEIGHT: f32 = 2.8;
+
+                if distance < RECEIVER_CLAIM_DISTANCE && self.position.z <= RECEIVER_MAX_HEIGHT {
+                    self.current_owner = Some(target_id);
+                    self.pass_target_player_id = None;
+                    self.ownership_duration = 0;
+                    self.flags.in_flight_state = 0;
+                    self.claim_cooldown = 15;
+                    events.add_ball_event(BallEvent::Claimed(target_id));
+                    return;
+                }
+            }
+        }
+
+        // Also allow previous owner (passer) to reclaim if ball bounced back
+        if let Some(prev_id) = self.previous_owner {
+            if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
+                let dx = prev_player.position.x - self.position.x;
+                let dy = prev_player.position.y - self.position.y;
+                let dist = (dx * dx + dy * dy).sqrt();
+                if dist < 2.0 && self.position.z <= 2.8 {
+                    // Check ball is moving toward passer (bounced back)
+                    let ball_speed = self.velocity.norm();
+                    if ball_speed > 0.1 {
+                        let to_passer_x = dx / dist;
+                        let to_passer_y = dy / dist;
+                        let dot = (self.velocity.x / ball_speed) * to_passer_x
+                            + (self.velocity.y / ball_speed) * to_passer_y;
+                        if dot > 0.3 {
+                            // Ball moving toward passer
+                            self.current_owner = Some(prev_id);
+                            self.pass_target_player_id = None;
+                            self.ownership_duration = 0;
+                            self.flags.in_flight_state = 0;
+                            self.claim_cooldown = 15;
+                            events.add_ball_event(BallEvent::Claimed(prev_id));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     pub fn try_notify_standing_ball(
@@ -203,6 +270,7 @@ impl Ball {
             // Process the claim after iteration to avoid borrow checker issues
             if let Some(player_id) = claiming_player_id {
                 self.current_owner = Some(player_id);
+                self.pass_target_player_id = None;
                 self.take_ball_notified_players.clear();
                 self.notification_timeout = 0;
                 events.add_ball_event(BallEvent::Claimed(player_id));
@@ -351,6 +419,7 @@ impl Ball {
                     // Grant ownership
                     self.current_owner = Some(nearest_player.id);
                     self.previous_owner = None;
+                    self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.flags.in_flight_state = 0;
                     self.take_ball_notified_players.clear();
@@ -558,6 +627,28 @@ impl Ball {
             }
         }
 
+        // Priority claim for pass target receiver (larger radius before normal competition)
+        if let Some(target_id) = self.pass_target_player_id {
+            if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
+                let dx = target_player.position.x - self.position.x;
+                let dy = target_player.position.y - self.position.y;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                const RECEIVER_PRIORITY_DISTANCE: f32 = 3.5;
+                const RECEIVER_MAX_HEIGHT: f32 = 2.8;
+
+                if distance < RECEIVER_PRIORITY_DISTANCE && self.position.z <= RECEIVER_MAX_HEIGHT {
+                    self.previous_owner = self.current_owner;
+                    self.current_owner = Some(target_id);
+                    self.pass_target_player_id = None;
+                    self.ownership_duration = 0;
+                    self.claim_cooldown = 15;
+                    events.add_ball_event(BallEvent::Claimed(target_id));
+                    return;
+                }
+            }
+        }
+
         // Velocity thresholds
         const MAX_CLAIMABLE_VELOCITY: f32 = 10.0; // Ball moving faster than 10 m/s is hard to claim
         const SLOW_BALL_VELOCITY: f32 = 4.0; // Ball moving slower than 4 m/s is easy to claim
@@ -680,6 +771,7 @@ impl Ball {
                 // Ownership change approved - reset duration and set cooldown
                 self.previous_owner = self.current_owner;
                 self.current_owner = Some(player.id);
+                self.pass_target_player_id = None;
                 self.ownership_duration = 0;
                 self.claim_cooldown = 15; // Same as CLAIM_COOLDOWN_TICKS
                 events.add_ball_event(BallEvent::Claimed(player.id));
@@ -898,5 +990,6 @@ impl Ball {
         self.velocity = Vector3::zeros();
 
         self.flags.reset();
+        self.pass_target_player_id = None;
     }
 }

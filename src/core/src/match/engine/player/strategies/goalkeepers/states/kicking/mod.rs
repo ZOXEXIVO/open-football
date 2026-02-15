@@ -69,10 +69,17 @@ impl GoalkeeperKickingState {
         let can_attempt_extreme = extreme_capability > 0.7;
         let prefers_extreme = extreme_capability > 0.8;
 
+        // Get previous ball owner to prevent ping-pong passes
+        let previous_owner_id = ctx.ball().previous_owner_id();
+
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
+            // Don't pass back to the player who just passed to us
+            if previous_owner_id == Some(teammate.id) {
+                continue;
+            }
             let distance = (teammate.position - ctx.player.position).norm();
 
             // Calculate base score using vision-weighted evaluation

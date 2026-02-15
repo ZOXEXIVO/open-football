@@ -24,7 +24,8 @@
       "Bash(ls:*)",
       "Bash(python3:*)",
       "Bash(gunzip:*)",
-      "Bash(python -m json.tool)"
+      "Bash(python -m json.tool)",
+      "Bash(node -e:*)"
     ],
     "deny": [],
     "ask": []

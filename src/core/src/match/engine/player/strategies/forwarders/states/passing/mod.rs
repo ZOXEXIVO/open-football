@@ -135,6 +135,9 @@ impl ForwardPassingState {
     ) -> Option<MatchPlayerLite> {
         let teammates = ctx.players().teammates();
 
+        // Get previous ball owner to prevent ping-pong passes
+        let previous_owner_id = ctx.ball().previous_owner_id();
+
         // Use player's vision skill to determine range
         let vision_range = ctx.player.skills.mental.vision * 30.0;
         let vision_range_min = 100.0;
@@ -142,7 +145,13 @@ impl ForwardPassingState {
         // PRIORITY: First look for nearby forwards for quick combinations (15-60m range)
         let nearby_forwards: Vec<MatchPlayerLite> = teammates
             .nearby_range(15.0, 60.0)
-            .filter(|t| t.tactical_positions.is_forward() && self.is_viable_pass_target(ctx, t))
+            .filter(|t| {
+                // Don't pass back to the player who just passed to us
+                if previous_owner_id == Some(t.id) {
+                    return false;
+                }
+                t.tactical_positions.is_forward() && self.is_viable_pass_target(ctx, t)
+            })
             .collect();
 
         // If we have forwards nearby in good positions, prioritize them
@@ -166,7 +175,13 @@ impl ForwardPassingState {
         // Fallback: Get all viable passing options within range (reduced min from 50 to 20)
         let pass_options: Vec<MatchPlayerLite> = teammates
             .nearby_range(20.0, vision_range.max(vision_range_min))
-            .filter(|t| self.is_viable_pass_target(ctx, t))
+            .filter(|t| {
+                // Don't pass back to the player who just passed to us
+                if previous_owner_id == Some(t.id) {
+                    return false;
+                }
+                self.is_viable_pass_target(ctx, t)
+            })
             .collect();
 
         if pass_options.is_empty() {
