@@ -14,7 +14,7 @@ impl WaypointManager {
         WaypointManager {
             current_index: 0,
             path_completed: false,
-            loop_path: false,
+            loop_path: true,
         }
     }
     

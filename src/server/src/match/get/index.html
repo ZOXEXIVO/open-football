@@ -120,13 +120,16 @@
 
     const fieldWidth = 840;
     const fieldHeight = 545;
-    const fieldOffsetX = 0;
-    const fieldOffsetY = 0;
+    // Field rectangle within the 1400x950 SVG canvas
+    const fieldOffsetX = 62;
+    const fieldOffsetY = 60;
+    const fieldPixelW = 1260;
+    const fieldPixelH = 810;
 
     function translateToField(x, y, z) {
-        const fx = (x / fieldWidth) * maxWidth;
-        const fy = (y / fieldHeight) * maxHeight;
-        return { x: fx + fieldOffsetX, y: fy + fieldOffsetY };
+        const fx = (x / fieldWidth) * fieldPixelW + fieldOffsetX;
+        const fy = (y / fieldHeight) * fieldPixelH + fieldOffsetY;
+        return { x: fx, y: fy };
     }
 
     function getChunkNumber(time) {
@@ -155,22 +158,40 @@
         }
     }
 
-    function findPosition(arr, time) {
-        if (!arr || arr.length === 0) return null;
+    function findIndex(arr, time) {
+        if (!arr || arr.length === 0) return -1;
         let lo = 0, hi = arr.length - 1;
         while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
             if (arr[mid].timestamp <= time) lo = mid;
             else hi = mid - 1;
         }
-        return arr[lo];
+        return lo;
+    }
+
+    function interpolatePosition(arr, idx, time) {
+        const a = arr[idx];
+        if (idx + 1 < arr.length) {
+            const b = arr[idx + 1];
+            const dt = b.timestamp - a.timestamp;
+            if (dt > 0) {
+                const t = (time - a.timestamp) / dt;
+                return [
+                    a.position[0] + (b.position[0] - a.position[0]) * t,
+                    a.position[1] + (b.position[1] - a.position[1]) * t,
+                    (a.position[2] || 0) + ((b.position[2] || 0) - (a.position[2] || 0)) * t
+                ];
+            }
+        }
+        return a.position;
     }
 
     function updatePositions(time) {
-        const bp = findPosition(ballData, time);
-        if (bp && ballObj) {
-            const z = bp.position[2] || 0;
-            const pos = translateToField(bp.position[0], bp.position[1], z);
+        const bi = findIndex(ballData, time);
+        if (bi >= 0 && ballObj) {
+            const pos3 = interpolatePosition(ballData, bi, time);
+            const z = pos3[2] || 0;
+            const pos = translateToField(pos3[0], pos3[1], z);
             ballObj.position.x = pos.x;
             ballObj.position.y = pos.y;
             const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
@@ -178,9 +199,10 @@
         }
 
         Object.entries(playerPositions).forEach(([id, positions]) => {
-            const pp = findPosition(positions, time);
-            if (pp && playerGraphics[id]) {
-                const pos = translateToField(pp.position[0], pp.position[1], 0);
+            const pi = findIndex(positions, time);
+            if (pi >= 0 && playerGraphics[id]) {
+                const pos3 = interpolatePosition(positions, pi, time);
+                const pos = translateToField(pos3[0], pos3[1], 0);
                 playerGraphics[id].position.x = pos.x - 10;
                 playerGraphics[id].position.y = pos.y - 10;
             }

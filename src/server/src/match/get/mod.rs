@@ -177,7 +177,7 @@ pub async fn match_get_action(
         title,
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),
-        menu_sections: views::match_menu(),
+        menu_sections: vec![],
         league_slug: league.slug.clone(),
         match_id: route_params.match_id.clone(),
         home_team_name: home_team.name.clone(),
