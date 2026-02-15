@@ -79,8 +79,6 @@ impl Ball {
         }
 
         self.update_velocity();
-        self.check_goal(context, events);
-        self.check_boundary_collision(context);
 
         self.try_intercept(players, events);
         self.try_notify_standing_ball(players, events);
@@ -90,7 +88,10 @@ impl Ball {
 
         self.process_ownership(context, players, events);
 
+        // Move ball FIRST, then check goal/boundary on new position
         self.move_to(tick_context);
+        self.check_goal(context, events);
+        self.check_boundary_collision(context);
     }
 
     pub fn process_ownership(

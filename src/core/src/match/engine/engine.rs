@@ -204,9 +204,8 @@ pub const GOAL_WIDTH: f32 = 60.0;
 
 impl GoalPosition {
     pub fn is_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        const EPSILON: f32 = 0.5;
-
-        if (ball_position.x - self.left.x).abs() < EPSILON {
+        // Check if ball has crossed or reached the left goal line (x <= 0)
+        if ball_position.x <= self.left.x {
             let top_goal_bound = self.left.y - GOAL_WIDTH;
             let bottom_goal_bound = self.left.y + GOAL_WIDTH;
 
@@ -215,7 +214,8 @@ impl GoalPosition {
             }
         }
 
-        if (ball_position.x - self.right.x).abs() < EPSILON {
+        // Check if ball has crossed or reached the right goal line (x >= field_width)
+        if ball_position.x >= self.right.x {
             let top_goal_bound = self.right.y - GOAL_WIDTH;
             let bottom_goal_bound = self.right.y + GOAL_WIDTH;
 
