@@ -1,0 +1,64 @@
+pub mod routes;
+
+use crate::views::{self, MenuSection};
+use crate::{ApiError, ApiResult, GameAppData};
+use askama::Template;
+use axum::extract::State;
+use axum::response::IntoResponse;
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "countries/list/index.html")]
+pub struct CountryListTemplate {
+    pub title: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub menu_sections: Vec<MenuSection>,
+    pub continents: Vec<ContinentDto>,
+}
+
+pub struct ContinentDto {
+    pub name: String,
+    pub countries: Vec<CountryDto>,
+}
+
+pub struct CountryDto {
+    pub slug: String,
+    pub code: String,
+    pub name: String,
+}
+
+pub async fn country_list_action(
+    State(state): State<GameAppData>,
+) -> ApiResult<impl IntoResponse> {
+    let guard = state.data.read().await;
+
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+    let continents: Vec<ContinentDto> = simulator_data
+        .continents
+        .iter()
+        .map(|continent| ContinentDto {
+            name: continent.name.clone(),
+            countries: continent
+                .countries
+                .iter()
+                .filter(|c| !c.leagues.leagues.is_empty())
+                .map(|country| CountryDto {
+                    slug: country.slug.clone(),
+                    code: country.code.clone(),
+                    name: country.name.clone(),
+                })
+                .collect(),
+        })
+        .collect();
+
+    Ok(CountryListTemplate {
+        title: "Select country".to_string(),
+        sub_title: "Select any country to inspect it all".to_string(),
+        sub_title_link: "/".to_string(),
+        menu_sections: views::home_menu(),
+        continents,
+    })
+}

@@ -1,5 +1,8 @@
-mod get;
-pub mod routes;
+pub mod get;
 
-pub use get::*;
-pub use routes::*;
+use crate::GameAppData;
+use axum::Router;
+
+pub fn league_routes() -> Router<GameAppData> {
+    get::routes::routes()
+}

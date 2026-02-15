@@ -1,7 +1,11 @@
-mod get;
-mod list;
-pub mod routes;
+pub mod get;
+pub mod list;
 
-pub use get::*;
-pub use list::*;
-pub use routes::*;
+use crate::GameAppData;
+use axum::Router;
+
+pub fn country_routes() -> Router<GameAppData> {
+    Router::new()
+        .merge(list::routes::routes())
+        .merge(get::routes::routes())
+}

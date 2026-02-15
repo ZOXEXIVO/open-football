@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
+    <div class="container-fluid">
+        <div class="collapse navbar-collapse" id="navbarScroll">
+            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
+                <li class="nav-item"><a class="nav-link">Players</a></li>
+                <li class="nav-item"><a class="nav-link">International</a></li>
+                <li class="nav-item"><a class="nav-link">Players on Loan</a></li>
+                <li class="nav-item"><a class="nav-link">Extended Leave</a></li>
+                <li class="nav-item"><a class="nav-link">Team Meeting</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<div class="content">
+    <table class="squad-table">
+        <tr>
+            <th style="width: 50px">Inf</th>
+            <th>Name</th>
+            <th>Position</th>
+            <th>Nat</th>
+            <th>Ability</th>
+            <th>Potential</th>
+            <th>Morale</th>
+            <th>Conditions</th>
+            <th>Value</th>
+        </tr>
+        {% for player in players %}
+        <tr>
+            <td style="width: 50px">
+                {% if player.injured %}
+                <div class="status-badge injured"></div>
+                {% endif %}
+            </td>
+            <td style="min-width: 200px;">
+                <a href="/teams/{{ team_slug }}/players/{{ player.id }}">
+                    {{ player.last_name }}&nbsp;{{ player.first_name }}
+                </a>
+            </td>
+            <td style="width: 80px">{{ player.position }}</td>
+            <td style="width: 50px">
+                <a href="/countries/{{ player.country_slug }}" class="sub-title-link">
+                    <div class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></div>
+                </a>
+            </td>
+            <td style="width: 150px">
+                <fieldset class="rating">
+                    {% for _ in 0..(5 - player.current_ability) %}<label></label>{% endfor %}
+                    {% for _ in 0..player.current_ability %}<label class="checked"></label>{% endfor %}
+                </fieldset>
+            </td>
+            <td style="width: 150px">
+                <fieldset class="rating">
+                    {% for _ in 0..(5 - player.potential_ability) %}<label></label>{% endfor %}
+                    {% for _ in 0..player.potential_ability %}<label class="checked"></label>{% endfor %}
+                </fieldset>
+            </td>
+            <td style="width: 150px">{{ player.behaviour }}</td>
+            <td style="width: 100px;text-align: center">{{ player.conditions }}%</td>
+            <td style="width: 170px">{{ player.value }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <div style="clear:both"></div>
+</div>
+{% endblock %}

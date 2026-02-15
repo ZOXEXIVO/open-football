@@ -1,5 +1,10 @@
-mod get;
-pub mod routes;
+pub mod get;
 
-pub use get::*;
-pub use routes::*;
+pub use get::PlayerStatusDto;
+
+use crate::GameAppData;
+use axum::Router;
+
+pub fn player_routes() -> Router<GameAppData> {
+    get::routes::routes()
+}

@@ -1,34 +1,37 @@
-﻿use crate::{ApiError, ApiResult, GameAppData};
+pub mod routes;
+
+use crate::views::{self, MenuSection};
+use crate::{ApiError, ApiResult, GameAppData};
+use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::{IntoResponse, Response};
-use axum::Json;
+use axum::response::IntoResponse;
 use core::Country;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct CountryGetRequest {
     country_slug: String,
 }
 
-#[derive(Serialize)]
-pub struct CountryGetViewModel<'c> {
-    pub slug: &'c str,
-    pub name: &'c str,
-    pub code: &'c str,
-    pub continent_name: &'c str,
-    pub leagues: Vec<LeagueDto<'c>>,
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "countries/get/index.html")]
+pub struct CountryGetTemplate {
+    pub title: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub menu_sections: Vec<MenuSection>,
+    pub leagues: Vec<LeagueDto>,
 }
 
-#[derive(Serialize)]
-pub struct LeagueDto<'l> {
-    pub slug: &'l str,
-    pub name: &'l str,
+pub struct LeagueDto {
+    pub slug: String,
+    pub name: String,
 }
 
 pub async fn country_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountryGetRequest>,
-) -> ApiResult<Response> {
+) -> ApiResult<impl IntoResponse> {
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -56,21 +59,21 @@ pub async fn country_get_action(
         .continent(country.continent_id)
         .ok_or_else(|| ApiError::NotFound(format!("Continent with ID {} not found", country.continent_id)))?;
 
-    let model = CountryGetViewModel {
-        slug: &country.slug,
-        name: &country.name,
-        code: &country.code,
-        continent_name: &continent.name,
-        leagues: country
-            .leagues
-            .leagues
-            .iter()
-            .map(|l| LeagueDto {
-                slug: &l.slug,
-                name: &l.name,
-            })
-            .collect(),
-    };
+    let leagues: Vec<LeagueDto> = country
+        .leagues
+        .leagues
+        .iter()
+        .map(|l| LeagueDto {
+            slug: l.slug.clone(),
+            name: l.name.clone(),
+        })
+        .collect();
 
-    Ok(Json(model).into_response())
+    Ok(CountryGetTemplate {
+        title: country.name.clone(),
+        sub_title: continent.name.clone(),
+        sub_title_link: "/countries".to_string(),
+        menu_sections: views::country_menu(),
+        leagues,
+    })
 }

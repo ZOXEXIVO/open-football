@@ -1,7 +1,11 @@
-mod get;
-pub mod routes;
-mod schedule;
+pub mod get;
+pub mod schedule;
 
-pub use get::*;
-pub use routes::*;
-pub use schedule::*;
+use crate::GameAppData;
+use axum::Router;
+
+pub fn team_routes() -> Router<GameAppData> {
+    Router::new()
+        .merge(get::routes::routes())
+        .merge(schedule::routes::routes())
+}

@@ -1,0 +1,406 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="content match-content">
+    <div class="container-fluid">
+        <div class="row">
+            <div class="col-lg-2 d-none d-lg-block">
+                <ul class="list-group squad-list squad-list-left">
+                    <li class="list-unstyled">
+                        <a href="/teams/{{ home_team_slug }}"><h3>{{ home_team_name }}</h3></a>
+                    </li>
+                    <hr/>
+                    {% for player in home_squad_main %}
+                    <li class="list-group-item bg-transparent">
+                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}">
+                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+                <hr/>
+                <ul class="list-group squad-list squad-list-left">
+                    {% for player in home_squad_subs %}
+                    <li class="list-group-item bg-transparent">
+                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}">
+                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div class="col-lg-8">
+                <div id="match-play-area">
+                    <div class="time-scrollbar-wrapper" id="time-scrollbar-wrapper" style="display:none">
+                        <div class="time-scrollbar-container">
+                            <div class="half-labels">
+                                <span class="half-label">1st Half</span>
+                                <span class="half-label">2nd Half</span>
+                            </div>
+                            <div class="time-scrollbar-track" id="time-scrollbar-track">
+                                <div class="halftime-delimiter" style="left:50%">
+                                    <div class="delimiter-line"></div>
+                                    <div class="delimiter-label">HT</div>
+                                </div>
+                                <div id="goal-markers"></div>
+                                <div class="time-progress" id="time-progress"></div>
+                                <div class="time-scrollbar-slider" id="time-slider">
+                                    <div class="time-display" id="time-display">0:00</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <div id="match-container">
+                        <div class="loading-spinner" id="loading-spinner">
+                            <i class="fas fa-spinner fa-spin fa-2x"></i>
+                            <p>Loading match data...</p>
+                        </div>
+                        <div id="pixi-container" class="match-container"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="col-lg-2 d-none d-lg-block">
+                <ul class="list-group squad-list">
+                    <li class="list-unstyled">
+                        <a href="/teams/{{ away_team_slug }}"><h3>{{ away_team_name }}</h3></a>
+                    </li>
+                    <hr/>
+                    {% for player in away_squad_main %}
+                    <li class="list-group-item bg-transparent">
+                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}">
+                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+                <hr/>
+                <ul class="list-group squad-list">
+                    {% for player in away_squad_subs %}
+                    <li class="list-group-item bg-transparent">
+                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}">
+                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pixi.js/8.6.6/pixi.min.js"></script>
+<script>
+(function() {
+    const leagueSlug = "{{ league_slug }}";
+    const matchId = "{{ match_id }}";
+    const matchTimeMsTotal = {{ match_time_ms }};
+    const goalsData = {{ goals_json|safe }};
+    const playersData = {{ players_json|safe }};
+
+    const maxWidth = 1400;
+    const maxHeight = 950;
+    const aspectRatio = 16 / 10;
+
+    let app = null;
+    let background = null;
+    let gameContainer = null;
+    let currentTime = 0;
+    let isPlaying = false;
+    let lastTickTime = 0;
+    let ballData = [];
+    let playerPositions = {};
+    let playerGraphics = {};
+    let ballObj = null;
+    let loadedChunks = new Set();
+    let totalChunks = 0;
+    let chunkDurationMs = 300000;
+    let isDragging = false;
+
+    const fieldWidth = 10500;
+    const fieldHeight = 6800;
+    const fieldOffsetX = 0;
+    const fieldOffsetY = 0;
+
+    function translateToField(x, y, z) {
+        const fx = (x / fieldWidth) * maxWidth;
+        const fy = (y / fieldHeight) * maxHeight;
+        return { x: fx + fieldOffsetX, y: fy + fieldOffsetY };
+    }
+
+    function getChunkNumber(time) {
+        return Math.floor(time / chunkDurationMs);
+    }
+
+    async function loadChunk(chunkNum) {
+        if (loadedChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
+        const res = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/${chunkNum}`);
+        const data = await res.json();
+        mergeData(data, chunkNum);
+        loadedChunks.add(chunkNum);
+    }
+
+    function mergeData(data, chunkNum) {
+        if (data.ball) {
+            ballData = ballData.concat(data.ball);
+            ballData.sort((a, b) => a.timestamp - b.timestamp);
+        }
+        if (data.players) {
+            Object.entries(data.players).forEach(([id, positions]) => {
+                if (!playerPositions[id]) playerPositions[id] = [];
+                playerPositions[id] = playerPositions[id].concat(positions);
+                playerPositions[id].sort((a, b) => a.timestamp - b.timestamp);
+            });
+        }
+    }
+
+    function findPosition(arr, time) {
+        if (!arr || arr.length === 0) return null;
+        let lo = 0, hi = arr.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (arr[mid].timestamp <= time) lo = mid;
+            else hi = mid - 1;
+        }
+        return arr[lo];
+    }
+
+    function updatePositions(time) {
+        const bp = findPosition(ballData, time);
+        if (bp && ballObj) {
+            const z = bp.position[2] || 0;
+            const pos = translateToField(bp.position[0], bp.position[1], z);
+            ballObj.position.x = pos.x;
+            ballObj.position.y = pos.y;
+            const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
+            ballObj.scale.set(heightScale);
+        }
+
+        Object.entries(playerPositions).forEach(([id, positions]) => {
+            const pp = findPosition(positions, time);
+            if (pp && playerGraphics[id]) {
+                const pos = translateToField(pp.position[0], pp.position[1], 0);
+                playerGraphics[id].position.x = pos.x - 10;
+                playerGraphics[id].position.y = pos.y - 10;
+            }
+        });
+    }
+
+    function formatMatchTime(ms) {
+        const totalSeconds = Math.floor(ms / 1000);
+        const minutes = Math.floor(totalSeconds / 60);
+        const seconds = totalSeconds % 60;
+        const halfDuration = matchTimeMsTotal / 2;
+        if (ms < halfDuration) {
+            return minutes + ':' + String(seconds).padStart(2, '0') + ' (1st)';
+        } else {
+            const s2 = Math.floor((ms - halfDuration) / 1000);
+            const m2 = Math.floor(s2 / 60);
+            const sec2 = s2 % 60;
+            return m2 + ':' + String(sec2).padStart(2, '0') + ' (2nd)';
+        }
+    }
+
+    function updateSlider() {
+        if (matchTimeMsTotal <= 0) return;
+        const pct = (currentTime / matchTimeMsTotal) * 100;
+        document.getElementById('time-slider').style.left = pct + '%';
+        document.getElementById('time-progress').style.width = pct + '%';
+        document.getElementById('time-display').textContent = formatMatchTime(currentTime);
+    }
+
+    function tick(now) {
+        if (!isPlaying) return;
+        if (lastTickTime === 0) lastTickTime = now;
+        const delta = now - lastTickTime;
+        lastTickTime = now;
+        currentTime += delta;
+
+        if (currentTime >= matchTimeMsTotal) {
+            currentTime = matchTimeMsTotal;
+            isPlaying = false;
+        }
+
+        const chunkNeeded = getChunkNumber(currentTime);
+        if (!loadedChunks.has(chunkNeeded)) {
+            loadChunk(chunkNeeded);
+        }
+
+        updatePositions(currentTime);
+        if (!isDragging) updateSlider();
+    }
+
+    function getPlayerColor(player) {
+        if (player.position === 'GK') return 0xf7e300;
+        return player.is_home ? 0x00307d : 0xb33f00;
+    }
+
+    function createPlayerGraphic(x, y, player) {
+        const container = new PIXI.Container();
+        container.position.x = x - 10;
+        container.position.y = y - 10;
+
+        const color = getPlayerColor(player);
+        const borderColor = color === 0xf7e300 ? 0x000000 : 0xffffff;
+
+        const border = new PIXI.Graphics();
+        border.circle(6, 6, 19).fill(borderColor);
+        container.addChild(border);
+
+        const circle = new PIXI.Graphics();
+        circle.circle(6, 6, 16).fill(color);
+        container.addChild(circle);
+
+        const numStyle = new PIXI.TextStyle({
+            fontFamily: 'Arial, sans-serif',
+            fontSize: 14,
+            fontWeight: 'bold',
+            fill: player.position === 'GK' ? 'black' : 'white',
+            align: 'center'
+        });
+        const numText = new PIXI.Text({text: String(player.shirt_number), style: numStyle});
+        numText.anchor.set(0.5);
+        numText.position.set(6, 6);
+        container.addChild(numText);
+
+        const nameStyle = new PIXI.TextStyle({
+            fontFamily: 'Verdana, sans-serif',
+            fontSize: 17,
+            fill: 'white',
+            wordWrap: false,
+            align: 'center'
+        });
+        const nameText = new PIXI.Text({text: player.last_name, style: nameStyle});
+        nameText.x = 10;
+        nameText.y = 40;
+        nameText.anchor.set(0.5);
+        container.addChild(nameText);
+
+        return container;
+    }
+
+    async function init() {
+        let metadata;
+        try {
+            const metaRes = await fetch(`/api/match/${leagueSlug}/${matchId}/metadata`);
+            metadata = await metaRes.json();
+        } catch(e) {
+            console.error('Failed to load metadata:', e);
+            document.getElementById('loading-spinner').innerHTML = '<p>Failed to load match data</p>';
+            return;
+        }
+
+        totalChunks = metadata.chunk_count;
+        chunkDurationMs = metadata.chunk_duration_ms;
+
+        const chunkRes = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/0`);
+        const firstChunk = await chunkRes.json();
+        mergeData(firstChunk, 0);
+        loadedChunks.add(0);
+
+        app = new PIXI.Application();
+        await app.init({
+            antialias: true,
+            autoDensity: true,
+            resolution: window.devicePixelRatio,
+            width: maxWidth,
+            height: maxHeight,
+            backgroundColor: 0x283238
+        });
+
+        const container = document.getElementById('pixi-container');
+        container.appendChild(app.canvas);
+
+        const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
+        background = new PIXI.Sprite(bgTexture);
+        background.width = maxWidth;
+        background.height = maxHeight;
+        app.stage.addChild(background);
+
+        gameContainer = new PIXI.Container();
+        app.stage.addChild(gameContainer);
+
+        Object.entries(firstChunk.players || {}).forEach(([id, positions]) => {
+            const player = playersData.find(p => p.id === Number(id));
+            if (player && positions.length > 0) {
+                const pos = translateToField(positions[0].position[0], positions[0].position[1], 0);
+                const gfx = createPlayerGraphic(pos.x, pos.y, player);
+                playerGraphics[id] = gfx;
+                gameContainer.addChild(gfx);
+            }
+        });
+
+        const ballContainer = new PIXI.Container();
+        const ballCircle = new PIXI.Graphics();
+        ballCircle.circle(0, 0, 6).fill(0xFFFFFF);
+        ballCircle.circle(0, 0, 6).stroke({width: 2, color: 0x000000});
+        ballContainer.addChild(ballCircle);
+        if (firstChunk.ball && firstChunk.ball.length > 0) {
+            const z = firstChunk.ball[0].position[2] || 0;
+            const bp = translateToField(firstChunk.ball[0].position[0], firstChunk.ball[0].position[1], z);
+            ballContainer.position.x = bp.x;
+            ballContainer.position.y = bp.y;
+        }
+        gameContainer.addChild(ballContainer);
+        ballObj = ballContainer;
+
+        resizeApp();
+        window.addEventListener('resize', resizeApp);
+
+        document.getElementById('loading-spinner').style.display = 'none';
+        document.getElementById('time-scrollbar-wrapper').style.display = 'block';
+
+        const markersDiv = document.getElementById('goal-markers');
+        goalsData.forEach(goal => {
+            const pct = (goal.time / matchTimeMsTotal) * 100;
+            const player = playersData.find(p => p.id === goal.player_id);
+            const isHome = player ? player.is_home : true;
+            const marker = document.createElement('div');
+            marker.className = 'goal-marker ' + (isHome ? 'goal-marker-home' : 'goal-marker-away');
+            marker.style.left = pct + '%';
+            marker.innerHTML = '<div class="goal-icon">\u26BD</div>';
+            markersDiv.appendChild(marker);
+        });
+
+        document.getElementById('time-scrollbar-track').addEventListener('mousedown', async (e) => {
+            const rect = e.currentTarget.getBoundingClientRect();
+            const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
+            currentTime = pct * matchTimeMsTotal;
+            await loadChunk(getChunkNumber(currentTime));
+            updatePositions(currentTime);
+            updateSlider();
+        });
+
+        isPlaying = true;
+        lastTickTime = 0;
+        app.ticker.add(() => {
+            tick(performance.now());
+        });
+    }
+
+    function resizeApp() {
+        if (!app || !background || !gameContainer) return;
+        const parent = document.getElementById('pixi-container').parentElement;
+        let w = parent.clientWidth;
+        let h = parent.clientHeight || (w / aspectRatio);
+
+        const ar = w / h;
+        if (ar > aspectRatio) w = h * aspectRatio;
+        else h = w / aspectRatio;
+
+        app.renderer.resize(w, h);
+        const scale = Math.min(w / maxWidth, h / maxHeight);
+        app.stage.scale.set(scale);
+        app.stage.position.set(
+            (w - maxWidth * scale) / 2,
+            (h - maxHeight * scale) / 2
+        );
+        background.width = maxWidth;
+        background.height = maxHeight;
+    }
+
+    init();
+})();
+</script>
+{% endblock %}

@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="950" viewBox="0 0 1400 950">
+  <rect width="1400" height="950" fill="#206e52"/>
+
+  <!-- Field grass -->
+  <rect x="62" y="60" width="1260" height="810" fill="#206e52"/>
+
+  <!-- Field outline -->
+  <rect x="62" y="60" width="1260" height="810" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center line -->
+  <line x1="692" y1="60" x2="692" y2="870" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center circle (radius ~73 backend units) -->
+  <ellipse cx="692" cy="465" rx="110" ry="109" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Center spot -->
+  <circle cx="692" cy="465" r="4" fill="white" fill-opacity="0.7"/>
+
+  <!-- Left penalty area (132 deep x 322 wide in backend) -->
+  <rect x="62" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right penalty area -->
+  <rect x="1124" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Left goal area (44 deep x 146 wide in backend) -->
+  <rect x="62" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right goal area -->
+  <rect x="1256" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Left penalty spot (88 units from goal in backend) -->
+  <circle cx="194" cy="465" r="3" fill="white" fill-opacity="0.7"/>
+
+  <!-- Right penalty spot -->
+  <circle cx="1190" cy="465" r="3" fill="white" fill-opacity="0.7"/>
+
+  <!-- Left penalty arc (outside penalty area) -->
+  <path d="M 260 378 A 110 109 0 0 1 260 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Right penalty arc (outside penalty area) -->
+  <path d="M 1124 378 A 110 109 0 0 0 1124 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+
+  <!-- Goal nets behind goal line -->
+  <!-- Left goal: GOAL_WIDTH=60 => y from 376 to 554 (backend y 212.5..332.5) -->
+  <rect x="42" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
+
+  <!-- Right goal -->
+  <rect x="1322" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
+
+  <!-- Corner arcs -->
+  <path d="M 62 75 A 15 15 0 0 1 77 60" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 1307 60 A 15 15 0 0 1 1322 75" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 77 870 A 15 15 0 0 1 62 855" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+  <path d="M 1322 855 A 15 15 0 0 1 1307 870" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
+</svg>

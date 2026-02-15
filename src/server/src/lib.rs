@@ -7,6 +7,7 @@ mod r#match;
 mod player;
 mod routes;
 mod teams;
+mod views;
 
 pub use error::{ApiError, ApiResult};
 

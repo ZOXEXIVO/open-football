@@ -1,0 +1,116 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
+    <div class="container-fluid">
+        <div class="collapse navbar-collapse" id="navbarScroll">
+            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
+                <li class="nav-item"><a class="nav-link">Overview</a></li>
+                <li class="nav-item"><a class="nav-link">Matches</a></li>
+                <li class="nav-item"><a class="nav-link">News</a></li>
+                <li class="nav-item"><a class="nav-link">Stats</a></li>
+                <li class="nav-item"><a class="nav-link">Transfers</a></li>
+                <li class="nav-item"><a class="nav-link">Awards</a></li>
+                <li class="nav-item"><a class="nav-link">History</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+
+<div class="container-fluid">
+    <div class="row">
+        <div class="col col-4">
+            <p class="header">Stages ></p>
+            <div>
+                <table class="league-table">
+                    <tr>
+                        <th style="width: 50px">Pos</th>
+                        <th style="width: 60%; min-width: 180px;">Team</th>
+                        <th style="width: 50px;text-align: center;">P</th>
+                        <th style="width: 50px;text-align: center;">W</th>
+                        <th style="width: 50px;text-align: center;">D</th>
+                        <th style="width: 50px;text-align: center;">L</th>
+                        <th style="width: 50px;text-align: center;">GD</th>
+                        <th style="width: 50px;text-align: center;">PTS</th>
+                    </tr>
+                    {% for row in table_rows %}
+                    <tr>
+                        <td class="idx">{{ loop.index }}st</td>
+                        <td>
+                            <a href="/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
+                        </td>
+                        <td style="text-align: center;">{{ row.played }}</td>
+                        <td style="text-align: center;">{{ row.win }}</td>
+                        <td style="text-align: center;">{{ row.draft }}</td>
+                        <td style="text-align: center;">{{ row.lost }}</td>
+                        <td style="text-align: center;">{{ row.goal_scored - row.goal_concerned }}</td>
+                        <td style="text-align: center;">{{ row.points }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </div>
+        <div class="col col-8">
+            <div class="container-fluid">
+                <div class="row h-75">
+                    <div class="col">
+                        <p class="header">Fixtures/results ></p>
+                        {% for tour_schedule in current_tour_schedule %}
+                        <table class="week-results">
+                            <tr>
+                                <td colspan="3">{{ tour_schedule.date }}</td>
+                            </tr>
+                            {% for item in tour_schedule.matches %}
+                            <tr>
+                                <td class="home-team">
+                                    <a href="/teams/{{ item.home_team_slug }}">
+                                        {{ item.home_team_name }}
+                                        {% if let Some(result) = item.result %}
+                                        <ul class="goalscorers-list">
+                                            {% for gs in result.home_goalscorers %}
+                                            <li>
+                                                <a href="/teams/{{ item.home_team_slug }}/players/{{ gs.id }}">
+                                                    {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} AG{% endif %}
+                                                </a>
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% endif %}
+                                    </a>
+                                </td>
+                                <td class="score">
+                                    <a href="/match/{{ league_slug }}/{{ item.match_id }}">
+                                        {% if let Some(result) = item.result %}
+                                        {{ result.home_goals }} - {{ result.away_goals }}
+                                        {% else %}
+                                        -
+                                        {% endif %}
+                                    </a>
+                                </td>
+                                <td class="away-team">
+                                    <a href="/teams/{{ item.away_team_slug }}">
+                                        {{ item.away_team_name }}
+                                        {% if let Some(result) = item.result %}
+                                        <ul class="goalscorers-list">
+                                            {% for gs in result.away_goalscorers %}
+                                            <li>
+                                                <a href="/teams/{{ item.away_team_slug }}/players/{{ gs.id }}">
+                                                    {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} AG{% endif %}
+                                                </a>
+                                            </li>
+                                            {% endfor %}
+                                        </ul>
+                                        {% endif %}
+                                    </a>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </table>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
