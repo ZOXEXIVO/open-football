@@ -1,6 +1,6 @@
 {% extends "layout.html" %}
 
-{% block content %}
+{% block submenu %}
 <nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
     <div class="container-fluid">
         <div class="collapse navbar-collapse" id="navbarScroll">
@@ -16,7 +16,9 @@
         </div>
     </div>
 </nav>
+{% endblock %}
 
+{% block content %}
 <div class="container-fluid">
     <div class="row">
         <div class="col col-4">
@@ -107,6 +109,28 @@
                             {% endfor %}
                         </table>
                         {% endfor %}
+                    </div>
+                    <div class="col">
+                        <p class="header">Competition Reputation ></p>
+                        <ol class="list-group list-group-numbered league-competitions">
+                            {% for item in competition_reputation %}
+                            <li class="list-group-item d-flex justify-content-between align-items-start">
+                                <div class="ms-2 me-auto">
+                                    <div class="fw-bold">
+                                        <a href="/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>
+                                    </div>
+                                    <div class="container">
+                                        <div class="row">
+                                            <div class="col col-2 p-0 flag-col">
+                                                <div class="flag flag-{{ item.country_code }}"></div>
+                                            </div>
+                                            <div class="col country-col">{{ item.country_name }}</div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </li>
+                            {% endfor %}
+                        </ol>
                     </div>
                 </div>
             </div>

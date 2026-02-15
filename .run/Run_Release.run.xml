@@ -1,5 +1,5 @@
-<component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="Backend:Release" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
+﻿<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="Run:Release" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="release" />
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />

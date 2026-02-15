@@ -27,6 +27,14 @@ pub struct LeagueGetTemplate {
     pub league_slug: String,
     pub table_rows: Vec<LeagueTableRow>,
     pub current_tour_schedule: Vec<TourSchedule>,
+    pub competition_reputation: Vec<CompetitionReputationItem>,
+}
+
+pub struct CompetitionReputationItem {
+    pub league_name: String,
+    pub league_slug: String,
+    pub country_name: String,
+    pub country_code: String,
 }
 
 pub struct TourSchedule {
@@ -214,6 +222,32 @@ pub async fn league_get_action(
         }
     }
 
+    let mut reputation_data: Vec<(u16, String, String, String, String)> = simulator_data
+        .continents
+        .iter()
+        .flat_map(|continent| &continent.countries)
+        .flat_map(|country| {
+            country.leagues.leagues.iter().map(move |league| {
+                (league.reputation, league.name.clone(), league.slug.clone(), country.name.clone(), country.code.clone())
+            })
+        })
+        .collect();
+
+    reputation_data.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
+        .into_iter()
+        .take(20)
+        .map(|(_, league_name, league_slug, country_name, country_code)| {
+            CompetitionReputationItem {
+                league_name,
+                league_slug,
+                country_name,
+                country_code,
+            }
+        })
+        .collect();
+
     Ok(LeagueGetTemplate {
         title: league.name.clone(),
         sub_title: country.name.clone(),
@@ -222,5 +256,6 @@ pub async fn league_get_action(
         league_slug: league.slug.clone(),
         table_rows,
         current_tour_schedule,
+        competition_reputation,
     })
 }
