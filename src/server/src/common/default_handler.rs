@@ -32,23 +32,3 @@ pub async fn default_handler(Path(path): Path<String>) -> impl IntoResponse {
         ),
     }
 }
-
-pub async fn handle_root_path() -> impl IntoResponse {
-    let path_str = "static/index.html";
-
-    match Assets::get(path_str) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path_str).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [(header::CONTENT_TYPE, mime.to_string())],
-                content.data,
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
-            [(header::CONTENT_TYPE, "text/plain".to_string())],
-            "404 Not Found".as_bytes().into(),
-        ),
-    }
-}
