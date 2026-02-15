@@ -63,6 +63,7 @@ impl MatchField {
 
     pub fn swap_squads(&mut self) {
         std::mem::swap(&mut self.left_side_players, &mut self.right_side_players);
+        std::mem::swap(&mut self.left_team_tactics, &mut self.right_team_tactics);
 
         self.players.iter_mut().for_each(|p| {
             if let Some(side) = &p.side {
@@ -72,6 +73,10 @@ impl MatchField {
                 };
                 p.side = Some(new_side);
                 p.tactical_position.regenerate_waypoints(Some(new_side));
+
+                if let Some(new_pos) = get_player_position(p, new_side) {
+                    p.start_position = new_pos;
+                }
             }
         });
     }

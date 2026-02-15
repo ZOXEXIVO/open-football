@@ -137,7 +137,7 @@
     }
 
     async function loadChunk(chunkNum) {
-        if (loadedChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
+        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
         const res = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/${chunkNum}`);
         const data = await res.json();
         mergeData(data, chunkNum);
@@ -306,6 +306,7 @@
         let metadata;
         try {
             const metaRes = await fetch(`/api/match/${leagueSlug}/${matchId}/metadata`);
+            if (!metaRes.ok) throw new Error(`metadata response ${metaRes.status}`);
             metadata = await metaRes.json();
         } catch(e) {
             console.error('Failed to load metadata:', e);
@@ -313,8 +314,8 @@
             return;
         }
 
-        totalChunks = metadata.chunk_count;
-        chunkDurationMs = metadata.chunk_duration_ms;
+        totalChunks = metadata.chunk_count || 0;
+        chunkDurationMs = metadata.chunk_duration_ms || 300000;
 
         const chunkRes = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/0`);
         const firstChunk = await chunkRes.json();

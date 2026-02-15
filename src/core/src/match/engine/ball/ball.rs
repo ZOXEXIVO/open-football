@@ -490,24 +490,22 @@ impl Ball {
         let field_width = context.field_size.width as f32;
         let field_height = context.field_size.height as f32;
 
-        // Check if ball hits the boundary and reverse its velocity if it does
-        if self.position.x <= 0.0 {
-            self.position.x = 0.0;
-            self.velocity = Vector3::zeros();
-        }
+        // Nudge ball slightly infield when it hits a boundary so players can reach it
+        const BOUNDARY_INSET: f32 = 3.0;
 
-        if self.position.x >= field_width {
-            self.position.x = field_width;
+        if self.position.x <= 0.0 {
+            self.position.x = BOUNDARY_INSET;
+            self.velocity = Vector3::zeros();
+        } else if self.position.x >= field_width {
+            self.position.x = field_width - BOUNDARY_INSET;
             self.velocity = Vector3::zeros();
         }
 
         if self.position.y <= 0.0 {
-            self.position.y = 0.0;
+            self.position.y = BOUNDARY_INSET;
             self.velocity = Vector3::zeros();
-        }
-
-        if self.position.y >= field_height {
-            self.position.y = field_height;
+        } else if self.position.y >= field_height {
+            self.position.y = field_height - BOUNDARY_INSET;
             self.velocity = Vector3::zeros();
         }
     }
@@ -700,19 +698,25 @@ impl Ball {
                 .any(|player| player.id == current_owner_id);
 
             if current_owner_nearby {
-                // Current owner is still close to the ball - maintain ownership
-                self.ownership_duration += 1;
-                return;
+                // Check if any opponent is also nearby and could challenge
+                let owner_team_id = context.players.by_id(current_owner_id)
+                    .map(|p| p.team_id);
+
+                let opponent_nearby = owner_team_id.is_some_and(|team_id| {
+                    nearby_players.iter().any(|p| p.team_id != team_id)
+                });
+
+                if !opponent_nearby {
+                    // No opponents close - owner keeps the ball unchallenged
+                    self.ownership_duration += 1;
+                    return;
+                }
+                // Opponent is close enough to challenge — fall through to tackling logic
+            } else {
+                // Current owner is NOT nearby - clear ownership so ball can be claimed
+                self.previous_owner = self.current_owner;
+                self.current_owner = None;
             }
-
-            // Current owner is NOT nearby - clear ownership so ball can be claimed
-            // This prevents the ball from being "owned" by a player who is far away
-            self.previous_owner = self.current_owner;
-            self.current_owner = None;
-
-            // If only teammates are nearby, they can now claim the ball
-            // If opponents are nearby, they compete for it
-            // This prevents the rapid position changes caused by inconsistent ownership state
         }
 
         // Ownership stability constants

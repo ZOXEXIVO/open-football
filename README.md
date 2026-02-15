@@ -50,7 +50,7 @@ Match dev looks like (cross-platform)
 /src/dev/neural - Dev utils for training NN for using in match, etc
 
 /src/neural - Core Burn neural network data
-/src/server - HTTP server for running API for Angular UI
+/src/web - HTTP server for running API for Angular UI
 
 /ui - Angular app that you can see in **[Live Demo](https://open-football.org)**
 
@@ -61,11 +61,6 @@ Match dev looks like (cross-platform)
 1) Local run
 
 ```console
-// run frontend (Angular)
-cd ui
-npm install --force
-npm start
-...
 // run backend
 cargo run
 ...

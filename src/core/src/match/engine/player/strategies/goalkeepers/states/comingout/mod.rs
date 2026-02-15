@@ -84,6 +84,22 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
                     ));
                 }
             }
+
+            // Check if opponent with ball is moving AWAY from our goal
+            // If so, don't chase them — return to goal position instead
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let opponent_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
+            let opponent_speed = opponent_velocity.magnitude();
+            if opponent_speed > 0.5 {
+                let opponent_to_goal = (own_goal - opponent.position).normalize();
+                let moving_toward_goal = opponent_velocity.normalize().dot(&opponent_to_goal);
+                // Opponent is moving away from our goal (dot < 0) and GK is already out
+                if moving_toward_goal < -0.2 && distance_from_goal > 20.0 {
+                    return Some(StateChangeResult::with_goalkeeper_state(
+                        GoalkeeperState::ReturningToGoal,
+                    ));
+                }
+            }
         }
 
         // Ball is loose - be aggressive!

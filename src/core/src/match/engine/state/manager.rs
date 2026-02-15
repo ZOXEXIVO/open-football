@@ -1,4 +1,4 @@
-use crate::r#match::{MatchContext, MatchField, MatchState, PlayMatchStateResult};
+use crate::r#match::{MatchContext, MatchField, MatchState, PlayMatchStateResult, TeamsTactics};
 
 pub struct StateManager {
     current_state: MatchState,
@@ -52,6 +52,7 @@ impl StateManager {
     ) {
         if context.state.match_state.need_swap_squads() {
             field.swap_squads();
+            context.tactics = TeamsTactics::from_field(field);
         }
 
         if play_result.additional_time > 0 {
