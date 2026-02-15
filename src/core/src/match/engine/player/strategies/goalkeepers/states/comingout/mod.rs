@@ -35,9 +35,10 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         }
 
         // Check if ball is moving very fast toward goalkeeper at close range - prepare for save
+        // Only trigger for actual shots (fast balls), not slow rolling balls the GK should claim
+        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
         let ball_toward_keeper = ctx.ball().is_towards_player_with_angle(0.7);
-        if ball_toward_keeper && ball_distance < 150.0 {
-            // Only switch to save for very fast shots at close range
+        if ball_toward_keeper && ball_distance < 150.0 && ball_speed > 8.0 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::PreparingForSave,
             ));

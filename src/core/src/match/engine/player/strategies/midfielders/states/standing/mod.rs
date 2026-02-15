@@ -12,13 +12,6 @@ pub struct MidfielderStandingState {}
 
 impl StateProcessingHandler for MidfielderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Add timeout to prevent getting stuck in standing state
-        if ctx.in_state_time > 30 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
         if ctx.player.has_ball(ctx) {
             // Decide whether to hold possession or distribute the ball
             return if self.should_hold_possession(ctx) {
@@ -80,6 +73,14 @@ impl StateProcessingHandler for MidfielderStandingState {
                     MidfielderState::Pressing,
                 ));
             }
+        }
+
+        // Add timeout to prevent getting stuck in standing state
+        // (moved after ball checks so we don't miss nearby loose balls)
+        if ctx.in_state_time > 30 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
         }
 
         // 4. Check if a teammate is making a run and needs support

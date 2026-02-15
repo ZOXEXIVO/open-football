@@ -30,6 +30,13 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
+        // Loose ball nearby — go claim it directly
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 40.0 && ctx.ball().speed() < 3.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
+        }
+
         // Priority: Press opponent with ball if close and we're the best positioned
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);

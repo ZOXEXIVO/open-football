@@ -87,7 +87,12 @@ impl StateProcessingHandler for DefenderPressingState {
         } else {
             // No opponent with the ball - ball might be loose
             // Check if we should intercept
-            if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
+            if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+            if ctx.ball().distance() < 60.0 && !ctx.ball().is_owned() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));
@@ -128,6 +133,13 @@ impl StateProcessingHandler for DefenderPressingState {
             };
 
             return Some(pressing_velocity + separation);
+        }
+
+        // Loose ball nearby — pursue it
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
+            let direction = (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
+            let speed = ctx.player.skills.physical.pace;
+            return Some(direction * speed);
         }
 
         None

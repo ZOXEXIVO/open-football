@@ -19,6 +19,16 @@ impl StateProcessingHandler for GoalkeeperPressureState {
             ));
         }
 
+        // Loose ball nearby — claim it instead of staying in dead-end pressure state
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 10.0 {
+            let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_speed < 5.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Catching,
+                ));
+            }
+        }
+
         if ctx.player().distance_from_start_position() > PRESSURE_DISTANCE_THRESHOLD {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,

@@ -32,6 +32,23 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ));
         }
 
+        // Notification system: if ball system notified us to take the ball, act immediately
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::TakeBall,
+            ));
+        }
+
+        // Loose ball nearby — go claim it directly
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 30.0 && ctx.ball().on_own_side() {
+            let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_speed < 5.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::Catching,
+                ));
+            }
+        }
+
         // Check ball proximity and threat level
         let ball_distance = ctx.ball().distance();
         let ball_on_own_side = ctx.ball().on_own_side();

@@ -29,7 +29,15 @@ impl StateProcessingHandler for DefenderWalkingState {
             }
         }
 
-        if ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
+        // Notification system: if ball system notified us to take the ball, act immediately
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
+        }
+
+        // Only pursue ball within 150m if it's actually unowned (not teammate's ball)
+        if !ctx.ball().is_owned() && ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall
             ));

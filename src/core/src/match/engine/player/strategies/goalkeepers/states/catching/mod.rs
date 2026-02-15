@@ -96,9 +96,10 @@ impl GoalkeeperCatchingState {
             return false; // Ball too far away to physically catch
         }
 
-        // CRITICAL: Goalkeeper can only catch balls that are flying TOWARDS them
+        // Goalkeeper can only catch balls that are flying TOWARDS them or are stationary/slow
         // If the ball is flying away, they cannot catch it (e.g., their own pass/kick)
-        if !ctx.ball().is_towards_player_with_angle(0.8) {
+        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+        if ball_speed > 1.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
             return false; // Ball is flying away from goalkeeper - cannot catch
         }
 
@@ -118,7 +119,6 @@ impl GoalkeeperCatchingState {
         let base_skill = scaled_handling * 0.4 + scaled_reflexes * 0.3 +
                           scaled_positioning * 0.2 + scaled_agility * 0.1;
 
-        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
         let ball_height = ctx.tick_context.positions.ball.position.z;
 
         // Base success rate should be high for skilled keepers (0.6 - 0.95 range)

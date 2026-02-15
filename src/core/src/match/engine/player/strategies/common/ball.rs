@@ -267,6 +267,11 @@ impl MatchBallLogic {
         let velocity_norm = velocity_xy.norm();
         let direction_norm = ball_to_player_xy.norm();
 
+        // Stationary or nearly-stationary ball cannot be heading towards anyone
+        if velocity_norm < 0.01 || direction_norm < 0.01 {
+            return (false, 0.0);
+        }
+
         let normalized_velocity = velocity_xy / velocity_norm;
         let normalized_direction = ball_to_player_xy / direction_norm;
         let dot_product = normalized_velocity.dot(&normalized_direction);

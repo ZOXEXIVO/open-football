@@ -52,7 +52,23 @@ impl StateProcessingHandler for DefenderRunningState {
                         DefenderState::Tackling,
                     ));
                 }
-            } else if !ctx.ball().is_owned() && self.should_intercept(ctx) {
+            }
+
+            // Loose ball nearby — go claim it directly
+            if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+
+            // Notification system: if ball system notified us to take the ball, act immediately
+            if ctx.ball().should_take_ball_immediately() {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+
+            if !ctx.ball().is_owned() && self.should_intercept(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Intercepting,
                 ));

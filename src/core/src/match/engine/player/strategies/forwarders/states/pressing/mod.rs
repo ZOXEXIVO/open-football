@@ -17,7 +17,14 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
-        if ctx.ball().distance() < 30.0 {
+        // Loose ball nearby — go claim it directly instead of pressing thin air
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
+        }
+
+        if ctx.ball().distance() < 30.0 && ctx.ball().is_owned() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
             ));
@@ -52,8 +59,18 @@ impl StateProcessingHandler for ForwardPressingState {
                     .calculate(ctx.player)
                     .velocity + ctx.player().separation_velocity(),
             )
+        } else if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
+            // Loose ball — pursue it
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                    .calculate(ctx.player)
+                    .velocity + ctx.player().separation_velocity(),
+            )
         } else {
-            // If no opponent has ball (teammate has it or it's loose), just maintain position
+            // Teammate has ball — maintain position
             Some(Vector3::zeros())
         }
     }

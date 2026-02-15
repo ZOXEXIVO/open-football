@@ -112,11 +112,27 @@
     let ballData = [];
     let playerPositions = {};
     let playerGraphics = {};
+    let playerIds = [];
     let ballObj = null;
     let loadedChunks = new Set();
+    let loadingChunks = new Set();
     let totalChunks = 0;
     let chunkDurationMs = 300000;
     let isDragging = false;
+
+    // Cached DOM elements (set once in init)
+    let sliderEl = null;
+    let progressEl = null;
+    let displayEl = null;
+
+    // Temporal coherence: remember last search index per entity
+    let lastBallIdx = 0;
+    let lastPlayerIdx = {};
+
+    // Frame throttle for 30fps
+    const TARGET_FPS = 30;
+    const FRAME_INTERVAL = 1000 / TARGET_FPS;
+    let lastFrameTime = 0;
 
     const fieldWidth = 840;
     const fieldHeight = 545;
@@ -126,10 +142,12 @@
     const fieldPixelW = 1260;
     const fieldPixelH = 810;
 
-    function translateToField(x, y, z) {
-        const fx = (x / fieldWidth) * fieldPixelW + fieldOffsetX;
-        const fy = (y / fieldHeight) * fieldPixelH + fieldOffsetY;
-        return { x: fx, y: fy };
+    // Precomputed scale factors
+    const scaleX = fieldPixelW / fieldWidth;
+    const scaleY = fieldPixelH / fieldHeight;
+
+    function translateToField(x, y) {
+        return { x: x * scaleX + fieldOffsetX, y: y * scaleY + fieldOffsetY };
     }
 
     function getChunkNumber(time) {
@@ -137,30 +155,73 @@
     }
 
     async function loadChunk(chunkNum) {
-        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
-        const res = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/${chunkNum}`);
-        const data = await res.json();
-        mergeData(data, chunkNum);
-        loadedChunks.add(chunkNum);
+        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || loadingChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
+        loadingChunks.add(chunkNum);
+        try {
+            const res = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/${chunkNum}`);
+            const data = await res.json();
+            mergeData(data, chunkNum);
+            loadedChunks.add(chunkNum);
+        } finally {
+            loadingChunks.delete(chunkNum);
+        }
+    }
+
+    function mergeSorted(existing, incoming) {
+        if (existing.length === 0) return incoming;
+        // Chunks arrive in order, so incoming timestamps are usually all after existing
+        if (incoming.length > 0 && incoming[0].timestamp >= existing[existing.length - 1].timestamp) {
+            return existing.concat(incoming);
+        }
+        // Fallback: full merge for out-of-order loads
+        const merged = new Array(existing.length + incoming.length);
+        let i = 0, j = 0, k = 0;
+        while (i < existing.length && j < incoming.length) {
+            if (existing[i].timestamp <= incoming[j].timestamp) merged[k++] = existing[i++];
+            else merged[k++] = incoming[j++];
+        }
+        while (i < existing.length) merged[k++] = existing[i++];
+        while (j < incoming.length) merged[k++] = incoming[j++];
+        return merged;
     }
 
     function mergeData(data, chunkNum) {
         if (data.ball) {
-            ballData = ballData.concat(data.ball);
-            ballData.sort((a, b) => a.timestamp - b.timestamp);
+            ballData = mergeSorted(ballData, data.ball);
         }
         if (data.players) {
-            Object.entries(data.players).forEach(([id, positions]) => {
-                if (!playerPositions[id]) playerPositions[id] = [];
-                playerPositions[id] = playerPositions[id].concat(positions);
-                playerPositions[id].sort((a, b) => a.timestamp - b.timestamp);
-            });
+            const entries = Object.entries(data.players);
+            for (let i = 0; i < entries.length; i++) {
+                const id = entries[i][0];
+                const positions = entries[i][1];
+                if (!playerPositions[id]) {
+                    playerPositions[id] = positions;
+                } else {
+                    playerPositions[id] = mergeSorted(playerPositions[id], positions);
+                }
+            }
         }
     }
 
-    function findIndex(arr, time) {
-        if (!arr || arr.length === 0) return -1;
-        let lo = 0, hi = arr.length - 1;
+    function findIndexNear(arr, time, hint) {
+        const len = arr.length;
+        if (len === 0) return -1;
+        // Try hint and nearby (temporal coherence - usually advances by 1-2)
+        if (hint >= 0 && hint < len) {
+            if (arr[hint].timestamp <= time) {
+                // Scan forward from hint
+                let i = hint;
+                while (i + 1 < len && arr[i + 1].timestamp <= time) i++;
+                return i;
+            } else {
+                // Scan backward a bit
+                let i = hint - 1;
+                while (i >= 0 && arr[i].timestamp > time) i--;
+                return Math.max(i, 0);
+            }
+        }
+        // Fallback: binary search
+        let lo = 0, hi = len - 1;
         while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
             if (arr[mid].timestamp <= time) lo = mid;
@@ -187,26 +248,32 @@
     }
 
     function updatePositions(time) {
-        const bi = findIndex(ballData, time);
-        if (bi >= 0 && ballObj) {
-            const pos3 = interpolatePosition(ballData, bi, time);
+        lastBallIdx = findIndexNear(ballData, time, lastBallIdx);
+        if (lastBallIdx >= 0 && ballObj) {
+            const pos3 = interpolatePosition(ballData, lastBallIdx, time);
             const z = pos3[2] || 0;
-            const pos = translateToField(pos3[0], pos3[1], z);
+            const pos = translateToField(pos3[0], pos3[1]);
             ballObj.position.x = pos.x;
             ballObj.position.y = pos.y;
             const heightScale = 1.0 + Math.min(z / 15.0, 0.4);
             ballObj.scale.set(heightScale);
         }
 
-        Object.entries(playerPositions).forEach(([id, positions]) => {
-            const pi = findIndex(positions, time);
-            if (pi >= 0 && playerGraphics[id]) {
+        for (let i = 0; i < playerIds.length; i++) {
+            const id = playerIds[i];
+            const positions = playerPositions[id];
+            const gfx = playerGraphics[id];
+            if (!positions || !gfx) continue;
+            const hint = lastPlayerIdx[id] || 0;
+            const pi = findIndexNear(positions, time, hint);
+            lastPlayerIdx[id] = pi;
+            if (pi >= 0) {
                 const pos3 = interpolatePosition(positions, pi, time);
-                const pos = translateToField(pos3[0], pos3[1], 0);
-                playerGraphics[id].position.x = pos.x - 10;
-                playerGraphics[id].position.y = pos.y - 10;
+                const pos = translateToField(pos3[0], pos3[1]);
+                gfx.position.x = pos.x - 10;
+                gfx.position.y = pos.y - 10;
             }
-        });
+        }
     }
 
     function formatMatchTime(ms) {
@@ -227,13 +294,19 @@
     function updateSlider() {
         if (matchTimeMsTotal <= 0) return;
         const pct = (currentTime / matchTimeMsTotal) * 100;
-        document.getElementById('time-slider').style.left = pct + '%';
-        document.getElementById('time-progress').style.width = pct + '%';
-        document.getElementById('time-display').textContent = formatMatchTime(currentTime);
+        sliderEl.style.left = pct + '%';
+        progressEl.style.width = pct + '%';
+        displayEl.textContent = formatMatchTime(currentTime);
     }
 
     function tick(now) {
         if (!isPlaying) return;
+
+        // Throttle to target FPS
+        const elapsed = now - lastFrameTime;
+        if (elapsed < FRAME_INTERVAL) return;
+        lastFrameTime = now - (elapsed % FRAME_INTERVAL);
+
         if (lastTickTime === 0) lastTickTime = now;
         const delta = now - lastTickTime;
         lastTickTime = now;
@@ -244,10 +317,11 @@
             isPlaying = false;
         }
 
+        // Preload current + next chunk
         const chunkNeeded = getChunkNumber(currentTime);
-        if (!loadedChunks.has(chunkNeeded)) {
-            loadChunk(chunkNeeded);
-        }
+        if (!loadedChunks.has(chunkNeeded)) loadChunk(chunkNeeded);
+        const nextChunk = chunkNeeded + 1;
+        if (nextChunk < totalChunks && !loadedChunks.has(nextChunk)) loadChunk(nextChunk);
 
         updatePositions(currentTime);
         if (!isDragging) updateSlider();
@@ -344,15 +418,23 @@
         gameContainer = new PIXI.Container();
         app.stage.addChild(gameContainer);
 
-        Object.entries(firstChunk.players || {}).forEach(([id, positions]) => {
-            const player = playersData.find(p => p.id === Number(id));
+        // Build a lookup map for players by id
+        const playerMap = {};
+        for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
+
+        const chunkPlayers = Object.entries(firstChunk.players || {});
+        for (let i = 0; i < chunkPlayers.length; i++) {
+            const id = chunkPlayers[i][0];
+            const positions = chunkPlayers[i][1];
+            const player = playerMap[Number(id)];
             if (player && positions.length > 0) {
-                const pos = translateToField(positions[0].position[0], positions[0].position[1], 0);
+                const pos = translateToField(positions[0].position[0], positions[0].position[1]);
                 const gfx = createPlayerGraphic(pos.x, pos.y, player);
                 playerGraphics[id] = gfx;
+                playerIds.push(id);
                 gameContainer.addChild(gfx);
             }
-        });
+        }
 
         const ballContainer = new PIXI.Container();
         const ballCircle = new PIXI.Graphics();
@@ -360,8 +442,7 @@
         ballCircle.circle(0, 0, 6).stroke({width: 2, color: 0x000000});
         ballContainer.addChild(ballCircle);
         if (firstChunk.ball && firstChunk.ball.length > 0) {
-            const z = firstChunk.ball[0].position[2] || 0;
-            const bp = translateToField(firstChunk.ball[0].position[0], firstChunk.ball[0].position[1], z);
+            const bp = translateToField(firstChunk.ball[0].position[0], firstChunk.ball[0].position[1]);
             ballContainer.position.x = bp.x;
             ballContainer.position.y = bp.y;
         }
@@ -394,6 +475,11 @@
             updatePositions(currentTime);
             updateSlider();
         });
+
+        // Cache DOM elements for slider updates
+        sliderEl = document.getElementById('time-slider');
+        progressEl = document.getElementById('time-progress');
+        displayEl = document.getElementById('time-display');
 
         isPlaying = true;
         lastTickTime = 0;

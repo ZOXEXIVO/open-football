@@ -424,6 +424,7 @@ impl Ball {
                     self.flags.in_flight_state = 0;
                     self.take_ball_notified_players.clear();
                     self.notification_timeout = 0;
+                    self.claim_cooldown = 15; // Prevent immediate re-claiming by another player
 
                     if self.position.z > 0.1 && self.position.z < DEADLOCK_HEIGHT_THRESHOLD {
                         self.position.z = 0.0;
@@ -931,18 +932,19 @@ impl Ball {
         // Clear notified players only when ball state changes significantly:
         // 1. Ball starts moving (not stopped anymore)
         // 2. Ball has an owner (claimed)
-        const MOVEMENT_THRESHOLD: f32 = 0.5; // Ball is considered moving above this velocity
-
         // Maximum distance owner can be from ball - must match deadlock claim distances
         // This allows deadlock resolution while preventing truly absurd teleports
         const MAX_OWNER_TELEPORT_DISTANCE: f32 = 15.0;
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
 
-        let is_moving = self.velocity.norm() > MOVEMENT_THRESHOLD;
         let has_owner = self.current_owner.is_some();
 
         // Clear notifications when ball is no longer in a "take ball" scenario
-        if (is_moving || has_owner) && !self.take_ball_notified_players.is_empty() {
+        // Use a higher threshold to avoid clearing notifications set by try_notify_standing_ball
+        // which uses is_ball_stopped_on_field (velocity < 2.5)
+        const CLEAR_NOTIFICATION_VELOCITY: f32 = 3.0;
+        let is_clearly_moving = self.velocity.norm() > CLEAR_NOTIFICATION_VELOCITY;
+        if (is_clearly_moving || has_owner) && !self.take_ball_notified_players.is_empty() {
             self.take_ball_notified_players.clear();
         }
 

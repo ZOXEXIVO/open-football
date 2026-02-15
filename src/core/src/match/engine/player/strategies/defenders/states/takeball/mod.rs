@@ -88,15 +88,16 @@ impl StateProcessingHandler for DefenderTakeBallState {
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
         const SEPARATION_RADIUS: f32 = 25.0;
-        const SEPARATION_WEIGHT: f32 = 0.5; // Increased from 0.4 for stronger separation
+        const SEPARATION_WEIGHT: f32 = 0.4;
         const BALL_CLAIM_DISTANCE: f32 = 10.0;
-        const MIN_SEPARATION_FACTOR: f32 = 0.25; // Minimum 25% separation - allows closer approach with larger claiming radius
+        const NO_SEPARATION_DISTANCE: f32 = 5.0; // Completely disable separation within this distance
 
         let distance_to_ball = (ctx.player.position - target).magnitude();
-        let separation_factor = if distance_to_ball < BALL_CLAIM_DISTANCE {
-            // Reduce separation force when close to ball, but never below 25%
-            let linear_factor = distance_to_ball / BALL_CLAIM_DISTANCE;
-            MIN_SEPARATION_FACTOR + (linear_factor * (1.0 - MIN_SEPARATION_FACTOR))
+        let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
+            0.0 // No separation at all — let the player reach the ball
+        } else if distance_to_ball < BALL_CLAIM_DISTANCE {
+            let linear_factor = (distance_to_ball - NO_SEPARATION_DISTANCE) / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
+            linear_factor * 0.3 // Gentle ramp from 0 to 0.3
         } else {
             1.0
         };

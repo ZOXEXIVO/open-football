@@ -26,13 +26,20 @@ impl StateProcessingHandler for ForwardInterceptingState {
             ));
         }
 
+        // Loose ball nearby — claim it directly
+        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
+        }
+
         if ball_distance < 30.0 && ctx.tick_context.ball.is_owned {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Tackling,
             ));
         }
 
-        // 2. Check if the defender can reach the interception point before any opponent
+        // 2. Check if the player can reach the interception point before any opponent
         if !self.can_reach_before_opponent(ctx) {
             // If not, transition to Pressing or HoldingLine state
             return Some(StateChangeResult::with_forward_state(

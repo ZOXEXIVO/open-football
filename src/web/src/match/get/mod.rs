@@ -120,48 +120,64 @@ pub async fn match_get_action(
 
     let mut players_json: Vec<PlayerJson> = Vec::new();
 
+    // Assign squad numbers (1-based) per team when shirt_number is not set
+    let mut home_number: u8 = 1;
     for player_id in &result_details.left_team_players.main {
         if let Some(p) = simulator_data.player(*player_id) {
+            let sn = p.shirt_number();
+            let number = if sn == 0 { home_number } else { sn };
             players_json.push(PlayerJson {
                 id: p.id,
-                shirt_number: p.shirt_number(),
+                shirt_number: number,
                 last_name: p.full_name.last_name.clone(),
                 position: p.position().get_short_name().to_string(),
                 is_home: true,
             });
+            home_number += 1;
         }
     }
     for player_id in &result_details.left_team_players.substitutes {
         if let Some(p) = simulator_data.player(*player_id) {
+            let sn = p.shirt_number();
+            let number = if sn == 0 { home_number } else { sn };
             players_json.push(PlayerJson {
                 id: p.id,
-                shirt_number: p.shirt_number(),
+                shirt_number: number,
                 last_name: p.full_name.last_name.clone(),
                 position: p.position().get_short_name().to_string(),
                 is_home: true,
             });
+            home_number += 1;
         }
     }
+
+    let mut away_number: u8 = 1;
     for player_id in &result_details.right_team_players.main {
         if let Some(p) = simulator_data.player(*player_id) {
+            let sn = p.shirt_number();
+            let number = if sn == 0 { away_number } else { sn };
             players_json.push(PlayerJson {
                 id: p.id,
-                shirt_number: p.shirt_number(),
+                shirt_number: number,
                 last_name: p.full_name.last_name.clone(),
                 position: p.position().get_short_name().to_string(),
                 is_home: false,
             });
+            away_number += 1;
         }
     }
     for player_id in &result_details.right_team_players.substitutes {
         if let Some(p) = simulator_data.player(*player_id) {
+            let sn = p.shirt_number();
+            let number = if sn == 0 { away_number } else { sn };
             players_json.push(PlayerJson {
                 id: p.id,
-                shirt_number: p.shirt_number(),
+                shirt_number: number,
                 last_name: p.full_name.last_name.clone(),
                 position: p.position().get_short_name().to_string(),
                 is_home: false,
             });
+            away_number += 1;
         }
     }
 

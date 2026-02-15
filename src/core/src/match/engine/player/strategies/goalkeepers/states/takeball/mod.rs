@@ -30,8 +30,16 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
-        // Timeout after 120 ticks
-        if ctx.in_state_time > 120 {
+        // Timeout after 120 ticks — but only if ball isn't very close
+        // If ball is close, keep trying instead of giving up
+        if ctx.in_state_time > 120 && ctx.ball().distance() > 10.0 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
+            ));
+        }
+
+        // Hard timeout after 200 ticks regardless
+        if ctx.in_state_time > 200 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
@@ -48,7 +56,7 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // Calculate base Arrive behavior
         let mut arrive_velocity = SteeringBehavior::Arrive {
             target: ctx.tick_context.positions.ball.position,
-            slowing_distance: 15.0,
+            slowing_distance: 2.0,
         }
         .calculate(ctx.player)
         .velocity;
@@ -57,13 +65,16 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         // BUT reduce separation when very close to ball to allow claiming
         const SEPARATION_RADIUS: f32 = 25.0;
         const SEPARATION_WEIGHT: f32 = 0.4;
-        const BALL_CLAIM_DISTANCE: f32 = 6.7; // Reduced by 1.5x from 10.0
+        const BALL_CLAIM_DISTANCE: f32 = 10.0;
+        const NO_SEPARATION_DISTANCE: f32 = 5.0;
 
         let target = ctx.tick_context.positions.ball.position;
         let distance_to_ball = (ctx.player.position - target).magnitude();
-        let separation_factor = if distance_to_ball < BALL_CLAIM_DISTANCE {
-            // Reduce separation force when close to ball (linear falloff)
-            distance_to_ball / BALL_CLAIM_DISTANCE
+        let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
+            0.0 // No separation at all — let the keeper reach the ball
+        } else if distance_to_ball < BALL_CLAIM_DISTANCE {
+            let linear_factor = (distance_to_ball - NO_SEPARATION_DISTANCE) / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
+            linear_factor * 0.3
         } else {
             1.0
         };

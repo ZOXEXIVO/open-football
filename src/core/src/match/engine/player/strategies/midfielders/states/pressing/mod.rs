@@ -46,6 +46,13 @@ impl StateProcessingHandler for MidfielderPressingState {
             }
         }
 
+        // Loose ball nearby — go claim it directly instead of pressing thin air
+        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::TakeBall,
+            ));
+        }
+
         // CRITICAL: Tackle if an opponent has the ball nearby
         // Using new chaining syntax: nearby(30.0).with_ball(ctx)
         if let Some(opponent) = ctx.players().opponents().nearby(30.0).with_ball(ctx).next() {
@@ -59,8 +66,9 @@ impl StateProcessingHandler for MidfielderPressingState {
             }
         }
 
-        // If ball is far away or team has possession, stop pressing
-        if ctx.ball().distance() > 250.0 || !ctx.ball().is_towards_player_with_angle(0.8) {
+        // If ball is far away, stop pressing
+        // Don't exit pressing just because ball is stationary (speed < 0.5 makes is_towards return false)
+        if ctx.ball().distance() > 250.0 || (ctx.ball().speed() > 0.5 && !ctx.ball().is_towards_player_with_angle(0.8)) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
             ));
@@ -100,8 +108,19 @@ impl StateProcessingHandler for MidfielderPressingState {
                 .velocity
                     + ctx.player().separation_velocity(),
             )
+        } else if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
+            // Loose ball — pursue it
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
+            )
         } else {
-            // If no opponent has ball (teammate has it or it's loose), just maintain position
+            // Teammate has ball — maintain position
             Some(Vector3::zeros())
         }
     }

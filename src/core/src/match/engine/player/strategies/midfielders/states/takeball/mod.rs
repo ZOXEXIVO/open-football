@@ -80,7 +80,7 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         // Calculate base Arrive behavior
         let mut arrive_velocity = SteeringBehavior::Arrive {
             target,
-            slowing_distance: 15.0,
+            slowing_distance: 2.0,
         }
         .calculate(ctx.player)
         .velocity;
@@ -88,25 +88,19 @@ impl StateProcessingHandler for MidfielderTakeBallState {
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
         const SEPARATION_RADIUS: f32 = 25.0;
-        const SEPARATION_WEIGHT: f32 = 0.5; // Increased from 0.4 for stronger separation
+        const SEPARATION_WEIGHT: f32 = 0.5;
         const BALL_CLAIM_DISTANCE: f32 = 15.0;
-        const BALL_PRIORITY_DISTANCE: f32 = 5.0;
-        const MIN_SEPARATION_FACTOR: f32 = 0.25; // Minimum 25% separation - allows closer approach with larger claiming radius
-        const MAX_SEPARATION_FACTOR: f32 = 1.0; // Maximum 100% separation when far
+        const NO_SEPARATION_DISTANCE: f32 = 5.0; // Completely disable separation within this distance
 
         let distance_to_ball = (ctx.player.position - target).magnitude();
 
-        // Progressive separation reduction - minimum 25% to allow claiming with larger radius
-        let separation_factor = if distance_to_ball < BALL_PRIORITY_DISTANCE {
-            // Very close to ball - minimum separation (25%)
-            MIN_SEPARATION_FACTOR
+        let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
+            0.0 // No separation at all — let the player reach the ball
         } else if distance_to_ball < BALL_CLAIM_DISTANCE {
-            // Approaching ball - lerp from 25% to 60%
-            let ratio = (distance_to_ball - BALL_PRIORITY_DISTANCE) / (BALL_CLAIM_DISTANCE - BALL_PRIORITY_DISTANCE);
-            MIN_SEPARATION_FACTOR + (ratio * 0.35)
+            let ratio = (distance_to_ball - NO_SEPARATION_DISTANCE) / (BALL_CLAIM_DISTANCE - NO_SEPARATION_DISTANCE);
+            ratio * 0.3 // Gentle ramp from 0 to 0.3
         } else {
-            // Far from ball - full separation
-            MAX_SEPARATION_FACTOR
+            1.0
         };
 
         let mut separation_force = Vector3::zeros();

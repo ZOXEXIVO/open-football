@@ -1,8 +1,8 @@
 [package]
 name = "open_football"
-version = "0.1.0"
+version = "0.3.0"
 authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
-edition = "2018"
+edition = "2024"
 
 [dependencies]
 core = { path = "src/core" }
