@@ -113,11 +113,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             match_data.add_player_positions(player.id, timestamp, player.position);
         });
 
-        // player positions
-        field.substitutes.iter().for_each(|sub_player| {
-            match_data.add_player_positions(sub_player.id, timestamp, sub_player.position);
-        });
-
         // write positions
         match_data.add_ball_positions(timestamp, field.ball.position);
     }
