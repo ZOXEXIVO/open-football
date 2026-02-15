@@ -13,6 +13,17 @@ pub struct GoalkeeperAttentiveState {}
 
 impl StateProcessingHandler for GoalkeeperAttentiveState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Direct catch for very close slow balls
+        if ctx.ball().distance() < 5.0
+            && !ctx.ball().is_owned()
+            && ctx.ball().on_own_side()
+            && ctx.tick_context.positions.ball.velocity.norm() < 8.0
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Catching,
+            ));
+        }
+
         // First, handle if goalkeeper already has the ball
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(

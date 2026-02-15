@@ -18,6 +18,14 @@ impl StateProcessingHandler for ForwardDribblingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
+        // PRIORITY 0: Near opponent goalkeeper - MUST shoot immediately
+        if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
+            let distance_to_gk = (ctx.player.position - gk.position).magnitude();
+            if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
+        }
+
         // PRIORITY 1: Very close to goal - ALWAYS try to shoot (inside 6-yard box)
         if distance_to_goal < 60.0 {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
@@ -82,9 +90,15 @@ impl StateProcessingHandler for ForwardDribblingState {
 
         // Check if there's an opportunity to shoot
         if self.can_shoot(ctx) {
-            // Transition to Shooting state if there's an opportunity to shoot
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Shooting,
+            ));
+        }
+
+        // Cross from wide position in attacking third
+        if self.should_cross(ctx) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Crossing,
             ));
         }
 
@@ -119,8 +133,37 @@ impl ForwardDribblingState {
         !ctx.players().opponents().exists(dribble_distance)
     }
 
+    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let y = ctx.player.position.y;
+        let wide_margin = field_height * 0.2;
+
+        let is_wide = y < wide_margin || y > field_height - wide_margin;
+        if !is_wide {
+            return false;
+        }
+
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        // In attacking area but not too close to goal
+        if distance_to_goal > 300.0 || distance_to_goal < 60.0 {
+            return false;
+        }
+
+        // Has teammates in the box
+        let goal_pos = ctx.player().opponent_goal_position();
+        let teammates_in_box = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| (t.position - goal_pos).magnitude() < 120.0)
+            .count();
+
+        let crossing = ctx.player.skills.technical.crossing / 20.0;
+        teammates_in_box >= 1 && crossing > 0.4
+    }
+
     fn can_shoot(&self, ctx: &StateProcessingContext) -> bool {
-        let shot_distance = 35.0;
+        let shot_distance = 80.0;
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 

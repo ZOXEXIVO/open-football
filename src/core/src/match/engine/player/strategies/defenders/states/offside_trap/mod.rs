@@ -13,7 +13,7 @@ pub struct DefenderOffsideTrapState {}
 impl StateProcessingHandler for DefenderOffsideTrapState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the team is defending a lead and there is limited time remaining
-        let defending_lead = ctx.team().is_loosing() && ctx.context.time.is_running_out();
+        let defending_lead = ctx.team().is_leading() && ctx.context.time.is_running_out();
 
         // 2. Check if the opponent's playing style and formation are suitable for an offside trap
         let opponent_style_suitable = self.is_opponent_style_suitable(ctx);

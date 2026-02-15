@@ -1,0 +1,261 @@
+pub mod routes;
+
+use crate::views::{self, MenuSection};
+use crate::{ApiError, ApiResult, GameAppData};
+use askama::Template;
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
+use chrono::Duration;
+use core::league::ScheduleTour;
+use core::r#match::GoalDetail;
+use core::r#match::player::statistics::MatchStatisticType;
+use itertools::*;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct LeagueGetRequest {
+    pub league_slug: String,
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "leagues/get/index.html")]
+pub struct LeagueGetTemplate {
+    pub title: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub menu_sections: Vec<MenuSection>,
+    pub league_slug: String,
+    pub table_rows: Vec<LeagueTableRow>,
+    pub current_tour_schedule: Vec<TourSchedule>,
+    pub competition_reputation: Vec<CompetitionReputationItem>,
+}
+
+pub struct CompetitionReputationItem {
+    pub league_name: String,
+    pub league_slug: String,
+    pub country_name: String,
+    pub country_code: String,
+}
+
+pub struct TourSchedule {
+    pub date: String,
+    pub matches: Vec<LeagueScheduleItem>,
+}
+
+pub struct LeagueScheduleItem {
+    pub match_id: String,
+    pub home_team_name: String,
+    pub home_team_slug: String,
+    pub away_team_name: String,
+    pub away_team_slug: String,
+    pub result: Option<LeagueScheduleItemResult>,
+}
+
+pub struct LeagueScheduleItemResult {
+    pub home_goals: u8,
+    pub home_goalscorers: Vec<LeagueTableGoalscorer>,
+    pub away_goals: u8,
+    pub away_goalscorers: Vec<LeagueTableGoalscorer>,
+}
+
+pub struct LeagueTableGoalscorer {
+    pub id: u32,
+    pub name: String,
+    pub time: String,
+    pub auto_goal: bool,
+}
+
+pub struct LeagueTableRow {
+    pub team_name: String,
+    pub team_slug: String,
+    pub played: u8,
+    pub win: u8,
+    pub draft: u8,
+    pub lost: u8,
+    pub goal_scored: i32,
+    pub goal_concerned: i32,
+    pub points: u8,
+}
+
+pub async fn league_get_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<LeagueGetRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let guard = state.data.read().await;
+
+    let simulator_data = guard.as_ref().unwrap();
+
+    let league_id = simulator_data
+        .indexes
+        .as_ref()
+        .unwrap()
+        .slug_indexes
+        .get_league_by_slug(&route_params.league_slug)
+        .ok_or_else(|| ApiError::NotFound(format!("League with slug {} not found", route_params.league_slug)))?;
+
+    let league = simulator_data.league(league_id).unwrap();
+    let country = simulator_data.country(league.country_id).unwrap();
+    let league_table = league.table.get();
+
+    let table_rows: Vec<LeagueTableRow> = league_table
+        .iter()
+        .map(|t| {
+            let team_data = simulator_data.team_data(t.team_id).unwrap();
+            LeagueTableRow {
+                team_name: team_data.name.clone(),
+                team_slug: team_data.slug.clone(),
+                played: t.played,
+                win: t.win,
+                draft: t.draft,
+                lost: t.lost,
+                goal_scored: t.goal_scored,
+                goal_concerned: t.goal_concerned,
+                points: t.points,
+            }
+        })
+        .collect();
+
+    let now = simulator_data.date.date() + Duration::days(3);
+
+    let mut current_tour: Option<&ScheduleTour> = None;
+
+    for tour in league.schedule.tours.iter() {
+        if now >= tour.start_date() && now <= tour.end_date() {
+            current_tour = Some(tour);
+        }
+    }
+
+    if current_tour.is_none() {
+        for tour in league.schedule.tours.iter() {
+            if now >= tour.end_date() {
+                current_tour = Some(tour);
+            }
+        }
+    }
+
+    let mut current_tour_schedule = Vec::new();
+
+    if let Some(tour) = current_tour {
+        for (key, group) in &tour.items.iter().chunk_by(|t| t.date.date()) {
+            let tour_schedule = TourSchedule {
+                date: key.format("%d.%m.%Y").to_string(),
+                matches: group
+                    .map(|item| {
+                        let home_team_data = simulator_data.team_data(item.home_team_id).unwrap();
+                        let home_team = simulator_data.team(item.home_team_id).unwrap();
+                        let away_team_data = simulator_data.team_data(item.away_team_id).unwrap();
+                        let away_team = simulator_data.team(item.away_team_id).unwrap();
+
+                        LeagueScheduleItem {
+                            match_id: item.id.clone(),
+                            result: item.result.as_ref().map(|res| {
+                                let details: Vec<&GoalDetail> = res
+                                    .details
+                                    .iter()
+                                    .filter(|detail| detail.stat_type == MatchStatisticType::Goal)
+                                    .collect();
+
+                                LeagueScheduleItemResult {
+                                    home_goals: if item.home_team_id == res.home_team.team_id {
+                                        res.home_team.get()
+                                    } else {
+                                        res.away_team.get()
+                                    },
+                                    home_goalscorers: details
+                                        .iter()
+                                        .filter_map(|detail| {
+                                            let player = simulator_data.player(detail.player_id).unwrap();
+                                            if home_team.players.contains(player.id) {
+                                                Some(LeagueTableGoalscorer {
+                                                    id: detail.player_id,
+                                                    name: player.full_name.to_string(),
+                                                    time: format!(
+                                                        "('{})",
+                                                        Duration::new((detail.time / 1000) as i64, 0)
+                                                            .unwrap()
+                                                            .num_minutes()
+                                                    ),
+                                                    auto_goal: detail.is_auto_goal,
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                    away_goals: if item.away_team_id == res.away_team.team_id {
+                                        res.away_team.get()
+                                    } else {
+                                        res.home_team.get()
+                                    },
+                                    away_goalscorers: details
+                                        .iter()
+                                        .filter_map(|detail| {
+                                            let player = simulator_data.player(detail.player_id).unwrap();
+                                            if away_team.players.contains(player.id) {
+                                                Some(LeagueTableGoalscorer {
+                                                    id: detail.player_id,
+                                                    name: player.full_name.to_string(),
+                                                    time: format!(
+                                                        "('{})",
+                                                        Duration::new((detail.time / 1000) as i64, 0)
+                                                            .unwrap()
+                                                            .num_minutes()
+                                                    ),
+                                                    auto_goal: detail.is_auto_goal,
+                                                })
+                                            } else {
+                                                None
+                                            }
+                                        })
+                                        .collect(),
+                                }
+                            }),
+                            home_team_name: home_team_data.name.clone(),
+                            home_team_slug: home_team_data.slug.clone(),
+                            away_team_name: away_team_data.name.clone(),
+                            away_team_slug: away_team_data.slug.clone(),
+                        }
+                    })
+                    .collect(),
+            };
+            current_tour_schedule.push(tour_schedule);
+        }
+    }
+
+    let mut reputation_data: Vec<(u16, String, String, String, String)> = simulator_data
+        .continents
+        .iter()
+        .flat_map(|continent| &continent.countries)
+        .flat_map(|country| {
+            country.leagues.leagues.iter().map(move |league| {
+                (league.reputation, league.name.clone(), league.slug.clone(), country.name.clone(), country.code.clone())
+            })
+        })
+        .collect();
+
+    reputation_data.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
+        .into_iter()
+        .take(20)
+        .map(|(_, league_name, league_slug, country_name, country_code)| {
+            CompetitionReputationItem {
+                league_name,
+                league_slug,
+                country_name,
+                country_code,
+            }
+        })
+        .collect();
+
+    Ok(LeagueGetTemplate {
+        title: league.name.clone(),
+        sub_title: country.name.clone(),
+        sub_title_link: format!("/countries/{}", &country.slug),
+        menu_sections: views::league_menu(&country.name, &country.slug, &league.name, &league.slug),
+        league_slug: league.slug.clone(),
+        table_rows,
+        current_tour_schedule,
+        competition_reputation,
+    })
+}

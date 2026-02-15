@@ -165,11 +165,11 @@ impl<'b> BallOperationsImpl<'b> {
         let ball_x = self.ctx.tick_context.positions.ball.position.x;
 
         if self.ctx.player.side == Some(PlayerSide::Left) {
-            // Home team defends the left side (negative X)
-            ball_x < -field_length / 3.0
+            // Home team defends the left side (0 to field_length/3)
+            ball_x < field_length / 3.0
         } else {
-            // Away team defends the right side (positive X)
-            ball_x > field_length / 3.0
+            // Away team defends the right side (2/3 to field_length)
+            ball_x > field_length * 2.0 / 3.0
         }
     }
 

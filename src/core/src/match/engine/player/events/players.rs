@@ -184,6 +184,9 @@ impl PlayerEventDispatcher {
             PlayerEvent::ClearBall(velocity) => {
                 Self::handle_clear_ball_event(velocity, field);
             }
+            PlayerEvent::RequestBallReceive(player_id) => {
+                Self::handle_request_ball_receive(player_id, field);
+            }
             _ => {} // Ignore unsupported events
         }
 
@@ -204,6 +207,7 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = None;
         field.ball.current_owner = None;
+        field.ball.pass_target_player_id = None;
 
         field.reset_players_positions();
         field.ball.reset();
@@ -358,6 +362,7 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
+        field.ball.pass_target_player_id = Some(event_model.to_player_id);
 
         // Increase in_flight_state based on pass distance to prevent immediate reclaim
         // Short passes (< 30m): 20 ticks (~0.33s)
@@ -714,21 +719,27 @@ impl PlayerEventDispatcher {
         // If there's already an owner and they're different from the claimer
         // Only allow the claim if enough time has passed (ownership_duration check)
         if let Some(current_owner) = field.ball.current_owner {
-            if current_owner != player_id {
-                // Different player trying to claim - this is a tackle/interception
-                // Allow it but set cooldown to prevent immediate re-claim
-                field.ball.previous_owner = Some(current_owner);
-                field.ball.current_owner = Some(player_id);
-                field.ball.ownership_duration = 0;
-                field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
-                field.ball.flags.in_flight_state = 30;
+            if current_owner == player_id {
+                // Already owns the ball (e.g. try_pass_target_claim already set ownership)
+                // Don't reset previous_owner — it tracks who passed to us
                 return;
             }
+
+            // Different player trying to claim - this is a tackle/interception
+            // Allow it but set cooldown to prevent immediate re-claim
+            field.ball.previous_owner = Some(current_owner);
+            field.ball.current_owner = Some(player_id);
+            field.ball.pass_target_player_id = None;
+            field.ball.ownership_duration = 0;
+            field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
+            field.ball.flags.in_flight_state = 30;
+            return;
         }
 
-        // No current owner or same owner - normal claim
+        // No current owner - normal claim
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        field.ball.pass_target_player_id = None;
         field.ball.ownership_duration = 0;
         field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
         field.ball.flags.in_flight_state = 30;
@@ -744,6 +755,7 @@ impl PlayerEventDispatcher {
     fn handle_gain_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        field.ball.pass_target_player_id = None;
 
         field.ball.flags.in_flight_state = 100;
     }
@@ -922,6 +934,7 @@ impl PlayerEventDispatcher {
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);
         field.ball.current_owner = None;
+        field.ball.pass_target_player_id = None;
         field.ball.velocity = final_velocity;
 
         field.ball.flags.in_flight_state = 100;
@@ -942,6 +955,37 @@ impl PlayerEventDispatcher {
         player.run_for_ball();
     }
 
+    fn handle_request_ball_receive(player_id: u32, field: &mut MatchField) {
+        // Only allow if ball is close and either unowned or this player is the target
+        let is_target = field.ball.pass_target_player_id == Some(player_id);
+        let is_unowned = field.ball.current_owner.is_none();
+
+        if !is_target && !is_unowned {
+            return;
+        }
+
+        // Copy ball position to avoid borrow conflict
+        let ball_pos = field.ball.position;
+
+        let player = match field.get_player(player_id) {
+            Some(p) => p,
+            None => return,
+        };
+
+        let dx = player.position.x - ball_pos.x;
+        let dy = player.position.y - ball_pos.y;
+        let distance = (dx * dx + dy * dy).sqrt();
+
+        if distance < 3.5 && ball_pos.z <= 2.8 {
+            field.ball.previous_owner = field.ball.current_owner;
+            field.ball.current_owner = Some(player_id);
+            field.ball.pass_target_player_id = None;
+            field.ball.ownership_duration = 0;
+            field.ball.claim_cooldown = 15;
+            field.ball.flags.in_flight_state = 0;
+        }
+    }
+
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
         // Apply the clearing velocity to the ball
         field.ball.velocity = velocity;
@@ -949,6 +993,7 @@ impl PlayerEventDispatcher {
         // Clear ownership - ball is now loose
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
+        field.ball.pass_target_player_id = None;
 
         // Set in-flight state to prevent immediate tackling
         field.ball.flags.in_flight_state = 10;

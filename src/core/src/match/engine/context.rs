@@ -88,8 +88,9 @@ impl MatchContext {
     pub fn penalty_area(&self, is_home_team: bool) -> PenaltyArea {
         let field_width = self.field_size.width as f32;
         let field_height = self.field_size.height as f32;
-        let penalty_area_width = 16.5; // Standard width of penalty area
-        let penalty_area_depth = 40.3; // Standard depth of penalty area
+        let scale = field_width / 105.0; // Field units per real meter
+        let penalty_area_width = 40.32 * scale; // 40.32m wide (centered on goal)
+        let penalty_area_depth = 16.5 * scale;  // 16.5m deep from goal line
 
         if is_home_team {
             PenaltyArea::new(

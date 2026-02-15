@@ -1,0 +1,79 @@
+pub mod routes;
+
+use crate::views::{self, MenuSection};
+use crate::{ApiError, ApiResult, GameAppData};
+use askama::Template;
+use axum::extract::{Path, State};
+use axum::response::IntoResponse;
+use core::Country;
+use serde::Deserialize;
+
+#[derive(Deserialize)]
+pub struct CountryGetRequest {
+    country_slug: String,
+}
+
+#[derive(Template, askama_web::WebTemplate)]
+#[template(path = "countries/get/index.html")]
+pub struct CountryGetTemplate {
+    pub title: String,
+    pub sub_title: String,
+    pub sub_title_link: String,
+    pub menu_sections: Vec<MenuSection>,
+    pub leagues: Vec<LeagueDto>,
+}
+
+pub struct LeagueDto {
+    pub slug: String,
+    pub name: String,
+}
+
+pub async fn country_get_action(
+    State(state): State<GameAppData>,
+    Path(route_params): Path<CountryGetRequest>,
+) -> ApiResult<impl IntoResponse> {
+    let guard = state.data.read().await;
+
+    let simulator_data = guard
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+    let indexes = simulator_data
+        .indexes
+        .as_ref()
+        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
+
+    let country_id = indexes
+        .slug_indexes
+        .get_country_by_slug(&route_params.country_slug)
+        .ok_or_else(|| ApiError::NotFound(format!("Country '{}' not found", route_params.country_slug)))?;
+
+    let country: &Country = simulator_data
+        .continents
+        .iter()
+        .flat_map(|c| &c.countries)
+        .find(|country| country.id == country_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Country with ID {} not found in continents", country_id)))?;
+
+    let continent = simulator_data
+        .continent(country.continent_id)
+        .ok_or_else(|| ApiError::NotFound(format!("Continent with ID {} not found", country.continent_id)))?;
+
+    let leagues: Vec<LeagueDto> = country
+        .leagues
+        .leagues
+        .iter()
+        .map(|l| LeagueDto {
+            slug: l.slug.clone(),
+            name: l.name.clone(),
+        })
+        .collect();
+
+    Ok(CountryGetTemplate {
+        title: country.name.clone(),
+        sub_title: continent.name.clone(),
+        sub_title_link: "/countries".to_string(),
+        menu_sections: views::country_menu(),
+        leagues,
+    })
+}

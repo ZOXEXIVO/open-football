@@ -1,0 +1,57 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
+    <div class="container-fluid">
+        <div class="collapse navbar-collapse" id="navbarScroll">
+            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
+                <li class="nav-item"><a class="nav-link">Overview</a></li>
+                <li class="nav-item"><a class="nav-link">Matches</a></li>
+                <li class="nav-item"><a class="nav-link">News</a></li>
+                <li class="nav-item"><a class="nav-link">Stats</a></li>
+                <li class="nav-item"><a class="nav-link">Transfers</a></li>
+                <li class="nav-item"><a class="nav-link">Awards</a></li>
+                <li class="nav-item"><a class="nav-link">History</a></li>
+            </ul>
+        </div>
+    </div>
+</nav>
+{% endblock %}
+
+{% block content %}
+<div class="content">
+    <table class="squad-table">
+        <tr>
+            <th style="width: 100px">Date</th>
+            <th style="width: 80px">Time</th>
+            <th>Opposition</th>
+            <th style="width: 100px;text-align: center">Venue</th>
+            <th style="width: 150px;text-align: center">Result</th>
+            <th>Competition</th>
+        </tr>
+        {% for item in items %}
+        <tr>
+            <td>{{ item.date }}</td>
+            <td>{{ item.time }}</td>
+            <td>
+                <a href="/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>
+            </td>
+            <td style="text-align: center">
+                {% if item.is_home %}H{% else %}A{% endif %}
+            </td>
+            <td style="text-align: center">
+                {% if let Some(result) = item.result %}
+                <a href="/match/{{ league_slug }}/{{ result.match_id }}">
+                    {{ result.home_goals }} - {{ result.away_goals }}
+                </a>
+                {% else %}
+                -
+                {% endif %}
+            </td>
+            <td>{{ item.competition_name }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+    <div style="clear:both"></div>
+</div>
+{% endblock %}

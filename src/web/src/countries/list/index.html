@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="country-list-content">
+    <div>
+        {% for continent in continents %}
+        <div class="country-box">
+            <h2>{{ continent.name }} ({{ continent.countries.len() }})</h2>
+            <hr />
+            <div>
+                <ul class="countries-list">
+                    {% for country in continent.countries %}
+                    <li>
+                        <a href="/countries/{{ country.slug }}">
+                            <div class="flag flag-{{ country.code }}"></div>&nbsp;&nbsp;{{ country.name }}
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+            </div>
+            <div style="clear:both"></div>
+        </div>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

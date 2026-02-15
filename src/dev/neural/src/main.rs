@@ -12,8 +12,8 @@ use burn::optim::lr_scheduler::constant::ConstantLr;
 use burn::prelude::{Backend, Module, Tensor};
 use burn::record::{BinFileRecorder, FullPrecisionSettings};
 use burn::tensor::backend::AutodiffBackend;
-use burn::train::metric::{LossMetric};
-use burn::train::{Learner, RegressionOutput, SupervisedTraining, TrainOutput, TrainStep, TrainingStrategy};
+use burn::train::metric::LossMetric;
+use burn::train::{InferenceStep, Learner, RegressionOutput, SupervisedTraining, TrainOutput, TrainStep, TrainingStrategy};
 use neural::{MidfielderPassingNeural, MidfielderPassingNeuralConfig};
 use std::path::PathBuf;
 use burn::backend::wgpu::WgpuDevice;
@@ -22,9 +22,7 @@ type NeuralNetworkDevice = WgpuDevice;
 type NeuralNetworkBackend = Wgpu;
 type NeuralNetworkAutodiffBackend = Autodiff<NeuralNetworkBackend>;
 
-type NeuralNetwork<B> = MidfielderPassingNeural<B>;
 type NeuralNetworkConfig = MidfielderPassingNeuralConfig;
-type NeuralNetworkInner = MidfielderPassingNeural<NeuralNetworkBackend>;
 
 fn main() {
     let device = NeuralNetworkDevice::default();
@@ -47,7 +45,7 @@ fn main() {
         // (90f64, 2f64, 0f64),
     ];
 
-    let model: NeuralNetworkInner = train::<NeuralNetworkAutodiffBackend>(
+    let model: MidfielderPassingNeural<NeuralNetworkBackend> = train::<NeuralNetworkAutodiffBackend>(
         "artifacts",
         TrainingConfig {
             num_epochs: 500,
@@ -66,8 +64,8 @@ fn main() {
 
         let tensor_data_string = result
             .to_data()
-            .iter()
-            .map(|x: f32| format!("{:.4}", x))
+            .iter::<f32>()
+            .map(|x| format!("{:.4}", x))
             .collect::<Vec<String>>()
             .join(", ");
 
@@ -81,7 +79,7 @@ fn main() {
 
     let recorder = BinFileRecorder::<FullPrecisionSettings>::new();
     model
-        .save_file(PathBuf::from_iter(&path), &recorder)
+        .save_file(path, &recorder)
         .expect("Should be able to save the model");
 }
 
@@ -150,17 +148,44 @@ fn create_artifact_dir(artifact_dir: &str) {
     std::fs::create_dir_all(artifact_dir).ok();
 }
 
-impl<B: AutodiffBackend> TrainStep<TrainingBatch<B>, RegressionOutput<B>> for NeuralNetwork<B> {
+// Wrapper type to satisfy orphan rules: TrainStep/InferenceStep (from burn)
+// cannot be implemented directly on MidfielderPassingNeural (from neural crate).
+#[derive(Module, Debug)]
+struct TrainableModel<B: Backend> {
+    inner: MidfielderPassingNeural<B>,
+}
+
+impl<B: AutodiffBackend> TrainStep for TrainableModel<B> {
+    type Input = TrainingBatch<B>;
+    type Output = RegressionOutput<B>;
+
     fn step(&self, item: TrainingBatch<B>) -> TrainOutput<RegressionOutput<B>> {
         let output = self.forward_step(item);
-
         TrainOutput::new(self, output.loss.backward(), output)
     }
 }
 
-impl<B: Backend> ValidStep<TrainingBatch<B>, RegressionOutput<B>> for NeuralNetwork<B> {
+impl<B: Backend> InferenceStep for TrainableModel<B> {
+    type Input = TrainingBatch<B>;
+    type Output = RegressionOutput<B>;
+
     fn step(&self, item: TrainingBatch<B>) -> RegressionOutput<B> {
         self.forward_step(item)
+    }
+}
+
+impl<B: Backend> TrainableModel<B> {
+    fn forward_step(&self, item: TrainingBatch<B>) -> RegressionOutput<B> {
+        let targets: Tensor<B, 2> = item.targets.unsqueeze_dim(1);
+        let output: Tensor<B, 2> = self.inner.forward(item.inputs);
+
+        let loss = MseLoss::new().forward(output.clone(), targets.clone(), Mean);
+
+        RegressionOutput {
+            loss,
+            output,
+            targets,
+        }
     }
 }
 
@@ -169,7 +194,7 @@ pub fn train<B: AutodiffBackend>(
     config: TrainingConfig,
     training_data: Vec<(f64, f64, f64)>,
     device: B::Device,
-) -> NeuralNetwork<B::InnerBackend> {
+) -> MidfielderPassingNeural<B::InnerBackend> {
     create_artifact_dir(artifact_dir);
 
     config
@@ -178,7 +203,8 @@ pub fn train<B: AutodiffBackend>(
 
     B::seed(&device, config.seed);
 
-    let model: NeuralNetwork<B> = NeuralNetworkConfig::init(&device);
+    let inner: MidfielderPassingNeural<B> = NeuralNetworkConfig::init(&device);
+    let model = TrainableModel { inner };
 
     let optimizer = AdamConfig::new().init();
 
@@ -188,13 +214,13 @@ pub fn train<B: AutodiffBackend>(
 
     let train_dataset = InMemDataset::new(training_data.clone());
 
-    let train_data = DataLoaderBuilder::new(BinaryDataBatcher::new(device.clone()))
+    let train_data = DataLoaderBuilder::new(BinaryDataBatcher::<B>::new(device.clone()))
         .batch_size(1)
         .build(train_dataset);
 
     let valid_dataset = InMemDataset::new(training_data);
 
-    let valid_data = DataLoaderBuilder::new(BinaryDataBatcher::new(device.clone()))
+    let valid_data = DataLoaderBuilder::new(BinaryDataBatcher::<B::InnerBackend>::new(device.clone()))
         .batch_size(1)
         .build(valid_dataset);
 
@@ -205,25 +231,6 @@ pub fn train<B: AutodiffBackend>(
         .num_epochs(config.num_epochs)
         .summary();
 
-    let result = training.run(learner);
-    result.model
-}
-
-trait NeuralTrait<B: Backend> {
-    fn forward_step(&self, item: TrainingBatch<B>) -> RegressionOutput<B>;
-}
-
-impl<B: Backend> NeuralTrait<B> for NeuralNetwork<B> {
-    fn forward_step(&self, item: TrainingBatch<B>) -> RegressionOutput<B> {
-        let targets: Tensor<B, 2> = item.targets.unsqueeze_dim(1);
-        let output: Tensor<B, 2> = self.forward(item.inputs);
-
-        let loss = MseLoss::new().forward(output.clone(), targets.clone(), Mean);
-
-        RegressionOutput {
-            loss,
-            output,
-            targets,
-        }
-    }
+    let result = training.launch(learner);
+    result.model.inner
 }

@@ -1,7 +1,7 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::PlayerEvent;
-use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -20,15 +20,30 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             return Some(holding_result);
         }
 
+        // If ball is moving away (not towards with angle 0.6 and speed > 2.0), give up
+        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+        if ball_speed > 2.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
+            ));
+        }
+
+        // If ball is too far, transition to ComingOut
+        if ctx.ball().distance() > 8.0 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::ComingOut,
+            ));
+        }
+
         if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
             ))
         }
 
-        if ctx.in_state_time > 100 {
+        if ctx.in_state_time > 30 {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Distributing,
+                GoalkeeperState::Standing,
             ));
         }
 
@@ -40,13 +55,29 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // During catching, the goalkeeper's velocity should be minimal
-        // but we can add a small adjustment towards the ball
-        let ball_position = ctx.tick_context.positions.ball.position;
-        let direction = (ball_position - ctx.player.position).normalize();
-        let speed = 0.5; // Very low speed for final adjustments
+        let ball_distance = ctx.ball().distance();
 
-        Some(direction * speed)
+        if ball_distance > 3.0 {
+            // Sprint to ball using Pursuit
+            Some(
+                SteeringBehavior::Pursuit {
+                    target: ctx.tick_context.positions.ball.position,
+                    target_velocity: ctx.tick_context.positions.ball.velocity,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
+        } else {
+            // Close - use Arrive for controlled approach
+            Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.tick_context.positions.ball.position,
+                    slowing_distance: 2.0,
+                }
+                .calculate(ctx.player)
+                .velocity,
+            )
+        }
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

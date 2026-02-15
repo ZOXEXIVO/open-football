@@ -3,6 +3,7 @@ use crate::r#match::defenders::states::common::{DefenderCondition, ActivityInten
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -56,9 +57,16 @@ impl StateProcessingHandler for DefenderHeadingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Defender is stationary while attempting to head the ball
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        Some(
+            SteeringBehavior::Arrive {
+                target: ball_position,
+                slowing_distance: 3.0,
+            }
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -77,6 +85,6 @@ impl DefenderHeadingState {
         // Simulate chance of success
         let random_value: f32 = rand::random(); // Generates a random float between 0.0 and 1.0
 
-        overall_skill > (random_value + HEADING_SUCCESS_THRESHOLD)
+        random_value < overall_skill
     }
 }

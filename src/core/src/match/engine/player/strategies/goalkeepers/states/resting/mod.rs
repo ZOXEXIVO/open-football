@@ -12,6 +12,16 @@ pub struct GoalkeeperRestingState {}
 
 impl StateProcessingHandler for GoalkeeperRestingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Emergency response: fast ball heading towards player
+        if ctx.ball().is_towards_player_with_angle(0.7)
+            && ctx.ball().distance() < 100.0
+            && ctx.tick_context.positions.ball.velocity.norm() > 8.0
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::PreparingForSave,
+            ));
+        }
+
         if ctx.player.player_attributes.condition_percentage() >= RESTING_STAMINA_THRESHOLD {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,

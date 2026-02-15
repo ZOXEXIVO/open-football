@@ -146,8 +146,7 @@ impl StateProcessingHandler for DefenderWalkingState {
 
         let walking_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.stamina) / 2.0 * 0.1;
 
-        let speed = Vector3::new(walking_speed, walking_speed, 0.0).normalize().norm();
-        Some(direction * speed)
+        Some(direction * walking_speed)
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

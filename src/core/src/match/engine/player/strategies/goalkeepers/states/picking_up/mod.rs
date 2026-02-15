@@ -20,8 +20,8 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
 
-        if ball_speed > 1.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
-            // Ball is flying away from goalkeeper with speed - cannot pick up
+        if ball_speed > 5.0 && !ctx.ball().is_towards_player_with_angle(0.3) {
+            // Ball is flying away from goalkeeper at high speed - cannot pick up
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));

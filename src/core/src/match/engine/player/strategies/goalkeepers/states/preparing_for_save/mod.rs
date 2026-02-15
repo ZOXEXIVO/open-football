@@ -37,7 +37,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
         // This prevents catching balls at center field
         let distance_from_goal = ctx.player().distance_from_start_position();
-        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 40.0; // Only catch within ~40 units of goal
+        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 120.0; // Allow catching within wider range of goal
 
         if ball_distance < CATCH_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(

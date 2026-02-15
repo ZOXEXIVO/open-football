@@ -51,7 +51,7 @@ impl StateProcessingHandler for ForwardHeadingState {
 impl ForwardHeadingState {
     fn is_ball_within_heading_range(&self, ctx: &StateProcessingContext) -> bool {
         let ball_position = ctx.tick_context.positions.ball.position;
-        let heading_range = 1.5; // Adjust based on your game's scale
+        let heading_range = 4.0; // Adjust based on your game's scale
 
         ctx.player.position.distance_to(&ball_position) <= heading_range
     }

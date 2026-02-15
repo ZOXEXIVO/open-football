@@ -89,16 +89,35 @@ impl StateProcessingHandler for DefenderPushingUpState {
 impl DefenderPushingUpState {
     fn should_retreat(&self, ctx: &StateProcessingContext) -> bool {
         let field_width = ctx.context.field_size.width as f32;
-        let max_push_up_x = field_width * (MAX_PUSH_UP_DISTANCE + PUSH_UP_HYSTERESIS);
+        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
 
-        ctx.player.position.x > max_push_up_x || self.is_last_defender(ctx)
+        if is_left {
+            // Left team pushes right: retreat if past max push-up line
+            let max_push_up_x = field_width * (MAX_PUSH_UP_DISTANCE + PUSH_UP_HYSTERESIS);
+            ctx.player.position.x > max_push_up_x || self.is_last_defender(ctx)
+        } else {
+            // Right team pushes left: retreat if past max push-up line (from right side)
+            let min_push_up_x = field_width * (1.0 - MAX_PUSH_UP_DISTANCE - PUSH_UP_HYSTERESIS);
+            ctx.player.position.x < min_push_up_x || self.is_last_defender(ctx)
+        }
     }
 
     fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players()
-            .teammates()
-            .defenders()
-            .all(|d| d.position.x <= ctx.player.position.x)
+        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+
+        if is_left {
+            // Left team: last defender is the one furthest back (smallest x)
+            ctx.players()
+                .teammates()
+                .defenders()
+                .all(|d| d.position.x >= ctx.player.position.x)
+        } else {
+            // Right team: last defender is the one furthest back (largest x)
+            ctx.players()
+                .teammates()
+                .defenders()
+                .all(|d| d.position.x <= ctx.player.position.x)
+        }
     }
 
     fn calculate_optimal_pushing_up_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
@@ -106,18 +125,33 @@ impl DefenderPushingUpState {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
+        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
 
-        let attacking_third_center = Vector3::new(
-            field_width * (1.0 - FIELD_THIRD_THRESHOLD / 2.0),
-            field_height * 0.5,
-            0.0,
-        );
+        let (attacking_third_x, mid_x, clamp_min, clamp_max) = if is_left {
+            (
+                field_width * (1.0 - FIELD_THIRD_THRESHOLD / 2.0),
+                field_width * 0.5,
+                field_width * 0.5,
+                field_width * MAX_PUSH_UP_DISTANCE,
+            )
+        } else {
+            (
+                field_width * (FIELD_THIRD_THRESHOLD / 2.0),
+                field_width * 0.5,
+                field_width * (1.0 - MAX_PUSH_UP_DISTANCE),
+                field_width * 0.5,
+            )
+        };
+
+        let attacking_third_center = Vector3::new(attacking_third_x, field_height * 0.5, 0.0);
 
         let teammates = ctx.players().teammates();
 
-        let attacking_teammates = teammates.all().into_iter()
-            .filter(|p| p.position.x > field_width * 0.5)
-            .collect::<Vec<_>>();
+        let attacking_teammates: Vec<_> = teammates.all().into_iter()
+            .filter(|p| {
+                if is_left { p.position.x > mid_x } else { p.position.x < mid_x }
+            })
+            .collect();
 
         let avg_attacking_position = if !attacking_teammates.is_empty() {
             attacking_teammates
@@ -131,13 +165,10 @@ impl DefenderPushingUpState {
         let support_position = (ball_position + avg_attacking_position) * 0.5;
 
         let optimal_position =
-            (support_position * 0.5 + attacking_third_center * 0.3 + player_position * 0.2)
-                .cap_magnitude(field_width * MAX_PUSH_UP_DISTANCE);
+            support_position * 0.5 + attacking_third_center * 0.3 + player_position * 0.2;
 
         Vector3::new(
-            optimal_position
-                .x
-                .clamp(field_width * 0.5, field_width * MAX_PUSH_UP_DISTANCE),
+            optimal_position.x.clamp(clamp_min, clamp_max),
             optimal_position.y.clamp(0.0, field_height),
             0.0,
         )

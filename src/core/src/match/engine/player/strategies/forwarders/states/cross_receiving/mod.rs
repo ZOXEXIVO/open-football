@@ -4,6 +4,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -29,8 +30,18 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+
+        Some(
+            SteeringBehavior::Pursuit {
+                target: ball_position,
+                target_velocity: ball_velocity,
+            }
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

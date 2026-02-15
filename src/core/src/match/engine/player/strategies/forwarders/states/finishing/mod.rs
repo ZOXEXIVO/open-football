@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -41,7 +41,13 @@ impl StateProcessingHandler for ForwardFinishingState {
         // Transition to Running state after taking the shot
         Some(StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
-            Event::PlayerEvent(PlayerEvent::RequestShot(ctx.player.id, shooting_direction)),
+            Event::PlayerEvent(PlayerEvent::Shoot(
+                ShootingEventContext::new()
+                    .with_player_id(ctx.player.id)
+                    .with_target(shooting_direction)
+                    .with_reason("FWD_FINISHING")
+                    .build(ctx)
+            )),
         ))
     }
 

@@ -17,9 +17,23 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
             ));
         }
 
+        // Transition to Catching when ball is very close and not owned
+        if ctx.ball().distance() < 3.0 && !ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Catching,
+            ));
+        }
+
         if ctx.ball().is_owned() {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
+            ));
+        }
+
+        // Timeout after 120 ticks
+        if ctx.in_state_time > 120 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
             ));
         }
 

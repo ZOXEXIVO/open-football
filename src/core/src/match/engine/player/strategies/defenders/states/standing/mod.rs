@@ -144,6 +144,13 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // White zone: loose ball on own side within range - go intercept or track back
+        if ctx.ball().on_own_side() && !ctx.ball().is_owned() && ctx.ball().distance() < 200.0 {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Intercepting,
+            ));
+        }
+
         // Walk or hold line more readily on attacking side
         if self.should_transition_to_walking(ctx) {
             return Some(StateChangeResult::with_defender_state(

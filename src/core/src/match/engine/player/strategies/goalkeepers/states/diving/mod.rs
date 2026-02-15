@@ -42,7 +42,15 @@ impl StateProcessingHandler for GoalkeeperDivingState {
                 Event::PlayerEvent(PlayerEvent::CaughtBall(ctx.player.id)),
             ));
         } else if self.is_ball_nearby(ctx) {
-            return Some(StateChangeResult::with_event(Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id))));
+            let mut result = StateChangeResult::with_goalkeeper_state(GoalkeeperState::Catching);
+            result.events.add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
+            return Some(result);
+        }
+
+        if ctx.in_state_time > 90 {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Standing,
+            ));
         }
 
         None

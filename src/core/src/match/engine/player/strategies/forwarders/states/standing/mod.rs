@@ -3,7 +3,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Maximum distance to attempt a shot
+const MAX_SHOOTING_DISTANCE: f32 = 250.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 1.0; // Minimum distance to attempt a shot (very close to goal)
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
 
@@ -16,7 +16,7 @@ impl StateProcessingHandler for ForwardStandingState {
         if ctx.player.has_ball(ctx) {
             // CRITICAL: Add cooldown before allowing another shot to prevent rapid-fire goal spam
             // Must wait at least 40 ticks (~0.7 seconds) after entering Standing before shooting again
-            const SHOOTING_COOLDOWN: u64 = 40;
+            const SHOOTING_COOLDOWN: u64 = 10;
 
             // Decide next action based on game context
             if self.is_in_shooting_range(ctx) && ctx.in_state_time > SHOOTING_COOLDOWN {
@@ -63,10 +63,11 @@ impl StateProcessingHandler for ForwardStandingState {
                 Some(StateChangeResult::with_forward_state(
                     ForwardState::Pressing,
                 ))
+            } else if ctx.ball().distance() > 200.0 && !ctx.team().is_control_ball() {
+                // Ball is far and team doesn't have it - walk to conserve energy
+                Some(StateChangeResult::with_forward_state(ForwardState::Walking))
             } else {
                 Some(StateChangeResult::with_forward_state(ForwardState::Running))
-                // Transition to Positioning state
-                //Some(StateChangeResult::with_forward_state(ForwardState::Positioning))
             }
         }
     }

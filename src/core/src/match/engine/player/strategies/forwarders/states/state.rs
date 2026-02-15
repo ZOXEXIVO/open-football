@@ -1,9 +1,11 @@
 use crate::r#match::forwarders::states::{
-    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossReceivingState,
-    ForwardDribblingState, ForwardFinishingState, ForwardHeadingState, ForwardHeadingUpPlayState,
-    ForwardInterceptingState, ForwardOffsideTrapBreakingState, ForwardPassingState,
-    ForwardPressingState, ForwardReturningState, ForwardRunningInBehindState, ForwardRunningState,
-    ForwardShootingState, ForwardStandingState, ForwardTacklingState, ForwardTakeBallState,
+    ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossingState,
+    ForwardCrossReceivingState, ForwardDribblingState, ForwardFinishingState,
+    ForwardHeadingState, ForwardHeadingUpPlayState, ForwardInterceptingState,
+    ForwardOffsideTrapBreakingState, ForwardPassingState, ForwardPressingState,
+    ForwardRestingState, ForwardReturningState, ForwardRunningInBehindState,
+    ForwardRunningState, ForwardShootingState, ForwardStandingState, ForwardTacklingState,
+    ForwardTakeBallState, ForwardWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
@@ -11,6 +13,7 @@ use std::fmt::{Display, Formatter};
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ForwardState {
     Standing,            // Standing still
+    Walking,             // Walking at low intensity to reposition or conserve energy
     Passing,             // Passing the ball
     Dribbling,           // Dribbling the ball past opponents
     Shooting,            // Taking a shot on goal
@@ -22,12 +25,14 @@ pub enum ForwardState {
     Finishing,           // Attempting to score from a close range
     CreatingSpace,       // Creating space for teammates by pulling defenders away
     CrossReceiving,      // Positioning to receive a cross
+    Crossing,            // Delivering a cross from a wide position
     OffsideTrapBreaking, // Trying to beat the offside trap by timing runs
     Tackling,            // Tackling the ball
     Assisting,           // Providing an assist by passing or crossing to a teammate
     TakeBall,            // Take the ball,
     Intercepting,        // Intercepting the ball,
     Returning,           // Returning the ball
+    Resting,             // Recovering stamina when fatigued
 }
 
 pub struct ForwardStrategies {}
@@ -36,6 +41,7 @@ impl ForwardStrategies {
     pub fn process(state: ForwardState, state_processor: StateProcessor) -> StateProcessingResult {
         match state {
             ForwardState::Standing => state_processor.process(ForwardStandingState::default()),
+            ForwardState::Walking => state_processor.process(ForwardWalkingState::default()),
             ForwardState::Passing => state_processor.process(ForwardPassingState::default()),
             ForwardState::Dribbling => state_processor.process(ForwardDribblingState::default()),
             ForwardState::Shooting => state_processor.process(ForwardShootingState::default()),
@@ -54,6 +60,7 @@ impl ForwardStrategies {
             ForwardState::CrossReceiving => {
                 state_processor.process(ForwardCrossReceivingState::default())
             }
+            ForwardState::Crossing => state_processor.process(ForwardCrossingState::default()),
             ForwardState::OffsideTrapBreaking => {
                 state_processor.process(ForwardOffsideTrapBreakingState::default())
             }
@@ -65,6 +72,7 @@ impl ForwardStrategies {
                 state_processor.process(ForwardInterceptingState::default())
             }
             ForwardState::Returning => state_processor.process(ForwardReturningState::default()),
+            ForwardState::Resting => state_processor.process(ForwardRestingState::default()),
         }
     }
 }
@@ -73,6 +81,7 @@ impl Display for ForwardState {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {
             ForwardState::Standing => write!(f, "Standing"),
+            ForwardState::Walking => write!(f, "Walking"),
             ForwardState::Dribbling => write!(f, "Dribbling"),
             ForwardState::Shooting => write!(f, "Shooting"),
             ForwardState::Heading => write!(f, "Heading"),
@@ -82,6 +91,7 @@ impl Display for ForwardState {
             ForwardState::Finishing => write!(f, "Finishing"),
             ForwardState::CreatingSpace => write!(f, "Creating Space"),
             ForwardState::CrossReceiving => write!(f, "Cross Receiving"),
+            ForwardState::Crossing => write!(f, "Crossing"),
             ForwardState::OffsideTrapBreaking => write!(f, "Offside Trap Breaking"),
             ForwardState::Assisting => write!(f, "Assisting"),
             ForwardState::Passing => write!(f, "Passing"),
@@ -90,6 +100,7 @@ impl Display for ForwardState {
             ForwardState::TakeBall => write!(f, "Take Ball"),
             ForwardState::Intercepting => write!(f, "Intercepting"),
             ForwardState::Returning => write!(f, "Returning"),
+            ForwardState::Resting => write!(f, "Resting"),
         }
     }
 }
