@@ -1,4 +1,5 @@
-﻿use crate::{MentalGains, PhysicalGains, SimulatorData, TechnicalGains, TrainingEffects};
+use crate::club::player::injury::InjuryType;
+use crate::{MentalGains, PhysicalGains, PlayerStatusType, SimulatorData, TechnicalGains, TrainingEffects};
 
 pub struct PlayerTrainingResult {
     pub player_id: u32,
@@ -30,6 +31,7 @@ impl PlayerTrainingResult {
     /// Apply the training effects to the player
     /// This is where the actual skill updates happen with mutable references
     pub fn process(&self, data: &mut SimulatorData) {
+        let current_date = data.date.date();
         // Get mutable reference to the player
         if let Some(player) = data.player_mut(self.player_id) {
             // Apply physical gains
@@ -64,10 +66,18 @@ impl PlayerTrainingResult {
             let new_condition = player.player_attributes.condition as f32 - self.effects.fatigue_change;
             player.player_attributes.condition = new_condition.clamp(0.0, 10000.0) as i16;
 
-            // Apply injury risk (simplified)
+            // Apply injury risk — use proper injury system
             if rand::random::<f32>() < self.effects.injury_risk {
-                player.player_attributes.is_injured = true;
-                // You might want to add more injury details here
+                let age = 25u8; // Approximate; exact age unavailable without birth_date context
+                let condition_pct = player.player_attributes.condition_percentage();
+                let natural_fitness = player.skills.physical.natural_fitness;
+
+                let injury = InjuryType::random_training_injury(age, condition_pct, natural_fitness);
+                player.player_attributes.set_injury(injury);
+                player.statuses.add(
+                    current_date,
+                    PlayerStatusType::Inj,
+                );
             }
 
             // Update match readiness based on training
@@ -80,19 +90,11 @@ impl PlayerTrainingResult {
             }
 
             // Apply morale changes to happiness (simplified)
-            // You might want to integrate this with your happiness system
             if self.effects.morale_change > 0.0 {
-                // Positive morale change could improve behavior
                 if rand::random::<f32>() < self.effects.morale_change {
                     player.behaviour.try_increase();
                 }
             }
-
-            // Record training in history (if you implement this)
-            // player.training_history.add_record(TrainingRecord {
-            //     date: data.date,
-            //     skills: player.skills.clone(),
-            // });
         }
     }
 }

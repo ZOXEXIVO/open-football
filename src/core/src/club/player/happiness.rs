@@ -15,6 +15,14 @@ impl PlayerHappiness {
     pub fn is_happy(&self) -> bool {
         self.positive.len() > self.negative.len()
     }
+
+    pub fn add_positive(&mut self, item: PositiveHappiness) {
+        self.positive.push(item);
+    }
+
+    pub fn add_negative(&mut self, item: NegativeHappiness) {
+        self.negative.push(item);
+    }
 }
 
 #[derive(Debug)]

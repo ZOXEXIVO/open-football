@@ -1,3 +1,5 @@
+use crate::club::player::injury::InjuryType;
+
 pub const CONDITION_MAX_VALUE: i16 = 10000;
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -29,6 +31,10 @@ pub struct PlayerAttributes {
 
     pub under_21_international_apps: u16,
     pub under_21_international_goals: u16,
+
+    // injury tracking
+    pub injury_days_remaining: u16,
+    pub injury_type: Option<InjuryType>,
 }
 
 impl PlayerAttributes {
@@ -42,15 +48,42 @@ impl PlayerAttributes {
     pub fn condition_percentage(&self) -> u32 {
         (self.condition as f32 * 100.0 / CONDITION_MAX_VALUE as f32).floor() as u32
     }
+
+    /// Set an injury on this player, calculating a random duration within the injury's range
+    pub fn set_injury(&mut self, injury_type: InjuryType) {
+        self.is_injured = true;
+        self.injury_type = Some(injury_type);
+        self.injury_days_remaining = injury_type.random_duration();
+    }
+
+    /// Decrement injury days by one. Returns true when fully recovered.
+    pub fn recover_injury_day(&mut self) -> bool {
+        if self.injury_days_remaining > 0 {
+            self.injury_days_remaining -= 1;
+        }
+
+        if self.injury_days_remaining == 0 && self.is_injured {
+            self.is_injured = false;
+            self.injury_type = None;
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if the current injury is serious (> 30 days remaining)
+    pub fn is_injury_serious(&self) -> bool {
+        self.is_injured && self.injury_days_remaining > 30
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::club::player::injury::InjuryType;
 
-    #[test]
-    fn test_rest_increases_condition() {
-        let mut player_attributes = PlayerAttributes {
+    fn default_attrs() -> PlayerAttributes {
+        PlayerAttributes {
             is_banned: false,
             is_injured: false,
             condition: 5000,
@@ -68,87 +101,77 @@ mod tests {
             international_goals: 5,
             under_21_international_apps: 15,
             under_21_international_goals: 7,
-        };
+            injury_days_remaining: 0,
+            injury_type: None,
+        }
+    }
 
+    #[test]
+    fn test_rest_increases_condition() {
+        let mut player_attributes = default_attrs();
         player_attributes.rest(1000);
         assert_eq!(player_attributes.condition, 6000);
     }
 
     #[test]
     fn test_rest_does_not_exceed_max_condition() {
-        let mut player_attributes = PlayerAttributes {
-            is_banned: false,
-            is_injured: false,
-            condition: 9500,
-            fitness: 8000,
-            jadedness: 2000,
-            weight: 75,
-            height: 180,
-            value: 1000000,
-            current_reputation: 50,
-            home_reputation: 60,
-            world_reputation: 70,
-            current_ability: 80,
-            potential_ability: 90,
-            international_apps: 10,
-            international_goals: 5,
-            under_21_international_apps: 15,
-            under_21_international_goals: 7,
-        };
-
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 9500;
         player_attributes.rest(1000);
         assert_eq!(player_attributes.condition, CONDITION_MAX_VALUE);
     }
 
     #[test]
     fn test_condition_percentage() {
-        let player_attributes = PlayerAttributes {
-            is_banned: false,
-            is_injured: false,
-            condition: 7500,
-            fitness: 8000,
-            jadedness: 2000,
-            weight: 75,
-            height: 180,
-            value: 1000000,
-            current_reputation: 50,
-            home_reputation: 60,
-            world_reputation: 70,
-            current_ability: 80,
-            potential_ability: 90,
-            international_apps: 10,
-            international_goals: 5,
-            under_21_international_apps: 15,
-            under_21_international_goals: 7,
-        };
-
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 7500;
         let condition_percentage = player_attributes.condition_percentage();
         assert_eq!(condition_percentage, 75);
     }
 
     #[test]
     fn test_condition_percentage_rounding() {
-        let player_attributes = PlayerAttributes {
-            is_banned: false,
-            is_injured: false,
-            condition: 7499,
-            fitness: 8000,
-            jadedness: 2000,
-            weight: 75,
-            height: 180,
-            value: 1000000,
-            current_reputation: 50,
-            home_reputation: 60,
-            world_reputation: 70,
-            current_ability: 80,
-            potential_ability: 90,
-            international_apps: 10,
-            international_goals: 5,
-            under_21_international_apps: 15,
-            under_21_international_goals: 7,
-        };
-
+        let mut player_attributes = default_attrs();
+        player_attributes.condition = 7499;
         let condition_percentage = player_attributes.condition_percentage();
         assert_eq!(condition_percentage, 74);
+    }
+
+    #[test]
+    fn test_set_injury() {
+        let mut attrs = default_attrs();
+        attrs.set_injury(InjuryType::Bruise);
+        assert!(attrs.is_injured);
+        assert_eq!(attrs.injury_type, Some(InjuryType::Bruise));
+        assert!(attrs.injury_days_remaining >= 3 && attrs.injury_days_remaining <= 7);
+    }
+
+    #[test]
+    fn test_recover_injury_day() {
+        let mut attrs = default_attrs();
+        attrs.is_injured = true;
+        attrs.injury_type = Some(InjuryType::Cramp);
+        attrs.injury_days_remaining = 2;
+
+        assert!(!attrs.recover_injury_day()); // 2 -> 1, not recovered yet
+        assert!(attrs.is_injured);
+        assert!(attrs.recover_injury_day()); // 1 -> 0, recovered!
+        assert!(!attrs.is_injured);
+        assert!(attrs.injury_type.is_none());
+    }
+
+    #[test]
+    fn test_is_injury_serious() {
+        let mut attrs = default_attrs();
+        attrs.is_injured = true;
+        attrs.injury_days_remaining = 31;
+        assert!(attrs.is_injury_serious());
+
+        attrs.injury_days_remaining = 30;
+        assert!(!attrs.is_injury_serious());
+
+        attrs.is_injured = false;
+        attrs.injury_days_remaining = 50;
+        assert!(!attrs.is_injury_serious());
     }
 }

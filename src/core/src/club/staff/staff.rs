@@ -7,6 +7,7 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
+use crate::club::staff::result::{ScoutingReport, ScoutRecommendation};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 #[derive(Debug)]
@@ -232,6 +233,9 @@ impl Staff {
 
         // Process professional development
         self.process_professional_development(&ctx, &mut result);
+
+        // Scouting duties for scouts
+        self.process_scouting(&ctx, &mut result);
 
         result
     }
@@ -484,6 +488,59 @@ impl Staff {
             result.on_professional_development = true;
             self.fatigue = (self.fatigue - 5.0).max(0.0);  // Courses are refreshing
         }
+    }
+
+    fn process_scouting(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
+        // Only scouts perform scouting
+        let is_scout = matches!(
+            self.contract.as_ref().map(|c| &c.position),
+            Some(StaffPosition::Scout)
+        );
+        if !is_scout {
+            return;
+        }
+
+        // Scouts evaluate one player per day with a small chance
+        if rand::random::<f32>() > 0.3 {
+            return; // 70% chance of no scouting report today
+        }
+
+        // Generate a simplified scouting report for a hypothetical player
+        // In a full implementation this would reference actual players from other teams
+        let scout_ability_skill = self.staff_attributes.knowledge.judging_player_ability;
+        let scout_potential_skill = self.staff_attributes.knowledge.judging_player_potential;
+
+        // Simulate evaluating a random player (using a random player_id as placeholder)
+        let player_id = rand::random::<u32>() % 100000;
+
+        // Scout's estimate has error inversely proportional to skill
+        let ability_error = (20i16 - scout_ability_skill as i16).max(1) as u8;
+        let potential_error = (20i16 - scout_potential_skill as i16).max(1) as u8;
+
+        let base_ability: u8 = (rand::random::<u8>() % 80) + 20; // 20-99
+        let base_potential: u8 = base_ability.saturating_add(rand::random::<u8>() % 20);
+
+        let assessed_ability = base_ability.saturating_add(rand::random::<u8>() % ability_error)
+            .saturating_sub(ability_error / 2)
+            .clamp(1, 100);
+        let assessed_potential = base_potential.saturating_add(rand::random::<u8>() % potential_error)
+            .saturating_sub(potential_error / 2)
+            .clamp(1, 100);
+
+        let recommendation = if assessed_ability > 75 || assessed_potential > 85 {
+            ScoutRecommendation::Sign
+        } else if assessed_ability > 60 || assessed_potential > 70 {
+            ScoutRecommendation::Monitor
+        } else {
+            ScoutRecommendation::Pass
+        };
+
+        result.scouting_reports.push(ScoutingReport {
+            player_id,
+            assessed_ability,
+            assessed_potential,
+            recommendation,
+        });
     }
 
     // Helper methods

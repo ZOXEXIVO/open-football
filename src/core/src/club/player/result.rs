@@ -1,4 +1,5 @@
 use crate::club::Player;
+use crate::club::player::injury::InjuryType;
 use crate::simulator::SimulatorData;
 
 pub struct PlayerCollectionResult {
@@ -26,6 +27,10 @@ pub struct PlayerResult {
     pub contract: PlayerContractResult,
     pub is_transfer_requested: bool,
     pub transfer_requests: Vec<u32>,
+    pub injury_occurred: Option<InjuryType>,
+    pub injury_recovered: bool,
+    pub unhappy: bool,
+    pub wants_to_leave: bool,
 }
 
 pub struct PlayerContractResult {
@@ -47,6 +52,10 @@ impl PlayerResult {
             },
             is_transfer_requested: false,
             transfer_requests: Vec::new(),
+            injury_occurred: None,
+            injury_recovered: false,
+            unhappy: false,
+            wants_to_leave: false,
         }
     }
 

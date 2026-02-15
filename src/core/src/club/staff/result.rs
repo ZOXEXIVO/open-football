@@ -13,6 +13,20 @@ impl StaffCollectionResult {
     pub fn process(&self, _: &mut SimulatorData) {}
 }
 
+#[derive(Debug)]
+pub struct ScoutingReport {
+    pub player_id: u32,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub recommendation: ScoutRecommendation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoutRecommendation {
+    Sign,
+    Monitor,
+    Pass,
+}
 
 // Enhanced StaffResult with new fields
 pub struct StaffResult {
@@ -31,6 +45,7 @@ pub struct StaffResult {
     pub relationship_event: Option<RelationshipEvent>,
     pub warnings: Vec<StaffWarning>,
     pub events: Vec<StaffMoraleEvent>,
+    pub scouting_reports: Vec<ScoutingReport>,
 }
 
 impl StaffResult {
@@ -51,6 +66,7 @@ impl StaffResult {
             relationship_event: None,
             warnings: Vec::new(),
             events: Vec::new(),
+            scouting_reports: Vec::new(),
         }
     }
 

@@ -46,6 +46,7 @@ pub use club::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord, PlayerTrainingResult,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,
+    InjuryType, InjurySeverity,
     player_context, player_attributes_mod, player_contract_mod, player_builder_mod,
     CONDITION_MAX_VALUE,
     // Staff exports
@@ -62,6 +63,7 @@ pub use club::{
     StaffResult, StaffCollectionResult, StaffContractResult, StaffTrainingResult,
     StaffWarning, StaffMoraleEvent, ResignationReason, HealthIssue,
     RelationshipEvent, StaffLicenseType, StaffTrainingSession,
+    ScoutingReport, ScoutRecommendation,
     staff_context, staff_attributes_mod, staff_contract_mod,
     // Team exports
     Team, TeamCollection, TeamType, TeamBuilder, TeamContext,

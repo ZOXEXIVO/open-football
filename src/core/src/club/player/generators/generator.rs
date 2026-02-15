@@ -111,6 +111,8 @@ impl PlayerGenerator {
                 international_goals: 0,
                 under_21_international_apps: 0,
                 under_21_international_goals: 0,
+                injury_days_remaining: 0,
+                injury_type: None,
             },
             mailbox: PlayerMailbox::new(),
             training: PlayerTraining::new(),

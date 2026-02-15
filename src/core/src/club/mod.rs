@@ -56,6 +56,7 @@ pub use player::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,
+    InjuryType, InjurySeverity,
     CONDITION_MAX_VALUE,
 };
 // Also export the missing types
@@ -84,6 +85,7 @@ pub use staff::{
     StaffResult, StaffCollectionResult, StaffContractResult, StaffTrainingResult,
     StaffWarning, StaffMoraleEvent, ResignationReason, HealthIssue,
     RelationshipEvent, StaffLicenseType, StaffTrainingSession,
+    ScoutingReport, ScoutRecommendation,
 };
 // Also export context module for those who want to import from it
 pub use staff::context as staff_context;

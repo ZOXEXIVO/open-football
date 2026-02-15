@@ -261,6 +261,8 @@ impl PlayerGenerator {
             international_goals: IntegerUtils::random(0, 40) as u16,
             under_21_international_apps: IntegerUtils::random(0, 30) as u16,
             under_21_international_goals: IntegerUtils::random(0, 10) as u16,
+            injury_days_remaining: 0,
+            injury_type: None,
         }
     }
 
