@@ -117,7 +117,7 @@ impl StateProcessingHandler for DefenderMarkingState {
 
             // Calculate goal-side marking position
             // Position between opponent and own goal
-            let to_goal = (own_goal - opponent_future_position).normalize();
+            let to_goal = (opponent_future_position - own_goal).normalize();
             let goal_side_offset = to_goal * MARKING_DISTANCE_THRESHOLD * GOAL_SIDE_WEIGHT;
 
             // Also consider ball-side positioning

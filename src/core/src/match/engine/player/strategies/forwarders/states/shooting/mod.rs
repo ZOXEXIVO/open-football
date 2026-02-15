@@ -13,7 +13,7 @@ pub struct ForwardShootingState {}
 impl StateProcessingHandler for ForwardShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         Some(StateChangeResult::with_forward_state_and_event(
-            ForwardState::Standing,
+            ForwardState::Running,
             Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::new()
                     .with_player_id(ctx.player.id)

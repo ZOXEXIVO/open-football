@@ -56,7 +56,7 @@ impl StateProcessingHandler for DefenderTacklingState {
             return if tackle_success {
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::GainBall(ctx.player.id)),
+                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
                 ))
             } else if committed_foul {
                 Some(StateChangeResult::with_defender_state_and_event(

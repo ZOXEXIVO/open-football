@@ -13,8 +13,8 @@ const PUSH_UP_HYSTERESIS: f32 = 0.05;
 const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - wider threat detection
 const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower runs
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
-const MIN_STATE_TIME_DEFAULT: u64 = 100; // Reduced from 200 - faster reactions
-const MIN_STATE_TIME_WITH_THREAT: u64 = 30; // Reduced from 50 - very fast reaction to threats
+const MIN_STATE_TIME_DEFAULT: u64 = 20; // Reduced - faster reactions
+const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to threats
 
 #[derive(Default)]
 pub struct DefenderCoveringState {}

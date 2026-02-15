@@ -4,6 +4,7 @@ use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -12,6 +13,11 @@ pub struct DefenderClearingState {}
 
 impl StateProcessingHandler for DefenderClearingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Wait a few ticks before clearing to allow the player to reach the ball
+        if ctx.in_state_time < 5 {
+            return None;
+        }
+
         let mut state = StateChangeResult::with(PlayerState::Defender(DefenderState::Standing));
 
         // Get player's position and ball's current position
@@ -94,8 +100,16 @@ impl StateProcessingHandler for DefenderClearingState {
         None
     }
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let ball_position = ctx.tick_context.positions.ball.position;
+        Some(
+            SteeringBehavior::Arrive {
+                target: ball_position,
+                slowing_distance: 5.0,
+            }
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

@@ -16,6 +16,18 @@ pub struct GoalkeeperStandingState {}
 
 impl StateProcessingHandler for GoalkeeperStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Direct catch for very close slow balls
+        let ball_distance = ctx.ball().distance();
+        if ball_distance < 5.0
+            && !ctx.ball().is_owned()
+            && ctx.ball().on_own_side()
+            && ctx.tick_context.positions.ball.velocity.norm() < 8.0
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Catching,
+            ));
+        }
+
         // If goalkeeper has the ball, decide whether to pass or run
         if ctx.player.has_ball(ctx) {
             return if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
@@ -29,7 +41,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             }
         }
 
-        let ball_distance = ctx.ball().distance();
         let ball_on_own_side = ctx.ball().on_own_side();
 
         // Skill-based threat assessment

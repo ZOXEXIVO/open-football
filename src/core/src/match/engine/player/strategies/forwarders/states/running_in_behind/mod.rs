@@ -1,6 +1,6 @@
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 
 #[derive(Default)]
@@ -9,11 +9,9 @@ pub struct ForwardRunningInBehindState {}
 impl StateProcessingHandler for ForwardRunningInBehindState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
-        let player_ops = ctx.player();
-
         if ctx.player.has_ball(ctx) {
             // Transition to Dribbling or Shooting based on position
-            return if ball_ops.distance_to_opponent_goal() < 25.0 {
+            return if ball_ops.distance_to_opponent_goal() < 80.0 {
                 Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ))
@@ -22,14 +20,6 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
                     ForwardState::Dribbling,
                 ))
             };
-        }
-
-        // Check if the player is offside
-        if !player_ops.on_own_side() {
-            // Transition to Standing state when offside
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Standing,
-            ));
         }
 
         // Check if the run is still viable

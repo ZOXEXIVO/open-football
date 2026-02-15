@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 // TakeBall timeout and distance constants
-const MAX_TAKEBALL_DISTANCE: f32 = 500.0;
+const MAX_TAKEBALL_DISTANCE: f32 = 80.0;
 const OPPONENT_ADVANTAGE_THRESHOLD: f32 = 20.0; // Opponent must be this much closer to give up
 const TEAMMATE_ADVANTAGE_THRESHOLD: f32 = 8.0; // Teammate must be this much closer to give up (reduced from 15.0)
 

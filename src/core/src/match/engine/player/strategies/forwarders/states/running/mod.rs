@@ -3,6 +3,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    VectorExtensions,
 };
 use crate::IntegerUtils;
 use nalgebra::Vector3;
@@ -31,9 +32,20 @@ impl StateProcessingHandler for ForwardRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
-            // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
-            // This prevents forwards from colliding with goalkeeper instead of shooting
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+
+            // Priority 0: Near opponent goalkeeper - MUST shoot immediately
+            // This prevents forwards from running into the GK without shooting
+            if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
+                let distance_to_gk = ctx.player.position.distance_to(&gk.position);
+                if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
+            }
+
+            // Priority 0b: Point-blank range - MUST shoot regardless of clear shot check
             if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
@@ -47,11 +59,13 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            // Priority 1: Clear ball if congested anywhere (not just boundaries)
-            if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
-                // Force a long clearance pass to any teammate
-                if let Some(_) = ctx.players().teammates().all().next() {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            // Priority 1b: Clear ball if congested - but NOT in shooting range
+            // Near the goal, shoot instead of passing out of congestion
+            if distance_to_goal > SHOOTING_ZONE_DISTANCE {
+                if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
+                    if let Some(_) = ctx.players().teammates().all().next() {
+                        return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                    }
                 }
             }
 
@@ -109,6 +123,13 @@ impl StateProcessingHandler for ForwardRunningState {
             if self.should_dribble(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
+                ));
+            }
+
+            // Priority 5: Cross from wide position in attacking third
+            if self.should_cross(ctx) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Crossing,
                 ));
             }
 
@@ -172,7 +193,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // Consider fatigue and state duration
             if self.needs_recovery(ctx) {
                 return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Standing,
+                    ForwardState::Resting,
                 ));
             }
 
@@ -184,7 +205,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     ))
                 } else {
                     Some(StateChangeResult::with_forward_state(
-                        ForwardState::Standing,
+                        ForwardState::Walking,
                     ))
                 };
             }
@@ -1027,6 +1048,36 @@ impl ForwardRunningState {
         let markers = ctx.players().opponents().nearby(marking_distance).count();
 
         markers >= 2 || (markers >= 1 && ctx.players().opponents().nearby(3.0).count() > 0)
+    }
+
+    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let y = ctx.player.position.y;
+        let wide_margin = field_height * 0.2;
+
+        // Must be in a wide channel
+        let is_wide = y < wide_margin || y > field_height - wide_margin;
+        if !is_wide {
+            return false;
+        }
+
+        // Must be in attacking third
+        if !self.is_in_good_attacking_position(ctx) {
+            return false;
+        }
+
+        // Must have teammates in the box to cross to
+        let goal_pos = ctx.player().opponent_goal_position();
+        let teammates_in_box = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| (t.position - goal_pos).magnitude() < 120.0)
+            .count();
+
+        let crossing = ctx.player.skills.technical.crossing / 20.0;
+
+        teammates_in_box >= 1 && crossing > 0.4
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {

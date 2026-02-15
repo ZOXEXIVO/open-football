@@ -42,10 +42,16 @@ impl StateProcessingHandler for DefenderReturningState {
                 }
             }
 
-            if ctx.ball().distance() < 100.0{
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Tackling,
-                ));
+            if ctx.ball().distance() < 100.0 {
+                if ctx.players().opponents().with_ball().next().is_some() {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                } else {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::TakeBall,
+                    ));
+                }
             }
 
             if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 200.0 {
