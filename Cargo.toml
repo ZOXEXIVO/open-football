@@ -6,7 +6,7 @@ edition = "2018"
 
 [dependencies]
 core = { path = "src/core" }
-server = { path = "src/server" }
+web = { path = "src/web" }
 database = { path = "src/database" }
 log = { version = "0.4.29", features = ["release_max_level_info"] }
 env_logger = "0.11.9"

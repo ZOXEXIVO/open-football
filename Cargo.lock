@@ -4559,8 +4559,8 @@ dependencies = [
  "database",
  "env_logger",
  "log",
- "server",
  "tokio",
+ "web",
 ]
 
 [[package]]
@@ -5650,29 +5650,6 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
-]
-
-[[package]]
-name = "server"
-version = "0.1.0"
-dependencies = [
- "askama",
- "askama_web",
- "async-compression",
- "axum",
- "chrono",
- "core",
- "database",
- "futures",
- "itertools 0.14.0",
- "log",
- "mime_guess",
- "rust-embed",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "tower-http",
 ]
 
 [[package]]
@@ -6994,6 +6971,29 @@ dependencies = [
  "hashbrown 0.15.5",
  "indexmap",
  "semver",
+]
+
+[[package]]
+name = "web"
+version = "0.1.0"
+dependencies = [
+ "askama",
+ "askama_web",
+ "async-compression",
+ "axum",
+ "chrono",
+ "core",
+ "database",
+ "futures",
+ "itertools 0.14.0",
+ "log",
+ "mime_guess",
+ "rust-embed",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tower-http",
 ]
 
 [[package]]
