@@ -312,7 +312,7 @@
         const container = document.getElementById('pixi-container');
         container.appendChild(app.canvas);
 
-        const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
+        const bgTexture = await PIXI.Assets.load('/images/match/field.svg');
         background = new PIXI.Sprite(bgTexture);
         background.width = maxWidth;
         background.height = maxHeight;

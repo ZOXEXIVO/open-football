@@ -8,6 +8,7 @@ mod player;
 mod routes;
 mod teams;
 mod views;
+mod common;
 
 pub use error::{ApiError, ApiResult};
 

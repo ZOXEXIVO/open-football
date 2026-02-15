@@ -1,7 +1,0 @@
-<component name="ProjectRunConfigurationManager">
-  <configuration default="false" name="RunAll:Release" type="CompoundRunConfigurationType">
-    <toRun name="Backend:Release" type="CargoCommandRunConfiguration" />
-    <toRun name="Frontend:Release" type="js.build_tools.npm" />
-    <method v="2" />
-  </configuration>
-</component>
