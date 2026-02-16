@@ -38,7 +38,7 @@ impl FootballSimulatorServer {
             .layer(
                 ServiceBuilder::new()
                     // Catch panics in handlers and convert them to 500 errors
-                    .layer(CatchPanicLayer::custom(|err| {
+                    .layer(CatchPanicLayer::custom(|_err| {
                         (
                             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                             "Internal server error - handler panicked".to_string(),

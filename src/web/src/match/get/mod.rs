@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::views::{self, MenuSection};
+use crate::views::MenuSection;
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};

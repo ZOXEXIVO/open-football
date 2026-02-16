@@ -11,31 +11,38 @@
 {% block content %}
 <div class="fm-page">
     <section class="fm-player-header">
-        <div class="fm-ph-profile">
+        <div class="fm-ph-banner">
             <div class="fm-ph-photo">
-                <div class="fm-ph-photo-img"><i class="fa fa-user"></i></div>
+                <div class="fm-ph-photo-frame">
+                    <div class="fm-ph-photo-img"><i class="fa fa-user"></i></div>
+                </div>
                 <span class="fm-ph-pos">{{ player.position }}</span>
             </div>
-            <div class="fm-ph-info">
-                <div class="fm-ph-info-top">
+            <div class="fm-ph-identity">
+                <div class="fm-ph-name-row">
                     <a href="/countries/{{ player.country_slug }}" class="fm-ph-flag">
                         <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                     </a>
+                    <h2 class="fm-ph-name">{{ player.first_name }} {{ player.last_name }}</h2>
+                </div>
+                <div class="fm-ph-meta">
                     <span class="fm-ph-nat">{{ player.country_name }}</span>
+                    <span class="fm-ph-sep"></span>
                     <span class="fm-ph-age">{{ player.age }} years old</span>
+                    <span class="fm-ph-sep"></span>
                     <span class="fm-ph-born">{{ player.birth_date }}</span>
                 </div>
-                <div class="fm-ph-info-mid">
-                    <div class="fm-ph-stars-block">
-                        <span class="fm-ph-slabel">Ability</span>
-                        <span class="fm-stars">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
+                <div class="fm-ph-ratings">
+                    <div class="fm-ph-rating-item">
+                        <span class="fm-ph-rlabel">Ability</span>
+                        <span class="fm-stars fm-stars-lg">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
                     </div>
-                    <div class="fm-ph-stars-block">
-                        <span class="fm-ph-slabel">Potential</span>
-                        <span class="fm-stars">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
+                    <div class="fm-ph-rating-item">
+                        <span class="fm-ph-rlabel">Potential</span>
+                        <span class="fm-stars fm-stars-lg">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
                     </div>
-                    <div class="fm-ph-cond-block">
-                        <span class="fm-ph-slabel">Condition</span>
+                    <div class="fm-ph-rating-item fm-ph-cond-item">
+                        <span class="fm-ph-rlabel">Condition</span>
                         <div class="fm-cond">
                             <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
@@ -58,7 +65,7 @@
             <div class="fm-ph-col">
                 <div class="fm-detail-row">
                     <span class="fm-detail-label">Value</span>
-                    <span class="fm-detail-value">${{ player.value }}</span>
+                    <span class="fm-detail-value fm-val-highlight">${{ player.value }}</span>
                 </div>
                 {% if let Some(contract) = player.contract %}
                 <div class="fm-detail-row">

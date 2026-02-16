@@ -34,7 +34,7 @@ pub async fn game_process_action(State(state): State<GameAppData>) -> impl IntoR
     })
     .await;
 
-    if let Ok(res) = result {
+    if let Ok(_res) = result {
         (StatusCode::OK, Json(()))
     } else {
         (StatusCode::BAD_REQUEST, Json(()))

@@ -79,11 +79,18 @@ pub fn team_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<MenuSe
     }
 
     sections.push(MenuSection {
-        items: vec![MenuItem {
-            title: "Schedule".to_string(),
-            url: format!("/teams/{}/schedule", team_slug),
-            icon: "fa-calendar".to_string(),
-        }],
+        items: vec![
+            MenuItem {
+                title: "Tactics".to_string(),
+                url: format!("/teams/{}/tactics", team_slug),
+                icon: "fa-chess".to_string(),
+            },
+            MenuItem {
+                title: "Schedule".to_string(),
+                url: format!("/teams/{}/schedule", team_slug),
+                icon: "fa-calendar".to_string(),
+            },
+        ],
     });
 
     sections

@@ -27,7 +27,11 @@
       "Bash(python -m json.tool)",
       "Bash(node -e:*)",
       "Bash(python:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "WebFetch(domain:www.just-football.com)",
+      "Bash(cargo metadata:*)",
+      "WebFetch(domain:steamuserimages-a.akamaihd.net)",
+      "WebFetch(domain:www.fmscout.com)"
     ],
     "deny": [],
     "ask": []

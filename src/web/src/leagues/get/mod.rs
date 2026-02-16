@@ -28,6 +28,18 @@ pub struct LeagueGetTemplate {
     pub table_rows: Vec<LeagueTableRow>,
     pub current_tour_schedule: Vec<TourSchedule>,
     pub competition_reputation: Vec<CompetitionReputationItem>,
+    pub top_scorers: Vec<LeaguePlayerStatItem>,
+    pub top_assisters: Vec<LeaguePlayerStatItem>,
+    pub top_rated: Vec<LeaguePlayerStatItem>,
+}
+
+pub struct LeaguePlayerStatItem {
+    pub player_id: u32,
+    pub player_name: String,
+    pub team_name: String,
+    pub team_slug: String,
+    pub played: u16,
+    pub stat_value: String,
 }
 
 pub struct CompetitionReputationItem {
@@ -248,6 +260,94 @@ pub async fn league_get_action(
         })
         .collect();
 
+    // Collect player statistics from all teams in this league
+    let mut scorer_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new(); // (player_id, name, team_name, team_slug, played, goals)
+    let mut assister_data: Vec<(u32, String, String, String, u16, u16)> = Vec::new();
+    let mut rating_data: Vec<(u32, String, String, String, u16, f32)> = Vec::new();
+
+    for table_row in league_table {
+        if let Some(team) = simulator_data.team(table_row.team_id) {
+            let team_name = team.name.clone();
+            let team_slug = team.slug.clone();
+            for player in &team.players.players {
+                let played = player.statistics.played + player.statistics.played_subs;
+                if player.statistics.goals > 0 {
+                    scorer_data.push((
+                        player.id,
+                        player.full_name.to_string(),
+                        team_name.clone(),
+                        team_slug.clone(),
+                        played,
+                        player.statistics.goals,
+                    ));
+                }
+                if player.statistics.assists > 0 {
+                    assister_data.push((
+                        player.id,
+                        player.full_name.to_string(),
+                        team_name.clone(),
+                        team_slug.clone(),
+                        played,
+                        player.statistics.assists,
+                    ));
+                }
+                if played > 0 && player.statistics.average_rating > 0.0 {
+                    rating_data.push((
+                        player.id,
+                        player.full_name.to_string(),
+                        team_name.clone(),
+                        team_slug.clone(),
+                        played,
+                        player.statistics.average_rating,
+                    ));
+                }
+            }
+        }
+    }
+
+    scorer_data.sort_by(|a, b| b.5.cmp(&a.5));
+    assister_data.sort_by(|a, b| b.5.cmp(&a.5));
+    rating_data.sort_by(|a, b| b.5.partial_cmp(&a.5).unwrap_or(std::cmp::Ordering::Equal));
+
+    let top_scorers: Vec<LeaguePlayerStatItem> = scorer_data
+        .into_iter()
+        .take(10)
+        .map(|(player_id, player_name, team_name, team_slug, played, goals)| LeaguePlayerStatItem {
+            player_id,
+            player_name,
+            team_name,
+            team_slug,
+            played,
+            stat_value: goals.to_string(),
+        })
+        .collect();
+
+    let top_assisters: Vec<LeaguePlayerStatItem> = assister_data
+        .into_iter()
+        .take(10)
+        .map(|(player_id, player_name, team_name, team_slug, played, assists)| LeaguePlayerStatItem {
+            player_id,
+            player_name,
+            team_name,
+            team_slug,
+            played,
+            stat_value: assists.to_string(),
+        })
+        .collect();
+
+    let top_rated: Vec<LeaguePlayerStatItem> = rating_data
+        .into_iter()
+        .take(10)
+        .map(|(player_id, player_name, team_name, team_slug, played, rating)| LeaguePlayerStatItem {
+            player_id,
+            player_name,
+            team_name,
+            team_slug,
+            played,
+            stat_value: format!("{:.2}", rating),
+        })
+        .collect();
+
     Ok(LeagueGetTemplate {
         title: league.name.clone(),
         sub_title: country.name.clone(),
@@ -257,5 +357,8 @@ pub async fn league_get_action(
         table_rows,
         current_tour_schedule,
         competition_reputation,
+        top_scorers,
+        top_assisters,
+        top_rated,
     })
 }
