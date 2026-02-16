@@ -1,0 +1,69 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}">Overview</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}/matches">Matches</a>
+    <a class="fm-tab active" href="/teams/{{ team_slug }}/players/{{ player_id }}/history">History</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Career Statistics</h3>
+        </div>
+        <table class="fm-stats">
+            <thead>
+                <tr>
+                    <th>Season</th>
+                    <th>Apps</th>
+                    <th>Gls</th>
+                    <th>Ast</th>
+                    <th>Pen</th>
+                    <th>PoM</th>
+                    <th>YC</th>
+                    <th>RC</th>
+                    <th>SoT</th>
+                    <th>PAS%</th>
+                    <th>TCK W</th>
+                    <th>AV RAT</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td>{{ item.season }}</td>
+                    <td>{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
+                    <td>{{ item.stats.goals }}</td>
+                    <td>{{ item.stats.assists }}</td>
+                    <td>{{ item.stats.penalties }}</td>
+                    <td>{{ item.stats.player_of_the_match }}</td>
+                    <td>{{ item.stats.yellow_cards }}</td>
+                    <td>{{ item.stats.red_cards }}</td>
+                    <td>{{ item.stats.shots_on_target }}</td>
+                    <td>{{ item.stats.passes }}</td>
+                    <td>{{ item.stats.tackling }}</td>
+                    <td>{{ item.stats.average_rating }}</td>
+                </tr>
+                {% endfor %}
+                <tr class="fm-stats-current">
+                    <td>Current</td>
+                    <td>{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
+                    <td>{{ current.goals }}</td>
+                    <td>{{ current.assists }}</td>
+                    <td>{{ current.penalties }}</td>
+                    <td>{{ current.player_of_the_match }}</td>
+                    <td>{{ current.yellow_cards }}</td>
+                    <td>{{ current.red_cards }}</td>
+                    <td>{{ current.shots_on_target }}</td>
+                    <td>{{ current.passes }}</td>
+                    <td>{{ current.tackling }}</td>
+                    <td>{{ current.average_rating }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+</div>
+{% endblock %}

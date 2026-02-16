@@ -1,0 +1,44 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
+    <a class="fm-tab active" href="/teams/{{ team_slug }}/transfers">Transfers</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Transfer List</h3>
+            <span class="fm-panel-count">{{ items.len() }}</span>
+        </div>
+        {% if items.is_empty() %}
+        <div class="fm-empty">No players on the transfer list</div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Position</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td class="sq-name"><a href="/teams/{{ team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td class="sq-pos">{{ item.position }}</td>
+                    <td>{{ item.value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

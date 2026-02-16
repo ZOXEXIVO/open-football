@@ -1,0 +1,55 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
+    <a class="fm-tab active" href="/teams/{{ team_slug }}/stats">Stats</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Player Statistics</h3>
+        </div>
+        <table class="fm-stats">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Pos</th>
+                    <th>Apps</th>
+                    <th>Gls</th>
+                    <th>Ast</th>
+                    <th>YC</th>
+                    <th>RC</th>
+                    <th>SoT</th>
+                    <th>PAS%</th>
+                    <th>TCK W</th>
+                    <th>AV RAT</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in players %}
+                <tr>
+                    <td><a href="/teams/{{ team_slug }}/players/{{ p.id }}">{{ p.last_name }} {{ p.first_name }}</a></td>
+                    <td style="color:#7a868e;font-size:12px">{{ p.position }}</td>
+                    <td>{{ p.played }}{% if p.played_subs > 0 %} ({{ p.played_subs }}){% endif %}</td>
+                    <td>{{ p.goals }}</td>
+                    <td>{{ p.assists }}</td>
+                    <td>{{ p.yellow_cards }}</td>
+                    <td>{{ p.red_cards }}</td>
+                    <td>{{ p.shots_on_target }}</td>
+                    <td>{{ p.passes }}</td>
+                    <td>{{ p.tackling }}</td>
+                    <td>{{ p.average_rating }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+</div>
+{% endblock %}

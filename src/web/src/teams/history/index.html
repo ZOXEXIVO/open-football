@@ -1,0 +1,46 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
+    <a class="fm-tab active" href="/teams/{{ team_slug }}/history">History</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Match History</h3>
+            <span class="fm-panel-count">{{ items.len() }}</span>
+        </div>
+        {% if items.is_empty() %}
+        <div class="fm-empty">No match history recorded yet</div>
+        {% else %}
+        <table class="fm-schedule">
+            <thead>
+                <tr>
+                    <th>Date</th>
+                    <th>Opponent</th>
+                    <th class="sch-result">Result</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td class="sch-date">{{ item.date }}</td>
+                    <td>{{ item.opponent_name }}</td>
+                    <td class="sch-result">
+                        <span class="fm-result">{{ item.home_goals }} - {{ item.away_goals }}</span>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
