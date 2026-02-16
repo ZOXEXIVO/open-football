@@ -86,14 +86,6 @@ pub fn team_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<MenuSe
         }],
     });
 
-    sections.push(MenuSection {
-        items: vec![MenuItem {
-            title: "Calendar".to_string(),
-            url: "/calendar".to_string(),
-            icon: "fa-calendar-alt".to_string(),
-        }],
-    });
-
     sections
 }
 

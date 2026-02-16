@@ -73,11 +73,11 @@
                         <div class="fx-home">
                             <a href="/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
                             {% if let Some(result) = item.result %}
-                            <small class="fx-scorers">
+                            <div class="fx-scorers">
                                 {% for gs in result.home_goalscorers %}
-                                {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}{% if !loop.last %}, {% endif %}
+                                <span class="fx-scorer">{{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}</span>
                                 {% endfor %}
-                            </small>
+                            </div>
                             {% endif %}
                         </div>
                         <a href="/match/{{ league_slug }}/{{ item.match_id }}" class="fx-score">
@@ -90,11 +90,11 @@
                         <div class="fx-away">
                             <a href="/teams/{{ item.away_team_slug }}">{{ item.away_team_name }}</a>
                             {% if let Some(result) = item.result %}
-                            <small class="fx-scorers">
+                            <div class="fx-scorers">
                                 {% for gs in result.away_goalscorers %}
-                                {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}{% if !loop.last %}, {% endif %}
+                                <span class="fx-scorer">{{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}</span>
                                 {% endfor %}
-                            </small>
+                            </div>
                             {% endif %}
                         </div>
                     </div>
