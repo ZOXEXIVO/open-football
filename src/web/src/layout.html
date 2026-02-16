@@ -64,7 +64,7 @@
     <script>
         document.getElementById('process-btn').addEventListener('click', async () => {
             document.getElementById('process-game-btn').style.display = 'none';
-            document.getElementById('process-spinner').style.display = 'block';
+            document.getElementById('process-spinner').style.display = 'flex';
             try {
                 await fetch('/api/game/process', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
                 window.location.reload();
