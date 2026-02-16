@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-const MATCH_DIRECTORY: &str = "matches";
+const MATCH_DIRECTORY: &str = "match_results";
 const CHUNK_DURATION_MS: u64 = 300_000; // 5 minutes per chunk
 
 pub struct MatchStore;
