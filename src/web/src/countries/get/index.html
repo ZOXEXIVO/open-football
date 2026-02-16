@@ -1,18 +1,19 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="country-content">
-    <div>
-        <ul class="countries-list">
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Leagues</h3>
+        </div>
+        <div class="fm-league-list">
             {% for league in leagues %}
-            <li>
-                <a href="/leagues/{{ league.slug }}">
-                    {{ league.name }}
-                </a>
-            </li>
+            <a href="/leagues/{{ league.slug }}" class="fm-league-item">
+                <i class="fa fa-trophy"></i>
+                <span>{{ league.name }}</span>
+            </a>
             {% endfor %}
-        </ul>
-    </div>
-    <div style="clear:both"></div>
+        </div>
+    </section>
 </div>
 {% endblock %}

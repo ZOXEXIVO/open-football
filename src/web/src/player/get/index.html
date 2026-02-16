@@ -1,203 +1,197 @@
 {% extends "layout.html" %}
 
 {% block submenu %}
-<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
-    <div class="container-fluid">
-        <div class="collapse navbar-collapse" id="navbarScroll">
-            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
-                <li class="nav-item"><a class="nav-link">Players</a></li>
-                <li class="nav-item"><a class="nav-link">International</a></li>
-                <li class="nav-item"><a class="nav-link">Players on Loan</a></li>
-                <li class="nav-item"><a class="nav-link">Extended Leave</a></li>
-                <li class="nav-item"><a class="nav-link">Team Meeting</a></li>
-            </ul>
-        </div>
-    </div>
-</nav>
+<div class="fm-tabbar">
+    <a class="fm-tab active">Overview</a>
+    <a class="fm-tab">Matches</a>
+    <a class="fm-tab">History</a>
+</div>
 {% endblock %}
 
 {% block content %}
-<div class="content">
-    <div class="container-fluid player-content">
-        <div class="row player-header">
-            <div class="col-4">
-                <div class="row">
-                    <div class="col-xs-3 w-auto">
-                        <div class="player-photo player-default-photo"></div>
-                    </div>
-                    <div class="col-xs-1 w-auto">
-                        <a href="/countries/{{ player.country_slug }}" class="sub-title-link">
-                            <div class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></div>
-                        </a>
-                    </div>
-                    <div class="col-xs-5 basic-info w-auto">
-                        <p><span>{{ player.age }} years old</span> ({{ player.birth_date }})</p>
-                        <p>{{ player.country_name }}</p>
-                        <p>{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</p>
-                        {% if player.player_attributes.under_21_international_apps > 0 %}
-                        <p>{{ player.player_attributes.under_21_international_apps }} U21 caps / {{ player.player_attributes.under_21_international_goals }} goals U21</p>
-                        {% else %}
-                        <p>No youth caps</p>
-                        {% endif %}
-                    </div>
-                </div>
+<div class="fm-page">
+    <section class="fm-panel fm-player-header">
+        <div class="fm-player-top">
+            <div class="fm-player-identity">
+                <div class="fm-player-photo player-default-photo"></div>
+                <a href="/countries/{{ player.country_slug }}">
+                    <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
+                </a>
             </div>
-            <div class="col-3 delim">
-                <div class="row">
-                    <div class="col-xs-10 contract-info pull-left">
-                        <p class="contracted">
-                            Contracted to <a href="/teams/{{ player.team_slug }}" style="color: #787B7A;">{{ player.team_name }}</a>
-                        </p>
-                        <p>Valued at ${{ player.value }}</p>
-                        {% if let Some(contract) = player.contract %}
-                        <p class="wage">${{ contract.salary }}K p/w until {{ contract.expiration }}</p>
-                        <p class="status">{{ contract.squad_status }}</p>
-                        {% endif %}
-                    </div>
+            <div class="fm-player-info">
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Age</span>
+                    <span class="fm-info-value">{{ player.age }} years old</span>
+                    <span class="fm-info-sub">({{ player.birth_date }})</span>
                 </div>
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Nationality</span>
+                    <span class="fm-info-value">{{ player.country_name }}</span>
+                </div>
+                <div class="fm-info-group">
+                    <span class="fm-info-label">International</span>
+                    <span class="fm-info-value">{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</span>
+                </div>
+                {% if player.player_attributes.under_21_international_apps > 0 %}
+                <div class="fm-info-group">
+                    <span class="fm-info-label">U21</span>
+                    <span class="fm-info-value">{{ player.player_attributes.under_21_international_apps }} caps / {{ player.player_attributes.under_21_international_goals }} goals</span>
+                </div>
+                {% endif %}
             </div>
-            <div class="col delim">
-                <div class="row">
-                    <div class="col-xs-3 current_ability pull-left w-auto">
-                        <p>Current&nbsp;ability</p>
-                        <fieldset class="rating">
-                            {% for _ in 0..(5 - player.current_ability) %}<label></label>{% endfor %}
-                            {% for _ in 0..player.current_ability %}<label class="checked"></label>{% endfor %}
-                        </fieldset>
-                    </div>
-                    <div class="col-xs-3 potential_ability pull-left w-auto">
-                        <p>Potential&nbsp;ability</p>
-                        <fieldset class="rating">
-                            {% for _ in 0..(5 - player.potential_ability) %}<label></label>{% endfor %}
-                            {% for _ in 0..player.potential_ability %}<label class="checked"></label>{% endfor %}
-                        </fieldset>
-                    </div>
+            <div class="fm-player-contract">
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Club</span>
+                    <span class="fm-info-value"><a href="/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
                 </div>
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Value</span>
+                    <span class="fm-info-value">${{ player.value }}</span>
+                </div>
+                {% if let Some(contract) = player.contract %}
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Wage</span>
+                    <span class="fm-info-value">${{ contract.salary }}K p/w</span>
+                </div>
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Contract</span>
+                    <span class="fm-info-value">until {{ contract.expiration }}</span>
+                </div>
+                <div class="fm-info-group">
+                    <span class="fm-info-label">Status</span>
+                    <span class="fm-info-value">{{ contract.squad_status }}</span>
+                </div>
+                {% endif %}
             </div>
-        </div>
-        <div class="row player-data">
-            <div class="row">
-                <div class="col-3">
-                    <p>Positions</p>
-                    <img alt="position" src="/images/player/pole.png" class="position-img img-fluid"/>
+            <div class="fm-player-abilities">
+                <div class="fm-ability-block">
+                    <span class="fm-ability-label">Current Ability</span>
+                    <div class="fm-stars fm-stars-lg">
+                        {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
+                    </div>
                 </div>
-                <div class="col-5">
-                    <table class="skills">
-                        <tr>
-                            <th>Technical</th><th></th>
-                            <th>Mental</th><th></th>
-                            <th>Physical</th><th></th>
-                        </tr>
-                        <tr>
-                            <td>Corners</td><td class="td_{{ player.skills.technical.corners }}">{{ player.skills.technical.corners }}</td>
-                            <td>Aggression</td><td class="td_{{ player.skills.mental.aggression }}">{{ player.skills.mental.aggression }}</td>
-                            <td>Acceleration</td><td class="td_{{ player.skills.physical.acceleration }}">{{ player.skills.physical.acceleration }}</td>
-                        </tr>
-                        <tr>
-                            <td>Crossing</td><td class="td_{{ player.skills.technical.crossing }}">{{ player.skills.technical.crossing }}</td>
-                            <td>Anticipation</td><td class="td_{{ player.skills.mental.anticipation }}">{{ player.skills.mental.anticipation }}</td>
-                            <td>Agility</td><td class="td_{{ player.skills.physical.agility }}">{{ player.skills.physical.agility }}</td>
-                        </tr>
-                        <tr>
-                            <td>Finishing</td><td class="td_{{ player.skills.technical.finishing }}">{{ player.skills.technical.finishing }}</td>
-                            <td>Composure</td><td class="td_{{ player.skills.mental.composure }}">{{ player.skills.mental.composure }}</td>
-                            <td>Jumping reach</td><td class="td_{{ player.skills.physical.jumping_reach }}">{{ player.skills.physical.jumping_reach }}</td>
-                        </tr>
-                        <tr>
-                            <td>First touch</td><td class="td_{{ player.skills.technical.first_touch }}">{{ player.skills.technical.first_touch }}</td>
-                            <td>Concentration</td><td class="td_{{ player.skills.mental.concentration }}">{{ player.skills.mental.concentration }}</td>
-                            <td>Natural fitness</td><td class="td_{{ player.skills.physical.natural_fitness }}">{{ player.skills.physical.natural_fitness }}</td>
-                        </tr>
-                        <tr>
-                            <td>Free kick taking</td><td class="td_{{ player.skills.technical.free_kick_taking }}">{{ player.skills.technical.free_kick_taking }}</td>
-                            <td>Decisions</td><td class="td_{{ player.skills.mental.decisions }}">{{ player.skills.mental.decisions }}</td>
-                            <td>Pace</td><td class="td_{{ player.skills.physical.pace }}">{{ player.skills.physical.pace }}</td>
-                        </tr>
-                        <tr>
-                            <td>Heading</td><td class="td_{{ player.skills.technical.heading }}">{{ player.skills.technical.heading }}</td>
-                            <td>Determination</td><td class="td_{{ player.skills.mental.determination }}">{{ player.skills.mental.determination }}</td>
-                            <td>Stamina</td><td class="td_{{ player.skills.physical.stamina }}">{{ player.skills.physical.stamina }}</td>
-                        </tr>
-                        <tr>
-                            <td>Long shots</td><td class="td_{{ player.skills.technical.long_shots }}">{{ player.skills.technical.long_shots }}</td>
-                            <td>Flair</td><td class="td_{{ player.skills.mental.flair }}">{{ player.skills.mental.flair }}</td>
-                            <td>Strength</td><td class="td_{{ player.skills.physical.strength }}">{{ player.skills.physical.strength }}</td>
-                        </tr>
-                        <tr>
-                            <td>Long throws</td><td class="td_{{ player.skills.technical.long_throws }}">{{ player.skills.technical.long_throws }}</td>
-                            <td>Leadership</td><td class="td_{{ player.skills.mental.leadership }}">{{ player.skills.mental.leadership }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                        <tr>
-                            <td>Marking</td><td class="td_{{ player.skills.technical.marking }}">{{ player.skills.technical.marking }}</td>
-                            <td>Off the ball</td><td class="td_{{ player.skills.mental.off_the_ball }}">{{ player.skills.mental.off_the_ball }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                        <tr>
-                            <td>Passing</td><td class="td_{{ player.skills.technical.passing }}">{{ player.skills.technical.passing }}</td>
-                            <td>Positioning</td><td class="td_{{ player.skills.mental.positioning }}">{{ player.skills.mental.positioning }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                        <tr>
-                            <td>Penalty taking</td><td class="td_{{ player.skills.technical.penalty_taking }}">{{ player.skills.technical.penalty_taking }}</td>
-                            <td>Teamwork</td><td class="td_{{ player.skills.mental.teamwork }}">{{ player.skills.mental.teamwork }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                        <tr>
-                            <td>Tackling</td><td class="td_{{ player.skills.technical.tackling }}">{{ player.skills.technical.tackling }}</td>
-                            <td>Vision</td><td class="td_{{ player.skills.mental.vision }}">{{ player.skills.mental.vision }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                        <tr>
-                            <td>Technique</td><td class="td_{{ player.skills.technical.technique }}">{{ player.skills.technical.technique }}</td>
-                            <td>Work rate</td><td class="td_{{ player.skills.mental.work_rate }}">{{ player.skills.mental.work_rate }}</td>
-                            <td>&nbsp;</td><td>&nbsp;</td>
-                        </tr>
-                    </table>
-                </div>
-                <div class="col-2">
-                    <dl>
-                        <dt>Preferred foot</dt>
-                        <dd>{{ player.preferred_foot }}</dd>
-                    </dl>
+                <div class="fm-ability-block">
+                    <span class="fm-ability-label">Potential Ability</span>
+                    <div class="fm-stars fm-stars-lg">
+                        {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
+                    </div>
                 </div>
             </div>
         </div>
-        <div class="row">
-            <div class="col">
-                <p class="header">Statistics</p>
-                <table class="player-statistics squad-table">
-                    <tr>
-                        <th>Competition</th>
-                        <th style="width: 60px">Apps</th>
-                        <th style="width: 40px">Gls</th>
-                        <th style="width: 40px">Ast</th>
-                        <th style="width: 40px">Pen</th>
-                        <th style="width: 40px">PoM</th>
-                        <th style="width: 40px">YC</th>
-                        <th style="width: 40px">RC</th>
-                        <th style="width: 40px">SoT</th>
-                        <th style="width: 40px">PAS%</th>
-                        <th style="width: 50px">TCK W</th>
-                        <th style="width: 50px">AV RAT</th>
-                    </tr>
-                    <tr>
-                        <td>League</td>
-                        <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
-                        <td>{{ player.statistics.goals }}</td>
-                        <td>{{ player.statistics.assists }}</td>
-                        <td>{{ player.statistics.penalties }}</td>
-                        <td>{{ player.statistics.player_of_the_match }}</td>
-                        <td>{{ player.statistics.yellow_cards }}</td>
-                        <td>{{ player.statistics.red_cards }}</td>
-                        <td>{{ player.statistics.shots_on_target }}</td>
-                        <td>{{ player.statistics.passes }}</td>
-                        <td>{{ player.statistics.tackling }}</td>
-                        <td>{{ player.statistics.average_rating }}</td>
-                    </tr>
-                </table>
-            </div>
+    </section>
+
+    <div class="row g-3 mt-1">
+        <div class="col-lg-3">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>Positions</h3>
+                </div>
+                <div class="fm-positions-img">
+                    <img alt="position" src="/images/player/pole.png" class="img-fluid"/>
+                </div>
+                <div class="fm-pref-foot">
+                    <span class="fm-info-label">Preferred foot</span>
+                    <span class="fm-info-value">{{ player.preferred_foot }}</span>
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-9">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>Attributes</h3>
+                </div>
+                <div class="fm-skills-grid">
+                    <div class="fm-skill-col">
+                        <h4>Technical</h4>
+                        <table class="fm-skills">
+                            <tr><td>Corners</td><td class="td_{{ player.skills.technical.corners }}">{{ player.skills.technical.corners }}</td></tr>
+                            <tr><td>Crossing</td><td class="td_{{ player.skills.technical.crossing }}">{{ player.skills.technical.crossing }}</td></tr>
+                            <tr><td>Finishing</td><td class="td_{{ player.skills.technical.finishing }}">{{ player.skills.technical.finishing }}</td></tr>
+                            <tr><td>First touch</td><td class="td_{{ player.skills.technical.first_touch }}">{{ player.skills.technical.first_touch }}</td></tr>
+                            <tr><td>Free kick taking</td><td class="td_{{ player.skills.technical.free_kick_taking }}">{{ player.skills.technical.free_kick_taking }}</td></tr>
+                            <tr><td>Heading</td><td class="td_{{ player.skills.technical.heading }}">{{ player.skills.technical.heading }}</td></tr>
+                            <tr><td>Long shots</td><td class="td_{{ player.skills.technical.long_shots }}">{{ player.skills.technical.long_shots }}</td></tr>
+                            <tr><td>Long throws</td><td class="td_{{ player.skills.technical.long_throws }}">{{ player.skills.technical.long_throws }}</td></tr>
+                            <tr><td>Marking</td><td class="td_{{ player.skills.technical.marking }}">{{ player.skills.technical.marking }}</td></tr>
+                            <tr><td>Passing</td><td class="td_{{ player.skills.technical.passing }}">{{ player.skills.technical.passing }}</td></tr>
+                            <tr><td>Penalty taking</td><td class="td_{{ player.skills.technical.penalty_taking }}">{{ player.skills.technical.penalty_taking }}</td></tr>
+                            <tr><td>Tackling</td><td class="td_{{ player.skills.technical.tackling }}">{{ player.skills.technical.tackling }}</td></tr>
+                            <tr><td>Technique</td><td class="td_{{ player.skills.technical.technique }}">{{ player.skills.technical.technique }}</td></tr>
+                        </table>
+                    </div>
+                    <div class="fm-skill-col">
+                        <h4>Mental</h4>
+                        <table class="fm-skills">
+                            <tr><td>Aggression</td><td class="td_{{ player.skills.mental.aggression }}">{{ player.skills.mental.aggression }}</td></tr>
+                            <tr><td>Anticipation</td><td class="td_{{ player.skills.mental.anticipation }}">{{ player.skills.mental.anticipation }}</td></tr>
+                            <tr><td>Composure</td><td class="td_{{ player.skills.mental.composure }}">{{ player.skills.mental.composure }}</td></tr>
+                            <tr><td>Concentration</td><td class="td_{{ player.skills.mental.concentration }}">{{ player.skills.mental.concentration }}</td></tr>
+                            <tr><td>Decisions</td><td class="td_{{ player.skills.mental.decisions }}">{{ player.skills.mental.decisions }}</td></tr>
+                            <tr><td>Determination</td><td class="td_{{ player.skills.mental.determination }}">{{ player.skills.mental.determination }}</td></tr>
+                            <tr><td>Flair</td><td class="td_{{ player.skills.mental.flair }}">{{ player.skills.mental.flair }}</td></tr>
+                            <tr><td>Leadership</td><td class="td_{{ player.skills.mental.leadership }}">{{ player.skills.mental.leadership }}</td></tr>
+                            <tr><td>Off the ball</td><td class="td_{{ player.skills.mental.off_the_ball }}">{{ player.skills.mental.off_the_ball }}</td></tr>
+                            <tr><td>Positioning</td><td class="td_{{ player.skills.mental.positioning }}">{{ player.skills.mental.positioning }}</td></tr>
+                            <tr><td>Teamwork</td><td class="td_{{ player.skills.mental.teamwork }}">{{ player.skills.mental.teamwork }}</td></tr>
+                            <tr><td>Vision</td><td class="td_{{ player.skills.mental.vision }}">{{ player.skills.mental.vision }}</td></tr>
+                            <tr><td>Work rate</td><td class="td_{{ player.skills.mental.work_rate }}">{{ player.skills.mental.work_rate }}</td></tr>
+                        </table>
+                    </div>
+                    <div class="fm-skill-col">
+                        <h4>Physical</h4>
+                        <table class="fm-skills">
+                            <tr><td>Acceleration</td><td class="td_{{ player.skills.physical.acceleration }}">{{ player.skills.physical.acceleration }}</td></tr>
+                            <tr><td>Agility</td><td class="td_{{ player.skills.physical.agility }}">{{ player.skills.physical.agility }}</td></tr>
+                            <tr><td>Jumping reach</td><td class="td_{{ player.skills.physical.jumping_reach }}">{{ player.skills.physical.jumping_reach }}</td></tr>
+                            <tr><td>Natural fitness</td><td class="td_{{ player.skills.physical.natural_fitness }}">{{ player.skills.physical.natural_fitness }}</td></tr>
+                            <tr><td>Pace</td><td class="td_{{ player.skills.physical.pace }}">{{ player.skills.physical.pace }}</td></tr>
+                            <tr><td>Stamina</td><td class="td_{{ player.skills.physical.stamina }}">{{ player.skills.physical.stamina }}</td></tr>
+                            <tr><td>Strength</td><td class="td_{{ player.skills.physical.strength }}">{{ player.skills.physical.strength }}</td></tr>
+                        </table>
+                    </div>
+                </div>
+            </section>
         </div>
     </div>
+
+    <section class="fm-panel mt-3">
+        <div class="fm-panel-head">
+            <h3>Statistics</h3>
+        </div>
+        <table class="fm-stats">
+            <thead>
+                <tr>
+                    <th>Competition</th>
+                    <th>Apps</th>
+                    <th>Gls</th>
+                    <th>Ast</th>
+                    <th>Pen</th>
+                    <th>PoM</th>
+                    <th>YC</th>
+                    <th>RC</th>
+                    <th>SoT</th>
+                    <th>PAS%</th>
+                    <th>TCK W</th>
+                    <th>AV RAT</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td>League</td>
+                    <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
+                    <td>{{ player.statistics.goals }}</td>
+                    <td>{{ player.statistics.assists }}</td>
+                    <td>{{ player.statistics.penalties }}</td>
+                    <td>{{ player.statistics.player_of_the_match }}</td>
+                    <td>{{ player.statistics.yellow_cards }}</td>
+                    <td>{{ player.statistics.red_cards }}</td>
+                    <td>{{ player.statistics.shots_on_target }}</td>
+                    <td>{{ player.statistics.passes }}</td>
+                    <td>{{ player.statistics.tackling }}</td>
+                    <td>{{ player.statistics.average_rating }}</td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
 </div>
 {% endblock %}

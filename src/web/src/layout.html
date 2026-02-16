@@ -13,14 +13,15 @@
     <div class="container-fluid">
         <div class="row">
             {% if !menu_sections.is_empty() %}
-            <div class="col-2 left-bar">
-                <nav class="navbar navbar-expand-lg bs-side-navbar">
+            <div class="col-2 fm-sidebar">
+                <nav class="fm-sidebar-nav">
                     {% for section in menu_sections %}
-                    <ul class="navbar-nav w-100">
+                    <ul class="fm-nav-section">
                         {% for item in section.items %}
-                        <li class="nav-item active">
-                            <a class="nav-link" href="{{ item.url }}">
-                                <i class="fa {{ item.icon }}"></i>&nbsp;&nbsp;{{ item.title }}
+                        <li>
+                            <a href="{{ item.url }}">
+                                <i class="fa {{ item.icon }}"></i>
+                                <span>{{ item.title }}</span>
                             </a>
                         </li>
                         {% endfor %}
@@ -31,34 +32,26 @@
             {% endif %}
             <div class="col m-0 p-0">
                 <div class="container-fluid">
-                    <div class="row bg-white">
-                        <div class="col-8 top-header-col gray_b_b">
-                            <div class="header-block">
-                                <div class="header-title-block">
-                                    <div class="page-title">{{ title }}</div>
-                                    <div>
-                                        <a href="{{ sub_title_link }}" class="sub-title-link">{{ sub_title }}</a>
+                    <div class="row">
+                        <div class="col m-0 p-0">
+                            <div class="fm-header">
+                                <div class="fm-header-title">
+                                    <h1>{{ title }}</h1>
+                                    <a href="{{ sub_title_link }}" class="fm-header-sub">{{ sub_title }}</a>
+                                </div>
+                                <div class="fm-header-actions">
+                                    <div class="fm-process-btn" id="process-btn">
+                                        <span id="process-game-btn">Process</span>
+                                        <div class="spinner-wrapper" id="process-spinner" style="display:none">
+                                            <div class="spinner"></div>
+                                        </div>
+                                    </div>
+                                    <div class="fm-date">
+                                        <div class="fm-date-main" id="date-up"></div>
+                                        <div class="fm-date-sub" id="date-down"></div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        <div class="col-4 gray_b_b p-0">
-                            <ul class="nav navbar-right header_top">
-                                <li class="item-msg" id="process-btn">
-                                    <div id="process-game-btn">Process</div>
-                                    <div class="spinner-wrapper" id="process-spinner" style="display:none">
-                                        <div class="spinner"></div>
-                                    </div>
-                                </li>
-                                <li class="item-date">
-                                    <div class="date-title" id="date-up"></div>
-                                    <div class="date-body" id="date-down"></div>
-                                </li>
-                            </ul>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col m-0 p-0">
                             {% block submenu %}{% endblock %}
                             {% block content %}{% endblock %}
                         </div>

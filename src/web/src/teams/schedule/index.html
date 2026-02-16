@@ -1,57 +1,59 @@
 {% extends "layout.html" %}
 
 {% block submenu %}
-<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
-    <div class="container-fluid">
-        <div class="collapse navbar-collapse" id="navbarScroll">
-            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
-                <li class="nav-item"><a class="nav-link">Overview</a></li>
-                <li class="nav-item"><a class="nav-link">Matches</a></li>
-                <li class="nav-item"><a class="nav-link">News</a></li>
-                <li class="nav-item"><a class="nav-link">Stats</a></li>
-                <li class="nav-item"><a class="nav-link">Transfers</a></li>
-                <li class="nav-item"><a class="nav-link">Awards</a></li>
-                <li class="nav-item"><a class="nav-link">History</a></li>
-            </ul>
-        </div>
-    </div>
-</nav>
+<div class="fm-tabbar">
+    <a class="fm-tab">Overview</a>
+    <a class="fm-tab active">Schedule</a>
+    <a class="fm-tab">Stats</a>
+    <a class="fm-tab">Transfers</a>
+    <a class="fm-tab">History</a>
+</div>
 {% endblock %}
 
 {% block content %}
-<div class="content">
-    <table class="squad-table">
-        <tr>
-            <th style="width: 100px">Date</th>
-            <th style="width: 80px">Time</th>
-            <th>Opposition</th>
-            <th style="width: 100px;text-align: center">Venue</th>
-            <th style="width: 150px;text-align: center">Result</th>
-            <th>Competition</th>
-        </tr>
-        {% for item in items %}
-        <tr>
-            <td>{{ item.date }}</td>
-            <td>{{ item.time }}</td>
-            <td>
-                <a href="/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>
-            </td>
-            <td style="text-align: center">
-                {% if item.is_home %}H{% else %}A{% endif %}
-            </td>
-            <td style="text-align: center">
-                {% if let Some(result) = item.result %}
-                <a href="/match/{{ league_slug }}/{{ result.match_id }}">
-                    {{ result.home_goals }} - {{ result.away_goals }}
-                </a>
-                {% else %}
-                -
-                {% endif %}
-            </td>
-            <td>{{ item.competition_name }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    <div style="clear:both"></div>
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Schedule</h3>
+        </div>
+        <table class="fm-schedule">
+            <thead>
+                <tr>
+                    <th class="sch-date">Date</th>
+                    <th class="sch-time">Time</th>
+                    <th>Opposition</th>
+                    <th class="sch-venue">Venue</th>
+                    <th class="sch-result">Result</th>
+                    <th>Competition</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in items %}
+                <tr>
+                    <td class="sch-date">{{ item.date }}</td>
+                    <td class="sch-time">{{ item.time }}</td>
+                    <td>
+                        <a href="/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>
+                    </td>
+                    <td class="sch-venue">
+                        <span class="fm-venue {% if item.is_home %}venue-h{% else %}venue-a{% endif %}">
+                            {% if item.is_home %}H{% else %}A{% endif %}
+                        </span>
+                    </td>
+                    <td class="sch-result">
+                        {% if let Some(result) = item.result %}
+                        <a href="/match/{{ league_slug }}/{{ result.match_id }}" class="fm-result">
+                            {{ result.home_goals }} – {{ result.away_goals }}
+                        </a>
+                        {% else %}
+                        <span class="fm-pending">–</span>
+                        {% endif %}
+                    </td>
+                    <td class="sch-comp">{{ item.competition_name }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
 </div>
 {% endblock %}

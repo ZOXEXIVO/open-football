@@ -26,7 +26,8 @@
       "Bash(gunzip:*)",
       "Bash(python -m json.tool)",
       "Bash(node -e:*)",
-      "Bash(python:*)"
+      "Bash(python:*)",
+      "Bash(wc:*)"
     ],
     "deny": [],
     "ask": []

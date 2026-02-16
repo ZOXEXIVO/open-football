@@ -1,33 +1,30 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="content match-content">
+<div class="fm-page fm-match-page">
     <div class="container-fluid">
         <div class="row">
             <div class="col-lg-2 d-none d-lg-block">
-                <ul class="list-group squad-list squad-list-left">
-                    <li class="list-unstyled">
-                        <a href="/teams/{{ home_team_slug }}"><h3>{{ home_team_name }}</h3></a>
-                    </li>
-                    <hr/>
-                    {% for player in home_squad_main %}
-                    <li class="list-group-item bg-transparent">
-                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}">
-                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                <div class="fm-match-squad fm-match-squad-home">
+                    <a href="/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                    <div class="fm-squad-section">
+                        {% for player in home_squad_main %}
+                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
+                            {{ player.last_name }} {{ player.first_name }}
+                            <small>{{ player.position }}</small>
                         </a>
-                    </li>
-                    {% endfor %}
-                </ul>
-                <hr/>
-                <ul class="list-group squad-list squad-list-left">
-                    {% for player in home_squad_subs %}
-                    <li class="list-group-item bg-transparent">
-                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}">
-                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        {% endfor %}
+                    </div>
+                    <div class="fm-squad-divider">Substitutes</div>
+                    <div class="fm-squad-section">
+                        {% for player in home_squad_subs %}
+                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
+                            {{ player.last_name }} {{ player.first_name }}
+                            <small>{{ player.position }}</small>
                         </a>
-                    </li>
-                    {% endfor %}
-                </ul>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
             <div class="col-lg-8">
                 <div id="match-play-area">
@@ -60,29 +57,26 @@
                 </div>
             </div>
             <div class="col-lg-2 d-none d-lg-block">
-                <ul class="list-group squad-list">
-                    <li class="list-unstyled">
-                        <a href="/teams/{{ away_team_slug }}"><h3>{{ away_team_name }}</h3></a>
-                    </li>
-                    <hr/>
-                    {% for player in away_squad_main %}
-                    <li class="list-group-item bg-transparent">
-                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}">
-                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                <div class="fm-match-squad fm-match-squad-away">
+                    <a href="/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                    <div class="fm-squad-section">
+                        {% for player in away_squad_main %}
+                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
+                            {{ player.last_name }} {{ player.first_name }}
+                            <small>{{ player.position }}</small>
                         </a>
-                    </li>
-                    {% endfor %}
-                </ul>
-                <hr/>
-                <ul class="list-group squad-list">
-                    {% for player in away_squad_subs %}
-                    <li class="list-group-item bg-transparent">
-                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}">
-                            {{ player.last_name }} {{ player.first_name }} ({{ player.position }})
+                        {% endfor %}
+                    </div>
+                    <div class="fm-squad-divider">Substitutes</div>
+                    <div class="fm-squad-section">
+                        {% for player in away_squad_subs %}
+                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
+                            {{ player.last_name }} {{ player.first_name }}
+                            <small>{{ player.position }}</small>
                         </a>
-                    </li>
-                    {% endfor %}
-                </ul>
+                        {% endfor %}
+                    </div>
+                </div>
             </div>
         </div>
     </div>

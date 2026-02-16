@@ -1,71 +1,76 @@
 {% extends "layout.html" %}
 
 {% block submenu %}
-<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
-    <div class="container-fluid">
-        <div class="collapse navbar-collapse" id="navbarScroll">
-            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
-                <li class="nav-item"><a class="nav-link">Players</a></li>
-                <li class="nav-item"><a class="nav-link">International</a></li>
-                <li class="nav-item"><a class="nav-link">Players on Loan</a></li>
-                <li class="nav-item"><a class="nav-link">Extended Leave</a></li>
-                <li class="nav-item"><a class="nav-link">Team Meeting</a></li>
-            </ul>
-        </div>
-    </div>
-</nav>
+<div class="fm-tabbar">
+    <a class="fm-tab active">Players</a>
+    <a class="fm-tab">International</a>
+    <a class="fm-tab">Players on Loan</a>
+    <a class="fm-tab">Extended Leave</a>
+    <a class="fm-tab">Team Meeting</a>
+</div>
 {% endblock %}
 
 {% block content %}
-<div class="content">
-    <table class="squad-table">
-        <tr>
-            <th style="width: 50px">Inf</th>
-            <th>Name</th>
-            <th>Position</th>
-            <th>Nat</th>
-            <th>Ability</th>
-            <th>Potential</th>
-            <th>Morale</th>
-            <th>Conditions</th>
-            <th>Value</th>
-        </tr>
-        {% for player in players %}
-        <tr>
-            <td style="width: 50px">
-                {% if player.injured %}
-                <div class="status-badge injured"></div>
-                {% endif %}
-            </td>
-            <td style="min-width: 200px;">
-                <a href="/teams/{{ team_slug }}/players/{{ player.id }}">
-                    {{ player.last_name }}&nbsp;{{ player.first_name }}
-                </a>
-            </td>
-            <td style="width: 80px">{{ player.position }}</td>
-            <td style="width: 50px">
-                <a href="/countries/{{ player.country_slug }}" class="sub-title-link">
-                    <div class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></div>
-                </a>
-            </td>
-            <td style="width: 150px">
-                <fieldset class="rating">
-                    {% for _ in 0..(5 - player.current_ability) %}<label></label>{% endfor %}
-                    {% for _ in 0..player.current_ability %}<label class="checked"></label>{% endfor %}
-                </fieldset>
-            </td>
-            <td style="width: 150px">
-                <fieldset class="rating">
-                    {% for _ in 0..(5 - player.potential_ability) %}<label></label>{% endfor %}
-                    {% for _ in 0..player.potential_ability %}<label class="checked"></label>{% endfor %}
-                </fieldset>
-            </td>
-            <td style="width: 150px">{{ player.behaviour }}</td>
-            <td style="width: 100px;text-align: center">{{ player.conditions }}%</td>
-            <td style="width: 170px">{{ player.value }}</td>
-        </tr>
-        {% endfor %}
-    </table>
-    <div style="clear:both"></div>
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Squad</h3>
+        </div>
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th class="sq-inf"></th>
+                    <th class="sq-name">Name</th>
+                    <th>Position</th>
+                    <th class="sq-nat">Nat</th>
+                    <th>Ability</th>
+                    <th>Potential</th>
+                    <th>Morale</th>
+                    <th class="sq-cond">Condition</th>
+                    <th>Value</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for player in players %}
+                <tr>
+                    <td class="sq-inf">
+                        {% if player.injured %}
+                        <span class="fm-badge fm-badge-inj">Inj</span>
+                        {% endif %}
+                    </td>
+                    <td class="sq-name">
+                        <a href="/teams/{{ team_slug }}/players/{{ player.id }}">
+                            {{ player.last_name }}&nbsp;{{ player.first_name }}
+                        </a>
+                    </td>
+                    <td class="sq-pos">{{ player.position }}</td>
+                    <td class="sq-nat">
+                        <a href="/countries/{{ player.country_slug }}">
+                            <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
+                        </a>
+                    </td>
+                    <td>
+                        <div class="fm-stars">
+                            {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
+                        </div>
+                    </td>
+                    <td>
+                        <div class="fm-stars">
+                            {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
+                        </div>
+                    </td>
+                    <td>{{ player.behaviour }}</td>
+                    <td class="sq-cond">
+                        <div class="fm-cond">
+                            <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
+                            <span class="fm-cond-val">{{ player.conditions }}%</span>
+                        </div>
+                    </td>
+                    <td>{{ player.value }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
 </div>
 {% endblock %}

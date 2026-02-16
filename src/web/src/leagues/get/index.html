@@ -1,139 +1,124 @@
 {% extends "layout.html" %}
 
 {% block submenu %}
-<nav class="navbar navbar-expand-lg navbar-light navbar-submenu">
-    <div class="container-fluid">
-        <div class="collapse navbar-collapse" id="navbarScroll">
-            <ul class="navbar-nav me-auto my-2 my-lg-0 navbar-nav-scroll">
-                <li class="nav-item"><a class="nav-link">Overview</a></li>
-                <li class="nav-item"><a class="nav-link">Matches</a></li>
-                <li class="nav-item"><a class="nav-link">News</a></li>
-                <li class="nav-item"><a class="nav-link">Stats</a></li>
-                <li class="nav-item"><a class="nav-link">Transfers</a></li>
-                <li class="nav-item"><a class="nav-link">Awards</a></li>
-                <li class="nav-item"><a class="nav-link">History</a></li>
-            </ul>
-        </div>
-    </div>
-</nav>
+<div class="fm-tabbar">
+    <a class="fm-tab active">Overview</a>
+    <a class="fm-tab">Matches</a>
+    <a class="fm-tab">News</a>
+    <a class="fm-tab">Stats</a>
+    <a class="fm-tab">Transfers</a>
+    <a class="fm-tab">Awards</a>
+    <a class="fm-tab">History</a>
+</div>
 {% endblock %}
 
 {% block content %}
-<div class="container-fluid">
-    <div class="row">
-        <div class="col col-4">
-            <p class="header">Stages ></p>
-            <div>
-                <table class="league-table">
-                    <tr>
-                        <th style="width: 50px">Pos</th>
-                        <th style="width: 60%; min-width: 180px;">Team</th>
-                        <th style="width: 50px;text-align: center;">P</th>
-                        <th style="width: 50px;text-align: center;">W</th>
-                        <th style="width: 50px;text-align: center;">D</th>
-                        <th style="width: 50px;text-align: center;">L</th>
-                        <th style="width: 50px;text-align: center;">GD</th>
-                        <th style="width: 50px;text-align: center;">PTS</th>
-                    </tr>
-                    {% for row in table_rows %}
-                    <tr>
-                        <td class="idx">{{ loop.index }}st</td>
-                        <td>
-                            <a href="/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
-                        </td>
-                        <td style="text-align: center;">{{ row.played }}</td>
-                        <td style="text-align: center;">{{ row.win }}</td>
-                        <td style="text-align: center;">{{ row.draft }}</td>
-                        <td style="text-align: center;">{{ row.lost }}</td>
-                        <td style="text-align: center;">{{ row.goal_scored - row.goal_concerned }}</td>
-                        <td style="text-align: center;">{{ row.points }}</td>
-                    </tr>
-                    {% endfor %}
-                </table>
-            </div>
-        </div>
-        <div class="col col-8">
-            <div class="container-fluid">
-                <div class="row h-75">
-                    <div class="col">
-                        <p class="header">Fixtures/results ></p>
-                        {% for tour_schedule in current_tour_schedule %}
-                        <table class="week-results">
-                            <tr>
-                                <td colspan="3">{{ tour_schedule.date }}</td>
-                            </tr>
-                            {% for item in tour_schedule.matches %}
-                            <tr>
-                                <td class="home-team">
-                                    <a href="/teams/{{ item.home_team_slug }}">
-                                        {{ item.home_team_name }}
-                                        {% if let Some(result) = item.result %}
-                                        <ul class="goalscorers-list">
-                                            {% for gs in result.home_goalscorers %}
-                                            <li>
-                                                <a href="/teams/{{ item.home_team_slug }}/players/{{ gs.id }}">
-                                                    {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} AG{% endif %}
-                                                </a>
-                                            </li>
-                                            {% endfor %}
-                                        </ul>
-                                        {% endif %}
-                                    </a>
-                                </td>
-                                <td class="score">
-                                    <a href="/match/{{ league_slug }}/{{ item.match_id }}">
-                                        {% if let Some(result) = item.result %}
-                                        {{ result.home_goals }} - {{ result.away_goals }}
-                                        {% else %}
-                                        -
-                                        {% endif %}
-                                    </a>
-                                </td>
-                                <td class="away-team">
-                                    <a href="/teams/{{ item.away_team_slug }}">
-                                        {{ item.away_team_name }}
-                                        {% if let Some(result) = item.result %}
-                                        <ul class="goalscorers-list">
-                                            {% for gs in result.away_goalscorers %}
-                                            <li>
-                                                <a href="/teams/{{ item.away_team_slug }}/players/{{ gs.id }}">
-                                                    {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} AG{% endif %}
-                                                </a>
-                                            </li>
-                                            {% endfor %}
-                                        </ul>
-                                        {% endif %}
-                                    </a>
-                                </td>
-                            </tr>
-                            {% endfor %}
-                        </table>
-                        {% endfor %}
-                    </div>
-                    <div class="col">
-                        <p class="header">Competition Reputation ></p>
-                        <ol class="list-group list-group-numbered league-competitions">
-                            {% for item in competition_reputation %}
-                            <li class="list-group-item d-flex justify-content-between align-items-start">
-                                <div class="ms-2 me-auto">
-                                    <div class="fw-bold">
-                                        <a href="/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>
-                                    </div>
-                                    <div class="container">
-                                        <div class="row">
-                                            <div class="col col-2 p-0 flag-col">
-                                                <div class="flag flag-{{ item.country_code }}"></div>
-                                            </div>
-                                            <div class="col country-col">{{ item.country_name }}</div>
-                                        </div>
-                                    </div>
-                                </div>
-                            </li>
-                            {% endfor %}
-                        </ol>
-                    </div>
+<div class="fm-page">
+    <div class="row g-3">
+        <div class="col-lg-5">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>League Table</h3>
+                    <span class="fm-panel-action">Stages ›</span>
                 </div>
-            </div>
+                <table class="fm-standings">
+                    <thead>
+                        <tr>
+                            <th class="st-pos">#</th>
+                            <th class="st-club">Club</th>
+                            <th>P</th>
+                            <th>W</th>
+                            <th>D</th>
+                            <th>L</th>
+                            <th>GD</th>
+                            <th class="st-pts">Pts</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in table_rows %}
+                        <tr class="{% if loop.index <= 4 %}zone-ucl{% else if loop.index <= 6 %}zone-uel{% else if loop.index > table_rows.len() - 3 %}zone-rel{% endif %}">
+                            <td class="st-pos">{{ loop.index }}</td>
+                            <td class="st-club">
+                                <a href="/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
+                            </td>
+                            <td>{{ row.played }}</td>
+                            <td>{{ row.win }}</td>
+                            <td>{{ row.draft }}</td>
+                            <td>{{ row.lost }}</td>
+                            <td class="st-gd">
+                                {% if row.goal_scored - row.goal_concerned > 0 %}+{% endif %}{{ row.goal_scored - row.goal_concerned }}
+                            </td>
+                            <td class="st-pts">{{ row.points }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <div class="fm-legend">
+                    <span><i class="legend-dot ucl"></i> Champions League</span>
+                    <span><i class="legend-dot uel"></i> Europa League</span>
+                    <span><i class="legend-dot rel"></i> Relegation</span>
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-7">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>Fixtures & Results</h3>
+                </div>
+                <div class="fm-fixtures">
+                    {% for tour_schedule in current_tour_schedule %}
+                    <div class="fm-matchday-hd">{{ tour_schedule.date }}</div>
+                    {% for item in tour_schedule.matches %}
+                    <div class="fm-fixture">
+                        <div class="fx-home">
+                            <a href="/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
+                            {% if let Some(result) = item.result %}
+                            <small class="fx-scorers">
+                                {% for gs in result.home_goalscorers %}
+                                {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}{% if !loop.last %}, {% endif %}
+                                {% endfor %}
+                            </small>
+                            {% endif %}
+                        </div>
+                        <a href="/match/{{ league_slug }}/{{ item.match_id }}" class="fx-score">
+                            {% if let Some(result) = item.result %}
+                            {{ result.home_goals }} – {{ result.away_goals }}
+                            {% else %}
+                            –
+                            {% endif %}
+                        </a>
+                        <div class="fx-away">
+                            <a href="/teams/{{ item.away_team_slug }}">{{ item.away_team_name }}</a>
+                            {% if let Some(result) = item.result %}
+                            <small class="fx-scorers">
+                                {% for gs in result.away_goalscorers %}
+                                {{ gs.name }} {{ gs.time }}{% if gs.auto_goal %} (OG){% endif %}{% if !loop.last %}, {% endif %}
+                                {% endfor %}
+                            </small>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% endfor %}
+                </div>
+            </section>
+            <section class="fm-panel mt-3">
+                <div class="fm-panel-head">
+                    <h3>Competition Reputation</h3>
+                </div>
+                <div class="fm-rep-list">
+                    {% for item in competition_reputation %}
+                    <a href="/leagues/{{ item.league_slug }}" class="fm-rep-row">
+                        <span class="rep-pos">{{ loop.index }}</span>
+                        <span class="rep-flag"><span class="flag flag-{{ item.country_code }}"></span></span>
+                        <span class="rep-detail">
+                            <span class="rep-league-name">{{ item.league_name }}</span>
+                            <span class="rep-ctry">{{ item.country_name }}</span>
+                        </span>
+                    </a>
+                    {% endfor %}
+                </div>
+            </section>
         </div>
     </div>
 </div>

@@ -1,26 +1,22 @@
 {% extends "layout.html" %}
 
 {% block content %}
-<div class="country-list-content">
-    <div>
-        {% for continent in continents %}
-        <div class="country-box">
-            <h2>{{ continent.name }} ({{ continent.countries.len() }})</h2>
-            <hr />
-            <div>
-                <ul class="countries-list">
-                    {% for country in continent.countries %}
-                    <li>
-                        <a href="/countries/{{ country.slug }}">
-                            <div class="flag flag-{{ country.code }}"></div>&nbsp;&nbsp;{{ country.name }}
-                        </a>
-                    </li>
-                    {% endfor %}
-                </ul>
-            </div>
-            <div style="clear:both"></div>
+<div class="fm-page">
+    {% for continent in continents %}
+    <section class="fm-panel {% if !loop.first %}mt-3{% endif %}">
+        <div class="fm-panel-head">
+            <h3>{{ continent.name }}</h3>
+            <span class="fm-panel-count">{{ continent.countries.len() }}</span>
         </div>
-        {% endfor %}
-    </div>
+        <div class="fm-country-grid">
+            {% for country in continent.countries %}
+            <a href="/countries/{{ country.slug }}" class="fm-country-item">
+                <span class="flag flag-{{ country.code }}"></span>
+                <span>{{ country.name }}</span>
+            </a>
+            {% endfor %}
+        </div>
+    </section>
+    {% endfor %}
 </div>
 {% endblock %}
