@@ -147,12 +147,15 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 /* Spinner */
 
 .spinner-wrapper {
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   width: 100%;
   height: 100%;
 }
+
+.htmx-request .fm-process-label { display: none; }
+.htmx-request .spinner-wrapper { display: flex; }
 
 .spinner {
   width: 22px;

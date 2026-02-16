@@ -8,6 +8,7 @@
     <link href="/css/flags.css" rel="stylesheet">
     <link href="/css/font.min.css" rel="stylesheet">
     <link href="/css/styles.min.css" rel="stylesheet">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
 </head>
 <body>
     <div class="container-fluid">
@@ -44,9 +45,11 @@
                                         <div class="fm-date-main" id="date-up"></div>
                                         <div class="fm-date-sub" id="date-down"></div>
                                     </div>
-                                    <div class="fm-process-btn" id="process-btn">
-                                        <span id="process-game-btn">Process</span>
-                                        <div class="spinner-wrapper" id="process-spinner" style="display:none">
+                                    <div class="fm-process-btn"
+                                         hx-post="/api/game/process"
+                                         hx-disabled-elt="this">
+                                        <span class="fm-process-label">Process</span>
+                                        <div class="spinner-wrapper" id="process-spinner">
                                             <div class="spinner"></div>
                                         </div>
                                     </div>
@@ -62,17 +65,6 @@
     </div>
     <script src="/js/bootstrap.bundle.min.js"></script>
     <script>
-        document.getElementById('process-btn').addEventListener('click', async () => {
-            document.getElementById('process-game-btn').style.display = 'none';
-            document.getElementById('process-spinner').style.display = 'flex';
-            try {
-                await fetch('/api/game/process', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: '{}' });
-                window.location.reload();
-            } catch(e) {
-                document.getElementById('process-game-btn').style.display = 'block';
-                document.getElementById('process-spinner').style.display = 'none';
-            }
-        });
         async function updateDate() {
             try {
                 const res = await fetch('/api/date');

@@ -1,12 +1,11 @@
 ﻿use crate::r#match::stores::MatchStore;
 use crate::GameAppData;
 use axum::extract::State;
-use axum::http::{StatusCode};
+use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
-use axum::Json;
 use core::FootballSimulator;
 use core::SimulationResult;
-use log::{debug};
+use log::debug;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
@@ -25,7 +24,7 @@ pub async fn game_process_action(State(state): State<GameAppData>) -> impl IntoR
 
         let result = FootballSimulator::simulate(simulator_data);
         if result.has_match_results() {
-            tokio::task::spawn(async  {
+            tokio::task::spawn(async {
                 write_match_results(result).await
             });
 
@@ -34,10 +33,13 @@ pub async fn game_process_action(State(state): State<GameAppData>) -> impl IntoR
     })
     .await;
 
-    if let Ok(_res) = result {
-        (StatusCode::OK, Json(()))
+    let mut headers = HeaderMap::new();
+    headers.insert("HX-Refresh", HeaderValue::from_static("true"));
+
+    if result.is_ok() {
+        (StatusCode::OK, headers, "")
     } else {
-        (StatusCode::BAD_REQUEST, Json(()))
+        (StatusCode::BAD_REQUEST, headers, "")
     }
 }
 
