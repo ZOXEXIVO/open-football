@@ -2,11 +2,11 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab active">Players</a>
-    <a class="fm-tab">International</a>
-    <a class="fm-tab">Players on Loan</a>
-    <a class="fm-tab">Extended Leave</a>
-    <a class="fm-tab">Team Meeting</a>
+    <a class="fm-tab active" href="/teams/{{ team_slug }}">Squad</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
+    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
 </div>
 {% endblock %}
 

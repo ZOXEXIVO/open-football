@@ -24,14 +24,17 @@ impl MatchHistory {
     pub fn add(&mut self, item: MatchHistoryItem) {
         self.items.push(item);
     }
+
+    pub fn items(&self) -> &[MatchHistoryItem] {
+        &self.items
+    }
 }
 
 #[derive(Debug)]
-#[allow(dead_code)]
 pub struct MatchHistoryItem {
-    date: NaiveDateTime,
-    rival_team_id: u32,
-    score: (TeamScore, TeamScore),
+    pub date: NaiveDateTime,
+    pub rival_team_id: u32,
+    pub score: (TeamScore, TeamScore),
 }
 
 impl MatchHistoryItem {

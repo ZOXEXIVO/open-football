@@ -63,13 +63,6 @@ pub fn team_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<MenuSe
                 icon: "fa-home".to_string(),
             }],
         },
-        MenuSection {
-            items: vec![MenuItem {
-                title: "Inbox".to_string(),
-                url: "/inbox".to_string(),
-                icon: "fa-inbox".to_string(),
-            }],
-        },
     ];
 
     if !neighbor_teams.is_empty() {
@@ -89,7 +82,7 @@ pub fn team_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<MenuSe
         items: vec![MenuItem {
             title: "Schedule".to_string(),
             url: format!("/teams/{}/schedule", team_slug),
-            icon: "fa-inbox".to_string(),
+            icon: "fa-calendar".to_string(),
         }],
     });
 

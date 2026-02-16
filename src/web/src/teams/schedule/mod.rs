@@ -20,6 +20,7 @@ pub struct TeamScheduleTemplate {
     pub sub_title: String,
     pub sub_title_link: String,
     pub menu_sections: Vec<MenuSection>,
+    pub team_slug: String,
     pub league_slug: String,
     pub items: Vec<TeamScheduleItem>,
 }
@@ -109,6 +110,7 @@ pub async fn team_schedule_get_action(
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),
         menu_sections: views::team_menu(&neighbor_teams, &team.slug),
+        team_slug: team.slug.clone(),
         league_slug: league.slug.clone(),
         items,
     })

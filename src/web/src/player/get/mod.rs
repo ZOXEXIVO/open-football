@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::Person;
 use core::Player;
+use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
@@ -51,6 +52,33 @@ pub struct PlayerViewModel {
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
     pub status: PlayerStatusDto,
+    pub position_map: PositionMapDto,
+}
+
+pub struct PositionMapDto {
+    pub gk: bool,
+    pub sw: bool,
+    pub dl: bool,
+    pub dcl: bool,
+    pub dc: bool,
+    pub dcr: bool,
+    pub dr: bool,
+    pub dm: bool,
+    pub wl: bool,
+    pub wr: bool,
+    pub ml: bool,
+    pub mcl: bool,
+    pub mc: bool,
+    pub mcr: bool,
+    pub mr: bool,
+    pub aml: bool,
+    pub amc: bool,
+    pub amr: bool,
+    pub fl: bool,
+    pub fc: bool,
+    pub fr: bool,
+    pub st: bool,
+    pub primary: String,
 }
 
 pub struct PlayerStatistics {
@@ -221,6 +249,7 @@ pub async fn player_get_action(
         player_attributes: get_attributes(player),
         statistics: get_statistics(player),
         status: PlayerStatusDto::new(player.statuses.get()),
+        position_map: get_position_map(player),
     };
 
     Ok(PlayerGetTemplate {
@@ -341,4 +370,35 @@ pub fn get_current_ability_stars(player: &Player) -> u8 {
 
 pub fn get_potential_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)) as u8
+}
+
+fn get_position_map(player: &Player) -> PositionMapDto {
+    let active = player.positions();
+    let primary = player.position().get_short_name().to_string();
+
+    PositionMapDto {
+        gk: active.contains(&PlayerPositionType::Goalkeeper),
+        sw: active.contains(&PlayerPositionType::Sweeper),
+        dl: active.contains(&PlayerPositionType::DefenderLeft),
+        dcl: active.contains(&PlayerPositionType::DefenderCenterLeft),
+        dc: active.contains(&PlayerPositionType::DefenderCenter),
+        dcr: active.contains(&PlayerPositionType::DefenderCenterRight),
+        dr: active.contains(&PlayerPositionType::DefenderRight),
+        dm: active.contains(&PlayerPositionType::DefensiveMidfielder),
+        wl: active.contains(&PlayerPositionType::WingbackLeft),
+        wr: active.contains(&PlayerPositionType::WingbackRight),
+        ml: active.contains(&PlayerPositionType::MidfielderLeft),
+        mcl: active.contains(&PlayerPositionType::MidfielderCenterLeft),
+        mc: active.contains(&PlayerPositionType::MidfielderCenter),
+        mcr: active.contains(&PlayerPositionType::MidfielderCenterRight),
+        mr: active.contains(&PlayerPositionType::MidfielderRight),
+        aml: active.contains(&PlayerPositionType::AttackingMidfielderLeft),
+        amc: active.contains(&PlayerPositionType::AttackingMidfielderCenter),
+        amr: active.contains(&PlayerPositionType::AttackingMidfielderRight),
+        fl: active.contains(&PlayerPositionType::ForwardLeft),
+        fc: active.contains(&PlayerPositionType::ForwardCenter),
+        fr: active.contains(&PlayerPositionType::ForwardRight),
+        st: active.contains(&PlayerPositionType::Striker),
+        primary,
+    }
 }

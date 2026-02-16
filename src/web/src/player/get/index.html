@@ -2,100 +2,150 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab active">Overview</a>
-    <a class="fm-tab">Matches</a>
-    <a class="fm-tab">History</a>
+    <a class="fm-tab active" href="/teams/{{ player.team_slug }}/players/{{ player.id }}">Overview</a>
+    <a class="fm-tab" href="/teams/{{ player.team_slug }}/players/{{ player.id }}/matches">Matches</a>
+    <a class="fm-tab" href="/teams/{{ player.team_slug }}/players/{{ player.id }}/history">History</a>
 </div>
 {% endblock %}
 
 {% block content %}
 <div class="fm-page">
     <section class="fm-panel fm-player-header">
-        <div class="fm-player-top">
+        <div class="fm-player-banner">
             <div class="fm-player-identity">
                 <div class="fm-player-photo player-default-photo"></div>
-                <a href="/countries/{{ player.country_slug }}">
-                    <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
-                </a>
+                <div class="fm-player-name-block">
+                    <span class="fm-player-pos-badge">{{ player.position }}</span>
+                    <a href="/countries/{{ player.country_slug }}" class="fm-player-flag-link">
+                        <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
+                    </a>
+                </div>
             </div>
-            <div class="fm-player-info">
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Age</span>
-                    <span class="fm-info-value">{{ player.age }} years old</span>
-                    <span class="fm-info-sub">({{ player.birth_date }})</span>
-                </div>
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Nationality</span>
-                    <span class="fm-info-value">{{ player.country_name }}</span>
-                </div>
-                <div class="fm-info-group">
-                    <span class="fm-info-label">International</span>
-                    <span class="fm-info-value">{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</span>
-                </div>
-                {% if player.player_attributes.under_21_international_apps > 0 %}
-                <div class="fm-info-group">
-                    <span class="fm-info-label">U21</span>
-                    <span class="fm-info-value">{{ player.player_attributes.under_21_international_apps }} caps / {{ player.player_attributes.under_21_international_goals }} goals</span>
-                </div>
-                {% endif %}
-            </div>
-            <div class="fm-player-contract">
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Club</span>
-                    <span class="fm-info-value"><a href="/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
-                </div>
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Value</span>
-                    <span class="fm-info-value">${{ player.value }}</span>
-                </div>
-                {% if let Some(contract) = player.contract %}
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Wage</span>
-                    <span class="fm-info-value">${{ contract.salary }}K p/w</span>
-                </div>
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Contract</span>
-                    <span class="fm-info-value">until {{ contract.expiration }}</span>
-                </div>
-                <div class="fm-info-group">
-                    <span class="fm-info-label">Status</span>
-                    <span class="fm-info-value">{{ contract.squad_status }}</span>
-                </div>
-                {% endif %}
-            </div>
-            <div class="fm-player-abilities">
-                <div class="fm-ability-block">
-                    <span class="fm-ability-label">Current Ability</span>
-                    <div class="fm-stars fm-stars-lg">
-                        {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
+            <div class="fm-player-details">
+                <div class="fm-player-detail-col">
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Age</span>
+                        <span class="fm-detail-value">{{ player.age }} <span class="fm-detail-hint">({{ player.birth_date }})</span></span>
+                    </div>
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Nationality</span>
+                        <span class="fm-detail-value">{{ player.country_name }}</span>
+                    </div>
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Preferred Foot</span>
+                        <span class="fm-detail-value">{{ player.preferred_foot }}</span>
                     </div>
                 </div>
-                <div class="fm-ability-block">
-                    <span class="fm-ability-label">Potential Ability</span>
-                    <div class="fm-stars fm-stars-lg">
-                        {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
+                <div class="fm-player-detail-col">
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Club</span>
+                        <span class="fm-detail-value"><a href="/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
+                    </div>
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Value</span>
+                        <span class="fm-detail-value">${{ player.value }}</span>
+                    </div>
+                    {% if let Some(contract) = player.contract %}
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Wage</span>
+                        <span class="fm-detail-value">${{ contract.salary }}K p/w</span>
+                    </div>
+                    {% endif %}
+                </div>
+                <div class="fm-player-detail-col">
+                    {% if let Some(contract) = player.contract %}
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Contract</span>
+                        <span class="fm-detail-value">until {{ contract.expiration }}</span>
+                    </div>
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Status</span>
+                        <span class="fm-detail-value">{{ contract.squad_status }}</span>
+                    </div>
+                    {% endif %}
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Condition</span>
+                        <span class="fm-detail-value">
+                            <span class="fm-cond">
+                                <span class="fm-cond-bar"><span class="fm-cond-fill" style="width:{{ player.conditions }}%"></span></span>
+                                <span class="fm-cond-val">{{ player.conditions }}%</span>
+                            </span>
+                        </span>
+                    </div>
+                </div>
+                <div class="fm-player-detail-col fm-player-detail-col-abilities">
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">International</span>
+                        <span class="fm-detail-value">{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</span>
+                    </div>
+                    {% if player.player_attributes.under_21_international_apps > 0 %}
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">U21</span>
+                        <span class="fm-detail-value">{{ player.player_attributes.under_21_international_apps }} caps / {{ player.player_attributes.under_21_international_goals }} goals</span>
+                    </div>
+                    {% endif %}
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Current Ability</span>
+                        <span class="fm-detail-value">
+                            <span class="fm-stars">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
+                        </span>
+                    </div>
+                    <div class="fm-detail-row">
+                        <span class="fm-detail-label">Potential Ability</span>
+                        <span class="fm-detail-value">
+                            <span class="fm-stars">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
+                        </span>
                     </div>
                 </div>
             </div>
         </div>
     </section>
 
-    <div class="row g-3 mt-1">
-        <div class="col-lg-3">
+    <div class="fm-player-grid">
+        <div class="fm-player-grid-left">
             <section class="fm-panel">
                 <div class="fm-panel-head">
                     <h3>Positions</h3>
                 </div>
-                <div class="fm-positions-img">
-                    <img alt="position" src="/images/player/pole.png" class="img-fluid"/>
+                <div class="fp-pitch">
+                    <div class="fp-field">
+                        <div class="fp-half-line"></div>
+                        <div class="fp-center-circle"></div>
+                        <div class="fp-penalty-area fp-pa-top"></div>
+                        <div class="fp-goal-area fp-ga-top"></div>
+                        <div class="fp-penalty-area fp-pa-bot"></div>
+                        <div class="fp-goal-area fp-ga-bot"></div>
+                        <span class="fp-dot fp-gk{% if player.position_map.gk %} fp-on{% endif %}{% if player.position_map.primary == "GK" %} fp-primary{% endif %}">GK</span>
+                        <span class="fp-dot fp-sw{% if player.position_map.sw %} fp-on{% endif %}{% if player.position_map.primary == "SW" %} fp-primary{% endif %}">SW</span>
+                        <span class="fp-dot fp-dl{% if player.position_map.dl %} fp-on{% endif %}{% if player.position_map.primary == "DL" %} fp-primary{% endif %}">DL</span>
+                        <span class="fp-dot fp-dcl{% if player.position_map.dcl %} fp-on{% endif %}{% if player.position_map.primary == "DCL" %} fp-primary{% endif %}">DCL</span>
+                        <span class="fp-dot fp-dc{% if player.position_map.dc %} fp-on{% endif %}{% if player.position_map.primary == "DC" %} fp-primary{% endif %}">DC</span>
+                        <span class="fp-dot fp-dcr{% if player.position_map.dcr %} fp-on{% endif %}{% if player.position_map.primary == "DCR" %} fp-primary{% endif %}">DCR</span>
+                        <span class="fp-dot fp-dr{% if player.position_map.dr %} fp-on{% endif %}{% if player.position_map.primary == "DR" %} fp-primary{% endif %}">DR</span>
+                        <span class="fp-dot fp-wl{% if player.position_map.wl %} fp-on{% endif %}{% if player.position_map.primary == "WL" %} fp-primary{% endif %}">WL</span>
+                        <span class="fp-dot fp-dm{% if player.position_map.dm %} fp-on{% endif %}{% if player.position_map.primary == "DM" %} fp-primary{% endif %}">DM</span>
+                        <span class="fp-dot fp-wr{% if player.position_map.wr %} fp-on{% endif %}{% if player.position_map.primary == "WR" %} fp-primary{% endif %}">WR</span>
+                        <span class="fp-dot fp-ml{% if player.position_map.ml %} fp-on{% endif %}{% if player.position_map.primary == "ML" %} fp-primary{% endif %}">ML</span>
+                        <span class="fp-dot fp-mcl{% if player.position_map.mcl %} fp-on{% endif %}{% if player.position_map.primary == "MCL" %} fp-primary{% endif %}">MCL</span>
+                        <span class="fp-dot fp-mc{% if player.position_map.mc %} fp-on{% endif %}{% if player.position_map.primary == "MC" %} fp-primary{% endif %}">MC</span>
+                        <span class="fp-dot fp-mcr{% if player.position_map.mcr %} fp-on{% endif %}{% if player.position_map.primary == "MCR" %} fp-primary{% endif %}">MCR</span>
+                        <span class="fp-dot fp-mr{% if player.position_map.mr %} fp-on{% endif %}{% if player.position_map.primary == "MR" %} fp-primary{% endif %}">MR</span>
+                        <span class="fp-dot fp-aml{% if player.position_map.aml %} fp-on{% endif %}{% if player.position_map.primary == "AML" %} fp-primary{% endif %}">AML</span>
+                        <span class="fp-dot fp-amc{% if player.position_map.amc %} fp-on{% endif %}{% if player.position_map.primary == "AMC" %} fp-primary{% endif %}">AMC</span>
+                        <span class="fp-dot fp-amr{% if player.position_map.amr %} fp-on{% endif %}{% if player.position_map.primary == "AMR" %} fp-primary{% endif %}">AMR</span>
+                        <span class="fp-dot fp-fl{% if player.position_map.fl %} fp-on{% endif %}{% if player.position_map.primary == "FL" %} fp-primary{% endif %}">FL</span>
+                        <span class="fp-dot fp-fc{% if player.position_map.fc %} fp-on{% endif %}{% if player.position_map.primary == "FC" %} fp-primary{% endif %}">FC</span>
+                        <span class="fp-dot fp-fr{% if player.position_map.fr %} fp-on{% endif %}{% if player.position_map.primary == "FR" %} fp-primary{% endif %}">FR</span>
+                        <span class="fp-dot fp-st{% if player.position_map.st %} fp-on{% endif %}{% if player.position_map.primary == "ST" %} fp-primary{% endif %}">ST</span>
+                    </div>
                 </div>
                 <div class="fm-pref-foot">
-                    <span class="fm-info-label">Preferred foot</span>
-                    <span class="fm-info-value">{{ player.preferred_foot }}</span>
+                    <span class="fm-detail-label">Preferred foot</span>
+                    <span class="fm-detail-value">{{ player.preferred_foot }}</span>
                 </div>
             </section>
         </div>
-        <div class="col-lg-9">
+        <div class="fm-player-grid-right">
             <section class="fm-panel">
                 <div class="fm-panel-head">
                     <h3>Attributes</h3>

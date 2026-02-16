@@ -17,6 +17,10 @@ impl Transfers {
     pub fn add(&mut self, item: TransferItem) {
         self.items.push(item);
     }
+
+    pub fn items(&self) -> &[TransferItem] {
+        &self.items
+    }
 }
 
 #[derive(Debug)]
