@@ -453,31 +453,45 @@ impl PlayerEventDispatcher {
                     TrajectoryType::LowDriven   // 25% driven
                 }
             } else if is_long {
-                // Long passes - prefer driven for speed
+                // Long passes need arc to cover distance even in clear lanes
                 if skills.technique > 0.7 {
-                    // Good technique - mostly driven
-                    if skill_influenced_random < 0.85 {
-                        TrajectoryType::LowDriven  // 85% driven
+                    // Good technique - can pick trajectory precisely
+                    if skill_influenced_random < 0.20 {
+                        TrajectoryType::LowDriven  // 20% driven (skillful option)
+                    } else if skill_influenced_random < 0.70 {
+                        TrajectoryType::MediumArc  // 50% medium arc
                     } else {
-                        TrajectoryType::Ground     // 15% ground (safe option)
+                        TrajectoryType::HighArc    // 30% high arc
                     }
                 } else {
-                    // Average technique - mix of ground and driven
-                    if skill_influenced_random < 0.55 {
-                        TrajectoryType::LowDriven  // 55% driven
+                    // Average technique - default to higher arcs for safety
+                    if skill_influenced_random < 0.10 {
+                        TrajectoryType::LowDriven  // 10% driven
+                    } else if skill_influenced_random < 0.55 {
+                        TrajectoryType::MediumArc  // 45% medium arc
                     } else {
-                        TrajectoryType::Ground     // 45% ground
+                        TrajectoryType::HighArc    // 45% high arc
                     }
                 }
             } else {
-                // Very long passes - mostly driven
+                // Very long passes - almost always lofted
                 let long_pass_ability = skills.long_shots * skills.vision * skills.crossing;
                 if long_pass_ability > 0.7 {
-                    TrajectoryType::LowDriven   // Elite long passer - driven
-                } else if skill_influenced_random < 0.6 {
-                    TrajectoryType::LowDriven   // 60% driven
+                    // Elite long passer - precise lofted balls
+                    if skill_influenced_random < 0.15 {
+                        TrajectoryType::LowDriven  // 15% driven (exceptional skill)
+                    } else if skill_influenced_random < 0.50 {
+                        TrajectoryType::MediumArc  // 35% medium arc
+                    } else {
+                        TrajectoryType::HighArc    // 50% high arc
+                    }
                 } else {
-                    TrajectoryType::MediumArc   // 40% medium arc for safety
+                    // Average passer - high arcs to cover distance
+                    if skill_influenced_random < 0.30 {
+                        TrajectoryType::MediumArc  // 30% medium arc
+                    } else {
+                        TrajectoryType::HighArc    // 70% high arc
+                    }
                 }
             }
         } else {
