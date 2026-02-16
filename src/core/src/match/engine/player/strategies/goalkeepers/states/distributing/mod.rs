@@ -85,16 +85,9 @@ impl GoalkeeperDistributingState {
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        // Get the previous ball owner to avoid immediate pass-backs
-        let previous_owner = ctx.tick_context.ball.last_owner;
-
         for teammate in ctx.players().teammates().nearby(max_distance) {
-            // PREVENT PASS-BACK: Don't pass to the player who just passed to us
-            if let Some(prev_owner_id) = previous_owner {
-                if teammate.id == prev_owner_id {
-                    continue; // Skip this player
-                }
-            }
+            // GRADUATED RECENCY PENALTY: Penalize recent passers instead of hard-skipping
+            let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
 
             let distance = (teammate.position - ctx.player.position).norm();
 
@@ -350,8 +343,8 @@ impl GoalkeeperDistributingState {
                 (pass_skill * 0.4) + (vision_skill * 0.4) + (kicking_skill * 0.2)
             };
 
-            // Calculate final score with skill-based weighting
-            let score = distance_bonus * position_bonus * space_bonus * forward_bonus * skill_factor;
+            // Calculate final score with skill-based weighting and recency penalty
+            let score = distance_bonus * position_bonus * space_bonus * forward_bonus * skill_factor * recency_penalty;
 
             if score > best_score {
                 best_score = score;

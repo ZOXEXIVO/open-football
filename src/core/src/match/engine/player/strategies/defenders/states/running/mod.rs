@@ -75,6 +75,14 @@ impl StateProcessingHandler for DefenderRunningState {
             }
         }
 
+        // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
+        if ctx.player.has_ball(ctx) && ctx.in_state_time > 80 {
+            // Defenders should clear or pass — never hold ball endlessly
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Clearing,
+            ));
+        }
+
         None
     }
 

@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::collections::VecDeque;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
@@ -25,6 +26,7 @@ pub struct Ball {
     pub ownership_duration: u32,  // How many ticks current owner has had the ball
     pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
     pub pass_target_player_id: Option<u32>,  // Intended receiver of a pass
+    pub recent_passers: VecDeque<u32>,  // Ring buffer of recent passers (up to 5)
 }
 
 #[derive(Default)]
@@ -63,6 +65,7 @@ impl Ball {
             ownership_duration: 0,
             claim_cooldown: 0,
             pass_target_player_id: None,
+            recent_passers: VecDeque::with_capacity(5),
         }
     }
 
@@ -147,27 +150,31 @@ impl Ball {
         }
 
         // Also allow previous owner (passer) to reclaim if ball bounced back
-        if let Some(prev_id) = self.previous_owner {
-            if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
-                let dx = prev_player.position.x - self.position.x;
-                let dy = prev_player.position.y - self.position.y;
-                let dist = (dx * dx + dy * dy).sqrt();
-                if dist < 2.0 && self.position.z <= 2.8 {
-                    // Check ball is moving toward passer (bounced back)
-                    let ball_speed = self.velocity.norm();
-                    if ball_speed > 0.1 {
-                        let to_passer_x = dx / dist;
-                        let to_passer_y = dy / dist;
-                        let dot = (self.velocity.x / ball_speed) * to_passer_x
-                            + (self.velocity.y / ball_speed) * to_passer_y;
-                        if dot > 0.3 {
-                            // Ball moving toward passer
-                            self.current_owner = Some(prev_id);
-                            self.pass_target_player_id = None;
-                            self.ownership_duration = 0;
-                            self.flags.in_flight_state = 0;
-                            self.claim_cooldown = 15;
-                            events.add_ball_event(BallEvent::Claimed(prev_id));
+        // BUT only after the ball has had time to travel away (in_flight_state < 10)
+        // This prevents the passer from immediately reclaiming on low-force passes
+        if self.flags.in_flight_state < 10 {
+            if let Some(prev_id) = self.previous_owner {
+                if let Some(prev_player) = players.iter().find(|p| p.id == prev_id) {
+                    let dx = prev_player.position.x - self.position.x;
+                    let dy = prev_player.position.y - self.position.y;
+                    let dist = (dx * dx + dy * dy).sqrt();
+                    if dist < 2.0 && self.position.z <= 2.8 {
+                        // Check ball is moving toward passer (bounced back)
+                        let ball_speed = self.velocity.norm();
+                        if ball_speed > 0.1 {
+                            let to_passer_x = dx / dist;
+                            let to_passer_y = dy / dist;
+                            let dot = (self.velocity.x / ball_speed) * to_passer_x
+                                + (self.velocity.y / ball_speed) * to_passer_y;
+                            if dot > 0.3 {
+                                // Ball moving toward passer
+                                self.current_owner = Some(prev_id);
+                                self.pass_target_player_id = None;
+                                self.ownership_duration = 0;
+                                self.flags.in_flight_state = 0;
+                                self.claim_cooldown = 15;
+                                events.add_ball_event(BallEvent::Claimed(prev_id));
+                            }
                         }
                     }
                 }
@@ -180,6 +187,13 @@ impl Ball {
         players: &[MatchPlayer],
         events: &mut EventCollection,
     ) {
+        // Don't treat ball as "standing" during in-flight (just passed)
+        // Short passes have low velocity that triggers is_ball_stopped_on_field(),
+        // but the ball is still in transit to the intended receiver
+        if self.flags.in_flight_state > 0 {
+            return;
+        }
+
         // Decrement cooldown timer
         if self.notification_cooldown > 0 {
             self.notification_cooldown -= 1;
@@ -228,7 +242,7 @@ impl Ball {
                 return; // Will re-notify on next tick
             }
             // Check if any notified player reached the ball
-            const CLAIM_DISTANCE: f32 = 2.5; // Claim distance for notified players
+            const CLAIM_DISTANCE: f32 = 5.0; // Claim distance for notified players (generous to avoid corner deadlocks)
             const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow enough to claim
 
             let target_position = if self.is_aerial() {
@@ -350,17 +364,17 @@ impl Ball {
         const DEADLOCK_VELOCITY_EXIT: f32 = 4.0;
         const DEADLOCK_HEIGHT_THRESHOLD: f32 = 1.5;
 
-        // Progressive timing thresholds
-        const TICK_PHASE_1: u32 = 30;   // ~0.5s - try close range first
-        const TICK_PHASE_2: u32 = 60;   // ~1.0s - expand range
-        const TICK_PHASE_3: u32 = 100;  // ~1.6s - further expand
-        const TICK_PHASE_4: u32 = 150;  // ~2.5s - last resort
+        // Progressive timing thresholds — faster initial response prevents corner deadlocks
+        const TICK_PHASE_1: u32 = 15;   // ~0.25s - try close range quickly
+        const TICK_PHASE_2: u32 = 35;   // ~0.6s - expand range
+        const TICK_PHASE_3: u32 = 60;   // ~1.0s - further expand
+        const TICK_PHASE_4: u32 = 100;  // ~1.6s - last resort
 
-        // Progressive claim distances - balance realism vs avoiding deadlock
-        const CLAIM_DISTANCE_PHASE_1: f32 = 3.0;   // Close range - looks natural
-        const CLAIM_DISTANCE_PHASE_2: f32 = 5.0;   // Medium range - acceptable
-        const CLAIM_DISTANCE_PHASE_3: f32 = 8.0;   // Extended range - noticeable but not terrible
-        const CLAIM_DISTANCE_PHASE_4: f32 = 12.0;  // Last resort - better than stuck forever
+        // Progressive claim distances — generous to handle boundary/corner situations
+        const CLAIM_DISTANCE_PHASE_1: f32 = 5.0;   // Close range - matches notification claim distance
+        const CLAIM_DISTANCE_PHASE_2: f32 = 8.0;   // Medium range - acceptable
+        const CLAIM_DISTANCE_PHASE_3: f32 = 12.0;  // Extended range - noticeable but not terrible
+        const CLAIM_DISTANCE_PHASE_4: f32 = 15.0;  // Last resort - better than stuck forever
 
         let is_unowned = self.current_owner.is_none();
 
@@ -492,8 +506,10 @@ impl Ball {
         let field_width = context.field_size.width as f32;
         let field_height = context.field_size.height as f32;
 
-        // Nudge ball slightly infield when it hits a boundary so players can reach it
-        const BOUNDARY_INSET: f32 = 3.0;
+        // Push ball well infield when it hits a boundary so players can reliably reach it.
+        // 10m is generous enough that the Arrive steering and claim logic work smoothly,
+        // while still keeping the ball in the corner/touchline area of the pitch.
+        const BOUNDARY_INSET: f32 = 10.0;
 
         if self.position.x <= 0.0 {
             self.position.x = BOUNDARY_INSET;
@@ -547,7 +563,7 @@ impl Ball {
         }
 
         // Distance threshold for claiming ball
-        const BALL_DISTANCE_THRESHOLD: f32 = 2.0; // Players can claim within 2m
+        const BALL_DISTANCE_THRESHOLD: f32 = 3.5; // Players can claim within 3.5m (generous for corners/boundaries)
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
@@ -721,9 +737,9 @@ impl Ball {
             }
         }
 
-        // Ownership stability constants
-        const MIN_OWNERSHIP_DURATION: u32 = 8; // Minimum ticks before ownership can change (reduced from 15 to prevent stuck duels)
-        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.08; // Challenger must be 8% better (reduced from 1.15 to resolve duels faster)
+        // Ownership stability constants — give the ball holder time to act
+        const MIN_OWNERSHIP_DURATION: u32 = 25; // ~0.4s minimum before ownership can change
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25; // Challenger must be 25% better to steal
 
         // Determine the best tackler from nearby players
         let best_tackler = if nearby_players.len() == 1 {
@@ -998,5 +1014,24 @@ impl Ball {
 
         self.flags.reset();
         self.pass_target_player_id = None;
+        self.clear_pass_history();
+    }
+
+    /// Record a passer in the recent passers ring buffer.
+    /// Skips consecutive duplicates and caps at 5 entries.
+    pub fn record_passer(&mut self, passer_id: u32) {
+        // Skip consecutive duplicates
+        if self.recent_passers.back() == Some(&passer_id) {
+            return;
+        }
+        if self.recent_passers.len() >= 5 {
+            self.recent_passers.pop_front();
+        }
+        self.recent_passers.push_back(passer_id);
+    }
+
+    /// Clear the recent passers history (e.g. on tackles, interceptions, clearances).
+    pub fn clear_pass_history(&mut self) {
+        self.recent_passers.clear();
     }
 }

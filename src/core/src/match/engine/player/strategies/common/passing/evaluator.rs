@@ -601,16 +601,9 @@ impl PassEvaluator {
             0.0
         };
 
-        // Get previous ball owner to prevent ping-pong passes
-        let previous_owner_id = ctx.ball().previous_owner_id();
-
         for teammate in ctx.players().teammates().nearby(max_distance) {
-            // PING-PONG PREVENTION: Don't pass back to the player who just passed to you
-            if let Some(prev_owner) = previous_owner_id {
-                if teammate.id == prev_owner {
-                    continue; // Skip this teammate
-                }
-            }
+            // GRADUATED RECENCY PENALTY: Penalize recent passers instead of hard-skipping
+            let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
 
             let pass_distance = (teammate.position - ctx.player.position).norm();
 
@@ -618,6 +611,26 @@ impl PassEvaluator {
             if pass_distance < min_pass_distance {
                 continue;
             }
+
+            // CONGESTION PENALTY: Heavily penalize passing into crowded areas.
+            // Count ALL players (teammates + opponents) near the receiver.
+            // This forces the ball OUT of huddles toward players in open space.
+            let nearby_teammates_count = ctx.tick_context.distances
+                .teammates(teammate.id, 0.0, 20.0)
+                .count();
+            let nearby_opponents_count = ctx.tick_context.distances
+                .opponents(teammate.id, 20.0)
+                .count();
+            let total_nearby = nearby_teammates_count + nearby_opponents_count;
+
+            let congestion_penalty = match total_nearby {
+                0 => 1.5,   // Completely isolated — excellent target
+                1 => 1.2,   // One nearby player — good
+                2 => 1.0,   // Normal
+                3 => 0.6,   // Getting crowded
+                4 => 0.35,  // Congested — strongly discouraged
+                _ => 0.15,  // Huddle — almost never pass here
+            };
 
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
             let interception_risk = Self::calculate_interception_risk(ctx, ctx.player, &teammate);
@@ -694,8 +707,8 @@ impl PassEvaluator {
                 // Short passes - acceptable
                 1.1 // New tier
             } else if pass_distance < 15.0 {
-                // Very short - discouraged unless necessary
-                0.7
+                // Very short - strongly discouraged (keeps ball in huddle)
+                0.4
             } else if pass_distance <= 100.0 {
                 // Long passes (70-100m) - still valuable
                 1.2 // New tier - was implicitly 1.0
@@ -861,6 +874,10 @@ impl PassEvaluator {
                 // Standard - slightly more aggressive
                 evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.6 && evaluation.success_probability > 0.48)
             };
+
+            // Apply graduated recency penalty to discourage ping-pong passing
+            // Apply congestion penalty to force ball out of huddles
+            let score = score * recency_penalty * congestion_penalty;
 
             if score > best_score && is_acceptable {
                 best_score = score;

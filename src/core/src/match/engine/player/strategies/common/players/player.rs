@@ -264,7 +264,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let distance_factor = 1.0 + distance_ratio * 0.6;
 
         // Calculate the shooting power - moderate increase from original
-        let base_power = 3.5; // Moderate increase from 2.4
+        let base_power = 3.5;
         let skill_multiplier = (technique_factor * 0.3)
             + (power_factor * 0.35)
             + (finishing_factor * 0.2)

@@ -237,6 +237,7 @@ impl PlayerEventDispatcher {
     fn handle_tackling_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        field.ball.clear_pass_history();
     }
 
     fn handle_ball_owner_change_event(player_id: u32, field: &mut MatchField) {
@@ -359,6 +360,9 @@ impl PlayerEventDispatcher {
 
         // Apply ball physics
         field.ball.velocity = final_velocity;
+
+        // Record the passer in recent passers history before clearing ownership
+        field.ball.record_passer(event_model.from_player_id);
 
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
@@ -706,6 +710,20 @@ impl PlayerEventDispatcher {
         // If the ball was just claimed by someone else, reject this claim
         const CLAIM_COOLDOWN_TICKS: u32 = 15; // ~250ms at 60fps - time before ball can change hands
 
+        // IN-FLIGHT CHECK: If ball was just passed, only allow the intended receiver to claim
+        // This prevents the passer from reclaiming via a stale ClaimBall event that was
+        // generated before the PassTo event cleared ownership in the same tick
+        if field.ball.flags.in_flight_state > 0 {
+            if let Some(target_id) = field.ball.pass_target_player_id {
+                if player_id != target_id {
+                    return; // Reject claim from non-target during in-flight
+                }
+            } else {
+                // Ball is in flight with no target (e.g., shot) - reject all claims
+                return;
+            }
+        }
+
         // If there's a cooldown active and this player doesn't already own the ball
         if field.ball.claim_cooldown > 0 {
             if let Some(current_owner) = field.ball.current_owner {
@@ -756,6 +774,7 @@ impl PlayerEventDispatcher {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;
+        field.ball.clear_pass_history();
 
         field.ball.flags.in_flight_state = 100;
     }
@@ -763,7 +782,7 @@ impl PlayerEventDispatcher {
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
         const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 12.0; // Maximum realistic shot velocity per tick (~40 m/s at 60fps)
+        const MAX_SHOT_VELOCITY: f32 = 6.0; // Maximum realistic shot velocity per tick
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -987,13 +1006,23 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
+        // Cap clearance velocity to prevent unrealistic ball speed
+        const MAX_CLEAR_VELOCITY: f32 = 10.0;
+        let speed = velocity.norm();
+        let capped_velocity = if speed > MAX_CLEAR_VELOCITY {
+            velocity * (MAX_CLEAR_VELOCITY / speed)
+        } else {
+            velocity
+        };
+
         // Apply the clearing velocity to the ball
-        field.ball.velocity = velocity;
+        field.ball.velocity = capped_velocity;
 
         // Clear ownership - ball is now loose
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = None;
         field.ball.pass_target_player_id = None;
+        field.ball.clear_pass_history();
 
         // Set in-flight state to prevent immediate tackling
         field.ball.flags.in_flight_state = 10;

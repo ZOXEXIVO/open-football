@@ -19,7 +19,7 @@ const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
 
 // Passing decision thresholds for forwards
 const PASSING_DISABLED_DISTANCE: f32 = 100.0; // Within this distance, very restrictive passing
-const SHOOTING_ZONE_DISTANCE: f32 = 150.0; // Enhanced shooting priority zone
+const SHOOTING_ZONE_DISTANCE: f32 = 300.0; // Enhanced shooting priority zone
 const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.4; // Teammate must be 40% of distance closer
 
 // Performance thresholds
@@ -82,7 +82,13 @@ impl StateProcessingHandler for ForwardRunningState {
                 if self.should_pass_in_shooting_zone(ctx) {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 }
-                // Stay with ball and keep running toward goal
+                // In shooting range with good angle but no pass option
+                // Only force-shoot if within close range; otherwise continue running toward goal
+                if distance_to_goal <= CLOSE_RANGE_DISTANCE {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
                 return None;
             }
 
@@ -133,7 +139,24 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            // Continue running with ball if no better option
+            // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
+            // This prevents forwards from endlessly running toward goal without shooting/passing
+            if ctx.in_state_time > 150 {
+                // Prefer passing first
+                if self.should_pass(ctx) {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+                }
+                // Only shoot as fallback at very close range
+                let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+                if distance_to_goal < CLOSE_RANGE_DISTANCE {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
+                return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
+            }
+
+            // Continue running with ball briefly while looking for an opening
             return None;
         }
         // Handle cases when player doesn't have the ball

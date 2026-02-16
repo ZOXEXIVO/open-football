@@ -71,7 +71,8 @@ impl StateProcessingHandler for DefenderClearingState {
         let direction_to_target = (target_position - ball_position).normalize();
 
         // Use higher clearing speed - especially critical when stuck at boundary
-        let clear_speed = if at_boundary { 80.0 } else { 50.0 };
+        // Clearance should be comparable to a strong pass/weak shot (not 50-80 units/tick!)
+        let clear_speed = if at_boundary { 12.0 } else { 8.0 };
 
         // Calculate horizontal velocity
         let horizontal_velocity = direction_to_target * clear_speed;

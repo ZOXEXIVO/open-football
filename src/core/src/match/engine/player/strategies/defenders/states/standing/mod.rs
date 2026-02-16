@@ -188,6 +188,13 @@ impl StateProcessingHandler for DefenderStandingState {
             }
         }
 
+        // Apply separation velocity to spread out from nearby players
+        // This prevents huddle formation even while standing
+        let separation = ctx.player().separation_velocity();
+        if separation.magnitude() > 1.0 {
+            return Some(separation * 0.4);
+        }
+
         Some(Vector3::zeros())
     }
 

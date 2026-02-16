@@ -240,6 +240,29 @@ impl<'b> BallOperationsImpl<'b> {
         !self.on_own_third() && !self.in_attacking_third()
     }
 
+    /// Returns a graduated recency penalty multiplier for a player based on
+    /// how recently they appear in the pass history.
+    /// Most recent passer gets 0.1 (near-total block), oldest gets 0.85 (gentle nudge).
+    /// Players not in history get 1.0 (no penalty).
+    pub fn passer_recency_penalty(&self, player_id: u32) -> f32 {
+        const PENALTIES: [f32; 5] = [0.1, 0.3, 0.5, 0.7, 0.85];
+
+        let recent_passers = &self.ctx.tick_context.ball.recent_passers;
+
+        // Search from end (most recent) to beginning (oldest)
+        for (i, &passer_id) in recent_passers.iter().rev().enumerate() {
+            if passer_id == player_id {
+                return if i < PENALTIES.len() {
+                    PENALTIES[i]
+                } else {
+                    1.0
+                };
+            }
+        }
+
+        1.0 // Not in history
+    }
+
     /// Get field position as percentage (0.0 = own goal, 1.0 = opponent goal)
     pub fn field_position_percentage(&self) -> f32 {
         let field_length = self.ctx.context.field_size.width as f32;

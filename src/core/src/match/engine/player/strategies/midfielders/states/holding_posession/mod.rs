@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 300.0; // Maximum distance to attempt a shot
+const MAX_SHOOTING_DISTANCE: f32 = 150.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
 #[derive(Default)]
@@ -18,7 +18,7 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
             ));
         }
 
-        if self.is_in_shooting_range(ctx) {
+        if self.is_in_shooting_range(ctx) && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Shooting,
             ));

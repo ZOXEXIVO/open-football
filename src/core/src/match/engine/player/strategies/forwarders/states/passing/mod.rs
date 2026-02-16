@@ -135,9 +135,6 @@ impl ForwardPassingState {
     ) -> Option<MatchPlayerLite> {
         let teammates = ctx.players().teammates();
 
-        // Get previous ball owner to prevent ping-pong passes
-        let previous_owner_id = ctx.ball().previous_owner_id();
-
         // Use player's vision skill to determine range
         let vision_range = ctx.player.skills.mental.vision * 30.0;
         let vision_range_min = 100.0;
@@ -146,10 +143,6 @@ impl ForwardPassingState {
         let nearby_forwards: Vec<MatchPlayerLite> = teammates
             .nearby_range(15.0, 60.0)
             .filter(|t| {
-                // Don't pass back to the player who just passed to us
-                if previous_owner_id == Some(t.id) {
-                    return false;
-                }
                 t.tactical_positions.is_forward() && self.is_viable_pass_target(ctx, t)
             })
             .collect();
@@ -159,7 +152,8 @@ impl ForwardPassingState {
             let best_forward = nearby_forwards
                 .into_iter()
                 .map(|teammate| {
-                    let score = self.evaluate_forward_pass(ctx, &teammate);
+                    let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
+                    let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty;
                     (teammate, score)
                 })
                 .max_by(|(_, score_a), (_, score_b)| {
@@ -176,10 +170,6 @@ impl ForwardPassingState {
         let pass_options: Vec<MatchPlayerLite> = teammates
             .nearby_range(20.0, vision_range.max(vision_range_min))
             .filter(|t| {
-                // Don't pass back to the player who just passed to us
-                if previous_owner_id == Some(t.id) {
-                    return false;
-                }
                 self.is_viable_pass_target(ctx, t)
             })
             .collect();
@@ -192,7 +182,8 @@ impl ForwardPassingState {
         pass_options
             .into_iter()
             .map(|teammate| {
-                let score = self.evaluate_forward_pass(ctx, &teammate);
+                let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
+                let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty;
                 (teammate, score)
             })
             .max_by(|(_, score_a), (_, score_b)| {

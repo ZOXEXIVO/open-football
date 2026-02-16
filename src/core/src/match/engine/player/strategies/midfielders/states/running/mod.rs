@@ -30,25 +30,35 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             // Priority: Clear ball if congested anywhere (not just boundaries)
             // Allow emergency clearances even without stable possession
-            if self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested() {
+            // Cooldown: only attempt every 30 ticks to prevent claim-pass-reclaim loops
+            if (self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested())
+                && ctx.in_state_time % 30 < 2
+            {
                 // Try to find a good pass option first using the standard evaluator
                 if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(target_teammate.id)
-                                .with_reason("MID_RUNNING_EMERGENCY_CLEARANCE_BEST")
-                                .build(ctx),
-                        )),
-                    ));
+                    let dist = (target_teammate.position - ctx.player.position).magnitude();
+                    // Only pass if target is far enough away to escape congestion
+                    if dist > 40.0 {
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Standing,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(target_teammate.id)
+                                    .with_reason("MID_RUNNING_EMERGENCY_CLEARANCE_BEST")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
                 }
 
-                // Fallback: find any nearby teammate within reasonable distance
-                if let Some(target_teammate) = ctx.players().teammates().nearby(100.0).next() {
+                // Fallback: find teammate at least 40 units away (outside congestion zone)
+                if let Some(target_teammate) = ctx.players().teammates().nearby(100.0)
+                    .filter(|t| (t.position - ctx.player.position).magnitude() > 40.0)
+                    .next()
+                {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
-                        MidfielderState::Running,
+                        MidfielderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
                             PassingEventContext::new()
                                 .with_from_player_id(ctx.player.id)
@@ -142,6 +152,65 @@ impl StateProcessingHandler for MidfielderRunningState {
             if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
+                ));
+            }
+        }
+
+        // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
+        if ctx.player.has_ball(ctx) && ctx.in_state_time > 150 {
+            // Prefer passing first
+            if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("MID_RUNNING_ANTI_OSCILLATION")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            // Only shoot as fallback at very close range
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            if distance_to_goal < 50.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+            // Last resort: pass to any nearby teammate ahead of the ball (toward opponent goal)
+            let player_pos = ctx.player.position;
+            let goal_pos = ctx.player().opponent_goal_position();
+            let to_goal = (goal_pos - player_pos).normalize();
+            if let Some(target_teammate) = ctx.players().teammates().nearby(200.0)
+                .filter(|t| {
+                    let to_teammate = (t.position - player_pos).normalize();
+                    to_teammate.dot(&to_goal) > 0.0 // Teammate is ahead (toward opponent goal)
+                })
+                .next()
+            {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("MID_RUNNING_ANTI_OSCILLATION_FALLBACK")
+                            .build(ctx),
+                    )),
+                ));
+            }
+            // Absolute last resort: pass to any nearby teammate (even backward)
+            if let Some(target_teammate) = ctx.players().teammates().nearby(200.0).next() {
+                return Some(StateChangeResult::with_midfielder_state_and_event(
+                    MidfielderState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("MID_RUNNING_ANTI_OSCILLATION_FALLBACK_ANY")
+                            .build(ctx),
+                    )),
                 ));
             }
         }

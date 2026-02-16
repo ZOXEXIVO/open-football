@@ -36,10 +36,15 @@ const INNER_FIELD_HEIGHT: f32 = 545.0;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum MatchSpeed {
-    Percent100 = 1,
-    Percent50 = 2,
-    Percent10 = 10,
-    Percent1 = 100,
+    Percent1,
+    Percent10,
+    Percent50,
+    Percent100,
+    Times5,
+    Times10,
+    Times30,
+    Times50,
+    Times100,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -51,19 +56,46 @@ enum PlayMode {
 impl MatchSpeed {
     fn label(&self) -> &'static str {
         match self {
-            MatchSpeed::Percent100 => "100%",
-            MatchSpeed::Percent50 => "50%",
-            MatchSpeed::Percent10 => "10%",
             MatchSpeed::Percent1 => "1%",
+            MatchSpeed::Percent10 => "10%",
+            MatchSpeed::Percent50 => "50%",
+            MatchSpeed::Percent100 => "100%",
+            MatchSpeed::Times5 => "5x",
+            MatchSpeed::Times10 => "10x",
+            MatchSpeed::Times30 => "30x",
+            MatchSpeed::Times50 => "50x",
+            MatchSpeed::Times100 => "100x",
         }
     }
 
-    fn all() -> [MatchSpeed; 4] {
+    /// Returns (ticks_per_frame, frame_divisor).
+    /// For slow speeds: 1 tick every N frames.
+    /// For fast speeds: N ticks every frame.
+    fn tick_config(&self) -> (u32, u64) {
+        match self {
+            MatchSpeed::Percent1 => (1, 100),
+            MatchSpeed::Percent10 => (1, 10),
+            MatchSpeed::Percent50 => (1, 2),
+            MatchSpeed::Percent100 => (1, 1),
+            MatchSpeed::Times5 => (5, 1),
+            MatchSpeed::Times10 => (10, 1),
+            MatchSpeed::Times30 => (30, 1),
+            MatchSpeed::Times50 => (50, 1),
+            MatchSpeed::Times100 => (100, 1),
+        }
+    }
+
+    fn all() -> [MatchSpeed; 9] {
         [
-            MatchSpeed::Percent100,
-            MatchSpeed::Percent50,
-            MatchSpeed::Percent10,
             MatchSpeed::Percent1,
+            MatchSpeed::Percent10,
+            MatchSpeed::Percent50,
+            MatchSpeed::Percent100,
+            MatchSpeed::Times5,
+            MatchSpeed::Times10,
+            MatchSpeed::Times30,
+            MatchSpeed::Times50,
+            MatchSpeed::Times100,
         ]
     }
 }
@@ -176,14 +208,16 @@ async fn main() {
         // Execute game tick or update replay based on mode
         match play_mode {
             PlayMode::Live if !is_paused => {
-                // Only execute game tick based on selected speed
-                let should_tick = tick_frame % (selected_speed as u64) == 0;
+                // Execute game ticks based on selected speed
+                let (ticks_per_frame, frame_divisor) = selected_speed.tick_config();
+                let should_tick = tick_frame % frame_divisor == 0;
                 tick_frame += 1;
 
                 if should_tick {
-                    // Increment time before game tick (like the engine does)
-                    context.increment_time();
-                    FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+                    for _ in 0..ticks_per_frame {
+                        context.increment_time();
+                        FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+                    }
                 }
 
                 // Update replay_time to current match time for slider display
@@ -199,12 +233,13 @@ async fn main() {
             }
             PlayMode::Replay if !is_paused => {
                 // Auto-advance replay time using same speed as live mode
-                let should_advance = tick_frame % (selected_speed as u64) == 0;
+                let (ticks_per_frame, frame_divisor) = selected_speed.tick_config();
+                let should_advance = tick_frame % frame_divisor == 0;
                 tick_frame += 1;
 
                 if should_advance {
-                    // Increment by 10ms to match live mode speed (MATCH_TIME_INCREMENT_MS)
-                    replay_time += 10;
+                    // Increment by 10ms per tick to match live mode (MATCH_TIME_INCREMENT_MS)
+                    replay_time += 10 * ticks_per_frame as u64;
                     // Use max_live_time as the limit (highest time reached in Live mode)
                     if replay_time > max_live_time {
                         replay_time = max_live_time;

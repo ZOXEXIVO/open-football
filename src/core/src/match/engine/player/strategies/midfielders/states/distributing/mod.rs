@@ -51,17 +51,10 @@ impl MidfielderDistributingState {
     ) -> Option<MatchPlayerLite> {
         let vision_range = ctx.player.skills.mental.vision * 10.0; // Adjust the factor as needed
 
-        // Get previous ball owner to prevent ping-pong passes
-        let previous_owner_id = ctx.ball().previous_owner_id();
-
         let open_teammates: Vec<MatchPlayerLite> = ctx.players().teammates()
             .nearby(vision_range)
             .filter(|t| !t.tactical_positions.is_goalkeeper())
             .filter(|t| {
-                // Don't pass back to the player who just passed to us
-                if previous_owner_id == Some(t.id) {
-                    return false;
-                }
                 self.is_teammate_open(ctx, t) && ctx.player().has_clear_pass(t.id)
             })
             .collect();
@@ -70,8 +63,10 @@ impl MidfielderDistributingState {
             let best_option = open_teammates
                 .iter()
                 .max_by(|a, b| {
-                    let space_a = self.calculate_space_around_player(ctx, a);
-                    let space_b = self.calculate_space_around_player(ctx, b);
+                    let recency_a = ctx.ball().passer_recency_penalty(a.id);
+                    let recency_b = ctx.ball().passer_recency_penalty(b.id);
+                    let space_a = self.calculate_space_around_player(ctx, a) * recency_a;
+                    let space_b = self.calculate_space_around_player(ctx, b) * recency_b;
                     space_a
                         .partial_cmp(&space_b)
                         .unwrap_or(std::cmp::Ordering::Equal)

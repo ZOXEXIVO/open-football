@@ -84,8 +84,9 @@ impl SteeringBehavior {
                 let pace_normalized = 0.8 + (player.skills.physical.pace - 1.0) / 19.0;
                 let agility_normalized = 0.8 + (player.skills.physical.agility - 1.0) / 19.0;
 
-                // Ensure slowing_distance is never zero (increased for smoother deceleration)
-                let safe_slowing_distance = slowing_distance.max(8.0); // Increased from 5.0
+                // Ensure slowing_distance is never zero but keep it small so players
+                // can approach balls near boundaries without crawling to a halt
+                let safe_slowing_distance = slowing_distance.max(3.0);
 
                 // Calculate desired speed based on distance (with condition factor)
                 let max_speed = player.skills.max_speed_with_condition(
