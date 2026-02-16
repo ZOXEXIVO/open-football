@@ -25,29 +25,9 @@ impl StateProcessingHandler for ForwardPassingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // PRIORITY 1: Very close to goal - SHOOT instead of pass (inside 6-yard box)
-        if distance_to_goal < 60.0 {
+        // Only allow shooting at point-blank range (< 30 units) with xG check
+        if distance_to_goal < 30.0 && ctx.player().should_attempt_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-        }
-
-        // PRIORITY 2: Inside penalty area - prefer shooting over passing
-        if distance_to_goal < 165.0 {
-            let finishing = ctx.player.skills.technical.finishing;
-            let has_clear_shot = ctx.player().has_clear_shot();
-            let close_blockers = ctx.players().opponents().nearby(5.0).count();
-
-            // Good finishing skill or clear shot - shoot!
-            if has_clear_shot || (finishing > 11.0 && close_blockers <= 1) {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
-        }
-
-        // PRIORITY 3: Edge of box with clear shot - shoot
-        if distance_to_goal < 250.0 && ctx.player().has_clear_shot() {
-            let finishing = ctx.player.skills.technical.finishing;
-            if finishing > 10.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
         }
 
         // Determine the best teammate to pass to
@@ -65,19 +45,16 @@ impl StateProcessingHandler for ForwardPassingState {
             ));
         }
 
-        // If no good passing option is found - try shooting anyway if close
-        if distance_to_goal < 300.0 && self.should_shoot_instead_of_pass(ctx) {
+        // No good pass option found - prefer dribbling toward goal if close enough
+        if distance_to_goal < 200.0 {
+            // Close to goal with no pass option - dribble forward instead of holding
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Shooting,
+                ForwardState::Dribbling,
             ));
         }
 
         // If under excessive pressure, consider going back to dribbling
         if self.is_under_heavy_pressure(ctx) {
-            // But in dangerous area - shoot!
-            if distance_to_goal < 200.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
             if self.can_dribble_effectively(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
@@ -88,11 +65,8 @@ impl StateProcessingHandler for ForwardPassingState {
         }
 
         if ctx.in_state_time > MAX_PASS_DURATION {
-            // Timeout - if close to goal, shoot
-            if distance_to_goal < 300.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
-            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+            // Timeout - redirect to holding up play, not shooting
+            return Some(StateChangeResult::with_forward_state(ForwardState::HoldingUpPlay));
         }
 
         None
@@ -139,11 +113,16 @@ impl ForwardPassingState {
         let vision_range = ctx.player.skills.mental.vision * 30.0;
         let vision_range_min = 100.0;
 
-        // PRIORITY: First look for nearby forwards for quick combinations (15-60m range)
+        // PRIORITY: First look for nearby forwards for quick combinations (25-80m range)
+        // Minimum distance raised to 25 to prevent very short ping-pong passes
         let nearby_forwards: Vec<MatchPlayerLite> = teammates
-            .nearby_range(15.0, 60.0)
+            .nearby_range(25.0, 80.0)
             .filter(|t| {
-                t.tactical_positions.is_forward() && self.is_viable_pass_target(ctx, t)
+                t.tactical_positions.is_forward()
+                    && self.is_viable_pass_target(ctx, t)
+                    // Hard-reject the most recent passer if they're very close
+                    // This prevents two forwards ping-ponging at close range
+                    && !self.is_close_recent_passer(ctx, t)
             })
             .collect();
 
@@ -166,11 +145,13 @@ impl ForwardPassingState {
             }
         }
 
-        // Fallback: Get all viable passing options within range (reduced min from 50 to 20)
+        // Fallback: Get all viable passing options within range
+        // Minimum distance 25 to prevent very short passes between close players
         let pass_options: Vec<MatchPlayerLite> = teammates
-            .nearby_range(20.0, vision_range.max(vision_range_min))
+            .nearby_range(25.0, vision_range.max(vision_range_min))
             .filter(|t| {
                 self.is_viable_pass_target(ctx, t)
+                    && !self.is_close_recent_passer(ctx, t)
             })
             .collect();
 
@@ -192,6 +173,23 @@ impl ForwardPassingState {
                     .unwrap_or(std::cmp::Ordering::Equal)
             })
             .map(|(teammate, _)| teammate)
+    }
+
+    /// Hard-reject a teammate who is the most recent passer AND very close.
+    /// This prevents two forwards from ping-ponging the ball at close range.
+    fn is_close_recent_passer(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> bool {
+        const CLOSE_DISTANCE: f32 = 40.0;
+        let recency = ctx.ball().passer_recency_penalty(teammate.id);
+        // recency <= 0.1 means most recent passer, <= 0.3 means second most recent
+        if recency > 0.3 {
+            return false;
+        }
+        let distance = (teammate.position - ctx.player.position).magnitude();
+        distance < CLOSE_DISTANCE
     }
 
     /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
@@ -243,9 +241,38 @@ impl ForwardPassingState {
             score += 50.0; // Increased from 35.0
         }
 
+        // Through-ball detection: teammate running toward goal with space ahead
+        let teammate_velocity = teammate.velocity(ctx);
+        let to_goal = (ctx.player().opponent_goal_position() - teammate.position).normalize();
+        let running_toward_goal = teammate_velocity.magnitude() > 2.0
+            && teammate_velocity.normalize().dot(&to_goal) > 0.5;
+
+        if running_toward_goal {
+            // Check if there's space ahead of teammate (no defenders in front)
+            let ahead_pos = teammate.position + to_goal * 30.0;
+            let defenders_ahead = ctx
+                .players()
+                .opponents()
+                .all()
+                .filter(|opp| {
+                    let opp_to_ahead = (ahead_pos - opp.position).magnitude();
+                    opp_to_ahead < 20.0
+                })
+                .count();
+
+            if defenders_ahead == 0 {
+                score += 45.0; // Major through-ball bonus
+            }
+        }
+
+        // Pass streak bonus: encourage patient build-up play
+        let pass_streak = ctx.memory().pass_streak;
+        let streak_bonus = (pass_streak as f32 * 2.0).min(15.0);
+        score += streak_bonus;
+
         // Strong penalty for backwards passes unless under heavy pressure
         if teammate.position.x < ctx.player.position.x && !self.is_under_heavy_pressure(ctx) {
-            score -= 30.0; // Increased from 15.0
+            score -= 30.0;
 
             // Extra penalty if passing back when in attacking third
             if forward_to_goal_dist < 350.0 {
@@ -424,58 +451,6 @@ impl ForwardPassingState {
             .count();
 
         space_radius - num_opponents_nearby as f32
-    }
-
-    /// Check if player should shoot instead of pass - AGGRESSIVE for forwards
-    fn should_shoot_instead_of_pass(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let finishing = ctx.player.skills.technical.finishing;
-        let technique = ctx.player.skills.technical.technique;
-        let long_shots = ctx.player.skills.technical.long_shots;
-        let composure = ctx.player.skills.mental.composure;
-
-        let has_clear_shot = ctx.player().has_clear_shot();
-        let close_blockers = ctx.players().opponents().nearby(5.0).count();
-
-        // Very close to goal - always shoot
-        if distance_to_goal < 60.0 {
-            return true;
-        }
-
-        // Inside penalty area - shoot with decent skill or clear shot
-        if distance_to_goal < 165.0 {
-            if has_clear_shot {
-                return true;
-            }
-            // Shoot with good skill even with blockers
-            if finishing > 10.0 && close_blockers <= 1 {
-                return true;
-            }
-            if composure > 13.0 {
-                return true;
-            }
-        }
-
-        // Edge of box - shoot with good skills
-        if distance_to_goal < 250.0 {
-            if has_clear_shot && finishing > 9.0 {
-                return true;
-            }
-            // Good long shot taker
-            if long_shots > 13.0 && close_blockers == 0 {
-                return true;
-            }
-        }
-
-        // Further out - only with clear shot and excellent skills
-        if distance_to_goal < 350.0 && has_clear_shot {
-            let shooting_skill = (finishing + technique) / 2.0;
-            if shooting_skill > 14.0 || long_shots > 15.0 {
-                return true;
-            }
-        }
-
-        false
     }
 
     /// Check if player is under heavy pressure from opponents

@@ -2,6 +2,8 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::players::ShotQualityEvaluator;
+use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -12,6 +14,22 @@ pub struct DefenderShootingState {}
 
 impl StateProcessingHandler for DefenderShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Check shot cooldown
+        let current_tick = ctx.current_tick();
+        if !ctx.memory().can_shoot(current_tick) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
+        // Evaluate xG
+        let xg = ShotQualityEvaluator::evaluate(ctx);
+        if xg < MIN_XG_THRESHOLD {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         Some(StateChangeResult::with_defender_state_and_event(
             DefenderState::Standing,
             Event::PlayerEvent(PlayerEvent::Shoot(

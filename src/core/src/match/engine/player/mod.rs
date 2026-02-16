@@ -2,6 +2,7 @@
 
 pub mod behaviours;
 pub mod context;
+pub mod memory;
 pub mod player;
 pub mod state;
 pub mod statistics;

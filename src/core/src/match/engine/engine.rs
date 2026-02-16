@@ -3,6 +3,7 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
+use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
 use crate::Tactics;
 use nalgebra::Vector3;
@@ -74,6 +75,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         result.position_data = match_position_data;
+
+        // Extract per-player stats from the match
+        for player in &field.players {
+            result.player_stats.insert(player.id, PlayerMatchEndStats {
+                shots_on_target: player.memory.shots_on_target as u16,
+                shots_total: player.memory.shots_taken as u16,
+                passes_attempted: player.statistics.passes_attempted,
+                passes_completed: player.statistics.passes_completed,
+                tackles: player.statistics.tackles,
+            });
+        }
 
         result
     }

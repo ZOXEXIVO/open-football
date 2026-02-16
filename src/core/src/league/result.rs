@@ -1,4 +1,5 @@
 use crate::league::{LeagueTableResult, ScheduleItem};
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{GoalDetail, MatchResult, Score, TeamScore};
 use crate::simulator::SimulatorData;
 use crate::{MatchHistoryItem, SimulationResult};
@@ -71,32 +72,70 @@ impl LeagueResult {
             ),
         ));
 
-        // process_match_events(result, data);
-        //
-        // fn process_match_events(result: &MatchResult, data: &mut SimulatorData) {
-        //     for match_event in &result.details.as_ref().unwrap().events {
-        //         match match_event {
-        //             MatchEvent::MatchPlayed(player_id, is_start_squad, _minutes_played) => {
-        //                 let mut player = data.player_mut(*player_id).unwrap();
-        //
-        //                 if *is_start_squad {
-        //                     player.statistics.played += 1;
-        //                 } else {
-        //                     player.statistics.played_subs += 1;
-        //                 }
-        //             }
-        //             MatchEvent::Goal(player_id) => {
-        //                 let mut player = data.player_mut(*player_id).unwrap();
-        //                 player.statistics.goals += 1;
-        //             }
-        //             MatchEvent::Assist(player_id) => {
-        //                 let mut player = data.player_mut(*player_id).unwrap();
-        //                 player.statistics.assists += 1;
-        //             }
-        //             MatchEvent::Injury(player_id) => {}
-        //         }
-        //     }
-        // }
+        Self::process_match_events(result, data);
+    }
+
+    fn process_match_events(result: &MatchResult, data: &mut SimulatorData) {
+        let details = match &result.details {
+            Some(d) => d,
+            None => return,
+        };
+
+        // Mark players as played (main squad) or played_subs (substitutes)
+        for player_id in &details.left_team_players.main {
+            if let Some(player) = data.player_mut(*player_id) {
+                player.statistics.played += 1;
+            }
+        }
+        for player_id in &details.left_team_players.substitutes {
+            if let Some(player) = data.player_mut(*player_id) {
+                player.statistics.played_subs += 1;
+            }
+        }
+        for player_id in &details.right_team_players.main {
+            if let Some(player) = data.player_mut(*player_id) {
+                player.statistics.played += 1;
+            }
+        }
+        for player_id in &details.right_team_players.substitutes {
+            if let Some(player) = data.player_mut(*player_id) {
+                player.statistics.played_subs += 1;
+            }
+        }
+
+        // Goals and assists from score details
+        for detail in &result.score.details {
+            match detail.stat_type {
+                MatchStatisticType::Goal => {
+                    if let Some(player) = data.player_mut(detail.player_id) {
+                        player.statistics.goals += 1;
+                    }
+                }
+                MatchStatisticType::Assist => {
+                    if let Some(player) = data.player_mut(detail.player_id) {
+                        player.statistics.assists += 1;
+                    }
+                }
+            }
+        }
+
+        // Per-player stats (shots, passes, tackles)
+        for (player_id, stats) in &details.player_stats {
+            if let Some(player) = data.player_mut(*player_id) {
+                player.statistics.shots_on_target += stats.shots_on_target as f32;
+                player.statistics.tackling += stats.tackles as f32;
+                if stats.passes_attempted > 0 {
+                    let match_pct = (stats.passes_completed as f32 / stats.passes_attempted as f32 * 100.0) as u8;
+                    let games = player.statistics.played + player.statistics.played_subs;
+                    if games <= 1 {
+                        player.statistics.passes = match_pct;
+                    } else {
+                        let prev = player.statistics.passes as f32;
+                        player.statistics.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
+                    }
+                }
+            }
+        }
     }
 }
 

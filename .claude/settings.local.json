@@ -31,7 +31,8 @@
       "WebFetch(domain:www.just-football.com)",
       "Bash(cargo metadata:*)",
       "WebFetch(domain:steamuserimages-a.akamaihd.net)",
-      "WebFetch(domain:www.fmscout.com)"
+      "WebFetch(domain:www.fmscout.com)",
+      "Bash(echo:*)"
     ],
     "deny": [],
     "ask": []

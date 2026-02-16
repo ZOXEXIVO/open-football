@@ -7,6 +7,7 @@ pub struct ShootingEventContext {
     pub target: Vector3<f32>,
     pub force: f64,
     pub reason: &'static str,
+    pub tick: u64,
 }
 
 impl ShootingEventContext {
@@ -35,7 +36,7 @@ impl ShootingEventBuilder {
             reason: None,
         }
     }
-    
+
     pub fn with_player_id(mut self, from_player_id: u32) -> Self {
         self.from_player_id = Some(from_player_id);
         self
@@ -57,6 +58,7 @@ impl ShootingEventBuilder {
             target: self.target.unwrap(),
             force: ctx.player().shoot_goal_power(),
             reason: self.reason.unwrap_or("No reason specified"),
+            tick: ctx.current_tick(),
         }
     }
 }

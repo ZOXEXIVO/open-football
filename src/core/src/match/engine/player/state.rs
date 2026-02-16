@@ -39,6 +39,12 @@ impl PlayerMatchState {
         context: &MatchContext,
         tick_context: &GameTickContext,
     ) -> EventCollection {
+        // Decay memory every 100 ticks
+        let current_tick = context.current_tick();
+        if current_tick > 0 && current_tick % 100 == 0 {
+            player.memory.decay(current_tick);
+        }
+
         let player_position_group = player.tactical_position.current_position.position_group();
 
         let state_change_result =

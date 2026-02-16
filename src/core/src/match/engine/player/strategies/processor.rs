@@ -8,6 +8,7 @@ use crate::r#match::player::state::PlayerState::{Defender, Forward, Goalkeeper, 
 use crate::r#match::{
     BallOperationsImpl, GameTickContext, MatchContext, MatchPlayer,
 };
+use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::common_states::CommonInjuredState;
 use crate::r#match::player::strategies::common::PlayerOperationsImpl;
 use crate::r#match::player::strategies::common::PlayersOperationsImpl;
@@ -157,6 +158,16 @@ impl<'sp> StateProcessingContext<'sp> {
     #[inline]
     pub fn team(&'sp self) -> TeamOperationsImpl<'sp> {
         TeamOperationsImpl::new(self)
+    }
+
+    #[inline]
+    pub fn memory(&self) -> &PlayerMemory {
+        &self.player.memory
+    }
+
+    #[inline]
+    pub fn current_tick(&self) -> u64 {
+        self.context.current_tick()
     }
 }
 

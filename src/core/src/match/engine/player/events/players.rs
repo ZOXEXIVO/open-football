@@ -235,6 +235,10 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_tackling_ball_event(player_id: u32, field: &mut MatchField) {
+        if let Some(player) = field.get_player_mut(player_id) {
+            player.statistics.tackles += 1;
+        }
+
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.clear_pass_history();
@@ -247,6 +251,12 @@ impl PlayerEventDispatcher {
 
     fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
         let mut rng = rand::rng();
+
+        // Increment pass counters on the passer
+        if let Some(passer) = field.get_player_mut(event_model.from_player_id) {
+            passer.statistics.passes_attempted += 1;
+            passer.statistics.passes_completed += 1;
+        }
 
         // Extract player skills and condition
         let player = field.get_player(event_model.from_player_id).unwrap();
@@ -865,20 +875,31 @@ impl PlayerEventDispatcher {
         // Add shooting error based on skills and distance
         // Error increases with distance and decreases with skill
         let distance_error_factor = (horizontal_distance / 100.0).clamp(0.5, 2.5);
-        let skill_error_reduction = base_accuracy;
 
         // Calculate positional error (how far from intended target)
         // Elite players: ±2-5 units, Poor players: ±10-20 units
-        let base_position_error = 8.0 * distance_error_factor * (1.0 - skill_error_reduction);
-        let max_y_error = base_position_error.clamp(2.0, 25.0);
+        // Distance penalty multiplier for base_accuracy
+        let distance_penalty = if horizontal_distance > 200.0 {
+            0.4
+        } else if horizontal_distance > 100.0 {
+            0.6
+        } else if horizontal_distance > 50.0 {
+            0.8
+        } else {
+            1.0
+        };
+        let adjusted_accuracy = base_accuracy * distance_penalty;
+
+        let base_position_error = 8.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let max_y_error = base_position_error.clamp(5.0, 60.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let actual_y_target = ideal_y_target + y_error;
 
         // Clamp to reasonable bounds (can miss goal, but not by too much)
-        // Allow shots to miss by up to 50% of goal width on each side
-        let max_miss_distance = GOAL_WIDTH * 0.5;
+        // Allow shots to miss by up to 150% of goal width on each side
+        let max_miss_distance = GOAL_WIDTH * 1.5;
         let clamped_y_target = actual_y_target.clamp(
             goal_left_post - max_miss_distance,
             goal_right_post + max_miss_distance
@@ -963,6 +984,12 @@ impl PlayerEventDispatcher {
         let velocity_magnitude = final_velocity.norm();
         if velocity_magnitude > MAX_SHOT_VELOCITY {
             final_velocity = final_velocity * (MAX_SHOT_VELOCITY / velocity_magnitude);
+        }
+
+        // Record shot in player memory
+        let on_target = clamped_y_target >= goal_left_post && clamped_y_target <= goal_right_post;
+        if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
+            shooter.memory.record_shot(shoot_event_model.tick, on_target);
         }
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);

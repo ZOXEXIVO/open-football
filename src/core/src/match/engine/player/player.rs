@@ -4,6 +4,7 @@ use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
+use crate::r#match::player::memory::PlayerMemory;
 use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
@@ -36,6 +37,8 @@ pub struct MatchPlayer {
     pub use_extended_state_logging: bool,
 
     pub waypoint_manager: WaypointManager,
+
+    pub memory: PlayerMemory,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -67,6 +70,7 @@ impl MatchPlayer {
             statistics: MatchPlayerStatistics::new(),
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
+            memory: PlayerMemory::new(),
         }
     }
 

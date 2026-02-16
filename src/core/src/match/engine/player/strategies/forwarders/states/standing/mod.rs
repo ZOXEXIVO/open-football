@@ -3,8 +3,6 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 120.0; // Maximum distance to attempt a shot (close range only)
-const MIN_SHOOTING_DISTANCE: f32 = 1.0; // Minimum distance to attempt a shot (very close to goal)
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
 
 #[derive(Default)]
@@ -19,8 +17,8 @@ impl StateProcessingHandler for ForwardStandingState {
             const SHOOTING_COOLDOWN: u64 = 40;
 
             // Decide next action based on game context
-            if self.is_in_shooting_range(ctx) && ctx.in_state_time > SHOOTING_COOLDOWN {
-                // Transition to Shooting state (only after cooldown)
+            if ctx.player().should_attempt_shot() && ctx.in_state_time > SHOOTING_COOLDOWN {
+                // Transition to Shooting state (only after cooldown and xG check)
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
@@ -113,19 +111,21 @@ impl StateProcessingHandler for ForwardStandingState {
 }
 
 impl ForwardStandingState {
-    /// Determines if the forward is within shooting range of the opponent's goal.
-    fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {
-        let distance_to_goal = self.distance_to_opponent_goal(ctx);
-        distance_to_goal <= MAX_SHOOTING_DISTANCE && distance_to_goal >= MIN_SHOOTING_DISTANCE
-    }
-
     /// Finds the best teammate to pass to based on proximity and position.
+    /// Filters out close recent passers to prevent ping-pong passing.
     fn find_best_teammate_to_pass<'a>(
         &'a self,
         ctx: &'a StateProcessingContext<'a>,
     ) -> Option<u32> {
-        if let Some((teammate_id, _)) = ctx.players().teammates().nearby_ids(100.0).next() {
-            return Some(teammate_id)
+        // Look for teammates within range, but skip anyone who just passed to us
+        // and is still very close (prevents ping-pong)
+        for (teammate_id, distance) in ctx.players().teammates().nearby_ids(100.0) {
+            let recency = ctx.ball().passer_recency_penalty(teammate_id);
+            // If most recent or second-most-recent passer AND within 40 units, skip
+            if recency <= 0.3 && distance < 40.0 {
+                continue;
+            }
+            return Some(teammate_id);
         }
 
         None
@@ -149,8 +149,4 @@ impl ForwardStandingState {
         }
     }
 
-    /// Calculates the distance from the forward to the opponent's goal.
-    fn distance_to_opponent_goal(&self, ctx: &StateProcessingContext) -> f32 {
-        ctx.ball().distance_to_opponent_goal()
-    }
 }

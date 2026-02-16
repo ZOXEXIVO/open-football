@@ -1,7 +1,17 @@
 ﻿use crate::league::LeagueMatch;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
+
+#[derive(Debug, Clone)]
+pub struct PlayerMatchEndStats {
+    pub shots_on_target: u16,
+    pub shots_total: u16,
+    pub passes_attempted: u16,
+    pub passes_completed: u16,
+    pub tackles: u16,
+}
 
 #[derive(Debug)]
 pub struct MatchResultRaw {
@@ -14,6 +24,8 @@ pub struct MatchResultRaw {
 
     pub match_time_ms: u64,
     pub additional_time_ms: u64,
+
+    pub player_stats: HashMap<u32, PlayerMatchEndStats>,
 }
 
 impl Clone for MatchResultRaw {
@@ -25,6 +37,7 @@ impl Clone for MatchResultRaw {
             right_team_players: self.right_team_players.clone(),
             match_time_ms: self.match_time_ms,
             additional_time_ms: self.additional_time_ms,
+            player_stats: self.player_stats.clone(),
         }
     }
 }
@@ -38,6 +51,7 @@ impl MatchResultRaw {
             right_team_players: FieldSquad::new(),
             match_time_ms,
             additional_time_ms: 0,
+            player_stats: HashMap::new(),
         }
     }
 
@@ -49,6 +63,7 @@ impl MatchResultRaw {
             right_team_players: self.right_team_players.clone(),
             match_time_ms: self.match_time_ms,
             additional_time_ms: self.additional_time_ms,
+            player_stats: self.player_stats.clone(),
         }
     }
 

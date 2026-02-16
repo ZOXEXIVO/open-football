@@ -2,6 +2,8 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::players::ShotQualityEvaluator;
+use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -12,6 +14,23 @@ pub struct ForwardShootingState {}
 
 impl StateProcessingHandler for ForwardShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Check shot cooldown
+        let current_tick = ctx.current_tick();
+        if !ctx.memory().can_shoot(current_tick) {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Passing,
+            ));
+        }
+
+        // Evaluate xG
+        let xg = ShotQualityEvaluator::evaluate(ctx);
+        if xg < MIN_XG_THRESHOLD {
+            // xG too low - redirect to passing or holding up play
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Passing,
+            ));
+        }
+
         Some(StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
             Event::PlayerEvent(PlayerEvent::Shoot(

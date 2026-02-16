@@ -1,12 +1,18 @@
 #[derive(Debug, Clone)]
 pub struct MatchPlayerStatistics {
     pub items: Vec<MatchPlayerStatisticsItem>,
+    pub passes_attempted: u16,
+    pub passes_completed: u16,
+    pub tackles: u16,
 }
 
 impl MatchPlayerStatistics {
     pub fn new() -> Self {
         MatchPlayerStatistics {
             items: Vec::with_capacity(5),
+            passes_attempted: 0,
+            passes_completed: 0,
+            tackles: 0,
         }
     }
 

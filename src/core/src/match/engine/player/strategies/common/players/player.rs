@@ -6,7 +6,7 @@ use crate::r#match::{
 use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::RngExt;
-use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
+use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl, ShotQualityEvaluator, MIN_XG_THRESHOLD};
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -446,6 +446,39 @@ impl<'p> PlayerOperationsImpl<'p> {
     /// Get skill operations for skill-based calculations
     pub fn skill(&self) -> SkillOperationsImpl<'p> {
         SkillOperationsImpl::new(self.ctx)
+    }
+
+    /// Check if the player should attempt a shot based on cooldown and xG
+    pub fn should_attempt_shot(&self) -> bool {
+        let current_tick = self.ctx.current_tick();
+
+        // Check shot cooldown
+        if !self.ctx.memory().can_shoot(current_tick) {
+            return false;
+        }
+
+        // Evaluate xG
+        let xg = ShotQualityEvaluator::evaluate(self.ctx);
+
+        // Adjust threshold based on confidence and intentions
+        let confidence = self.ctx.memory().confidence;
+        let has_shoot_intention = self.ctx.memory().has_intention(
+            &crate::r#match::player::memory::IntentionKind::LookingToShoot,
+        );
+
+        let mut threshold = MIN_XG_THRESHOLD;
+
+        // Lower threshold if player is confident
+        if confidence > 0.7 {
+            threshold *= 0.7;
+        }
+
+        // Lower threshold if player intends to shoot
+        if has_shoot_intention {
+            threshold *= 0.8;
+        }
+
+        xg >= threshold
     }
 }
 

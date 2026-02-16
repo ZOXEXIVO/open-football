@@ -81,6 +81,10 @@ impl MatchContext {
         }
     }
 
+    pub fn current_tick(&self) -> u64 {
+        self.total_match_time / 10
+    }
+
     pub fn enable_logging(&mut self) {
         self.logging_enabled = true;
     }

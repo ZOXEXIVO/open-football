@@ -2,6 +2,8 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::player::strategies::players::ShotQualityEvaluator;
+use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -17,6 +19,22 @@ impl StateProcessingHandler for MidfielderShootingState {
             // Lost possession, transition to Pressing
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Pressing,
+            ));
+        }
+
+        // Check shot cooldown
+        let current_tick = ctx.current_tick();
+        if !ctx.memory().can_shoot(current_tick) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
+        }
+
+        // Evaluate xG
+        let xg = ShotQualityEvaluator::evaluate(ctx);
+        if xg < MIN_XG_THRESHOLD {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
             ));
         }
 
