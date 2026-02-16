@@ -15,6 +15,12 @@ async fn main() {
         .default_filter_or("debug")
     ).init();
 
+    let is_debug = env::args().any(|arg| arg == "--debug");
+    if is_debug {
+        core::set_debug_mode(true);
+        info!("Debug mode enabled - match events will be recorded");
+    }
+
     let is_one_shot_game = env::var("MODE") == Ok(String::from("ONESHOT"));
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);

@@ -41,10 +41,18 @@ impl PartialEq<ResultPositionDataItem> for ResultPositionDataItem {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct MatchEventData {
+    pub timestamp: u64,
+    pub category: String,
+    pub description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct ResultMatchPositionData {
     ball: Vec<ResultPositionDataItem>,
     players: HashMap<u32, Vec<ResultPositionDataItem>>,
     passes: Vec<PassEventData>,
+    events: Vec<MatchEventData>,
     #[serde(skip)]
     track_events: bool,
 }
@@ -55,6 +63,7 @@ impl ResultMatchPositionData {
             ball: Vec::new(),
             players: HashMap::with_capacity(22 * 2 * 9000),
             passes: Vec::new(),
+            events: Vec::new(),
             track_events: false,
         }
     }
@@ -64,6 +73,7 @@ impl ResultMatchPositionData {
             ball: Vec::new(),
             players: HashMap::with_capacity(22 * 2 * 9000),
             passes: Vec::new(),
+            events: Vec::new(),
             track_events: true,
         }
     }
@@ -89,6 +99,7 @@ impl ResultMatchPositionData {
                 ball: Vec::new(),
                 players: HashMap::new(),
                 passes: Vec::new(),
+                events: Vec::new(),
                 track_events: self.track_events,
             };
 
@@ -114,6 +125,11 @@ impl ResultMatchPositionData {
             if self.track_events {
                 chunk.passes = self.passes.iter()
                     .filter(|pass| pass.timestamp >= start_time && pass.timestamp < end_time)
+                    .cloned()
+                    .collect();
+
+                chunk.events = self.events.iter()
+                    .filter(|evt| evt.timestamp >= start_time && evt.timestamp < end_time)
                     .cloned()
                     .collect();
             }
@@ -224,6 +240,17 @@ impl ResultMatchPositionData {
     /// Get all player IDs that have recorded positions
     pub fn get_player_ids(&self) -> Vec<u32> {
         self.players.keys().copied().collect()
+    }
+
+    /// Add a match event (only if event tracking is enabled)
+    pub fn add_match_event(&mut self, timestamp: u64, category: &str, description: String) {
+        if self.track_events {
+            self.events.push(MatchEventData {
+                timestamp,
+                category: category.to_string(),
+                description,
+            });
+        }
     }
 
     /// Add a pass event (only if event tracking is enabled)

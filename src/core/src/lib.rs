@@ -1,3 +1,15 @@
+use std::sync::atomic::{AtomicBool, Ordering};
+
+static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_debug_mode(enabled: bool) {
+    DEBUG_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_debug_mode() -> bool {
+    DEBUG_MODE.load(Ordering::SeqCst)
+}
+
 pub mod simulator;
 pub use simulator::*;
 

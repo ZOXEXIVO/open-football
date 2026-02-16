@@ -120,6 +120,10 @@
     let chunkDurationMs = 300000;
     let isDragging = false;
 
+    // Debug event logging
+    let eventData = [];
+    let lastEventIdx = 0;
+
     // Cached DOM elements (set once in init)
     let sliderEl = null;
     let progressEl = null;
@@ -200,6 +204,9 @@
                     playerPositions[id] = mergeSorted(playerPositions[id], positions);
                 }
             }
+        }
+        if (data.events && data.events.length > 0) {
+            eventData = mergeSorted(eventData, data.events);
         }
     }
 
@@ -291,6 +298,19 @@
         }
     }
 
+    function logEvents(time) {
+        while (lastEventIdx < eventData.length && eventData[lastEventIdx].timestamp <= time) {
+            const evt = eventData[lastEventIdx];
+            const timeStr = formatMatchTime(evt.timestamp);
+            if (evt.category === 'ball') {
+                console.log(`%c[${timeStr}] Ball: ${evt.description}`, 'color: #4fc3f7');
+            } else {
+                console.log(`%c[${timeStr}] Player: ${evt.description}`, 'color: #81c784');
+            }
+            lastEventIdx++;
+        }
+    }
+
     function updateSlider() {
         if (matchTimeMsTotal <= 0) return;
         const pct = (currentTime / matchTimeMsTotal) * 100;
@@ -324,6 +344,7 @@
         if (nextChunk < totalChunks && !loadedChunks.has(nextChunk)) loadChunk(nextChunk);
 
         updatePositions(currentTime);
+        logEvents(currentTime);
         if (!isDragging) updateSlider();
     }
 
@@ -471,6 +492,7 @@
             const rect = e.currentTarget.getBoundingClientRect();
             const pct = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width));
             currentTime = pct * matchTimeMsTotal;
+            lastEventIdx = 0;
             await loadChunk(getChunkNumber(currentTime));
             updatePositions(currentTime);
             updateSlider();

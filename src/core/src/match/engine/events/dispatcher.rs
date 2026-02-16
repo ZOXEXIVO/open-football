@@ -68,6 +68,15 @@ impl EventDispatcher {
         for event in events {
             match event {
                 Event::BallEvent(ball_event) => {
+                    if context.logging_enabled {
+                        match ball_event {
+                            BallEvent::TakeMe(_) => {},
+                            _ => match_data.add_match_event(
+                                context.total_match_time, "ball", format!("{:?}", ball_event)
+                            ),
+                        }
+                    }
+
                     let mut ball_remaining_events =
                         BallEventDispatcher::dispatch(ball_event, field, context);
 
@@ -76,6 +85,15 @@ impl EventDispatcher {
                     }
                 }
                 Event::PlayerEvent(player_event) => {
+                    if context.logging_enabled {
+                        match &player_event {
+                            PlayerEvent::TakeBall(_) => {},
+                            _ => match_data.add_match_event(
+                                context.total_match_time, "player", format!("{:?}", player_event)
+                            ),
+                        }
+                    }
+
                     let mut player_remaining_events =
                         PlayerEventDispatcher::dispatch(player_event, field, context, match_data);
 

@@ -26,11 +26,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
-        let mut match_position_data = ResultMatchPositionData::new();
+        let mut match_position_data = if crate::is_debug_mode() {
+            ResultMatchPositionData::new_with_tracking()
+        } else {
+            ResultMatchPositionData::new()
+        };
 
         let mut field = MatchField::new(W, H, left_squad, right_squad);
 
         let mut context = MatchContext::new(&field, players, score);
+
+        if crate::is_debug_mode() {
+            context.enable_logging();
+        }
 
         let mut state_manager = StateManager::new();
 
