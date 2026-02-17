@@ -1,5 +1,6 @@
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
+use crate::face::face_routes;
 use crate::game::game_routes;
 use crate::leagues::league_routes;
 use crate::player::player_routes;
@@ -21,6 +22,7 @@ impl ServerRoutes {
             .merge(player_routes())
             .merge(match_routes())
             .merge(current_date_routes())
+            .merge(face_routes())
             .merge(current_common_routes())
     }
 }

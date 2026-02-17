@@ -730,9 +730,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .fm-ph-photo-frame {
-  width: 72px;
-  height: 72px;
-  border-radius: 50%;
+  width: 64px;
+  height: 80px;
+  border-radius: 4px;
   background: linear-gradient(145deg, #1e2e38, #162028);
   border: 2px solid #344a58;
   display: flex;
@@ -754,6 +754,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-size: 32px;
   color: #2e4452;
   margin-top: 8px;
+}
+
+.fm-ph-photo-img img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 4px;
 }
 
 .fm-ph-pos {
@@ -1456,6 +1463,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-match-squad-home { text-align: right; }
 .fm-match-squad-home .fm-squad-player small { margin-left: 0; margin-right: 4px; float: left; }
 
+.fm-match-squad-away { text-align: left; }
+.fm-match-squad-away .fm-squad-player small { margin-left: 0; margin-right: 0; float: right; }
+
 .fm-squad-divider {
   padding: 6px 12px;
   font-size: 10px;
@@ -1652,19 +1662,16 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
 .fm-tactics-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 300px 1fr;
   gap: 14px;
-  height: calc(100vh - 140px);
+  align-items: start;
 }
 
 .fm-tactics-grid > .fm-panel {
   overflow: hidden;
-  display: flex;
-  flex-direction: column;
 }
 
 .fm-tactics-grid > .fm-panel .fm-pitch {
-  flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1972,20 +1979,367 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-pitch-player.pos-st  { left: 50%; bottom: 86%; }
 
 /* Compact pitch variant */
-.fm-pitch-compact { padding: 10px; }
+.fm-pitch-compact { padding: 16px; }
 
 .fm-pitch-compact .fm-pitch-surface {
-  aspect-ratio: auto;
+  aspect-ratio: 0.72;
   width: 100%;
-  height: 100%;
+  max-width: 480px;
+  margin: 0 auto;
 }
 
 .fm-pitch-compact .fm-pitch-player-dot {
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
 }
 
 .fm-pitch-compact .fm-pitch-player-name {
   font-size: 9px;
   max-width: 70px;
+}
+
+/* ============================================
+   RESPONSIVE - MOBILE SIDEBAR & HEADER
+   ============================================ */
+
+/* Hamburger button */
+
+.fm-menu-toggle {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 48px;
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  border-right: 1px solid #e0e3e6;
+  cursor: pointer;
+  padding: 0;
+}
+
+.fm-menu-toggle span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: #1e272d;
+  position: relative;
+}
+
+.fm-menu-toggle span::before,
+.fm-menu-toggle span::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  width: 18px;
+  height: 2px;
+  background: #1e272d;
+}
+
+.fm-menu-toggle span::before { top: -6px; }
+.fm-menu-toggle span::after { top: 6px; }
+
+/* Sidebar overlay */
+
+.fm-sidebar-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1040;
+}
+
+/* Below lg breakpoint (< 992px) */
+
+@media (max-width: 991.98px) {
+  .fm-menu-toggle {
+    display: flex;
+  }
+
+  .fm-sidebar {
+    position: fixed !important;
+    top: 0;
+    left: 0;
+    bottom: 0;
+    width: 240px !important;
+    max-width: 80vw;
+    z-index: 1050;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    flex: none !important;
+  }
+
+  body.fm-sidebar-open .fm-sidebar {
+    transform: translateX(0);
+  }
+
+  body.fm-sidebar-open .fm-sidebar-overlay {
+    display: block;
+  }
+
+  .fm-header {
+    padding-left: 0;
+  }
+
+  .fm-header-title {
+    padding-left: 16px;
+  }
+
+  .fm-header-title h1 {
+    font-size: 17px;
+  }
+
+  .fm-date {
+    padding: 0 14px;
+  }
+
+  .fm-date-main {
+    font-size: 13px;
+  }
+
+  .fm-process-btn {
+    min-width: 100px;
+    padding: 0 16px;
+    font-size: 12px;
+  }
+
+  .fm-page {
+    padding: 12px 12px;
+  }
+
+  /* Player page: stack grid, 2-col details */
+  .fm-player-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .fm-player-grid-left { order: 2; }
+  .fm-player-grid-right { order: 1; }
+
+  .fm-ph-details {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .fm-ph-ratings {
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .fm-ph-cond-item {
+    margin-left: 0;
+  }
+
+  /* Wide tables: horizontal scroll */
+  .fm-stats,
+  .fm-schedule,
+  .fm-squad {
+    display: block;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .fm-schedule thead th,
+  .fm-schedule tbody td {
+    padding: 7px 8px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .fm-squad thead th,
+  .fm-squad tbody td {
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .fm-squad .sq-cond { width: 100px; }
+  .fm-squad .sq-name a { font-size: 12px; }
+
+  /* Tactics page: stack */
+  .fm-tactics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-pitch-compact .fm-pitch-surface {
+    max-width: 400px;
+  }
+}
+
+/* Below sm breakpoint (< 576px) */
+
+@media (max-width: 767.98px) {
+  /* Player banner: stack photo above identity */
+  .fm-ph-banner {
+    flex-direction: column;
+  }
+
+  .fm-ph-photo {
+    width: 100%;
+    flex-direction: row;
+    padding: 14px 16px;
+    gap: 14px;
+    border-right: none;
+    border-bottom: 1px solid #263340;
+  }
+
+  .fm-ph-identity {
+    padding: 14px 16px;
+  }
+
+  .fm-ph-name {
+    font-size: 18px;
+  }
+
+  /* Skills grid: single column */
+  .fm-skills-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-skill-col {
+    border-right: none;
+    border-bottom: 1px solid #263340;
+  }
+
+  .fm-skill-col:last-child {
+    border-bottom: none;
+  }
+
+  /* Schedule: card layout instead of table */
+  .fm-schedule {
+    display: block;
+    overflow-x: visible;
+  }
+
+  .fm-schedule thead { display: none; }
+  .fm-schedule tbody { display: block; }
+
+  .fm-schedule tbody tr {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    padding: 10px 14px;
+    gap: 2px 10px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    border-left: none;
+  }
+
+  .fm-schedule tbody tr:nth-child(even) {
+    background: rgba(0, 0, 0, 0.1);
+  }
+
+  .fm-schedule tbody td {
+    padding: 0;
+    border-bottom: none;
+    text-align: left;
+    font-size: 13px;
+    color: #b0bac2;
+    width: auto;
+  }
+
+  /* Row 1: date spans full width */
+  .fm-schedule .sch-date {
+    grid-column: 1 / -1;
+    font-size: 10px;
+    font-weight: 700;
+    color: #546a78;
+    text-transform: uppercase;
+    letter-spacing: 0.3px;
+  }
+
+  /* Time: hidden on mobile */
+  .fm-schedule .sch-time { display: none; }
+
+  /* Row 2: Opposition (left) + Venue badge (right) — auto-placed */
+  .fm-schedule .sch-venue {
+    width: auto;
+    text-align: right;
+  }
+
+  /* Row 3: Result (left) + Competition (right) — auto-placed */
+  .fm-schedule .sch-result {
+    width: auto;
+    text-align: left;
+  }
+
+  .fm-schedule .sch-comp {
+    text-align: right;
+    font-size: 11px;
+  }
+}
+
+@media (max-width: 575.98px) {
+  .fm-header-title h1 {
+    font-size: 14px;
+  }
+
+  .fm-header-sub {
+    font-size: 11px;
+  }
+
+  .fm-date {
+    display: none;
+  }
+
+  .fm-process-btn {
+    min-width: 80px;
+    padding: 0 12px;
+    font-size: 11px;
+    letter-spacing: 0.5px;
+  }
+
+  .fm-tabbar {
+    padding: 0 8px;
+  }
+
+  .fm-tab {
+    padding: 10px 12px;
+    font-size: 9px;
+  }
+
+  .fm-page {
+    padding: 10px 8px;
+  }
+
+  /* Player details: single column */
+  .fm-ph-details {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-ph-col {
+    border-right: none;
+    border-bottom: 1px solid #263340;
+  }
+
+  .fm-ph-col:last-child {
+    border-bottom: none;
+  }
+
+  /* Player ratings: stack */
+  .fm-ph-ratings {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .fm-ph-meta {
+    flex-wrap: wrap;
+  }
+
+  .fm-ph-name {
+    font-size: 16px;
+  }
+
+  /* Squad: tighter on small screens */
+  .fm-squad thead th,
+  .fm-squad tbody td {
+    padding: 5px 6px;
+    font-size: 11px;
+  }
+
+  .fm-squad .sq-inf { width: 32px; }
+  .fm-squad .sq-cond { width: 90px; }
+  .fm-cond-bar { width: 40px; }
+
+  .fm-stars .star {
+    width: 12px;
+    height: 12px;
+    font-size: 11px;
+    line-height: 12px;
+  }
 }

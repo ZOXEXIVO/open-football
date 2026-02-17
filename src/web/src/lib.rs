@@ -1,6 +1,7 @@
 mod countries;
 mod date;
 mod error;
+mod face;
 mod game;
 mod leagues;
 mod r#match;
