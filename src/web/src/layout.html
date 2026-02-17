@@ -32,11 +32,15 @@
                 </nav>
             </div>
             {% endif %}
+            <div class="fm-sidebar-overlay" onclick="document.body.classList.remove('fm-sidebar-open')"></div>
             <div class="col m-0 p-0">
                 <div class="container-fluid">
                     <div class="row">
                         <div class="col m-0 p-0">
                             <div class="fm-header">
+                                <button class="fm-menu-toggle d-lg-none" onclick="document.body.classList.toggle('fm-sidebar-open')" aria-label="Toggle menu">
+                                    <span></span>
+                                </button>
                                 <div class="fm-header-title">
                                     <h1>{{ title }}</h1>
                                     <a href="{{ sub_title_link }}" class="fm-header-sub">{{ sub_title }}</a>
