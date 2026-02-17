@@ -179,7 +179,7 @@ pub async fn league_get_action(
                                     home_goalscorers: details
                                         .iter()
                                         .filter_map(|detail| {
-                                            let player = simulator_data.player(detail.player_id).unwrap();
+                                            let player = simulator_data.player(detail.player_id)?;
                                             if home_team.players.contains(player.id) {
                                                 Some(LeagueTableGoalscorer {
                                                     id: detail.player_id,
@@ -205,7 +205,7 @@ pub async fn league_get_action(
                                     away_goalscorers: details
                                         .iter()
                                         .filter_map(|detail| {
-                                            let player = simulator_data.player(detail.player_id).unwrap();
+                                            let player = simulator_data.player(detail.player_id)?;
                                             if away_team.players.contains(player.id) {
                                                 Some(LeagueTableGoalscorer {
                                                     id: detail.player_id,
