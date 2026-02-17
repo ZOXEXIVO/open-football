@@ -119,7 +119,10 @@ impl LeagueResult {
             }
         }
 
-        // Per-player stats (shots, passes, tackles)
+        // Per-player stats (shots, passes, tackles, rating)
+        let mut best_rating: f32 = 0.0;
+        let mut best_player_id: Option<u32> = None;
+
         for (player_id, stats) in &details.player_stats {
             if let Some(player) = data.player_mut(*player_id) {
                 player.statistics.shots_on_target += stats.shots_on_target as f32;
@@ -134,6 +137,29 @@ impl LeagueResult {
                         player.statistics.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
                     }
                 }
+
+                // Update running average rating
+                let games = player.statistics.played + player.statistics.played_subs;
+                if games <= 1 {
+                    player.statistics.average_rating = stats.match_rating;
+                } else {
+                    let prev = player.statistics.average_rating;
+                    player.statistics.average_rating =
+                        (prev * (games - 1) as f32 + stats.match_rating) / games as f32;
+                }
+
+                // Track best rating for player of the match
+                if stats.match_rating > best_rating {
+                    best_rating = stats.match_rating;
+                    best_player_id = Some(*player_id);
+                }
+            }
+        }
+
+        // Award player of the match
+        if let Some(motm_id) = best_player_id {
+            if let Some(player) = data.player_mut(motm_id) {
+                player.statistics.player_of_the_match += 1;
             }
         }
     }

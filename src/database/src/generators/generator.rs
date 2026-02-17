@@ -139,6 +139,8 @@ impl DatabaseGenerator {
                     club.teams
                         .iter()
                         .map(|t| {
+                            let team_rep = t.reputation.world;
+
                             Team::builder()
                                 .id(t.id)
                                 .league_id(t.league_id)
@@ -158,9 +160,10 @@ impl DatabaseGenerator {
                                 .players(PlayerCollection::new(Self::generate_players(
                                     player_generator,
                                     country_id,
+                                    team_rep,
                                 )))
                                 .staffs(StaffCollection::new(
-                                    Self::generate_staffs(staff_generator, country_id)
+                                    Self::generate_staffs(staff_generator, country_id, team_rep)
                                 ))
                                 .build()
                                 .expect("Failed to build Team")
@@ -171,23 +174,23 @@ impl DatabaseGenerator {
             .collect()
     }
 
-    fn generate_players(player_generator: &mut PlayerGenerator, country_id: u32) -> Vec<Player> {
+    fn generate_players(player_generator: &mut PlayerGenerator, country_id: u32, team_reputation: u16) -> Vec<Player> {
         let mut players = Vec::with_capacity(100);
 
         let mut goalkeepers: Vec<Player> = (0..IntegerUtils::random(3, 5))
-            .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper))
+            .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper, team_reputation))
             .collect();
 
         let mut defenders: Vec<Player> = (0..IntegerUtils::random(20, 40))
-            .map(|_| player_generator.generate(country_id, PositionType::Defender))
+            .map(|_| player_generator.generate(country_id, PositionType::Defender, team_reputation))
             .collect();
 
         let mut midfielders: Vec<Player> = (0..IntegerUtils::random(25, 35))
-            .map(|_| player_generator.generate(country_id, PositionType::Midfielder))
+            .map(|_| player_generator.generate(country_id, PositionType::Midfielder, team_reputation))
             .collect();
 
         let mut strikers: Vec<Player> = (0..IntegerUtils::random(20, 24))
-            .map(|_| player_generator.generate(country_id, PositionType::Striker))
+            .map(|_| player_generator.generate(country_id, PositionType::Striker, team_reputation))
             .collect();
 
         players.append(&mut goalkeepers);
@@ -198,20 +201,20 @@ impl DatabaseGenerator {
         players
     }
 
-    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32) -> Vec<Staff> {
+    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, team_reputation: u16) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
-        staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Director));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
 
-        staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));
 
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
+        staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
 
         staffs
     }

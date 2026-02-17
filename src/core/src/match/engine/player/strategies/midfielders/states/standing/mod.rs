@@ -153,6 +153,7 @@ impl MidfielderStandingState {
     }
 
     /// Checks if an opponent player is nearby within the pressing threshold.
+    #[allow(dead_code)]
     fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players()
             .opponents()

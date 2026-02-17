@@ -659,9 +659,8 @@ mod tests {
     use super::*;
     use crate::shared::fullname::FullName;
     use crate::PersonAttributes;
-    use crate::club::player::builder::PlayerBuilder;
-
     fn create_test_player(id: u32, position: PlayerPositionType, ability: u8) -> Player {
+        use crate::club::player::builder::PlayerBuilder;
         use crate::club::player::*;
 
         PlayerBuilder::new()

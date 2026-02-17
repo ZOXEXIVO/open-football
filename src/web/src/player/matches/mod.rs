@@ -18,6 +18,7 @@ pub struct PlayerMatchesRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "player/matches/index.html")]
 pub struct PlayerMatchesTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -124,6 +125,7 @@ pub async fn player_matches_action(
     let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
 
     Ok(PlayerMatchesTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title: team.name.clone(),
         sub_title_link: format!("/teams/{}", &team.slug),

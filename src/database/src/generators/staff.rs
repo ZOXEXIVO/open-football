@@ -8,7 +8,7 @@ use core::{
     StaffGoalkeeperCoaching, StaffKnowledge, StaffLicenseType, StaffMedical, StaffMental,
     StaffPosition, StaffStatus, TechnicalFocusType,
 };
-use rand::{Rng, RngExt};
+use rand::RngExt;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{LazyLock};
 
@@ -30,12 +30,17 @@ impl StaffGenerator {
 }
 
 impl StaffGenerator {
-    pub fn generate(&mut self, country_id: u32, position: StaffPosition) -> Staff {
+    pub fn generate(&mut self, country_id: u32, position: StaffPosition, team_reputation: u16) -> Staff {
         let now = Utc::now();
+
+        let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
 
         let year = IntegerUtils::random(now.year() - 35, now.year() - 15) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
+
+        let salary_min = (1000.0 + rep_factor * 20000.0) as i32;
+        let salary_max = (5000.0 + rep_factor * 150000.0) as i32;
 
         Staff::new(
             STAFF_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst),
@@ -46,9 +51,9 @@ impl StaffGenerator {
             ),
             country_id,
             NaiveDate::from_ymd_opt(year as i32, month, day).unwrap(),
-            Self::generate_staff_attributes(),
+            Self::generate_staff_attributes(rep_factor),
             Some(StaffClubContract::new(
-                IntegerUtils::random(1000, 200000) as u32,
+                IntegerUtils::random(salary_min, salary_max) as u32,
                 NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap(),
                 position,
                 StaffStatus::Active,
@@ -93,43 +98,46 @@ impl StaffGenerator {
         }
     }
 
-    fn generate_staff_attributes() -> StaffAttributes {
+    fn generate_staff_attributes(rep_factor: f32) -> StaffAttributes {
+        let attr_min = (rep_factor * 8.0) as i32;
+        let attr_max = (6 + (rep_factor * 14.0) as i32).min(20);
+
         StaffAttributes {
             coaching: StaffCoaching {
-                attacking: IntegerUtils::random(0, 20) as u8,
-                defending: IntegerUtils::random(0, 20) as u8,
-                fitness: IntegerUtils::random(0, 20) as u8,
-                mental: IntegerUtils::random(0, 20) as u8,
-                tactical: IntegerUtils::random(0, 20) as u8,
-                technical: IntegerUtils::random(0, 20) as u8,
-                working_with_youngsters: IntegerUtils::random(0, 20) as u8,
+                attacking: IntegerUtils::random(attr_min, attr_max) as u8,
+                defending: IntegerUtils::random(attr_min, attr_max) as u8,
+                fitness: IntegerUtils::random(attr_min, attr_max) as u8,
+                mental: IntegerUtils::random(attr_min, attr_max) as u8,
+                tactical: IntegerUtils::random(attr_min, attr_max) as u8,
+                technical: IntegerUtils::random(attr_min, attr_max) as u8,
+                working_with_youngsters: IntegerUtils::random(attr_min, attr_max) as u8,
             },
             goalkeeping: StaffGoalkeeperCoaching {
-                distribution: IntegerUtils::random(0, 20) as u8,
-                handling: IntegerUtils::random(0, 20) as u8,
-                shot_stopping: IntegerUtils::random(0, 20) as u8,
+                distribution: IntegerUtils::random(attr_min, attr_max) as u8,
+                handling: IntegerUtils::random(attr_min, attr_max) as u8,
+                shot_stopping: IntegerUtils::random(attr_min, attr_max) as u8,
             },
             mental: StaffMental {
-                adaptability: IntegerUtils::random(0, 20) as u8,
-                determination: IntegerUtils::random(0, 20) as u8,
-                discipline: IntegerUtils::random(0, 20) as u8,
-                man_management: IntegerUtils::random(0, 20) as u8,
-                motivating: IntegerUtils::random(0, 20) as u8,
+                adaptability: IntegerUtils::random(attr_min, attr_max) as u8,
+                determination: IntegerUtils::random(attr_min, attr_max) as u8,
+                discipline: IntegerUtils::random(attr_min, attr_max) as u8,
+                man_management: IntegerUtils::random(attr_min, attr_max) as u8,
+                motivating: IntegerUtils::random(attr_min, attr_max) as u8,
             },
             knowledge: StaffKnowledge {
-                judging_player_ability: IntegerUtils::random(0, 20) as u8,
-                judging_player_potential: IntegerUtils::random(0, 20) as u8,
-                tactical_knowledge: IntegerUtils::random(0, 20) as u8,
+                judging_player_ability: IntegerUtils::random(attr_min, attr_max) as u8,
+                judging_player_potential: IntegerUtils::random(attr_min, attr_max) as u8,
+                tactical_knowledge: IntegerUtils::random(attr_min, attr_max) as u8,
             },
             data_analysis: StaffDataAnalysis {
-                judging_player_data: IntegerUtils::random(0, 20) as u8,
-                judging_team_data: IntegerUtils::random(0, 20) as u8,
-                presenting_data: IntegerUtils::random(0, 20) as u8,
+                judging_player_data: IntegerUtils::random(attr_min, attr_max) as u8,
+                judging_team_data: IntegerUtils::random(attr_min, attr_max) as u8,
+                presenting_data: IntegerUtils::random(attr_min, attr_max) as u8,
             },
             medical: StaffMedical {
-                physiotherapy: IntegerUtils::random(0, 20) as u8,
-                sports_science: IntegerUtils::random(0, 20) as u8,
-                non_player_tendencies: IntegerUtils::random(0, 20) as u8,
+                physiotherapy: IntegerUtils::random(attr_min, attr_max) as u8,
+                sports_science: IntegerUtils::random(attr_min, attr_max) as u8,
+                non_player_tendencies: IntegerUtils::random(attr_min, attr_max) as u8,
             },
         }
     }

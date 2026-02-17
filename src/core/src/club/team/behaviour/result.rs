@@ -1,4 +1,4 @@
-use crate::SimulatorData;
+use crate::{ChangeType, SimulatorData};
 
 pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
@@ -40,13 +40,17 @@ impl PlayerBehaviourResult {
     }
 
     pub fn process(&self, data: &mut SimulatorData) {
-        for relationship_result in &self.relationship_result {
-            let player_to_modify = data.player_mut(relationship_result.from_player_id).unwrap();
+        let sim_date = data.date.date();
 
-            player_to_modify.relations.update(
-                relationship_result.to_player_id,
-                relationship_result.relationship_change,
-            );
+        for relationship_result in &self.relationship_result {
+            if let Some(player_to_modify) = data.player_mut(relationship_result.from_player_id) {
+                player_to_modify.relations.update_with_type(
+                    relationship_result.to_player_id,
+                    relationship_result.relationship_change,
+                    relationship_result.change_type.clone(),
+                    sim_date,
+                );
+            }
         }
     }
 }
@@ -55,4 +59,5 @@ pub struct PlayerRelationshipChangeResult {
     pub from_player_id: u32,
     pub to_player_id: u32,
     pub relationship_change: f32,
+    pub change_type: ChangeType,
 }

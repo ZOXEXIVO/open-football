@@ -269,6 +269,16 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-style: italic;
 }
 
+.fm-transfers-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.fm-transfers-row .fm-panel {
+  margin-bottom: 0;
+}
+
 /* ============================================
    FM BADGES
    ============================================ */
@@ -291,6 +301,21 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-badge-wnt {
   background: #2a7a3f;
   color: #c8f0d0;
+}
+
+.fm-badge-lst {
+  background: #2a7a3f;
+  color: #c8f0d0;
+}
+
+.fm-badge-loan-in {
+  background: #b2ebf2;
+  color: #00606e;
+}
+
+.fm-badge-loan-out {
+  background: #00838f;
+  color: #e0f7fa;
 }
 
 /* ============================================
@@ -1257,6 +1282,18 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   border-top: 1px solid #263340;
 }
 
+.fm-loan-badge {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #e8a735;
+  background: rgba(232, 167, 53, 0.12);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+
 /* ============================================
    LEAGUE PAGE - PLAYER STATS TABLES
    ============================================ */
@@ -1387,11 +1424,6 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   min-width: 200px;
   transition: background 0.1s, color 0.1s;
   border-radius: 3px;
-}
-
-.fm-country-item:hover {
-  background: rgba(255, 255, 255, 0.04);
-  color: #fff;
 }
 
 .fm-league-list { padding: 0; }

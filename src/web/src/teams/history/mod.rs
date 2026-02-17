@@ -16,6 +16,7 @@ pub struct TeamHistoryRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/history/index.html")]
 pub struct TeamHistoryTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -83,6 +84,7 @@ pub async fn team_history_action(
         .collect();
 
     Ok(TeamHistoryTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

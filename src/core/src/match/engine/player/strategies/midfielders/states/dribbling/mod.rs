@@ -99,6 +99,7 @@ impl MidfielderDribblingState {
         distance_to_goal <= shooting_range
     }
 
+    #[allow(dead_code)]
     fn should_return_to_position(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player is far from their starting position and the team is not in possession
         let distance_from_start = ctx.player().distance_from_start_position();
@@ -107,6 +108,7 @@ impl MidfielderDribblingState {
         distance_from_start > 20.0 && !team_in_possession
     }
 
+    #[allow(dead_code)]
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
         // Check if the player should press the opponent with the ball
         let ball_distance = ctx.ball().distance();

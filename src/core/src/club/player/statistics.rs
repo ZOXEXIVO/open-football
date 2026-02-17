@@ -27,6 +27,8 @@ pub struct PlayerStatisticsHistory {
 #[derive(Debug)]
 pub struct PlayerStatisticsHistoryItem {
     pub season: Season,
+    pub team_name: String,
+    pub is_loan: bool,
     pub statistics: PlayerStatistics,
 }
 

@@ -13,6 +13,8 @@ pub struct TransferNegotiation {
     pub status: NegotiationStatus,
     pub expiry_date: NaiveDate,
     pub created_date: NaiveDate,
+    pub is_loan: bool,
+    pub is_unsolicited: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -34,8 +36,10 @@ impl TransferNegotiation {
         initial_offer: TransferOffer,
         created_date: NaiveDate,
     ) -> Self {
-        // Negotiations expire after 3 days by default
-        let expiry_date = created_date.checked_add_signed(chrono::Duration::days(3))
+        // Negotiations take 3-14 days to resolve
+        use crate::utils::IntegerUtils;
+        let duration_days = IntegerUtils::random(3, 14) as i64;
+        let expiry_date = created_date.checked_add_signed(chrono::Duration::days(duration_days))
             .unwrap_or(created_date);
 
         TransferNegotiation {
@@ -49,6 +53,8 @@ impl TransferNegotiation {
             status: NegotiationStatus::Pending,
             expiry_date,
             created_date,
+            is_loan: false,
+            is_unsolicited: false,
         }
     }
 
@@ -66,8 +72,19 @@ impl TransferNegotiation {
         self.status = NegotiationStatus::Rejected;
     }
 
+    pub fn is_ready_to_resolve(&self, current_date: NaiveDate) -> bool {
+        current_date >= self.expiry_date
+            && (self.status == NegotiationStatus::Pending || self.status == NegotiationStatus::Countered)
+    }
+
     pub fn check_expired(&mut self, current_date: NaiveDate) -> bool {
-        if current_date >= self.expiry_date && self.status == NegotiationStatus::Pending {
+        // Negotiations that have gone 7 days past expiry without resolution expire
+        let hard_deadline = self.expiry_date
+            .checked_add_signed(chrono::Duration::days(7))
+            .unwrap_or(self.expiry_date);
+        if current_date >= hard_deadline
+            && (self.status == NegotiationStatus::Pending || self.status == NegotiationStatus::Countered)
+        {
             self.status = NegotiationStatus::Expired;
             return true;
         }

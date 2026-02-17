@@ -41,5 +41,69 @@
         </table>
         {% endif %}
     </section>
+
+    <div class="fm-transfers-row">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>Incoming Transfers</h3>
+                <span class="fm-panel-count">{{ incoming_transfers.len() }}</span>
+            </div>
+            {% if incoming_transfers.is_empty() %}
+            <div class="fm-empty">No incoming transfers</div>
+            {% else %}
+            <table class="fm-squad">
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>From</th>
+                        <th>Fee</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in incoming_transfers %}
+                    <tr>
+                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td>{{ item.fee }}</td>
+                        <td>{{ item.date }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>Outgoing Transfers</h3>
+                <span class="fm-panel-count">{{ outgoing_transfers.len() }}</span>
+            </div>
+            {% if outgoing_transfers.is_empty() %}
+            <div class="fm-empty">No outgoing transfers</div>
+            {% else %}
+            <table class="fm-squad">
+                <thead>
+                    <tr>
+                        <th>Player</th>
+                        <th>To</th>
+                        <th>Fee</th>
+                        <th>Date</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in outgoing_transfers %}
+                    <tr>
+                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td>{{ item.fee }}</td>
+                        <td>{{ item.date }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
 </div>
 {% endblock %}

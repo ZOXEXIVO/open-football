@@ -7,7 +7,7 @@ use crate::r#match::{
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 15.0;
 const FOUL_CHANCE_BASE: f32 = 0.2;

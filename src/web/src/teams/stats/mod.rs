@@ -16,6 +16,7 @@ pub struct TeamStatsRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/stats/index.html")]
 pub struct TeamStatsTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -97,6 +98,7 @@ pub async fn team_stats_action(
     players.sort_by(|a, b| b.average_rating.partial_cmp(&a.average_rating).unwrap_or(std::cmp::Ordering::Equal));
 
     Ok(TeamStatsTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

@@ -6,6 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::league::Season;
+use chrono::Datelike;
 use core::{Player, SimulatorData, Team};
 use serde::Deserialize;
 
@@ -18,6 +19,7 @@ pub struct PlayerHistoryRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "player/history/index.html")]
 pub struct PlayerHistoryTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -25,11 +27,15 @@ pub struct PlayerHistoryTemplate {
     pub team_slug: String,
     pub player_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
+    pub current_club: String,
+    pub current_season: String,
     pub current: PlayerHistoryStats,
 }
 
 pub struct PlayerHistorySeasonItem {
     pub season: String,
+    pub team_name: String,
+    pub is_loan: bool,
     pub stats: PlayerHistoryStats,
 }
 
@@ -88,7 +94,7 @@ pub async fn player_history_action(
 
     let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
 
-    let items: Vec<PlayerHistorySeasonItem> = player
+    let mut items: Vec<PlayerHistorySeasonItem> = player
         .statistics_history
         .items
         .iter()
@@ -100,6 +106,8 @@ pub async fn player_history_action(
 
             PlayerHistorySeasonItem {
                 season: season_str,
+                team_name: item.team_name.clone(),
+                is_loan: item.is_loan,
                 stats: PlayerHistoryStats {
                     played: item.statistics.played,
                     played_subs: item.statistics.played_subs,
@@ -118,6 +126,9 @@ pub async fn player_history_action(
         })
         .collect();
 
+    // Most recent season first
+    items.reverse();
+
     let current = PlayerHistoryStats {
         played: player.statistics.played,
         played_subs: player.statistics.played_subs,
@@ -135,7 +146,17 @@ pub async fn player_history_action(
 
     let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
 
+    let sim_date = simulator_data.date.date();
+    let year = sim_date.year();
+    let month = sim_date.month();
+    let current_season = if month >= 7 {
+        format!("{}/{}", year, (year + 1) % 100)
+    } else {
+        format!("{}/{}", year - 1, year % 100)
+    };
+
     Ok(PlayerHistoryTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title: team.name.clone(),
         sub_title_link: format!("/teams/{}", &team.slug),
@@ -143,6 +164,8 @@ pub async fn player_history_action(
         team_slug: team.slug.clone(),
         player_id: route_params.player_id,
         items,
+        current_club: team.name.clone(),
+        current_season,
         current,
     })
 }

@@ -34,12 +34,17 @@ pub enum PositionType {
 }
 
 impl PlayerGenerator {
-    pub fn generate(&mut self, country_id: u32, position: PositionType) -> Player {
+    pub fn generate(&mut self, country_id: u32, position: PositionType, team_reputation: u16) -> Player {
         let now = Utc::now();
+
+        let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
 
         let year = IntegerUtils::random(now.year() - 35, now.year() - 15) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
+
+        let salary_min = (2000.0 + rep_factor * 30000.0) as i32;
+        let salary_max = (10000.0 + rep_factor * 190000.0) as i32;
 
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
@@ -50,11 +55,11 @@ impl PlayerGenerator {
             ))
             .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
             .country_id(country_id)
-            .skills(Self::generate_skills())
+            .skills(Self::generate_skills(rep_factor))
             .attributes(Self::generate_person_attributes())
-            .player_attributes(Self::generate_player_attributes())
+            .player_attributes(Self::generate_player_attributes(rep_factor))
             .contract(Some(PlayerClubContract::new(
-                IntegerUtils::random(1000, 200000) as u32,
+                IntegerUtils::random(salary_min, salary_max) as u32,
                 NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap(),
             )))
             .positions(Self::generate_positions(position))
@@ -62,50 +67,53 @@ impl PlayerGenerator {
             .expect("Failed to build Player")
     }
 
-    fn generate_skills() -> PlayerSkills {
+    fn generate_skills(rep_factor: f32) -> PlayerSkills {
+        let skill_min = 1.0 + rep_factor * 8.0;
+        let skill_max = (6.0 + rep_factor * 15.0).min(20.0);
+
         PlayerSkills {
             technical: Technical {
-                corners: FloatUtils::random(1.0, 20.0),
-                crossing: FloatUtils::random(1.0, 20.0),
-                dribbling: FloatUtils::random(1.0, 20.0),
-                finishing: FloatUtils::random(1.0, 20.0),
-                first_touch: FloatUtils::random(1.0, 20.0),
-                free_kicks: FloatUtils::random(1.0, 20.0),
-                heading: FloatUtils::random(1.0, 20.0),
-                long_shots: FloatUtils::random(1.0, 20.0),
-                long_throws: FloatUtils::random(1.0, 20.0),
-                marking: FloatUtils::random(1.0, 20.0),
-                passing: FloatUtils::random(1.0, 20.0),
-                penalty_taking: FloatUtils::random(1.0, 20.0),
-                tackling: FloatUtils::random(1.0, 20.0),
-                technique: FloatUtils::random(1.0, 20.0),
+                corners: FloatUtils::random(skill_min, skill_max),
+                crossing: FloatUtils::random(skill_min, skill_max),
+                dribbling: FloatUtils::random(skill_min, skill_max),
+                finishing: FloatUtils::random(skill_min, skill_max),
+                first_touch: FloatUtils::random(skill_min, skill_max),
+                free_kicks: FloatUtils::random(skill_min, skill_max),
+                heading: FloatUtils::random(skill_min, skill_max),
+                long_shots: FloatUtils::random(skill_min, skill_max),
+                long_throws: FloatUtils::random(skill_min, skill_max),
+                marking: FloatUtils::random(skill_min, skill_max),
+                passing: FloatUtils::random(skill_min, skill_max),
+                penalty_taking: FloatUtils::random(skill_min, skill_max),
+                tackling: FloatUtils::random(skill_min, skill_max),
+                technique: FloatUtils::random(skill_min, skill_max),
             },
             mental: Mental {
-                aggression: FloatUtils::random(1.0, 20.0),
-                anticipation: FloatUtils::random(1.0, 20.0),
-                bravery: FloatUtils::random(1.0, 20.0),
-                composure: FloatUtils::random(1.0, 20.0),
-                concentration: FloatUtils::random(1.0, 20.0),
-                decisions: FloatUtils::random(1.0, 20.0),
-                determination: FloatUtils::random(1.0, 20.0),
-                flair: FloatUtils::random(1.0, 20.0),
-                leadership: FloatUtils::random(1.0, 20.0),
-                off_the_ball: FloatUtils::random(1.0, 20.0),
-                positioning: FloatUtils::random(1.0, 20.0),
-                teamwork: FloatUtils::random(1.0, 20.0),
-                vision: FloatUtils::random(1.0, 20.0),
-                work_rate: FloatUtils::random(1.0, 20.0),
+                aggression: FloatUtils::random(skill_min, skill_max),
+                anticipation: FloatUtils::random(skill_min, skill_max),
+                bravery: FloatUtils::random(skill_min, skill_max),
+                composure: FloatUtils::random(skill_min, skill_max),
+                concentration: FloatUtils::random(skill_min, skill_max),
+                decisions: FloatUtils::random(skill_min, skill_max),
+                determination: FloatUtils::random(skill_min, skill_max),
+                flair: FloatUtils::random(skill_min, skill_max),
+                leadership: FloatUtils::random(skill_min, skill_max),
+                off_the_ball: FloatUtils::random(skill_min, skill_max),
+                positioning: FloatUtils::random(skill_min, skill_max),
+                teamwork: FloatUtils::random(skill_min, skill_max),
+                vision: FloatUtils::random(skill_min, skill_max),
+                work_rate: FloatUtils::random(skill_min, skill_max),
             },
             physical: Physical {
-                acceleration: FloatUtils::random(1.0, 20.0),
-                agility: FloatUtils::random(1.0, 20.0),
-                balance: FloatUtils::random(1.0, 20.0),
-                jumping: FloatUtils::random(1.0, 20.0),
-                natural_fitness: FloatUtils::random(1.0, 20.0),
-                pace: FloatUtils::random(1.0, 20.0),
-                stamina: FloatUtils::random(1.0, 20.0),
-                strength: FloatUtils::random(1.0, 20.0),
-                match_readiness: FloatUtils::random(1.0, 20.0),
+                acceleration: FloatUtils::random(skill_min, skill_max),
+                agility: FloatUtils::random(skill_min, skill_max),
+                balance: FloatUtils::random(skill_min, skill_max),
+                jumping: FloatUtils::random(skill_min, skill_max),
+                natural_fitness: FloatUtils::random(skill_min, skill_max),
+                pace: FloatUtils::random(skill_min, skill_max),
+                stamina: FloatUtils::random(skill_min, skill_max),
+                strength: FloatUtils::random(skill_min, skill_max),
+                match_readiness: FloatUtils::random(skill_min, skill_max),
             },
         }
     }
@@ -242,23 +250,33 @@ impl PlayerGenerator {
         }
     }
 
-    fn generate_player_attributes() -> PlayerAttributes {
+    fn generate_player_attributes(rep_factor: f32) -> PlayerAttributes {
+        let ca_min = (rep_factor * 80.0) as i32;
+        let ca_max = (40.0 + rep_factor * 130.0).min(200.0) as i32;
+        let current_ability = IntegerUtils::random(ca_min, ca_max).min(200) as u8;
+
+        let pa_min = current_ability as i32;
+        let pa_max = (current_ability as i32 + 50).min(200);
+        let potential_ability = IntegerUtils::random(pa_min, pa_max) as u8;
+
+        let rep_base = (rep_factor * 3000.0) as i32;
+
         PlayerAttributes {
             is_banned: false,
             is_injured: false,
-            condition: IntegerUtils::random(0, 10000) as i16,
-            fitness: IntegerUtils::random(0, 10000) as i16,
-            jadedness: IntegerUtils::random(0, 10000) as i16,
+            condition: IntegerUtils::random(3000, 10000) as i16,
+            fitness: IntegerUtils::random(3000, 10000) as i16,
+            jadedness: IntegerUtils::random(0, 5000) as i16,
             weight: IntegerUtils::random(60, 100) as u8,
             height: IntegerUtils::random(150, 220) as u8,
             value: 0,
-            current_reputation: IntegerUtils::random(0, 3000) as i16,
-            home_reputation: IntegerUtils::random(0, 3000) as i16,
-            world_reputation: IntegerUtils::random(0, 1000) as i16,
-            current_ability: IntegerUtils::random(0, 100) as u8,
-            potential_ability: IntegerUtils::random(80, 200) as u8,
-            international_apps: IntegerUtils::random(0, 100) as u16,
-            international_goals: IntegerUtils::random(0, 40) as u16,
+            current_reputation: IntegerUtils::random((rep_base as f32 * 0.3) as i32, rep_base) as i16,
+            home_reputation: IntegerUtils::random((rep_base as f32 * 0.5) as i32, rep_base) as i16,
+            world_reputation: IntegerUtils::random((rep_base as f32 * 0.1) as i32, (rep_base as f32 * 0.4) as i32) as i16,
+            current_ability,
+            potential_ability,
+            international_apps: IntegerUtils::random(0, (rep_factor * 100.0) as i32) as u16,
+            international_goals: IntegerUtils::random(0, (rep_factor * 40.0) as i32) as u16,
             under_21_international_apps: IntegerUtils::random(0, 30) as u16,
             under_21_international_goals: IntegerUtils::random(0, 10) as u16,
             injury_days_remaining: 0,

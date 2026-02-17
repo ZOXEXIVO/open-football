@@ -9,12 +9,16 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 // Realistic shooting distances (field is 840 units)
+#[allow(dead_code)]
 const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
+#[allow(dead_code)]
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+#[allow(dead_code)]
 const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+#[allow(dead_code)]
 const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
 
 // Passing decision thresholds for forwards
@@ -295,6 +299,7 @@ impl ForwardRunningState {
     }
 
     /// Check if under immediate pressure
+    #[allow(dead_code)]
     fn is_under_immediate_pressure(&self, ctx: &StateProcessingContext) -> bool {
         let close_opponents = ctx.players().opponents().nearby(30.0).count();
         close_opponents >= 1
@@ -756,6 +761,7 @@ impl ForwardRunningState {
     }
 
     /// Calculate intelligent support run position
+    #[allow(dead_code)]
     fn calculate_support_run_position(
         &self,
         ctx: &StateProcessingContext,
@@ -779,6 +785,7 @@ impl ForwardRunningState {
     }
 
     /// Calculate wide support position
+    #[allow(dead_code)]
     fn calculate_wide_support_position(
         &self,
         ctx: &StateProcessingContext,
@@ -805,6 +812,7 @@ impl ForwardRunningState {
     }
 
     /// Calculate central support position
+    #[allow(dead_code)]
     fn calculate_central_support_position(
         &self,
         ctx: &StateProcessingContext,
@@ -917,6 +925,7 @@ impl ForwardRunningState {
     }
 
     /// Check if any teammate is in a significantly better scoring position
+    #[allow(dead_code)]
     fn has_better_positioned_teammate(
         &self,
         ctx: &StateProcessingContext,
@@ -1094,6 +1103,7 @@ impl ForwardRunningState {
     }
 
     // Calculate tactical run position for better support when team has possession
+    #[allow(dead_code)]
     fn calculate_tactical_run_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
@@ -1148,6 +1158,7 @@ impl ForwardRunningState {
     }
 
     // Calculate defensive position when team doesn't have possession
+    #[allow(dead_code)]
     fn calculate_defensive_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let field_width = ctx.context.field_size.width as f32;
 
@@ -1165,6 +1176,7 @@ impl ForwardRunningState {
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around
+    #[allow(dead_code)]
     fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
         // Check if near any boundary (within 20 units)
         let field_width = ctx.context.field_size.width as f32;

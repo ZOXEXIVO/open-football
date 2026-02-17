@@ -9,6 +9,7 @@ use nalgebra::Vector3;
 const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 25.0;
 const SPACE_CREATION_RADIUS: f32 = 20.0;
+#[allow(dead_code)]
 const HALF_SPACE_WIDTH: f32 = 15.0;
 
 #[derive(Default)]
@@ -457,6 +458,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Make a third man run (beyond the immediate play)
+    #[allow(dead_code)]
     fn make_third_man_run(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
         // Identify potential passing sequence
         if let Some(ball_holder) = self.find_ball_holder(ctx) {
@@ -484,6 +486,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Create central overload
+    #[allow(dead_code)]
     fn create_central_overload(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let field_center_y = field_height / 2.0;
@@ -565,6 +568,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Helper methods
+    #[allow(dead_code)]
     fn get_movement_pattern(&self, ctx: &StateProcessingContext) -> MovementPattern {
         let time_mod = ctx.in_state_time % 30;
 
@@ -597,6 +601,7 @@ impl MidfielderCreatingSpaceState {
         player_pos + to_ball * 10.0
     }
 
+    #[allow(dead_code)]
     fn get_ball_zone(&self, ctx: &StateProcessingContext) -> BallZone {
         let ball_x = ctx.tick_context.positions.ball.position.x;
         let field_width = ctx.context.field_size.width as f32;
@@ -616,6 +621,7 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn analyze_team_shape(&self, ctx: &StateProcessingContext) -> TeamShape {
         let teammates = ctx.players().teammates().all().collect::<Vec<_>>();
 
@@ -637,6 +643,7 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn analyze_opponent_shape(&self, ctx: &StateProcessingContext) -> OpponentShape {
         let opponents = ctx.players().opponents().all().collect::<Vec<_>>();
         let defenders = opponents.iter()
@@ -665,11 +672,13 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn is_half_space_occupied(&self, ctx: &StateProcessingContext, y_position: f32) -> bool {
         ctx.players().teammates().all()
             .any(|t| (t.position.y - y_position).abs() < HALF_SPACE_WIDTH)
     }
 
+    #[allow(dead_code)]
     fn can_exploit_half_space(&self, ctx: &StateProcessingContext) -> bool {
         let vision = ctx.player.skills.mental.vision;
         let off_ball = ctx.player.skills.mental.off_the_ball;
@@ -677,6 +686,7 @@ impl MidfielderCreatingSpaceState {
         vision > 13.0 && off_ball > 12.0
     }
 
+    #[allow(dead_code)]
     fn find_lateral_space_between_lines(
         &self,
         ctx: &StateProcessingContext,
@@ -708,6 +718,7 @@ impl MidfielderCreatingSpaceState {
         gap_center
     }
 
+    #[allow(dead_code)]
     fn calculate_progressive_position(&self, ctx: &StateProcessingContext, field_width: f32, field_height: f32) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let attacking_direction = match ctx.player.side {
@@ -723,6 +734,7 @@ impl MidfielderCreatingSpaceState {
         ).clamp_to_field(field_width, field_height)
     }
 
+    #[allow(dead_code)]
     fn determine_overload_strategy(&self, ctx: &StateProcessingContext) -> OverloadStrategy {
         // Based on team tactics and game situation
         if ctx.team().is_loosing() {
@@ -732,6 +744,7 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn calculate_position_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         let mut congestion = 0.0;
 
@@ -768,6 +781,7 @@ impl MidfielderCreatingSpaceState {
         None
     }
 
+    #[allow(dead_code)]
     fn predict_next_pass_recipient(
         &self,
         ctx: &StateProcessingContext,
@@ -783,6 +797,7 @@ impl MidfielderCreatingSpaceState {
             })
     }
 
+    #[allow(dead_code)]
     fn calculate_run_angle(&self, ctx: &StateProcessingContext, target: &MatchPlayerLite) -> f32 {
         // Angle away from target's current position
         if target.position.y < ctx.context.field_size.height as f32 / 2.0 {
@@ -792,6 +807,7 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn calculate_depth_variation(&self, ctx: &StateProcessingContext) -> f32 {
         // Vary depth based on other midfielders
         let other_mids = ctx.players().teammates().all()
@@ -806,6 +822,7 @@ impl MidfielderCreatingSpaceState {
         }
     }
 
+    #[allow(dead_code)]
     fn calculate_central_lane_offset(&self, ctx: &StateProcessingContext) -> f32 {
         // Slight offset to create passing lanes
         if ctx.in_state_time % 40 < 20 {
@@ -854,6 +871,7 @@ impl MidfielderCreatingSpaceState {
         creating_space_count >= 3
     }
 
+    #[allow(dead_code)]
     fn is_opponent_compact_central(&self, ctx: &StateProcessingContext) -> bool {
         let field_height = ctx.context.field_size.height as f32;
         let central_opponents = ctx.players().opponents().all()
@@ -863,6 +881,7 @@ impl MidfielderCreatingSpaceState {
         central_opponents >= 6
     }
 
+    #[allow(dead_code)]
     fn is_opponent_narrow(&self, ctx: &StateProcessingContext) -> bool {
         let opponents = ctx.players().opponents().all().collect::<Vec<_>>();
         if opponents.is_empty() {
@@ -877,6 +896,7 @@ impl MidfielderCreatingSpaceState {
 }
 
 // Supporting types
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum SpaceType {
     HalfSpace,
@@ -887,6 +907,7 @@ enum SpaceType {
     CentralOverload,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum BallZone {
     DefensiveThird,
@@ -894,12 +915,14 @@ enum BallZone {
     AttackingThird,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy)]
 enum OverloadStrategy {
     CreateNumericalAdvantage,
     BalanceWidth,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 struct TeamShape {
     width: f32,
@@ -907,12 +930,14 @@ struct TeamShape {
     compactness: f32,
 }
 
+#[allow(dead_code)]
 impl TeamShape {
     fn is_stretched(&self) -> bool {
         self.depth > 300.0 || self.width > 400.0
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Default)]
 struct OpponentShape {
     high_line: bool,
@@ -920,6 +945,7 @@ struct OpponentShape {
     narrow: bool,
 }
 
+#[allow(dead_code)]
 impl OpponentShape {
     fn has_high_line(&self) -> bool {
         self.high_line
@@ -931,6 +957,7 @@ impl OpponentShape {
 }
 
 // Extension trait
+#[allow(dead_code)]
 trait VectorFieldExtensions {
     fn clamp_to_field(self, field_width: f32, field_height: f32) -> Self;
 }

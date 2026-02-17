@@ -1,6 +1,7 @@
 use crate::context::GlobalContext;
 use crate::continent::{Tournament, TournamentContext};
 
+#[allow(dead_code)]
 pub struct ChampionLeague {}
 
 impl ChampionLeague {}

@@ -15,7 +15,15 @@ impl Transfers {
     }
 
     pub fn add(&mut self, item: TransferItem) {
+        // Don't add duplicates
+        if self.items.iter().any(|i| i.player_id == item.player_id) {
+            return;
+        }
         self.items.push(item);
+    }
+
+    pub fn remove(&mut self, player_id: u32) {
+        self.items.retain(|item| item.player_id != player_id);
     }
 
     pub fn items(&self) -> &[TransferItem] {

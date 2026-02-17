@@ -111,6 +111,7 @@ impl CountryBuilder {
             international_competitions: self.international_competitions.unwrap_or_default(),
             media_coverage: self.media_coverage.unwrap_or_else(MediaCoverage::new),
             regulations: self.regulations.unwrap_or_else(CountryRegulations::new),
+            scouting_interests: Vec::new(),
         })
     }
 }

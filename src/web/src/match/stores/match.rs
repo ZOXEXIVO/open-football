@@ -11,6 +11,7 @@ const CHUNK_DURATION_MS: u64 = 300_000; // 5 minutes per chunk
 pub struct MatchStore;
 
 impl MatchStore {
+    #[allow(dead_code)]
     pub async fn get(league_slug: &str, match_id: &str) -> Vec<u8> {
         let match_file = PathBuf::from(MATCH_DIRECTORY)
             .join(league_slug)

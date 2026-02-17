@@ -2,13 +2,14 @@ use crate::context::SimulationContext;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 use chrono::NaiveDateTime;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum ContractType {
     PartTime,
     FullTime,
     Amateur,
     Youth,
     NonContract,
+    Loan,
 }
 
 #[derive(Debug)]
@@ -61,6 +62,21 @@ impl PlayerClubContract {
             is_transfer_listed: false,
             started: Option::None,
             expiration: expired,
+            bonuses: vec![],
+            clauses: vec![],
+        }
+    }
+
+    pub fn new_loan(salary: u32, expiration: NaiveDate) -> Self {
+        PlayerClubContract {
+            shirt_number: None,
+            salary,
+            contract_type: ContractType::Loan,
+            squad_status: PlayerSquadStatus::NotYetSet,
+            transfer_status: None,
+            is_transfer_listed: false,
+            started: Option::None,
+            expiration,
             bonuses: vec![],
             clauses: vec![],
         }

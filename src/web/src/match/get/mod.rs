@@ -17,6 +17,7 @@ pub struct MatchGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "match/get/index.html")]
 pub struct MatchGetTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -190,6 +191,7 @@ pub async fn match_get_action(
     );
 
     Ok(MatchGetTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

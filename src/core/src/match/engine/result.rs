@@ -11,6 +11,9 @@ pub struct PlayerMatchEndStats {
     pub passes_attempted: u16,
     pub passes_completed: u16,
     pub tackles: u16,
+    pub goals: u16,
+    pub assists: u16,
+    pub match_rating: f32,
 }
 
 #[derive(Debug)]

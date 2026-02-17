@@ -1,5 +1,5 @@
 use crate::shared::CurrencyValue;
-use crate::{Person, Player, PlayerValueCalculator};
+use crate::{Player, PlayerValueCalculator};
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 
@@ -48,87 +48,29 @@ impl TransferWindowManager {
     }
 }
 
-/// Generates appropriate values for players based on multiple factors
+/// Transfer-market-specific player valuation.
+/// Wraps `PlayerValueCalculator` with market conditions (selling pressure, squad role).
 pub struct PlayerValuationCalculator;
 
 impl PlayerValuationCalculator {
     pub fn calculate_value(player: &Player, date: NaiveDate) -> CurrencyValue {
-        // Use the existing calculator as a base
         let base_value = PlayerValueCalculator::calculate(player, date);
 
-        // Apply market modifiers
-        let market_adjusted_value = Self::apply_market_factors(base_value, player, date);
+        // Transfer-listed players face market discount (buyer leverage)
+        let mut market_value = base_value;
+
+        if player.statuses.get().contains(&crate::PlayerStatusType::Lst) {
+            market_value *= 0.9;
+        }
+
+        // Players wanting to leave lose negotiating power
+        if player.statuses.get().contains(&crate::PlayerStatusType::Req) {
+            market_value *= 0.85;
+        }
 
         CurrencyValue {
-            amount: market_adjusted_value,
+            amount: market_value,
             currency: crate::shared::Currency::Usd,
         }
-    }
-
-    fn apply_market_factors(base_value: f64, player: &Player, date: NaiveDate) -> f64 {
-        let mut adjusted_value = base_value;
-
-        // Contract length factor - extremely important
-        if let Some(contract) = &player.contract {
-            let days_remaining = contract.days_to_expiration(date.and_hms_opt(0, 0, 0).unwrap());
-            let years_remaining = days_remaining as f64 / 365.0;
-
-            if years_remaining < 0.5 {
-                // Less than 6 months - massive devaluation
-                adjusted_value *= 0.3;
-            } else if years_remaining < 1.0 {
-                // Less than a year - significant devaluation
-                adjusted_value *= 0.6;
-            } else if years_remaining < 2.0 {
-                // 1-2 years - moderate devaluation
-                adjusted_value *= 0.8;
-            } else if years_remaining > 4.0 {
-                // Long contract - slight value increase
-                adjusted_value *= 1.1;
-            }
-        }
-
-        // Player age factor (already included in base calculator but we can fine-tune)
-        let age = player.age(date);
-        if age < 23 {
-            // Young players with potential
-            adjusted_value *= 1.2;
-        } else if age > 32 {
-            // Older players
-            adjusted_value *= 0.7;
-        }
-
-        // Recent performance factor
-        let goals = player.statistics.goals;
-        let assists = player.statistics.assists;
-        let played = player.statistics.played;
-
-        if played > 10 {
-            // Had significant playing time
-            let goals_per_game = goals as f64 / played as f64;
-            let assists_per_game = assists as f64 / played as f64;
-
-            // Attackers valued by goals
-            if player.position().is_forward() && goals_per_game > 0.5 {
-                adjusted_value *= 1.0 + (goals_per_game - 0.5) * 2.0;
-            }
-
-            // Midfielders valued by combined contribution
-            if player.position().is_midfielder() && (goals_per_game + assists_per_game) > 0.4 {
-                adjusted_value *= 1.0 + ((goals_per_game + assists_per_game) - 0.4) * 1.5;
-            }
-        }
-
-        // International status
-        if player.player_attributes.international_apps > 10 {
-            adjusted_value *= 1.2;
-        }
-
-        // Apply position factor (goalkeepers and defenders typically valued less)
-        if player.position().is_goalkeeper() {
-            adjusted_value *= 0.8;
-        }
-
-        adjusted_value
     }
 }

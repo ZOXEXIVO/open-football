@@ -16,6 +16,7 @@ pub struct CountryGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "countries/get/index.html")]
 pub struct CountryGetTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -70,6 +71,7 @@ pub async fn country_get_action(
         .collect();
 
     Ok(CountryGetTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: country.name.clone(),
         sub_title: continent.name.clone(),
         sub_title_link: "/countries".to_string(),

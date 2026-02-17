@@ -3,11 +3,19 @@ use crate::country::CountryResult;
 use crate::league::LeagueCollection;
 use crate::transfers::market::{TransferMarket};
 use crate::utils::Logging;
-use crate::{Club, ClubResult};
-use chrono::{NaiveDate};
+use crate::{Club, ClubResult, PlayerStatusType, StaffPosition};
+use crate::club::staff::result::ScoutRecommendation;
+use chrono::NaiveDate;
 use log::{debug, info};
 use std::collections::HashMap;
 use crate::country::builder::CountryBuilder;
+
+pub struct ScoutingInterest {
+    pub player_id: u32,
+    pub interested_club_id: u32,
+    pub recommendation: ScoutRecommendation,
+    pub date: NaiveDate,
+}
 
 pub struct Country {
     pub id: u32,
@@ -25,6 +33,7 @@ pub struct Country {
     pub international_competitions: Vec<InternationalCompetition>,
     pub media_coverage: MediaCoverage,
     pub regulations: CountryRegulations,
+    pub scouting_interests: Vec<ScoutingInterest>,
 }
 
 impl Country {
@@ -34,6 +43,7 @@ impl Country {
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
         let country_name = self.name.clone();
+        let date = ctx.simulation.date.date();
 
         info!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
 
@@ -43,9 +53,157 @@ impl Country {
         // Phase 2: Club Operations
         let clubs_results = self.simulate_clubs(&ctx);
 
+        // Phase 3: Country-level scouting
+        self.process_scouting(date);
+
         info!("✅ Country {} simulation complete", country_name);
 
-        CountryResult::new(league_results, clubs_results)
+        CountryResult::new(self.id, league_results, clubs_results)
+    }
+
+    fn process_scouting(&mut self, date: NaiveDate) {
+        use crate::utils::IntegerUtils;
+
+        // Pass 1: Collect scout info and player summaries (immutable reads)
+        struct ScoutInfo {
+            club_id: u32,
+            judging_ability: u8,
+            judging_potential: u8,
+        }
+
+        struct PlayerSummary {
+            player_id: u32,
+            club_id: u32,
+            current_ability: u8,
+            potential_ability: u8,
+        }
+
+        let mut scouts = Vec::new();
+        let mut all_players = Vec::new();
+
+        for club in &self.clubs {
+            for team in &club.teams.teams {
+                // Collect scouts from team staff
+                for staff in &team.staffs.staffs {
+                    let is_scout = matches!(
+                        staff.contract.as_ref().map(|c| &c.position),
+                        Some(StaffPosition::Scout) | Some(StaffPosition::ChiefScout)
+                    );
+                    if is_scout {
+                        scouts.push(ScoutInfo {
+                            club_id: club.id,
+                            judging_ability: staff.staff_attributes.knowledge.judging_player_ability,
+                            judging_potential: staff.staff_attributes.knowledge.judging_player_potential,
+                        });
+                    }
+                }
+
+                // Collect players
+                for player in &team.players.players {
+                    all_players.push(PlayerSummary {
+                        player_id: player.id,
+                        club_id: club.id,
+                        current_ability: player.player_attributes.current_ability,
+                        potential_ability: player.player_attributes.potential_ability,
+                    });
+                }
+            }
+        }
+
+        if scouts.is_empty() || all_players.is_empty() {
+            return;
+        }
+
+        // For each scout, with 30% daily chance, evaluate a random player from another club
+        let mut interests: Vec<ScoutingInterest> = Vec::new();
+
+        for scout in &scouts {
+            // 30% daily chance of scouting
+            if IntegerUtils::random(0, 100) > 30 {
+                continue;
+            }
+
+            // Pick a random player from another club
+            let other_players: Vec<&PlayerSummary> = all_players
+                .iter()
+                .filter(|p| p.club_id != scout.club_id)
+                .collect();
+
+            if other_players.is_empty() {
+                continue;
+            }
+
+            let idx = IntegerUtils::random(0, other_players.len() as i32) as usize;
+            let idx = idx.min(other_players.len() - 1);
+            let target = other_players[idx];
+
+            // Evaluate with error margin based on scout skill
+            let ability_error = (20i16 - scout.judging_ability as i16).max(1) as i32;
+            let potential_error = (20i16 - scout.judging_potential as i16).max(1) as i32;
+
+            let assessed_ability = (target.current_ability as i32
+                + IntegerUtils::random(-ability_error, ability_error))
+                .clamp(1, 100) as u8;
+            let assessed_potential = (target.potential_ability as i32
+                + IntegerUtils::random(-potential_error, potential_error))
+                .clamp(1, 100) as u8;
+
+            let recommendation = if assessed_ability > 75 || assessed_potential > 85 {
+                ScoutRecommendation::Sign
+            } else if assessed_ability > 60 || assessed_potential > 70 {
+                ScoutRecommendation::Monitor
+            } else {
+                ScoutRecommendation::Pass
+            };
+
+            if recommendation == ScoutRecommendation::Pass {
+                continue;
+            }
+
+            debug!(
+                "Scout from club {} evaluated player {} (ability:{}, potential:{}) -> {:?}",
+                scout.club_id, target.player_id, assessed_ability, assessed_potential, recommendation
+            );
+
+            interests.push(ScoutingInterest {
+                player_id: target.player_id,
+                interested_club_id: scout.club_id,
+                recommendation,
+                date,
+            });
+        }
+
+        // Pass 2: Apply statuses to players (mutable writes)
+        for interest in &interests {
+            for club in &mut self.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == interest.player_id) {
+                        match interest.recommendation {
+                            ScoutRecommendation::Sign => {
+                                if !player.statuses.get().contains(&PlayerStatusType::Wnt) {
+                                    player.statuses.add(date, PlayerStatusType::Wnt);
+                                }
+                            }
+                            ScoutRecommendation::Monitor => {
+                                if !player.statuses.get().contains(&PlayerStatusType::Sct)
+                                    && !player.statuses.get().contains(&PlayerStatusType::Wnt)
+                                {
+                                    player.statuses.add(date, PlayerStatusType::Sct);
+                                }
+                            }
+                            ScoutRecommendation::Pass => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        // Store interests for transfer negotiation use
+        self.scouting_interests.extend(interests);
+
+        // Prune old interests (older than 30 days)
+        let cutoff = date - chrono::Duration::days(30);
+        self.scouting_interests.retain(|i| i.date >= cutoff);
     }
 
     fn simulate_leagues(&mut self, ctx: &GlobalContext<'_>) -> Vec<crate::league::LeagueResult> {
@@ -220,6 +378,7 @@ impl CountryRegulations {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct TransferActivitySummary {
     total_listings: u32,
@@ -228,6 +387,7 @@ struct TransferActivitySummary {
     total_fees_exchanged: f64,
 }
 
+#[allow(dead_code)]
 impl TransferActivitySummary {
     fn new() -> Self {
         TransferActivitySummary {
@@ -245,6 +405,7 @@ impl TransferActivitySummary {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug)]
 struct SquadAnalysis {
     surplus_positions: Vec<crate::PlayerPositionType>,
@@ -253,6 +414,7 @@ struct SquadAnalysis {
     quality_level: u8,
 }
 
+#[allow(dead_code)]
 struct CountrySimulationContext {
     economic_multiplier: f32,
     transfer_market_heat: f32,

@@ -216,6 +216,7 @@ impl GoalkeeperPreparingForSaveState {
     }
 
     /// Calculate the optimal position for making a save
+    #[allow(dead_code)]
     fn calculate_optimal_save_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;

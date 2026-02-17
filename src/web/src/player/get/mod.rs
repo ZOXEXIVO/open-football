@@ -8,6 +8,7 @@ use axum::response::IntoResponse;
 use core::Person;
 use core::Player;
 use core::PlayerPositionType;
+use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
@@ -23,6 +24,7 @@ pub struct PlayerGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "player/get/index.html")]
 pub struct PlayerGetTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -51,6 +53,7 @@ pub struct PlayerViewModel {
     pub preferred_foot: String,
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
+    #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
 }
@@ -157,6 +160,7 @@ pub struct PlayerAttributesDto {
     pub under_21_international_goals: u16,
 }
 
+#[allow(dead_code)]
 pub struct PlayerStatusDto {
     pub statuses: Vec<PlayerStatusType>,
 }
@@ -166,6 +170,7 @@ impl PlayerStatusDto {
         PlayerStatusDto { statuses }
     }
 
+    #[allow(dead_code)]
     pub fn is_wanted(&self) -> bool {
         self.statuses.iter().any(|s| *s == PlayerStatusType::Wnt)
     }
@@ -222,7 +227,7 @@ pub async fn player_get_action(
     let contract = player.contract.as_ref().map(|c| PlayerContractDto {
         salary: c.salary / 1000,
         expiration: c.expiration.format("%d.%m.%Y").to_string(),
-        squad_status: String::from("First team player"),
+        squad_status: format_squad_status(&c.squad_status),
     });
 
     let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
@@ -253,6 +258,7 @@ pub async fn player_get_action(
     };
 
     Ok(PlayerGetTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title: team.name.clone(),
         sub_title_link: format!("/teams/{}", &team.slug),
@@ -370,6 +376,20 @@ pub fn get_current_ability_stars(player: &Player) -> u8 {
 
 pub fn get_potential_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)) as u8
+}
+
+fn format_squad_status(status: &PlayerSquadStatus) -> String {
+    match status {
+        PlayerSquadStatus::KeyPlayer => "Key Player",
+        PlayerSquadStatus::FirstTeamRegular => "First Team Regular",
+        PlayerSquadStatus::FirstTeamSquadRotation => "Squad Rotation",
+        PlayerSquadStatus::MainBackupPlayer => "Backup Player",
+        PlayerSquadStatus::HotProspectForTheFuture => "Hot Prospect",
+        PlayerSquadStatus::DecentYoungster => "Decent Youngster",
+        PlayerSquadStatus::NotNeeded => "Not Needed",
+        PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "N/A",
+    }
+    .to_string()
 }
 
 fn get_position_map(player: &Player) -> PositionMapDto {

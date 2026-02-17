@@ -941,6 +941,7 @@ enum AttackingRunType {
 }
 
 /// Channel between defenders
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct Channel {
     center_y: f32,

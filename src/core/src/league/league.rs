@@ -230,12 +230,14 @@ impl League {
         match_result
     }
 
+    #[allow(dead_code)]
     fn get_team_momentums(&self, home_id: u32, away_id: u32) -> (f32, f32) {
         let home = self.dynamics.get_team_momentum(home_id);
         let away = self.dynamics.get_team_momentum(away_id);
         (home, away)
     }
 
+    #[allow(dead_code)]
     fn calculate_match_pressures(
         &self,
         home_team: &Team,
@@ -247,6 +249,7 @@ impl League {
         (home, away)
     }
 
+    #[allow(dead_code)]
     fn calculate_match_pressure(
         &self,
         team: &Team,
@@ -278,6 +281,7 @@ impl League {
         pressure.min(1.0)
     }
 
+    #[allow(dead_code)]
     fn apply_psychological_factors(
         &self,
         squad: &mut crate::r#match::MatchSquad,
@@ -339,6 +343,7 @@ impl League {
         pressure.min(1.0)
     }
 
+    #[allow(dead_code)]
     fn calculate_matches_remaining(&self, team_id: u32) -> usize {
         self.schedule.tours.iter()
             .flat_map(|t| &t.items)
@@ -571,6 +576,7 @@ impl League {
 
     // ========== UTILITY METHODS ==========
 
+    #[allow(dead_code)]
     fn get_team<'c>(&self, clubs: &'c [Club], id: u32) -> &'c Team {
         clubs
             .iter()

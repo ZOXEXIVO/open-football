@@ -1,14 +1,14 @@
 use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::FloatUtils;
-use crate::{Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, StaffCollection};
-use chrono::{Datelike, NaiveDateTime};
+use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, StaffCollection};
+use chrono::Datelike;
 use log::{debug, info};
 
 #[derive(Debug)]
 pub struct TeamBehaviour {
-    last_full_update: Option<NaiveDateTime>,
-    last_minor_update: Option<NaiveDateTime>,
+    last_full_update: Option<chrono::NaiveDateTime>,
+    last_minor_update: Option<chrono::NaiveDateTime>,
 }
 
 impl Default for TeamBehaviour {
@@ -34,56 +34,45 @@ impl TeamBehaviour {
     ) -> TeamBehaviourResult {
         let current_time = ctx.simulation.date;
 
-        // Determine update frequency based on simulation settings
         let should_run_full = self.should_run_full_update(current_time);
         let should_run_minor = self.should_run_minor_update(current_time);
 
         if should_run_full {
-            info!("🏟️  Running FULL team behaviour update at {}", current_time);
+            info!("Running FULL team behaviour update at {}", current_time);
             self.last_full_update = Some(current_time);
             self.run_full_behaviour_simulation(players, staffs, ctx)
         } else if should_run_minor {
-            debug!("⚽ Running minor team behaviour update at {}", current_time);
+            debug!("Running minor team behaviour update at {}", current_time);
             self.last_minor_update = Some(current_time);
             self.run_minor_behaviour_simulation(players, staffs, ctx)
         } else {
-            debug!("⏸️  Skipping team behaviour update at {}", current_time);
             TeamBehaviourResult::new()
         }
     }
 
-    /// Determine if we should run a full behaviour update
-    fn should_run_full_update(&self, current_time: NaiveDateTime) -> bool {
+    fn should_run_full_update(&self, current_time: chrono::NaiveDateTime) -> bool {
         match self.last_full_update {
-            None => true, // First run
+            None => true,
             Some(last) => {
                 let days_since = current_time.signed_duration_since(last).num_days();
-
-                // Run full update every week (7 days)
-                days_since >= 7 ||
-
-                    // Or if it's a match day (more interactions)
-                    current_time.weekday() == chrono::Weekday::Sat ||
-                    current_time.weekday() == chrono::Weekday::Sun ||
-
-                    // Or beginning of month (team meetings, etc.)
-                    current_time.day() == 1
+                days_since >= 7
+                    || current_time.weekday() == chrono::Weekday::Sat
+                    || current_time.weekday() == chrono::Weekday::Sun
+                    || current_time.day() == 1
             }
         }
     }
 
-    fn should_run_minor_update(&self, current_time: NaiveDateTime) -> bool {
+    fn should_run_minor_update(&self, current_time: chrono::NaiveDateTime) -> bool {
         match self.last_minor_update {
-            None => true, // First run
+            None => true,
             Some(last) => {
                 let days_since = current_time.signed_duration_since(last).num_days();
-
-                // Run minor updates every 2-3 days
-                days_since >= 2 ||
-
-                    // Or during training intensive periods (Tuesday to Thursday)
-                    matches!(current_time.weekday(),
-                    chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu)
+                days_since >= 2
+                    || matches!(
+                        current_time.weekday(),
+                        chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu
+                    )
             }
         }
     }
@@ -95,28 +84,29 @@ impl TeamBehaviour {
         _staffs: &mut StaffCollection,
         ctx: GlobalContext<'_>,
     ) -> TeamBehaviourResult {
-        info!("🔄 Processing comprehensive team dynamics...");
-
         let mut result = TeamBehaviourResult::new();
 
-        // Log team state before processing
         Self::log_team_state(players, "BEFORE full update");
 
-        // Process all interaction types
+        // Core interaction types
         Self::process_position_group_dynamics(players, &mut result);
-        Self::process_age_group_dynamics(players, &mut result);
+        Self::process_age_group_dynamics(players, &mut result, &ctx);
         Self::process_performance_based_relationships(players, &mut result);
         Self::process_personality_conflicts(players, &mut result);
         Self::process_leadership_influence(players, &mut result);
         Self::process_playing_time_jealousy(players, &mut result);
 
-        // Additional full-update only processes
+        // Reputation-driven dynamics
+        Self::process_reputation_dynamics(players, &mut result);
+        Self::process_mentorship_dynamics(players, &mut result, &ctx);
+
+        // Additional full-update processes
         Self::process_contract_satisfaction(players, &mut result, &ctx);
         Self::process_injury_sympathy(players, &mut result, &ctx);
         Self::process_international_duty_bonds(players, &mut result, &ctx);
 
         info!(
-            "✅ Full team behaviour update complete - {} relationship changes",
+            "Full team behaviour update complete - {} relationship changes",
             result.players.relationship_result.len()
         );
 
@@ -130,33 +120,17 @@ impl TeamBehaviour {
         _staffs: &mut StaffCollection,
         ctx: GlobalContext<'_>,
     ) -> TeamBehaviourResult {
-        debug!("🔄 Processing minor team dynamics...");
-
         let mut result = TeamBehaviourResult::new();
 
-        // Only process most dynamic relationships for minor updates
         Self::process_daily_interactions(players, &mut result, &ctx);
         Self::process_mood_changes(players, &mut result, &ctx);
         Self::process_recent_performance_reactions(players, &mut result);
 
-        // Log results if there are changes
-        if !result.players.relationship_result.is_empty() {
-            debug!(
-                "✅ Minor team behaviour update complete - {} relationship changes",
-                result.players.relationship_result.len()
-            );
-        }
-
         result
     }
 
-    /// Log current team relationship state
     fn log_team_state(players: &PlayerCollection, context: &str) {
-        debug!(
-            "📊 Team State {}: {} players",
-            context,
-            players.players.len()
-        );
+        debug!("Team State {}: {} players", context, players.players.len());
 
         let mut happy_players = 0;
         let mut unhappy_players = 0;
@@ -174,28 +148,24 @@ impl TeamBehaviour {
         }
 
         info!(
-            "😊 Happy: {} | 😐 Neutral: {} | 😠 Unhappy: {}",
+            "Happy: {} | Neutral: {} | Unhappy: {}",
             happy_players, neutral_players, unhappy_players
         );
     }
+
+    // ========== MINOR UPDATE PROCESSES ==========
 
     fn process_daily_interactions(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
-        debug!("🗣️  Processing daily player interactions...");
-
-        // Random small interactions between players who already know each other
         for i in 0..players.players.len().min(10) {
-            // Limit for performance
             for j in i + 1..players.players.len().min(10) {
                 let player_i = &players.players[i];
                 let player_j = &players.players[j];
 
-                // Check if they already have a relationship
                 if let Some(existing_relationship) = player_i.relations.get_player(player_j.id) {
-                    // Small random fluctuations in existing relationships
                     let daily_change = Self::calculate_daily_interaction_change(
                         player_i,
                         player_j,
@@ -211,6 +181,7 @@ impl TeamBehaviour {
                                 from_player_id: player_i.id,
                                 to_player_id: player_j.id,
                                 relationship_change: daily_change,
+                                change_type: ChangeType::NaturalProgression,
                             });
                     }
                 }
@@ -218,18 +189,14 @@ impl TeamBehaviour {
         }
     }
 
-    /// Process mood-based relationship changes
     fn process_mood_changes(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
         _ctx: &GlobalContext<'_>,
     ) {
-        debug!("😔 Processing player mood changes...");
-
         for player in &players.players {
             let current_happiness = Self::calculate_player_happiness(player);
 
-            // Very unhappy players affect team morale
             if current_happiness < -0.5 {
                 for other_player in &players.players {
                     if player.id != other_player.id {
@@ -242,6 +209,7 @@ impl TeamBehaviour {
                                     from_player_id: other_player.id,
                                     to_player_id: player.id,
                                     relationship_change: mood_impact,
+                                    change_type: ChangeType::PersonalConflict,
                                 },
                             );
                         }
@@ -251,19 +219,16 @@ impl TeamBehaviour {
         }
     }
 
-    /// Process reactions to recent match performances
     fn process_recent_performance_reactions(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
     ) {
-        debug!("⚽ Processing recent performance reactions...");
-
-        // This would ideally check recent match results, but for now simulate
-        // reactions to recent stat changes
         for player in &players.players {
-            // Players who scored recently get temporary popularity boost
             if player.statistics.goals > 0 && player.position().is_forward() {
-                let popularity_boost = 0.05;
+                // Star performers with high reputation get bigger boosts
+                let rep_factor = (player.player_attributes.current_reputation as f32 / 10000.0)
+                    .clamp(0.1, 1.0);
+                let popularity_boost = 0.03 + 0.04 * rep_factor;
 
                 for other_player in &players.players {
                     if player.id != other_player.id {
@@ -274,6 +239,7 @@ impl TeamBehaviour {
                                 from_player_id: other_player.id,
                                 to_player_id: player.id,
                                 relationship_change: popularity_boost,
+                                change_type: ChangeType::MatchCooperation,
                             });
                     }
                 }
@@ -281,310 +247,9 @@ impl TeamBehaviour {
         }
     }
 
-    // ========== ADDITIONAL FULL UPDATE PROCESSES ==========
+    // ========== FULL UPDATE PROCESSES ==========
 
-    /// Process contract satisfaction effects on relationships
-    fn process_contract_satisfaction(
-        players: &PlayerCollection,
-        result: &mut TeamBehaviourResult,
-        _ctx: &GlobalContext<'_>,
-    ) {
-        debug!("💰 Processing contract satisfaction effects...");
-
-        for i in 0..players.players.len() {
-            for j in i + 1..players.players.len() {
-                let player_i = &players.players[i];
-                let player_j = &players.players[j];
-
-                let contract_jealousy = Self::calculate_contract_jealousy(player_i, player_j);
-
-                if contract_jealousy.abs() > 0.02 {
-                    result
-                        .players
-                        .relationship_result
-                        .push(PlayerRelationshipChangeResult {
-                            from_player_id: player_i.id,
-                            to_player_id: player_j.id,
-                            relationship_change: contract_jealousy,
-                        });
-
-                    result
-                        .players
-                        .relationship_result
-                        .push(PlayerRelationshipChangeResult {
-                            from_player_id: player_j.id,
-                            to_player_id: player_i.id,
-                            relationship_change: contract_jealousy,
-                        });
-                }
-            }
-        }
-    }
-
-    /// Process injury sympathy and support
-    fn process_injury_sympathy(
-        players: &PlayerCollection,
-        result: &mut TeamBehaviourResult,
-        _ctx: &GlobalContext<'_>,
-    ) {
-        debug!("🏥 Processing injury sympathy...");
-
-        for injured_player in players
-            .players
-            .iter()
-            .filter(|p| p.player_attributes.is_injured)
-        {
-            for other_player in &players.players {
-                if injured_player.id != other_player.id {
-                    let sympathy = Self::calculate_injury_sympathy(injured_player, other_player);
-
-                    if sympathy > 0.01 {
-                        result
-                            .players
-                            .relationship_result
-                            .push(PlayerRelationshipChangeResult {
-                                from_player_id: other_player.id,
-                                to_player_id: injured_player.id,
-                                relationship_change: sympathy,
-                            });
-                    }
-                }
-            }
-        }
-    }
-
-    /// Process international duty bonding
-    fn process_international_duty_bonds(
-        players: &PlayerCollection,
-        result: &mut TeamBehaviourResult,
-        _ctx: &GlobalContext<'_>,
-    ) {
-        debug!("🌍 Processing international duty bonds...");
-
-        // Group players by country
-        use std::collections::HashMap;
-        let mut country_groups: HashMap<u32, Vec<&Player>> = HashMap::new();
-
-        for player in &players.players {
-            country_groups
-                .entry(player.country_id)
-                .or_default()
-                .push(player);
-        }
-
-        // Players from same country bond
-        for (_, country_players) in country_groups {
-            if country_players.len() > 1 {
-                for i in 0..country_players.len() {
-                    for j in i + 1..country_players.len() {
-                        let bond_strength = Self::calculate_national_team_bond(
-                            country_players[i],
-                            country_players[j],
-                        );
-
-                        if bond_strength > 0.01 {
-                            result.players.relationship_result.push(
-                                PlayerRelationshipChangeResult {
-                                    from_player_id: country_players[i].id,
-                                    to_player_id: country_players[j].id,
-                                    relationship_change: bond_strength,
-                                },
-                            );
-
-                            result.players.relationship_result.push(
-                                PlayerRelationshipChangeResult {
-                                    from_player_id: country_players[j].id,
-                                    to_player_id: country_players[i].id,
-                                    relationship_change: bond_strength,
-                                },
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // ========== CALCULATION HELPER FUNCTIONS ==========
-
-    fn calculate_daily_interaction_change(
-        player_a: &Player,
-        player_b: &Player,
-        existing_relationship: &PlayerRelation,  // Changed from f32 to &PlayerRelation
-        _ctx: &GlobalContext<'_>,
-    ) -> f32 {
-        // Extract the relationship level from the PlayerRelation struct
-        let relationship_level = existing_relationship.level;
-
-        // Small random fluctuations based on personalities
-        let temperament_factor =
-            (player_a.attributes.temperament + player_b.attributes.temperament) / 40.0;
-        let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
-
-        // Additional factors from the enhanced relationship data
-        let trust_factor = existing_relationship.trust / 100.0;
-        let friendship_factor = existing_relationship.friendship / 100.0;
-
-        // Relationship decay/improvement tendency
-        if relationship_level > 50.0 {
-            // Very good relationships tend to stay stable but can still improve slightly
-            // Trust and friendship help maintain good relationships
-            let stability_bonus = (trust_factor * 0.3 + friendship_factor * 0.2) * base_change;
-            base_change * 0.5 + stability_bonus
-        } else if relationship_level < -50.0 {
-            // Very bad relationships might improve over time
-            // Low trust makes improvement harder
-            let improvement_chance = base_change + 0.01 * (1.0 - trust_factor);
-            improvement_chance
-        } else {
-            // Neutral relationships are more volatile
-            // Professional respect can stabilize neutral relationships
-            let professional_factor = existing_relationship.professional_respect / 100.0;
-            base_change * (1.0 - professional_factor * 0.3)
-        }
-    }
-
-    fn calculate_daily_interaction_change_simple(
-        player_a: &Player,
-        player_b: &Player,
-        existing_relationship_level: f32,  // Just the level value
-        _ctx: &GlobalContext<'_>,
-    ) -> f32 {
-        // Small random fluctuations based on personalities
-        let temperament_factor =
-            (player_a.attributes.temperament + player_b.attributes.temperament) / 40.0;
-        let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
-
-        // Relationship decay/improvement tendency
-        if existing_relationship_level > 50.0 {
-            // Very good relationships tend to stay stable
-            base_change * 0.5
-        } else if existing_relationship_level < -50.0 {
-            // Very bad relationships might improve over time
-            base_change + 0.01
-        } else {
-            base_change
-        }
-    }
-
-    fn calculate_mood_spread(
-        unhappy_player: &Player,
-        other_player: &Player,
-        happiness: f32,
-    ) -> f32 {
-        // Unhappy players with high leadership spread negativity more
-        let influence = (unhappy_player.skills.mental.leadership / 20.0) * happiness.abs() * 0.1;
-
-        // Players with high professionalism resist negative influence
-        let resistance = other_player.attributes.professionalism / 20.0;
-
-        influence * (1.0 - resistance).max(0.0)
-    }
-
-    fn calculate_contract_jealousy(player_a: &Player, player_b: &Player) -> f32 {
-        let salary_a = player_a.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-        let salary_b = player_b.contract.as_ref().map(|c| c.salary).unwrap_or(0);
-
-        if salary_a == 0 || salary_b == 0 {
-            return 0.0; // Can't compare without contracts
-        }
-
-        let salary_ratio = salary_a as f32 / salary_b as f32;
-
-        if salary_ratio > 2.0 || salary_ratio < 0.5 {
-            // Large salary differences create jealousy
-            let jealousy_factor =
-                (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
-            -0.1 * jealousy_factor
-        } else {
-            0.0
-        }
-    }
-
-    fn calculate_injury_sympathy(_injured_player: &Player, other_player: &Player) -> f32 {
-        // More empathetic players show more sympathy
-        let empathy = other_player.attributes.sportsmanship / 20.0;
-
-        // Team players show more concern
-        let team_spirit = other_player.skills.mental.teamwork / 20.0;
-
-        (empathy + team_spirit) * 0.1
-    }
-
-    fn calculate_national_team_bond(player_a: &Player, player_b: &Player) -> f32 {
-        // International experience creates stronger bonds
-        let int_experience_a =
-            (player_a.player_attributes.international_apps as f32 / 50.0).min(1.0);
-        let int_experience_b =
-            (player_b.player_attributes.international_apps as f32 / 50.0).min(1.0);
-
-        (int_experience_a + int_experience_b) * 0.05
-    }
-
-    // Include all the previous helper functions from the earlier implementation
-    // (calculate_competition_factor, calculate_synergy_factor, etc.)
-    // ... [Previous helper functions would go here] ...
-
-    fn calculate_player_happiness(player: &Player) -> f32 {
-        let mut happiness = 0.0;
-
-        // Contract satisfaction
-        happiness += player
-            .contract
-            .as_ref()
-            .map(|c| (c.salary as f32 / 10000.0).min(1.0))
-            .unwrap_or(-0.5);
-
-        // Playing time satisfaction
-        if player.statistics.played > 20 {
-            happiness += 0.3;
-        } else if player.statistics.played > 10 {
-            happiness += 0.1;
-        } else {
-            happiness -= 0.2;
-        }
-
-        // Performance satisfaction
-        let goals_ratio = player.statistics.goals as f32 / player.statistics.played.max(1) as f32;
-        if player.position().is_forward() && goals_ratio > 0.5 {
-            happiness += 0.2;
-        } else if !player.position().is_forward() && goals_ratio > 0.3 {
-            happiness += 0.15;
-        }
-
-        // Personality factors
-        happiness += (player.attributes.professionalism - 10.0) / 100.0;
-        happiness -= (player.attributes.controversy - 10.0) / 50.0;
-
-        // Behavior state affects happiness
-        match player.behaviour.state {
-            PersonBehaviourState::Good => happiness += 0.2,
-            PersonBehaviourState::Poor => happiness -= 0.3,
-            PersonBehaviourState::Normal => {}
-        }
-
-        happiness.clamp(-1.0, 1.0)
-    }
-
-    // pub fn simulate(
-    //     players: &mut PlayerCollection,
-    //     _staffs: &mut StaffCollection,
-    // ) -> TeamBehaviourResult {
-    //     let mut result = TeamBehaviourResult::new();
-    //
-    //     // Process different types of interactions
-    //     Self::process_position_group_dynamics(players, &mut result);
-    //     Self::process_age_group_dynamics(players, &mut result);
-    //     Self::process_performance_based_relationships(players, &mut result);
-    //     Self::process_personality_conflicts(players, &mut result);
-    //     Self::process_leadership_influence(players, &mut result);
-    //     Self::process_playing_time_jealousy(players, &mut result);
-    //
-    //     result
-    // }
-
-    /// Players in similar positions tend to have more complex relationships
-    /// due to competition for spots
+    /// Players in similar positions compete; complementary positions bond
     fn process_position_group_dynamics(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
@@ -597,7 +262,6 @@ impl TeamBehaviour {
                 let position_i = player_i.position();
                 let position_j = player_j.position();
 
-                // Same position = competition (negative relationship)
                 if position_i == position_j {
                     let competition_factor = Self::calculate_competition_factor(player_i, player_j);
 
@@ -608,6 +272,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change: -competition_factor,
+                            change_type: ChangeType::CompetitionRivalry,
                         });
 
                     result
@@ -617,10 +282,9 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change: -competition_factor,
+                            change_type: ChangeType::CompetitionRivalry,
                         });
-                }
-                // Complementary positions (e.g., defender + midfielder) = positive
-                else if Self::are_complementary_positions(&position_i, &position_j) {
+                } else if Self::are_complementary_positions(&position_i, &position_j) {
                     let synergy_factor = Self::calculate_synergy_factor(player_i, player_j);
 
                     result
@@ -630,6 +294,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change: synergy_factor,
+                            change_type: ChangeType::TrainingBonding,
                         });
 
                     result
@@ -639,22 +304,26 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change: synergy_factor,
+                            change_type: ChangeType::TrainingBonding,
                         });
                 }
             }
         }
     }
 
-    /// Age groups naturally form bonds - young players stick together,
-    /// veterans mentor youth, but sometimes clash with middle-aged players
-    fn process_age_group_dynamics(players: &PlayerCollection, result: &mut TeamBehaviourResult) {
+    /// Age groups form bonds - young players stick together, veterans mentor youth
+    fn process_age_group_dynamics(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let current_date = ctx.simulation.date.date();
+
         for i in 0..players.players.len() {
             for j in i + 1..players.players.len() {
                 let player_i = &players.players[i];
                 let player_j = &players.players[j];
 
-                // Calculate ages (using a fixed date for consistency)
-                let current_date = chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap();
                 let age_i = player_i.age(current_date);
                 let age_j = player_j.age(current_date);
 
@@ -663,7 +332,6 @@ impl TeamBehaviour {
                     Self::calculate_age_relationship_factor(age_i, age_j, age_diff);
 
                 if relationship_change.abs() > 0.01 {
-                    // Only process significant changes
                     result
                         .players
                         .relationship_result
@@ -671,6 +339,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change,
+                            change_type: ChangeType::NaturalProgression,
                         });
 
                     result
@@ -680,14 +349,14 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change,
+                            change_type: ChangeType::NaturalProgression,
                         });
                 }
             }
         }
     }
 
-    /// Players with similar performance levels respect each other,
-    /// while big performance gaps can create tension
+    /// Performance-based relationships using stats and reputation
     fn process_performance_based_relationships(
         players: &PlayerCollection,
         result: &mut TeamBehaviourResult,
@@ -705,9 +374,17 @@ impl TeamBehaviour {
                     performance_i,
                     performance_j,
                     performance_diff,
+                    player_i,
+                    player_j,
                 );
 
                 if relationship_change.abs() > 0.01 {
+                    let change_type = if relationship_change > 0.0 {
+                        ChangeType::MatchCooperation
+                    } else {
+                        ChangeType::CompetitionRivalry
+                    };
+
                     result
                         .players
                         .relationship_result
@@ -715,6 +392,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change,
+                            change_type: change_type.clone(),
                         });
 
                     result
@@ -724,13 +402,14 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change,
+                            change_type,
                         });
                 }
             }
         }
     }
 
-    /// Some personality combinations just don't work well together
+    /// Personality conflicts
     fn process_personality_conflicts(players: &PlayerCollection, result: &mut TeamBehaviourResult) {
         for i in 0..players.players.len() {
             for j in i + 1..players.players.len() {
@@ -740,6 +419,12 @@ impl TeamBehaviour {
                 let conflict_factor = Self::calculate_personality_conflict(player_i, player_j);
 
                 if conflict_factor.abs() > 0.02 {
+                    let change_type = if conflict_factor > 0.0 {
+                        ChangeType::PersonalSupport
+                    } else {
+                        ChangeType::PersonalConflict
+                    };
+
                     result
                         .players
                         .relationship_result
@@ -747,6 +432,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change: conflict_factor,
+                            change_type: change_type.clone(),
                         });
 
                     result
@@ -756,6 +442,7 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change: conflict_factor,
+                            change_type,
                         });
                 }
             }
@@ -764,7 +451,6 @@ impl TeamBehaviour {
 
     /// High leadership players influence team morale and relationships
     fn process_leadership_influence(players: &PlayerCollection, result: &mut TeamBehaviourResult) {
-        // Find leaders (high leadership skill)
         let leaders: Vec<&Player> = players
             .players
             .iter()
@@ -787,14 +473,14 @@ impl TeamBehaviour {
                             from_player_id: player.id,
                             to_player_id: leader.id,
                             relationship_change: influence,
+                            change_type: ChangeType::MentorshipBond,
                         });
                 }
             }
         }
     }
 
-    /// Players with similar playing time are more likely to bond,
-    /// while those with very different playing time might be jealous
+    /// Playing time jealousy
     fn process_playing_time_jealousy(players: &PlayerCollection, result: &mut TeamBehaviourResult) {
         for i in 0..players.players.len() {
             for j in i + 1..players.players.len() {
@@ -812,6 +498,12 @@ impl TeamBehaviour {
                 );
 
                 if jealousy_factor.abs() > 0.01 {
+                    let change_type = if jealousy_factor > 0.0 {
+                        ChangeType::TrainingBonding
+                    } else {
+                        ChangeType::CompetitionRivalry
+                    };
+
                     result
                         .players
                         .relationship_result
@@ -819,6 +511,7 @@ impl TeamBehaviour {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
                             relationship_change: jealousy_factor,
+                            change_type: change_type.clone(),
                         });
 
                     result
@@ -828,67 +521,548 @@ impl TeamBehaviour {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
                             relationship_change: jealousy_factor,
+                            change_type,
                         });
                 }
             }
         }
     }
 
-    // Helper functions for calculations
+    // ========== REPUTATION-DRIVEN PROCESSES ==========
+
+    /// Reputation dynamics: star players command respect or create tension
+    /// High-reputation players are admired by professional teammates but
+    /// resented by ambitious players who feel overshadowed
+    fn process_reputation_dynamics(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+    ) {
+        for i in 0..players.players.len() {
+            for j in i + 1..players.players.len() {
+                let player_i = &players.players[i];
+                let player_j = &players.players[j];
+
+                let rep_i = player_i.player_attributes.current_reputation as f32;
+                let rep_j = player_j.player_attributes.current_reputation as f32;
+                let rep_diff = (rep_i - rep_j).abs();
+
+                if rep_diff < 500.0 {
+                    // Similar reputation: mutual professional respect
+                    let max_rep = rep_i.max(rep_j);
+                    let respect_bonus = 0.03 * (max_rep / 10000.0).clamp(0.1, 1.0);
+
+                    if respect_bonus > 0.005 {
+                        result.players.relationship_result.push(
+                            PlayerRelationshipChangeResult {
+                                from_player_id: player_i.id,
+                                to_player_id: player_j.id,
+                                relationship_change: respect_bonus,
+                                change_type: ChangeType::ReputationAdmiration,
+                            },
+                        );
+                        result.players.relationship_result.push(
+                            PlayerRelationshipChangeResult {
+                                from_player_id: player_j.id,
+                                to_player_id: player_i.id,
+                                relationship_change: respect_bonus,
+                                change_type: ChangeType::ReputationAdmiration,
+                            },
+                        );
+                    }
+                } else if rep_diff > 3000.0 {
+                    // Large reputation gap: admiration or resentment
+                    let (star, lesser) = if rep_i > rep_j {
+                        (player_i, player_j)
+                    } else {
+                        (player_j, player_i)
+                    };
+                    let (star_id, lesser_id) = (star.id, lesser.id);
+
+                    // Lesser player's reaction depends on personality
+                    let admiration = (lesser.attributes.sportsmanship / 20.0) * 0.1
+                        + (lesser.attributes.professionalism / 20.0) * 0.05;
+
+                    let resentment = if lesser.attributes.ambition > 14.0 {
+                        (lesser.attributes.ambition - 14.0) / 6.0 * -0.08
+                    } else {
+                        0.0
+                    };
+
+                    let lesser_to_star = admiration + resentment;
+
+                    if lesser_to_star.abs() > 0.01 {
+                        let change_type = if lesser_to_star > 0.0 {
+                            ChangeType::ReputationAdmiration
+                        } else {
+                            ChangeType::ReputationTension
+                        };
+
+                        result.players.relationship_result.push(
+                            PlayerRelationshipChangeResult {
+                                from_player_id: lesser_id,
+                                to_player_id: star_id,
+                                relationship_change: lesser_to_star,
+                                change_type,
+                            },
+                        );
+                    }
+
+                    // Star player's reaction: professional stars are approachable,
+                    // controversial stars create tension
+                    let star_to_lesser = if star.attributes.professionalism > 14.0 {
+                        0.04 * (star.attributes.professionalism / 20.0)
+                    } else if star.attributes.controversy > 14.0 {
+                        -0.06 * (star.attributes.controversy / 20.0)
+                    } else {
+                        0.0
+                    };
+
+                    if star_to_lesser.abs() > 0.01 {
+                        let change_type = if star_to_lesser > 0.0 {
+                            ChangeType::PersonalSupport
+                        } else {
+                            ChangeType::ReputationTension
+                        };
+
+                        result.players.relationship_result.push(
+                            PlayerRelationshipChangeResult {
+                                from_player_id: star_id,
+                                to_player_id: lesser_id,
+                                relationship_change: star_to_lesser,
+                                change_type,
+                            },
+                        );
+                    }
+                } else if rep_diff > 1000.0 {
+                    // Moderate reputation gap: small professional respect toward higher-rep player
+                    let (higher_id, lower_id) = if rep_i > rep_j {
+                        (player_i.id, player_j.id)
+                    } else {
+                        (player_j.id, player_i.id)
+                    };
+
+                    let respect = 0.02 * (rep_i.max(rep_j) / 10000.0).clamp(0.1, 1.0);
+
+                    result.players.relationship_result.push(
+                        PlayerRelationshipChangeResult {
+                            from_player_id: lower_id,
+                            to_player_id: higher_id,
+                            relationship_change: respect,
+                            change_type: ChangeType::ReputationAdmiration,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    /// Mentorship dynamics: experienced veterans mentor young players
+    /// based on reputation, leadership, age gap, and position compatibility
+    fn process_mentorship_dynamics(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let current_date = ctx.simulation.date.date();
+
+        for i in 0..players.players.len() {
+            for j in i + 1..players.players.len() {
+                let player_i = &players.players[i];
+                let player_j = &players.players[j];
+
+                let age_i = player_i.age(current_date);
+                let age_j = player_j.age(current_date);
+
+                let age_diff = (age_i as i32 - age_j as i32).abs();
+                if age_diff < 5 {
+                    continue;
+                }
+
+                let (veteran, youth) = if age_i > age_j {
+                    (player_i, player_j)
+                } else {
+                    (player_j, player_i)
+                };
+                let (vet_age, youth_age) = if age_i > age_j {
+                    (age_i, age_j)
+                } else {
+                    (age_j, age_i)
+                };
+
+                // Veteran must be 28+ and youth must be under 24
+                if vet_age < 28 || youth_age > 23 {
+                    continue;
+                }
+
+                // Mentorship potential factors:
+                // - Veteran's leadership and experience
+                // - Veteran's reputation (experienced, respected players mentor better)
+                // - Youth's adaptability (how well they receive mentorship)
+                // - Position compatibility (same position = more relevant)
+                let leadership_factor =
+                    (veteran.skills.mental.leadership / 20.0).clamp(0.0, 1.0);
+                let rep_factor =
+                    (veteran.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+                let adaptability_factor =
+                    (youth.attributes.adaptability / 20.0).clamp(0.0, 1.0);
+
+                let same_position = veteran.position() == youth.position();
+                let position_bonus = if same_position { 1.5 } else { 1.0 };
+
+                // Professionalism of the veteran matters
+                let professionalism_factor =
+                    (veteran.attributes.professionalism / 20.0).clamp(0.0, 1.0);
+
+                let mentorship_strength = leadership_factor
+                    * (0.3 + rep_factor * 0.4 + professionalism_factor * 0.3)
+                    * adaptability_factor
+                    * position_bonus
+                    * 0.12;
+
+                if mentorship_strength > 0.015 {
+                    // Youth admires and learns from veteran
+                    result.players.relationship_result.push(
+                        PlayerRelationshipChangeResult {
+                            from_player_id: youth.id,
+                            to_player_id: veteran.id,
+                            relationship_change: mentorship_strength,
+                            change_type: ChangeType::MentorshipBond,
+                        },
+                    );
+
+                    // Veteran gains satisfaction from mentoring (slightly less)
+                    result.players.relationship_result.push(
+                        PlayerRelationshipChangeResult {
+                            from_player_id: veteran.id,
+                            to_player_id: youth.id,
+                            relationship_change: mentorship_strength * 0.6,
+                            change_type: ChangeType::MentorshipBond,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
+    // ========== ADDITIONAL FULL UPDATE PROCESSES ==========
+
+    fn process_contract_satisfaction(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        _ctx: &GlobalContext<'_>,
+    ) {
+        for i in 0..players.players.len() {
+            for j in i + 1..players.players.len() {
+                let player_i = &players.players[i];
+                let player_j = &players.players[j];
+
+                let contract_jealousy = Self::calculate_contract_jealousy(player_i, player_j);
+
+                if contract_jealousy.abs() > 0.02 {
+                    result
+                        .players
+                        .relationship_result
+                        .push(PlayerRelationshipChangeResult {
+                            from_player_id: player_i.id,
+                            to_player_id: player_j.id,
+                            relationship_change: contract_jealousy,
+                            change_type: ChangeType::PersonalConflict,
+                        });
+
+                    result
+                        .players
+                        .relationship_result
+                        .push(PlayerRelationshipChangeResult {
+                            from_player_id: player_j.id,
+                            to_player_id: player_i.id,
+                            relationship_change: contract_jealousy,
+                            change_type: ChangeType::PersonalConflict,
+                        });
+                }
+            }
+        }
+    }
+
+    fn process_injury_sympathy(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        _ctx: &GlobalContext<'_>,
+    ) {
+        for injured_player in players
+            .players
+            .iter()
+            .filter(|p| p.player_attributes.is_injured)
+        {
+            for other_player in &players.players {
+                if injured_player.id != other_player.id {
+                    let sympathy = Self::calculate_injury_sympathy(injured_player, other_player);
+
+                    if sympathy > 0.01 {
+                        result
+                            .players
+                            .relationship_result
+                            .push(PlayerRelationshipChangeResult {
+                                from_player_id: other_player.id,
+                                to_player_id: injured_player.id,
+                                relationship_change: sympathy,
+                                change_type: ChangeType::PersonalSupport,
+                            });
+                    }
+                }
+            }
+        }
+    }
+
+    fn process_international_duty_bonds(
+        players: &PlayerCollection,
+        result: &mut TeamBehaviourResult,
+        _ctx: &GlobalContext<'_>,
+    ) {
+        use std::collections::HashMap;
+        let mut country_groups: HashMap<u32, Vec<&Player>> = HashMap::new();
+
+        for player in &players.players {
+            country_groups
+                .entry(player.country_id)
+                .or_default()
+                .push(player);
+        }
+
+        for (_, country_players) in country_groups {
+            if country_players.len() > 1 {
+                for i in 0..country_players.len() {
+                    for j in i + 1..country_players.len() {
+                        let bond_strength = Self::calculate_national_team_bond(
+                            country_players[i],
+                            country_players[j],
+                        );
+
+                        if bond_strength > 0.01 {
+                            result.players.relationship_result.push(
+                                PlayerRelationshipChangeResult {
+                                    from_player_id: country_players[i].id,
+                                    to_player_id: country_players[j].id,
+                                    relationship_change: bond_strength,
+                                    change_type: ChangeType::TrainingBonding,
+                                },
+                            );
+
+                            result.players.relationship_result.push(
+                                PlayerRelationshipChangeResult {
+                                    from_player_id: country_players[j].id,
+                                    to_player_id: country_players[i].id,
+                                    relationship_change: bond_strength,
+                                    change_type: ChangeType::TrainingBonding,
+                                },
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ========== CALCULATION HELPERS ==========
+
+    fn calculate_daily_interaction_change(
+        player_a: &Player,
+        player_b: &Player,
+        existing_relationship: &PlayerRelation,
+        _ctx: &GlobalContext<'_>,
+    ) -> f32 {
+        let relationship_level = existing_relationship.level;
+
+        let temperament_factor =
+            (player_a.attributes.temperament + player_b.attributes.temperament) / 40.0;
+        let base_change = FloatUtils::random(-0.02, 0.02) * temperament_factor;
+
+        let trust_factor = existing_relationship.trust / 100.0;
+        let friendship_factor = existing_relationship.friendship / 100.0;
+
+        if relationship_level > 50.0 {
+            let stability_bonus = (trust_factor * 0.3 + friendship_factor * 0.2) * base_change;
+            base_change * 0.5 + stability_bonus
+        } else if relationship_level < -50.0 {
+            base_change + 0.01 * (1.0 - trust_factor)
+        } else {
+            let professional_factor = existing_relationship.professional_respect / 100.0;
+            base_change * (1.0 - professional_factor * 0.3)
+        }
+    }
+
+    fn calculate_mood_spread(
+        unhappy_player: &Player,
+        other_player: &Player,
+        happiness: f32,
+    ) -> f32 {
+        // Unhappy players with high leadership or reputation spread negativity more
+        let leadership_influence = unhappy_player.skills.mental.leadership / 20.0;
+        let rep_influence =
+            (unhappy_player.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let influence = ((leadership_influence + rep_influence) / 2.0) * happiness.abs() * 0.1;
+
+        // Players with high professionalism resist negative influence
+        let resistance = other_player.attributes.professionalism / 20.0;
+
+        influence * (1.0 - resistance).max(0.0)
+    }
+
+    fn calculate_contract_jealousy(player_a: &Player, player_b: &Player) -> f32 {
+        let salary_a = player_a.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+        let salary_b = player_b.contract.as_ref().map(|c| c.salary).unwrap_or(0);
+
+        if salary_a == 0 || salary_b == 0 {
+            return 0.0;
+        }
+
+        let salary_ratio = salary_a as f32 / salary_b as f32;
+
+        if salary_ratio > 2.0 || salary_ratio < 0.5 {
+            // Large salary differences create jealousy, amplified by reputation gap
+            let rep_a = player_a.player_attributes.current_reputation as f32;
+            let rep_b = player_b.player_attributes.current_reputation as f32;
+
+            // If the higher-paid player also has higher reputation, jealousy is reduced
+            // If higher-paid player has LOWER reputation, jealousy is amplified
+            let rep_alignment = if salary_ratio > 1.0 {
+                if rep_a > rep_b { 0.5 } else { 1.5 }
+            } else {
+                if rep_b > rep_a { 0.5 } else { 1.5 }
+            };
+
+            let jealousy_factor =
+                (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
+            -0.08 * jealousy_factor * rep_alignment
+        } else {
+            0.0
+        }
+    }
+
+    fn calculate_injury_sympathy(_injured_player: &Player, other_player: &Player) -> f32 {
+        let empathy = other_player.attributes.sportsmanship / 20.0;
+        let team_spirit = other_player.skills.mental.teamwork / 20.0;
+
+        (empathy + team_spirit) * 0.08
+    }
+
+    fn calculate_national_team_bond(player_a: &Player, player_b: &Player) -> f32 {
+        let int_experience_a =
+            (player_a.player_attributes.international_apps as f32 / 50.0).min(1.0);
+        let int_experience_b =
+            (player_b.player_attributes.international_apps as f32 / 50.0).min(1.0);
+
+        // Reputation similarity among compatriots strengthens bonds
+        let rep_a = player_a.player_attributes.current_reputation as f32;
+        let rep_b = player_b.player_attributes.current_reputation as f32;
+        let rep_similarity = 1.0 - ((rep_a - rep_b).abs() / 10000.0).clamp(0.0, 1.0);
+
+        (int_experience_a + int_experience_b) * 0.04 * (0.7 + 0.3 * rep_similarity)
+    }
+
+    fn calculate_player_happiness(player: &Player) -> f32 {
+        let mut happiness = 0.0;
+
+        // Contract satisfaction - high reputation players have higher expectations
+        let rep_expectation =
+            (player.player_attributes.current_reputation as f32 / 5000.0).clamp(0.5, 2.0);
+
+        happiness += player
+            .contract
+            .as_ref()
+            .map(|c| (c.salary as f32 / (10000.0 * rep_expectation)).min(1.0))
+            .unwrap_or(-0.5);
+
+        // Playing time satisfaction - star players expect to start
+        if player.statistics.played > 20 {
+            happiness += 0.3;
+        } else if player.statistics.played > 10 {
+            happiness += 0.1;
+        } else {
+            // High rep players get more upset about not playing
+            happiness -= 0.2 * (1.0 + (rep_expectation - 1.0) * 0.5);
+        }
+
+        // Performance satisfaction
+        let goals_ratio =
+            player.statistics.goals as f32 / player.statistics.played.max(1) as f32;
+        if player.position().is_forward() && goals_ratio > 0.5 {
+            happiness += 0.2;
+        } else if !player.position().is_forward() && goals_ratio > 0.3 {
+            happiness += 0.15;
+        }
+
+        // Personality factors
+        happiness += (player.attributes.professionalism - 10.0) / 100.0;
+        happiness -= (player.attributes.controversy - 10.0) / 50.0;
+
+        // Behavior state
+        match player.behaviour.state {
+            PersonBehaviourState::Good => happiness += 0.2,
+            PersonBehaviourState::Poor => happiness -= 0.3,
+            PersonBehaviourState::Normal => {}
+        }
+
+        happiness.clamp(-1.0, 1.0)
+    }
 
     fn calculate_competition_factor(player_a: &Player, player_b: &Player) -> f32 {
         let ability_diff = (player_a.player_attributes.current_ability as f32
             - player_b.player_attributes.current_ability as f32)
             .abs();
 
-        // More similar abilities = more competition
+        // Similar abilities = more competition
         let competition_base = 0.3 - (ability_diff / 100.0);
 
         // Ambition increases competition
-        let ambition_factor = (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
+        let ambition_factor =
+            (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
 
-        (competition_base * ambition_factor).max(0.0).min(0.5)
+        // Reputation amplifies competition: both high-rep players fight harder for spots
+        let rep_a =
+            (player_a.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let rep_b =
+            (player_b.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let rep_factor = 1.0 + (rep_a + rep_b) * 0.25;
+
+        (competition_base * ambition_factor * rep_factor).clamp(0.0, 0.5)
     }
 
     fn calculate_synergy_factor(player_a: &Player, player_b: &Player) -> f32 {
-        // Players with good teamwork create positive relationships
         let teamwork_factor =
             (player_a.skills.mental.teamwork + player_b.skills.mental.teamwork) / 40.0;
-
-        // Professional players work well together
         let professionalism_factor =
             (player_a.attributes.professionalism + player_b.attributes.professionalism) / 40.0;
 
-        (teamwork_factor * professionalism_factor * 0.2).min(0.3)
+        // Higher combined reputation means higher-quality partnership
+        let rep_a =
+            (player_a.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let rep_b =
+            (player_b.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let rep_bonus = 1.0 + (rep_a + rep_b) * 0.15;
+
+        (teamwork_factor * professionalism_factor * 0.2 * rep_bonus).min(0.3)
     }
 
     fn are_complementary_positions(pos_a: &PlayerPositionType, pos_b: &PlayerPositionType) -> bool {
         use PlayerPositionType::*;
 
         match (pos_a, pos_b) {
-            // Defenders and midfielders work well together
             (
                 DefenderCenter | DefenderLeft | DefenderRight,
                 MidfielderCenter | MidfielderLeft | MidfielderRight | DefensiveMidfielder,
             ) => true,
-
-            // Midfielders and forwards complement each other
             (
                 MidfielderCenter | MidfielderLeft | MidfielderRight | AttackingMidfielderCenter,
                 Striker | ForwardLeft | ForwardRight | ForwardCenter,
             ) => true,
-
-            // Reverse combinations
             (
                 MidfielderCenter | MidfielderLeft | MidfielderRight | DefensiveMidfielder,
                 DefenderCenter | DefenderLeft | DefenderRight,
             ) => true,
-
             (
                 Striker | ForwardLeft | ForwardRight | ForwardCenter,
                 MidfielderCenter | MidfielderLeft | MidfielderRight | AttackingMidfielderCenter,
             ) => true,
-
             _ => false,
         }
     }
@@ -899,16 +1073,13 @@ impl TeamBehaviour {
             (16..=22, 16..=22) if age_diff <= 3 => FloatUtils::random(0.1, 0.25),
 
             // Young and experienced (30+) - mentorship potential
-            (16..=22, 30..) | (30.., 16..=22) => {
-                // But depends on personalities
-                FloatUtils::random(-0.1, 0.2)
-            }
+            (16..=22, 30..) | (30.., 16..=22) => FloatUtils::random(-0.05, 0.2),
 
             // Prime age players (23-29) - competitive tension
-            (23..=29, 23..=29) if age_diff <= 2 => FloatUtils::random(-0.15, 0.1),
+            (23..=29, 23..=29) if age_diff <= 2 => FloatUtils::random(-0.1, 0.1),
 
-            // Large age gaps in prime years - respect or resentment
-            _ if age_diff > 8 => FloatUtils::random(-0.2, 0.15),
+            // Large age gaps - respect or indifference
+            _ if age_diff > 8 => FloatUtils::random(-0.1, 0.1),
 
             // Similar ages in general - slight positive
             _ if age_diff <= 2 => FloatUtils::random(0.0, 0.1),
@@ -925,21 +1096,40 @@ impl TeamBehaviour {
         let appearance_factor = (player.statistics.played as f32 / 30.0).min(1.0) * 5.0;
         let rating_factor = player.statistics.average_rating;
 
-        (goals_factor + assists_factor + appearance_factor + rating_factor) / 4.0
+        // Factor in reputation: a high-reputation player who performs poorly stands out
+        let rep_factor =
+            (player.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let rep_adjustment = rep_factor * 2.0;
+
+        (goals_factor + assists_factor + appearance_factor + rating_factor + rep_adjustment) / 5.0
     }
 
-    fn calculate_performance_relationship_factor(perf_a: f32, perf_b: f32, diff: f32) -> f32 {
+    fn calculate_performance_relationship_factor(
+        perf_a: f32,
+        perf_b: f32,
+        diff: f32,
+        player_a: &Player,
+        player_b: &Player,
+    ) -> f32 {
         if diff < 1.0 {
             // Similar performance - mutual respect
-            FloatUtils::random(0.05, 0.2)
+            FloatUtils::random(0.05, 0.15)
         } else if diff > 3.0 {
-            // Large performance gap - could create tension or admiration
+            // Large performance gap
+            let higher_rep = player_a
+                .player_attributes
+                .current_reputation
+                .max(player_b.player_attributes.current_reputation)
+                as f32;
+            let rep_scale = (higher_rep / 10000.0).clamp(0.1, 1.0);
+
             if perf_a > perf_b {
-                // Higher performer might look down
-                FloatUtils::random(-0.1, 0.05)
+                // Higher performer: professional players give credit, ambitious ones resent
+                let sportsmanship_a =
+                    (player_a.attributes.sportsmanship / 20.0).clamp(0.0, 1.0);
+                FloatUtils::random(-0.1, 0.05) * (1.0 + sportsmanship_a * 0.3) * rep_scale
             } else {
-                // Lower performer might be jealous or inspired
-                FloatUtils::random(-0.15, 0.1)
+                FloatUtils::random(-0.12, 0.08) * rep_scale
             }
         } else {
             0.0
@@ -950,52 +1140,65 @@ impl TeamBehaviour {
         // High controversy players clash with professional players
         let controversy_clash = if player_a.attributes.controversy > 15.0
             && player_b.attributes.professionalism > 15.0
-            || player_b.attributes.controversy > 15.0 && player_a.attributes.professionalism > 15.0
+            || player_b.attributes.controversy > 15.0
+                && player_a.attributes.professionalism > 15.0
         {
-            -0.3
+            -0.25
         } else {
             0.0
         };
 
-        // High temperament players might clash
+        // High temperament players clash
         let temperament_clash =
             if player_a.attributes.temperament > 18.0 && player_b.attributes.temperament > 18.0 {
-                FloatUtils::random(-0.2, -0.05)
+                FloatUtils::random(-0.15, -0.03)
             } else {
                 0.0
             };
 
-        // Different behavioral states can cause friction
+        // Different behavioral states cause friction
         let behavior_clash = match (&player_a.behaviour.state, &player_b.behaviour.state) {
             (PersonBehaviourState::Poor, PersonBehaviourState::Good)
-            | (PersonBehaviourState::Good, PersonBehaviourState::Poor) => -0.15,
+            | (PersonBehaviourState::Good, PersonBehaviourState::Poor) => -0.12,
             _ => 0.0,
         };
 
-        // Loyalty and professionalism create bonds
+        // Mutual loyalty and professionalism create bonds
         let positive_traits =
             if player_a.attributes.loyalty > 15.0 && player_b.attributes.loyalty > 15.0 {
-                0.1
+                0.08
             } else {
                 0.0
             };
 
-        controversy_clash + temperament_clash + behavior_clash + positive_traits
+        // Mutual sportsmanship creates bonds
+        let sportsmanship_bond = if player_a.attributes.sportsmanship > 14.0
+            && player_b.attributes.sportsmanship > 14.0
+        {
+            0.05
+        } else {
+            0.0
+        };
+
+        controversy_clash + temperament_clash + behavior_clash + positive_traits + sportsmanship_bond
     }
 
     fn calculate_leadership_influence(leader: &Player, player: &Player) -> f32 {
         let leadership_strength = leader.skills.mental.leadership / 20.0;
 
-        // Good leaders positively influence well-behaved players
+        // Reputation amplifies leadership: respected players are listened to more
+        let rep_boost =
+            (leader.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        let effective_leadership = leadership_strength * (1.0 + rep_boost * 0.5);
+
         let influence = match player.behaviour.state {
-            PersonBehaviourState::Good => leadership_strength * 0.2,
-            PersonBehaviourState::Normal => leadership_strength * 0.1,
+            PersonBehaviourState::Good => effective_leadership * 0.15,
+            PersonBehaviourState::Normal => effective_leadership * 0.08,
             PersonBehaviourState::Poor => {
-                // Poor behavior players might resist or benefit from leadership
                 if player.attributes.professionalism > 10.0 {
-                    leadership_strength * 0.15 // Can be helped
+                    effective_leadership * 0.12
                 } else {
-                    -leadership_strength * 0.1 // Resists authority
+                    -effective_leadership * 0.08
                 }
             }
         };
@@ -1012,19 +1215,23 @@ impl TeamBehaviour {
         let time_diff = (time_a as i32 - time_b as i32).abs();
 
         if time_diff < 3 {
-            // Similar playing time - bond over shared experience
-            return FloatUtils::random(0.05, 0.15);
+            return FloatUtils::random(0.03, 0.1);
         }
 
         if time_diff > 10 {
             let ambition_factor =
                 (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
 
-            // High ambition players get jealous of more playing time
+            // High reputation players who don't play feel it more acutely
+            let rep_a =
+                (player_a.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+            let rep_b =
+                (player_b.player_attributes.current_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+
             if time_a < time_b && player_a.attributes.ambition > 15.0 {
-                return -0.2 * ambition_factor;
+                return -0.15 * ambition_factor * (1.0 + rep_a * 0.3);
             } else if time_b < time_a && player_b.attributes.ambition > 15.0 {
-                return -0.2 * ambition_factor;
+                return -0.15 * ambition_factor * (1.0 + rep_b * 0.3);
             }
         }
 

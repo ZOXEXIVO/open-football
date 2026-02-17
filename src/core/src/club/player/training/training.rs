@@ -112,6 +112,20 @@ impl PlayerTraining {
                 effects.fatigue_change = 0.0;
                 effects.injury_risk = 0.0;
             }
+            TrainingType::RestDay => {
+                effects.fatigue_change = -50.0; // Full rest day — best recovery
+                effects.injury_risk = -0.03;
+                effects.morale_change = 0.03;
+            }
+            TrainingType::LightRecovery => {
+                effects.fatigue_change = -20.0;
+                effects.injury_risk = -0.01;
+                effects.morale_change = 0.02;
+            }
+            TrainingType::Rehabilitation => {
+                effects.fatigue_change = -15.0;
+                effects.injury_risk = -0.02;
+            }
             _ => {
                 // Default minimal gains for unspecified training types
                 effects.fatigue_change = 10.0 * intensity_multiplier;

@@ -17,12 +17,15 @@ pub struct TeamTransfersRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/transfers/index.html")]
 pub struct TeamTransfersTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
     pub items: Vec<TransferListItem>,
+    pub incoming_transfers: Vec<TransferHistoryItem>,
+    pub outgoing_transfers: Vec<TransferHistoryItem>,
 }
 
 pub struct TransferListItem {
@@ -30,6 +33,16 @@ pub struct TransferListItem {
     pub player_name: String,
     pub position: String,
     pub value: String,
+}
+
+pub struct TransferHistoryItem {
+    pub player_id: u32,
+    pub player_team_slug: String,
+    pub player_name: String,
+    pub other_team: String,
+    pub other_team_slug: String,
+    pub fee: String,
+    pub date: String,
 }
 
 pub async fn team_transfers_action(
@@ -62,9 +75,18 @@ pub async fn team_transfers_action(
         .league(team.league_id)
         .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", team.league_id)))?;
 
+    let country = simulator_data
+        .country(league.country_id)
+        .ok_or_else(|| {
+            ApiError::NotFound(format!("Country with ID {} not found", league.country_id))
+        })?;
+
     let now = simulator_data.date.date();
     let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
 
+    let club_id = team.club_id;
+
+    // Current transfer list items
     let items: Vec<TransferListItem> = team
         .transfer_list
         .items()
@@ -73,21 +95,79 @@ pub async fn team_transfers_action(
             let player = team.players().into_iter().find(|p| p.id == ti.player_id)?;
             Some(TransferListItem {
                 player_id: player.id,
-                player_name: format!("{} {}", player.full_name.first_name, player.full_name.last_name),
+                player_name: format!(
+                    "{} {}",
+                    player.full_name.first_name, player.full_name.last_name
+                ),
                 position: player.position().get_short_name().to_string(),
                 value: FormattingUtils::format_money(player.value(now)),
             })
         })
         .collect();
 
+    // Incoming transfers (players bought by this club)
+    let incoming_transfers: Vec<TransferHistoryItem> = country
+        .transfer_market
+        .transfer_history
+        .iter()
+        .filter(|t| t.to_club_id == club_id)
+        .map(|t| {
+            let other_team_slug = get_first_team_slug(country, t.from_club_id);
+            let player_team_slug = get_first_team_slug(country, t.to_club_id);
+            TransferHistoryItem {
+                player_id: t.player_id,
+                player_team_slug,
+                player_name: t.player_name.clone(),
+                other_team: t.from_team_name.clone(),
+                other_team_slug,
+                fee: FormattingUtils::format_money(t.fee.amount),
+                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+            }
+        })
+        .collect();
+
+    // Outgoing transfers (players sold by this club)
+    let outgoing_transfers: Vec<TransferHistoryItem> = country
+        .transfer_market
+        .transfer_history
+        .iter()
+        .filter(|t| t.from_club_id == club_id)
+        .map(|t| {
+            let other_team_slug = get_first_team_slug(country, t.to_club_id);
+            let player_team_slug = get_first_team_slug(country, t.to_club_id);
+            TransferHistoryItem {
+                player_id: t.player_id,
+                player_team_slug,
+                player_name: t.player_name.clone(),
+                other_team: t.to_team_name.clone(),
+                other_team_slug,
+                fee: FormattingUtils::format_money(t.fee.amount),
+                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+            }
+        })
+        .collect();
+
     Ok(TeamTransfersTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),
         menu_sections: views::team_menu(&neighbor_teams, &team.slug),
         team_slug: team.slug.clone(),
         items,
+        incoming_transfers,
+        outgoing_transfers,
     })
+}
+
+fn get_first_team_slug(country: &core::Country, club_id: u32) -> String {
+    country
+        .clubs
+        .iter()
+        .find(|c| c.id == club_id)
+        .and_then(|c| c.teams.teams.first())
+        .map(|t| t.slug.clone())
+        .unwrap_or_default()
 }
 
 fn get_neighbor_teams<'a>(
@@ -107,5 +187,8 @@ fn get_neighbor_teams<'a>(
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));
 
-    Ok(teams.into_iter().map(|(name, slug, _)| (name, slug)).collect())
+    Ok(teams
+        .into_iter()
+        .map(|(name, slug, _)| (name, slug))
+        .collect())
 }

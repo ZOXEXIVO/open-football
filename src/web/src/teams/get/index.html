@@ -38,6 +38,12 @@
                         {% if player.injured %}
                         <span class="fm-badge fm-badge-inj">Inj</span>
                         {% endif %}
+                        {% if player.transfer_listed %}
+                        <span class="fm-badge fm-badge-lst">Lst</span>
+                        {% endif %}
+                        {% if player.is_loan %}
+                        <span class="fm-badge fm-badge-loan-in">Loan</span>
+                        {% endif %}
                     </td>
                     <td class="sq-name">
                         <a href="/teams/{{ team_slug }}/players/{{ player.id }}">

@@ -16,7 +16,11 @@ impl TrainingSchedule {
         }
     }
 
-    pub fn is_time(&self, date: NaiveDateTime) -> bool {
-        self.morning_time == date.time() || self.evening_time == date.time()
+    /// Check if training should happen on this day.
+    /// The simulation advances in whole-day steps (time is always 00:00),
+    /// so we simply return true — the weekly plan determines what sessions
+    /// actually run on each weekday (rest days return empty sessions).
+    pub fn is_time(&self, _date: NaiveDateTime) -> bool {
+        true
     }
 }

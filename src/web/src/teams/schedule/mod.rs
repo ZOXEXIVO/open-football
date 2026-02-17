@@ -16,6 +16,7 @@ pub struct TeamScheduleGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/schedule/index.html")]
 pub struct TeamScheduleTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -106,6 +107,7 @@ pub async fn team_schedule_get_action(
         .collect();
 
     Ok(TeamScheduleTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

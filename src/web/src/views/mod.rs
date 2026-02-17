@@ -45,11 +45,18 @@ pub fn league_menu(country_name: &str, country_slug: &str, league_name: &str, le
             }],
         },
         MenuSection {
-            items: vec![MenuItem {
-                title: league_name.to_string(),
-                url: format!("/leagues/{}", league_slug),
-                icon: "fa-home".to_string(),
-            }],
+            items: vec![
+                MenuItem {
+                    title: league_name.to_string(),
+                    url: format!("/leagues/{}", league_slug),
+                    icon: "fa-home".to_string(),
+                },
+                MenuItem {
+                    title: "Transfers".to_string(),
+                    url: format!("/leagues/{}/transfers", league_slug),
+                    icon: "fa-exchange".to_string(),
+                },
+            ],
         },
     ]
 }
@@ -90,6 +97,11 @@ pub fn team_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<MenuSe
                 url: format!("/teams/{}/schedule", team_slug),
                 icon: "fa-calendar".to_string(),
             },
+            MenuItem {
+                title: "Transfers".to_string(),
+                url: format!("/teams/{}/transfers", team_slug),
+                icon: "fa-exchange".to_string(),
+            },
         ],
     });
 
@@ -100,6 +112,7 @@ pub fn player_menu(neighbor_teams: &[(&str, &str)], team_slug: &str) -> Vec<Menu
     team_menu(neighbor_teams, team_slug)
 }
 
+#[allow(dead_code)]
 pub fn match_menu() -> Vec<MenuSection> {
     vec![MenuSection {
         items: vec![MenuItem {

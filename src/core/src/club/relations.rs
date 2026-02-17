@@ -61,6 +61,17 @@ impl Relations {
         self.update_player_relationship(player_id, change, date);
     }
 
+    /// Update with a specific change type and simulation date
+    pub fn update_with_type(&mut self, player_id: u32, increment: f32, change_type: ChangeType, date: NaiveDate) {
+        let change = if increment >= 0.0 {
+            RelationshipChange::positive(change_type, increment.abs())
+        } else {
+            RelationshipChange::negative(change_type, increment.abs())
+        };
+
+        self.update_player_relationship(player_id, change, date);
+    }
+
     /// Alternative: Direct level update without full change tracking
     pub fn update_simple(&mut self, player_id: u32, increment: f32) {
         let relation = self.players.get_or_create(player_id);
@@ -452,6 +463,16 @@ impl Relationship for PlayerRelation {
                 self.trust -= magnitude * 2.0;
                 self.friendship -= magnitude * 3.0;
             }
+            ChangeType::ReputationAdmiration => {
+                self.respect += magnitude * 3.0;
+                self.professional_respect += magnitude * 2.0;
+                self.level += magnitude * 1.5;
+            }
+            ChangeType::ReputationTension => {
+                self.level -= magnitude * 1.5;
+                self.respect -= magnitude;
+                self.professional_respect -= magnitude * 0.5;
+            }
             _ => {
                 self.level += magnitude;
             }
@@ -576,6 +597,7 @@ impl Relationship for StaffRelation {
 }
 
 /// Group dynamics and cliques
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct GroupDynamics {
     groups: HashMap<GroupId, Group>,
@@ -645,6 +667,7 @@ impl GroupDynamics {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct Group {
     id: GroupId,
@@ -664,6 +687,7 @@ impl Group {
 
 type GroupId = u32;
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 enum GroupType {
     Nationality,
@@ -782,6 +806,7 @@ impl RelationshipHistory {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct RelationshipEvent {
     date: NaiveDate,
@@ -817,6 +842,10 @@ pub enum ChangeType {
     TacticalDisagreement,
     DisciplinaryAction,
     TeamFailure,
+
+    // Reputation-based
+    ReputationAdmiration,
+    ReputationTension,
 
     // Neutral
     NaturalProgression,

@@ -12,6 +12,7 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.7;
 
 // Coordination constants
 const ENGAGEMENT_DISTANCE: f32 = 25.0; // Distance at which a defender is considered "engaging" an opponent
+#[allow(dead_code)]
 const MIN_MARKING_SEPARATION: f32 = 15.0; // Minimum distance between defenders marking different opponents
 
 impl<'p> DefensiveOperationsImpl<'p> {

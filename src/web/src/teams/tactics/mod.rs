@@ -17,6 +17,7 @@ pub struct TeamTacticsGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/tactics/index.html")]
 pub struct TeamTacticsTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -96,6 +97,7 @@ pub async fn team_tactics_get_action(
     let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
 
     Ok(TeamTacticsTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

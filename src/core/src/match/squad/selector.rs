@@ -14,6 +14,7 @@ pub struct PlayerSelectionResult {
     pub substitutes: Vec<MatchPlayer>,
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct PlayerRating {
     player_id: u32,
@@ -496,11 +497,13 @@ mod tests {
         players
     }
 
+    #[allow(dead_code)]
     fn generate_versatile_player() -> crate::Player {
         // Create a player that can play multiple positions
         PlayerGenerator::generate(1, Utc::now().date_naive(), PlayerPositionType::MidfielderCenter, 18)
     }
 
+    #[allow(dead_code)]
     fn generate_attacking_player() -> crate::Player {
         PlayerGenerator::generate(1, Utc::now().date_naive(), PlayerPositionType::Striker, 18)
     }

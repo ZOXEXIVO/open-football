@@ -6,7 +6,7 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 /// Goalkeeper clearing state - emergency clearance of the ball away from danger
 #[derive(Default)]

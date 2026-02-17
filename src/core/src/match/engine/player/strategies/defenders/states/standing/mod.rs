@@ -19,8 +19,11 @@ const TACKLE_DISTANCE: f32 = 30.0;
 const BLOCKING_DISTANCE: f32 = 20.0; // Increased from 15.0 - earlier shot blocking
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
+#[allow(dead_code)]
 const THREAT_SCAN_DISTANCE: f32 = 100.0; // Increased from 70.0 - earlier detection of dangerous runs
+#[allow(dead_code)]
 const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower dangerous runs too
+#[allow(dead_code)]
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle detection
 
 #[derive(Default)]

@@ -9,6 +9,7 @@ use axum::response::IntoResponse;
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "countries/list/index.html")]
 pub struct CountryListTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -55,6 +56,7 @@ pub async fn country_list_action(
         .collect();
 
     Ok(CountryListTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: "Select country".to_string(),
         sub_title: "Select any country to inspect it all".to_string(),
         sub_title_link: "/".to_string(),

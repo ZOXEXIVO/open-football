@@ -6,8 +6,10 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::ContractType;
 use core::Player;
 use core::PlayerPositionType;
+use core::PlayerStatusType;
 use core::utils::FormattingUtils;
 use core::{SimulatorData, Team};
 use serde::Deserialize;
@@ -20,6 +22,7 @@ pub struct TeamGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "teams/get/index.html")]
 pub struct TeamGetTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -37,12 +40,15 @@ pub struct TeamPlayer {
     pub position_sort: PlayerPositionType,
     pub value: String,
     pub injured: bool,
+    pub transfer_listed: bool,
+    pub is_loan: bool,
     pub country_slug: String,
     pub country_code: String,
     pub country_name: String,
     pub conditions: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
+    #[allow(dead_code)]
     pub status: PlayerStatusDto,
 }
 
@@ -83,6 +89,10 @@ pub async fn team_get_action(
             let country = simulator_data.country(p.country_id)?;
             let position = p.positions.display_positions().join(", ");
 
+            let is_loan = p.contract.as_ref()
+                .map(|c| c.contract_type == ContractType::Loan)
+                .unwrap_or(false);
+
             Some(TeamPlayer {
                 id: p.id,
                 first_name: p.full_name.first_name.clone(),
@@ -90,6 +100,8 @@ pub async fn team_get_action(
                 position,
                 behaviour: p.behaviour.as_str().to_string(),
                 injured: p.player_attributes.is_injured,
+                transfer_listed: p.statuses.get().contains(&PlayerStatusType::Lst),
+                is_loan,
                 country_slug: country.slug.clone(),
                 country_code: country.code.clone(),
                 country_name: country.name.clone(),
@@ -112,6 +124,7 @@ pub async fn team_get_action(
     let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
 
     Ok(TeamGetTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
         sub_title: league.name.clone(),
         sub_title_link: format!("/leagues/{}", &league.slug),

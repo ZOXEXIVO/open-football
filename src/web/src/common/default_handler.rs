@@ -6,6 +6,7 @@ use rust_embed::RustEmbed;
 
 // Include the CSS hash to force recompilation when CSS files change
 // This ensures rust-embed picks up the updated styles.min.css
+// Also provides CSS_VERSION for cache-busting query params
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
 
 #[derive(RustEmbed)]

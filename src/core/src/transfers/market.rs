@@ -131,28 +131,30 @@ impl TransferMarket {
         }
     }
 
-    pub fn complete_transfer(&mut self, negotiation_id: u32, current_date: NaiveDate) -> Option<CompletedTransfer> {
-        // Find the negotiation
+    pub fn complete_transfer(
+        &mut self,
+        negotiation_id: u32,
+        current_date: NaiveDate,
+        player_name: String,
+        from_team_name: String,
+        to_team_name: String,
+    ) -> Option<CompletedTransfer> {
         if let Some(negotiation) = self.negotiations.get(&negotiation_id) {
             if negotiation.status != NegotiationStatus::Accepted {
                 return None;
             }
 
-            // Get the listing index
             let listing_idx = negotiation.listing_id as usize;
             if listing_idx >= self.listings.len() {
                 return None;
             }
 
-            // Update listing status
             if let Some(listing) = self.listings.get_mut(listing_idx) {
                 listing.status = TransferListingStatus::Completed;
             }
 
-            // Create a completed transfer record
             let transfer_type = match self.listings.get(listing_idx).unwrap().listing_type {
                 TransferListingType::Loan => {
-                    // Assume 6-month loan if contract length not specified
                     let loan_end = negotiation.current_offer.contract_length
                         .map(|months| {
                             current_date.checked_add_signed(chrono::Duration::days(months as i64 * 30))
@@ -170,14 +172,16 @@ impl TransferMarket {
 
             let completed = CompletedTransfer::new(
                 negotiation.player_id,
+                player_name,
                 negotiation.selling_club_id,
+                from_team_name,
                 negotiation.buying_club_id,
+                to_team_name,
                 current_date,
                 negotiation.current_offer.base_fee.clone(),
                 transfer_type,
             );
 
-            // Add to history
             self.transfer_history.push(completed.clone());
 
             Some(completed)

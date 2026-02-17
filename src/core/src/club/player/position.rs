@@ -224,7 +224,7 @@ mod tests {
     }
 }
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug)]
 pub enum PlayerFieldPositionGroup {
     Goalkeeper,
     Defender,

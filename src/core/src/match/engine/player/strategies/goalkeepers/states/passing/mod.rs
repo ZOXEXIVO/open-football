@@ -2,10 +2,10 @@ use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PlayerEvent, PassingEventContext};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, VectorExtensions};
+use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
-use rand::{Rng, RngExt};
+use rand::RngExt;
 
 /// Types of goalkeeper distribution
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -141,7 +141,7 @@ impl GoalkeeperPassingState {
         let vision = ctx.player.skills.mental.vision / 20.0;
         let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
         let passing = ctx.player.skills.technical.passing / 20.0;
-        let decisions = ctx.player.skills.mental.decisions / 20.0;
+        let _decisions = ctx.player.skills.mental.decisions / 20.0;
 
         // Under heavy pressure - clear it!
         if under_heavy_pressure {

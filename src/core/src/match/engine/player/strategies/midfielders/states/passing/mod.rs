@@ -256,6 +256,7 @@ impl MidfielderPassingState {
     }
 
     /// Check for clear passing lanes with improved logic
+    #[allow(dead_code)]
     fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         let player_position = ctx.player.position;
         let teammate_position = teammate.position;
@@ -292,6 +293,7 @@ impl MidfielderPassingState {
     }
 
     /// Check if player is heavily marked
+    #[allow(dead_code)]
     fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         const MARKING_DISTANCE: f32 = 5.0;
         const MAX_MARKERS: usize = 2;
@@ -319,6 +321,7 @@ impl MidfielderPassingState {
     }
 
     /// Check if teammate is in good position
+    #[allow(dead_code)]
     fn is_in_good_position(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         let is_backward_pass = match ctx.player.side {
             Some(PlayerSide::Left) => teammate.position.x < ctx.player.position.x,

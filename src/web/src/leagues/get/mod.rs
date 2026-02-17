@@ -20,6 +20,7 @@ pub struct LeagueGetRequest {
 #[derive(Template, askama_web::WebTemplate)]
 #[template(path = "leagues/get/index.html")]
 pub struct LeagueGetTemplate {
+    pub css_version: &'static str,
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
@@ -63,6 +64,7 @@ pub struct LeagueScheduleItem {
     pub result: Option<LeagueScheduleItemResult>,
 }
 
+#[allow(dead_code)]
 pub struct LeagueScheduleItemResult {
     pub home_goals: u8,
     pub home_goalscorers: Vec<LeagueTableGoalscorer>,
@@ -70,6 +72,7 @@ pub struct LeagueScheduleItemResult {
     pub away_goalscorers: Vec<LeagueTableGoalscorer>,
 }
 
+#[allow(dead_code)]
 pub struct LeagueTableGoalscorer {
     pub id: u32,
     pub name: String,
@@ -349,6 +352,7 @@ pub async fn league_get_action(
         .collect();
 
     Ok(LeagueGetTemplate {
+        css_version: crate::common::default_handler::CSS_VERSION,
         title: league.name.clone(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/countries/{}", &country.slug),

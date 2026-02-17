@@ -1,0 +1,114 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/leagues/{{ league_slug }}">Overview</a>
+    <a class="fm-tab">Matches</a>
+    <a class="fm-tab">News</a>
+    <a class="fm-tab">Stats</a>
+    <a class="fm-tab active" href="/leagues/{{ league_slug }}/transfers">Transfers</a>
+    <a class="fm-tab">Awards</a>
+    <a class="fm-tab">History</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Completed Transfers</h3>
+            <span class="fm-panel-count">{{ completed_transfers.len() }}</span>
+        </div>
+        {% if completed_transfers.is_empty() %}
+        <div class="fm-empty">No completed transfers</div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>From</th>
+                    <th>To</th>
+                    <th>Fee</th>
+                    <th>Date</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in completed_transfers %}
+                <tr>
+                    <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td><a href="/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
+                    <td><a href="/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
+                    <td>{{ item.fee }}</td>
+                    <td>{{ item.date }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Transfer Listings</h3>
+            <span class="fm-panel-count">{{ current_listings.len() }}</span>
+        </div>
+        {% if current_listings.is_empty() %}
+        <div class="fm-empty">No current listings</div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Team</th>
+                    <th>Asking Price</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in current_listings %}
+                <tr>
+                    <td class="sq-name"><a href="/teams/{{ item.team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td><a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a></td>
+                    <td>{{ item.asking_price }}</td>
+                    <td>{{ item.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Active Negotiations</h3>
+            <span class="fm-panel-count">{{ active_negotiations.len() }}</span>
+        </div>
+        {% if active_negotiations.is_empty() %}
+        <div class="fm-empty">No active negotiations</div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>Player</th>
+                    <th>Selling Club</th>
+                    <th>Buying Club</th>
+                    <th>Offer</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in active_negotiations %}
+                <tr>
+                    <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td><a href="/teams/{{ item.selling_team_slug }}">{{ item.selling_team }}</a></td>
+                    <td><a href="/teams/{{ item.buying_team_slug }}">{{ item.buying_team }}</a></td>
+                    <td>{{ item.offer_amount }}</td>
+                    <td>{{ item.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

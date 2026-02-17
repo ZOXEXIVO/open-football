@@ -1,5 +1,5 @@
 use crate::{Person, Player, PlayerStatusType};
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 
 pub struct PlayerValueCalculator;
 
@@ -7,152 +7,217 @@ impl PlayerValueCalculator {
     pub fn calculate(player: &Player, now: NaiveDate) -> f64 {
         let base_value = determine_base_value(player);
         let age_factor = determine_age_factor(player, now);
-
+        let potential_factor = determine_potential_factor(player, now);
         let status_factor = determine_status_factor(player);
-
         let contract_factor = determine_contract_factor(player, now);
-
-        let country_factor = determine_country_factor(player);
-
-        let form_factor = determine_form_factor(player);
-
-        let match_appearance_factor = determine_match_appearance_factor(player);
-
-        let statistics_factor = determine_statistics_factor(player);
-
-        let other_factors = determine_other_factors(player);
+        let performance_factor = determine_performance_factor(player);
+        let reputation_factor = determine_reputation_factor(player);
+        let position_factor = determine_position_factor(player);
 
         let value = base_value
             * age_factor
+            * potential_factor
             * status_factor
             * contract_factor
-            * country_factor
-            * form_factor
-            * match_appearance_factor
-            * statistics_factor
-            * other_factors;
+            * performance_factor
+            * reputation_factor
+            * position_factor;
 
-        value
+        value.max(10_000.0)
     }
 }
 
+/// Base value derived from current_ability using exponential curve.
+/// ability 40 → ~200K, 80 → ~3M, 120 → ~20M, 160 → ~60M, 200 → ~150M
 fn determine_base_value(player: &Player) -> f64 {
-    const BASE_PRICE: f64 = 1_000_000.0;
+    let ability = player.player_attributes.current_ability as f64;
 
-    let technical_mean = player.skills.technical.average();
-    let mental_mean = player.skills.mental.average();
-    let physical_mean = player.skills.physical.average();
+    // Exponential: small base + steep growth for high ability
+    let normalized = ability / 200.0; // 0.0 to 1.0
+    let exponential = normalized * normalized * normalized; // cubic growth
 
-    let base_value = ((technical_mean + mental_mean + physical_mean) / 3.0) as f64;
+    // Skill quality bonus (average of all skills, 1-20 range)
+    let technical = player.skills.technical.average() as f64;
+    let mental = player.skills.mental.average() as f64;
+    let physical = player.skills.physical.average() as f64;
+    let skill_avg = (technical + mental + physical) / 3.0;
+    let skill_factor = 0.7 + (skill_avg / 20.0) * 0.6; // 0.7 to 1.3
 
-    BASE_PRICE * base_value
+    150_000_000.0 * exponential * skill_factor
 }
 
+/// Age factor: peak value at 25-28, premium for young players, steep decline 30+
 fn determine_age_factor(player: &Player, date: NaiveDate) -> f64 {
-    match player.age(date) {
-        age if age < 21 => 0.7,
-        age if age < 25 => 0.8,
-        age if age < 30 => 0.9,
-        age if age < 35 => 0.7,
-        age if age < 40 => 0.5,
-        _ => 0.3,
+    let age = player.age(date);
+
+    match age {
+        a if a < 18 => 0.3,
+        18 => 0.5,
+        19 => 0.65,
+        20 => 0.8,
+        21 => 0.9,
+        22 => 0.95,
+        23 => 1.0,
+        24 => 1.05,
+        25..=28 => 1.1,  // Peak years
+        29 => 0.95,
+        30 => 0.8,
+        31 => 0.65,
+        32 => 0.5,
+        33 => 0.35,
+        34 => 0.25,
+        _ => 0.15,
     }
 }
 
+/// Young players with high potential get a premium
+fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
+    let age = player.age(date);
+    let current = player.player_attributes.current_ability as f64;
+    let potential = player.player_attributes.potential_ability as f64;
+
+    if age > 28 || current >= potential {
+        return 1.0;
+    }
+
+    let gap = potential - current;
+    let age_bonus = if age < 22 { 1.5 } else { 1.0 };
+
+    // Potential gap adds 1-50% value for young players
+    1.0 + (gap / 200.0) * age_bonus * 0.5
+}
+
+/// Player statuses that affect value
 fn determine_status_factor(player: &Player) -> f64 {
     let statuses = player.statuses.get();
-
-    let mut status_factor = 1.0f64;
+    let mut factor = 1.0f64;
 
     if statuses.contains(&PlayerStatusType::Inj) {
-        status_factor *= 0.7;
+        factor *= 0.6;
     }
 
     if statuses.contains(&PlayerStatusType::Unh) {
-        status_factor *= 0.8;
+        factor *= 0.75;
+    }
+
+    if statuses.contains(&PlayerStatusType::Lst) {
+        factor *= 0.85;
+    }
+
+    if statuses.contains(&PlayerStatusType::Req) {
+        factor *= 0.8;
     }
 
     if statuses.contains(&PlayerStatusType::Loa) {
-        status_factor *= 0.9;
+        factor *= 0.9;
     }
 
-    status_factor
+    factor
 }
 
+/// Contract length heavily affects transfer value
 fn determine_contract_factor(player: &Player, date: NaiveDate) -> f64 {
     let contract = match &player.contract {
         Some(contract) => contract,
-        None => return 0.0,
+        None => return 0.1, // Free agent: minimal value
     };
 
-    let remaining_years = (contract.expiration.year() as i32 - date.year() as i32) as f64;
-    let contract_factor = match remaining_years {
-        remaining_years if remaining_years > 2.0 => 1.0,
-        remaining_years if remaining_years > 1.0 => 0.9,
-        remaining_years if remaining_years > 0.5 => 0.8,
-        _ => 0.7,
-    };
+    let days_remaining = (contract.expiration - date).num_days();
+    let years_remaining = days_remaining as f64 / 365.0;
 
-    contract_factor
+    match years_remaining {
+        y if y <= 0.0 => 0.1,   // Expired
+        y if y < 0.5 => 0.3,    // Less than 6 months
+        y if y < 1.0 => 0.5,    // Less than 1 year
+        y if y < 1.5 => 0.7,    // 1-1.5 years
+        y if y < 2.0 => 0.85,   // 1.5-2 years
+        y if y < 3.0 => 1.0,    // 2-3 years
+        y if y < 4.0 => 1.05,   // 3-4 years
+        _ => 1.1,               // 4+ years
+    }
 }
 
-fn determine_country_factor(_player: &Player) -> f64 {
-    let country_factor = 1.0;
-    country_factor
-}
+/// Season performance: goals, assists, appearances, average rating
+fn determine_performance_factor(player: &Player) -> f64 {
+    let stats = &player.statistics;
+    let mut factor = 1.0;
 
-fn determine_form_factor(_player: &Player) -> f64 {
-    let form_factor = 1.0;
-
-    // let form = match player.statistics.get_form(date) {
-    //     Some(form) => form,
-    //     None => return 1.0,
-    // };
-    //
-    // let form_factor = match form {
-    //     form if form > 8.0 => 1.1,
-    //     form if form > 6.0 => 1.0,
-    //     form if form > 4.0 => 0.9,
-    //     form if form > 2.0 => 0.8,
-    //     _ => 0.7,
-    // };
-
-    form_factor
-}
-
-fn determine_match_appearance_factor(_player: &Player) -> f64 {
-    let match_appearance_factor = 1.0;
-    match_appearance_factor
-}
-
-fn determine_statistics_factor(player: &Player) -> f64 {
-    let match_appearance_factor = match player.statistics.played {
-        match_appearances if match_appearances > 20 => 1.1,
-        match_appearances if match_appearances > 10 => 1.0,
-        match_appearances if match_appearances > 5 => 0.9,
-        match_appearances if match_appearances > 2 => 0.8,
-        _ => 0.7,
-    };
-
-    match_appearance_factor
-}
-
-fn determine_other_factors(player: &Player) -> f64 {
-    let mut other_factors = 1.0;
-
-    if player.positions.is_goalkeeper() {
-        other_factors *= 1.2;
+    // Appearances
+    if stats.played > 25 {
+        factor *= 1.1;
+    } else if stats.played < 5 {
+        factor *= 0.85;
     }
 
-    if player.happiness.is_happy() {
-        other_factors *= 1.1;
+    // Goals contribution
+    if stats.played > 0 {
+        let goals_per_game = stats.goals as f64 / stats.played as f64;
+        let assists_per_game = stats.assists as f64 / stats.played as f64;
+
+        if player.position().is_forward() {
+            if goals_per_game > 0.5 {
+                factor *= 1.2;
+            } else if goals_per_game > 0.3 {
+                factor *= 1.1;
+            }
+        }
+
+        if player.position().is_midfielder() {
+            let combined = goals_per_game + assists_per_game;
+            if combined > 0.4 {
+                factor *= 1.15;
+            } else if combined > 0.2 {
+                factor *= 1.05;
+            }
+        }
     }
 
-    if player.attributes.loyalty > 8.0 {
-        other_factors *= 1.1;
+    // Average match rating
+    if stats.average_rating > 7.5 {
+        factor *= 1.15;
+    } else if stats.average_rating > 7.0 {
+        factor *= 1.05;
+    } else if stats.average_rating > 0.0 && stats.average_rating < 6.0 {
+        factor *= 0.9;
     }
 
-    other_factors
+    // International experience
+    let intl_apps = player.player_attributes.international_apps;
+    if intl_apps > 50 {
+        factor *= 1.2;
+    } else if intl_apps > 20 {
+        factor *= 1.1;
+    } else if intl_apps > 5 {
+        factor *= 1.05;
+    }
+
+    factor
+}
+
+/// Player reputation adds premium for well-known players
+fn determine_reputation_factor(player: &Player) -> f64 {
+    let rep = player.player_attributes.current_reputation as f64;
+
+    if rep > 2000.0 {
+        1.3
+    } else if rep > 1000.0 {
+        1.15
+    } else if rep > 500.0 {
+        1.05
+    } else {
+        1.0
+    }
+}
+
+/// Position-based value adjustment
+fn determine_position_factor(player: &Player) -> f64 {
+    if player.position().is_goalkeeper() {
+        0.7 // Goalkeepers typically valued less
+    } else if player.position().is_forward() {
+        1.15 // Strikers command premium
+    } else {
+        1.0
+    }
 }
 
 #[cfg(test)]

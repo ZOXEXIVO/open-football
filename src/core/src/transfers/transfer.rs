@@ -16,8 +16,11 @@ impl PlayerTransfer {
 #[derive(Debug, Clone)]
 pub struct CompletedTransfer {
     pub player_id: u32,
+    pub player_name: String,
     pub from_club_id: u32,
+    pub from_team_name: String,
     pub to_club_id: u32,
+    pub to_team_name: String,
     pub transfer_date: NaiveDate,
     pub fee: CurrencyValue,
     pub transfer_type: TransferType,
@@ -34,14 +37,15 @@ pub enum TransferType {
 impl CompletedTransfer {
     pub fn new(
         player_id: u32,
+        player_name: String,
         from_club_id: u32,
+        from_team_name: String,
         to_club_id: u32,
+        to_team_name: String,
         transfer_date: NaiveDate,
         fee: CurrencyValue,
         transfer_type: TransferType,
     ) -> Self {
-        // Determine the season year based on when transfer happened
-        // Typically football seasons span Aug-May, so use that as reference
         let season_year = if transfer_date.month() >= 8 {
             transfer_date.year() as u16
         } else {
@@ -50,8 +54,11 @@ impl CompletedTransfer {
 
         CompletedTransfer {
             player_id,
+            player_name,
             from_club_id,
+            from_team_name,
             to_club_id,
+            to_team_name,
             transfer_date,
             fee,
             transfer_type,

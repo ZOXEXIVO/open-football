@@ -32,7 +32,8 @@
       "Bash(cargo metadata:*)",
       "WebFetch(domain:steamuserimages-a.akamaihd.net)",
       "WebFetch(domain:www.fmscout.com)",
-      "Bash(echo:*)"
+      "Bash(echo:*)",
+      "Bash(tee:*)"
     ],
     "deny": [],
     "ask": []

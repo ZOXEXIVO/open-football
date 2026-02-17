@@ -48,6 +48,12 @@ impl Team {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
+        let date = ctx.simulation.date.date();
+
+        // Staff responsible for outgoing transfers evaluates squad
+        let players_refs: Vec<&Player> = self.players.players();
+        let staff_transfer_list = self.staffs.evaluate_outgoing_transfers(&players_refs, date);
+
         let result = TeamResult::new(
             self.id,
             self.players.simulate(ctx.with_player(None)),
@@ -55,6 +61,7 @@ impl Team {
             self.behaviour
                 .simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
             TeamTraining::train(self, ctx.simulation.date),
+            staff_transfer_list,
         );
 
         if self.tactics.is_none() {

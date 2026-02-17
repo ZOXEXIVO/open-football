@@ -4,11 +4,11 @@ use std::collections::VecDeque;
 /// Enhanced TeamReputation with dynamic updates and history tracking
 #[derive(Debug, Clone)]
 pub struct TeamReputation {
-    /// Local/regional reputation (0-1000)
+    /// Local/regional reputation (0-10000)
     pub home: u16,
-    /// National reputation (0-1000)
+    /// National reputation (0-10000)
     pub national: u16,
-    /// International reputation (0-1000)
+    /// International reputation (0-10000)
     pub world: u16,
 
     /// Momentum - how fast reputation is changing
@@ -25,28 +25,28 @@ impl TeamReputation {
     /// Create a new TeamReputation with initial values
     pub fn new(home: u16, national: u16, world: u16) -> Self {
         TeamReputation {
-            home: home.min(1000),
-            national: national.min(1000),
-            world: world.min(1000),
+            home: home.min(10000),
+            national: national.min(10000),
+            world: world.min(10000),
             momentum: ReputationMomentum::default(),
             history: ReputationHistory::new(),
             factors: ReputationFactors::default(),
         }
     }
 
-    /// Get the overall reputation score (weighted average)
+    /// Get the overall reputation score (weighted average, 0.0-1.0)
     pub fn overall_score(&self) -> f32 {
-        (self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5) / 1000.0
+        (self.home as f32 * 0.2 + self.national as f32 * 0.3 + self.world as f32 * 0.5) / 10000.0
     }
 
     /// Get reputation level category
     pub fn level(&self) -> ReputationLevel {
         match self.overall_score() {
-            s if s >= 0.9 => ReputationLevel::Elite,
-            s if s >= 0.75 => ReputationLevel::Continental,
-            s if s >= 0.6 => ReputationLevel::National,
-            s if s >= 0.4 => ReputationLevel::Regional,
-            s if s >= 0.2 => ReputationLevel::Local,
+            s if s >= 0.8 => ReputationLevel::Elite,
+            s if s >= 0.65 => ReputationLevel::Continental,
+            s if s >= 0.5 => ReputationLevel::National,
+            s if s >= 0.3 => ReputationLevel::Regional,
+            s if s >= 0.15 => ReputationLevel::Local,
             _ => ReputationLevel::Amateur,
         }
     }
@@ -90,21 +90,21 @@ impl TeamReputation {
 
         match achievement.scope() {
             AchievementScope::Local => {
-                self.home = (self.home + boost.0).min(1000);
-                self.national = (self.national + boost.1 / 2).min(1000);
+                self.home = (self.home + boost.0).min(10000);
+                self.national = (self.national + boost.1 / 2).min(10000);
             }
             AchievementScope::National => {
-                self.home = (self.home + boost.0).min(1000);
-                self.national = (self.national + boost.1).min(1000);
-                self.world = (self.world + boost.2 / 2).min(1000);
+                self.home = (self.home + boost.0).min(10000);
+                self.national = (self.national + boost.1).min(10000);
+                self.world = (self.world + boost.2 / 2).min(10000);
             }
             AchievementScope::Continental => {
-                self.national = (self.national + boost.1).min(1000);
-                self.world = (self.world + boost.2).min(1000);
+                self.national = (self.national + boost.1).min(10000);
+                self.world = (self.world + boost.2).min(10000);
             }
             AchievementScope::Global => {
-                self.world = (self.world + boost.2).min(1000);
-                self.national = (self.national + boost.1).min(1000);
+                self.world = (self.world + boost.2).min(10000);
+                self.national = (self.national + boost.1).min(10000);
             }
         }
 
@@ -117,8 +117,8 @@ impl TeamReputation {
         if is_star_player && player_reputation > self.world {
             // Signing a star player boosts reputation
             let boost = ((player_reputation - self.world) / 10) as u16;
-            self.world = (self.world + boost).min(1000);
-            self.national = (self.national + boost / 2).min(1000);
+            self.world = (self.world + boost).min(10000);
+            self.national = (self.national + boost / 2).min(10000);
 
             self.factors.star_players_signed += 1;
             self.momentum.boost(0.05);
@@ -129,8 +129,8 @@ impl TeamReputation {
     pub fn process_manager_change(&mut self, manager_reputation: u16) {
         if manager_reputation > self.national {
             let boost = ((manager_reputation - self.national) / 8) as u16;
-            self.national = (self.national + boost).min(1000);
-            self.world = (self.world + boost / 2).min(1000);
+            self.national = (self.national + boost).min(10000);
+            self.world = (self.world + boost / 2).min(10000);
 
             self.momentum.boost(0.1);
         }
@@ -213,13 +213,13 @@ impl TeamReputation {
         let total_factor = (match_factor + position_factor) * (1.0 + self.momentum.current);
 
         // Different scopes affected differently
-        let home_change = (total_factor * 20.0) as i16;
-        let national_change = (total_factor * 15.0) as i16;
-        let world_change = (total_factor * 10.0) as i16;
+        let home_change = (total_factor * 200.0) as i16;
+        let national_change = (total_factor * 150.0) as i16;
+        let world_change = (total_factor * 100.0) as i16;
 
-        self.home = ((self.home as i16 + home_change).max(0) as u16).min(1000);
-        self.national = ((self.national as i16 + national_change).max(0) as u16).min(1000);
-        self.world = ((self.world as i16 + world_change).max(0) as u16).min(1000);
+        self.home = ((self.home as i16 + home_change).max(0) as u16).min(10000);
+        self.national = ((self.national as i16 + national_change).max(0) as u16).min(10000);
+        self.world = ((self.world as i16 + world_change).max(0) as u16).min(10000);
 
         // Ensure logical ordering (world <= national <= home)
         if self.world > self.national {
@@ -354,6 +354,7 @@ impl ReputationHistory {
     }
 }
 
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 struct ReputationSnapshot {
     home: u16,
@@ -363,6 +364,7 @@ struct ReputationSnapshot {
 }
 
 /// Factors affecting reputation
+#[allow(dead_code)]
 #[derive(Debug, Clone, Default)]
 struct ReputationFactors {
     achievements: Vec<Achievement>,
@@ -410,6 +412,7 @@ pub enum ReputationTrend {
 pub struct Achievement {
     achievement_type: AchievementType,
     date: NaiveDate,
+    #[allow(dead_code)]
     importance: u8, // 1-10 scale
 }
 
@@ -424,12 +427,12 @@ impl Achievement {
 
     fn reputation_boost(&self) -> (u16, u16, u16) {
         match self.achievement_type {
-            AchievementType::LeagueTitle => (50, 100, 80),
-            AchievementType::CupWin => (40, 60, 40),
-            AchievementType::Promotion => (60, 40, 20),
-            AchievementType::ContinentalQualification => (30, 50, 60),
-            AchievementType::ContinentalTrophy => (40, 80, 150),
-            AchievementType::RecordBreaking => (20, 30, 40),
+            AchievementType::LeagueTitle => (500, 1000, 800),
+            AchievementType::CupWin => (400, 600, 400),
+            AchievementType::Promotion => (600, 400, 200),
+            AchievementType::ContinentalQualification => (300, 500, 600),
+            AchievementType::ContinentalTrophy => (400, 800, 1500),
+            AchievementType::RecordBreaking => (200, 300, 400),
         }
     }
 
@@ -514,19 +517,19 @@ mod tests {
 
     #[test]
     fn test_reputation_levels() {
-        let mut rep = TeamReputation::new(100, 100, 100);
+        let mut rep = TeamReputation::new(1000, 1000, 1000);
         assert_eq!(rep.level(), ReputationLevel::Amateur);
 
-        rep = TeamReputation::new(500, 500, 500);
+        rep = TeamReputation::new(3500, 3500, 3500);
         assert_eq!(rep.level(), ReputationLevel::Regional);
 
-        rep = TeamReputation::new(900, 900, 900);
+        rep = TeamReputation::new(8500, 8500, 8500);
         assert_eq!(rep.level(), ReputationLevel::Elite);
     }
 
     #[test]
     fn test_achievement_processing() {
-        let mut rep = TeamReputation::new(400, 400, 400);
+        let mut rep = TeamReputation::new(4000, 4000, 4000);
         let initial_world = rep.world;
 
         let achievement = Achievement::new(
@@ -537,23 +540,23 @@ mod tests {
 
         rep.process_achievement(achievement);
 
-        assert!(rep.national > 400);
+        assert!(rep.national > 4000);
         assert!(rep.world > initial_world);
     }
 
     #[test]
     fn test_match_results_processing() {
-        let mut rep = TeamReputation::new(500, 500, 500);
+        let mut rep = TeamReputation::new(5000, 5000, 5000);
 
         let results = vec![
             MatchResultInfo {
                 outcome: MatchOutcome::Win,
-                opponent_reputation: 600,
+                opponent_reputation: 6000,
                 competition_type: CompetitionType::League,
             },
             MatchResultInfo {
                 outcome: MatchOutcome::Win,
-                opponent_reputation: 700,
+                opponent_reputation: 7000,
                 competition_type: CompetitionType::DomesticCup,
             },
         ];
@@ -565,7 +568,7 @@ mod tests {
 
     #[test]
     fn test_attractiveness_factor() {
-        let mut rep = TeamReputation::new(800, 800, 800);
+        let mut rep = TeamReputation::new(8000, 8000, 8000);
         let base_attractiveness = rep.attractiveness_factor();
 
         // Add achievement
@@ -581,7 +584,7 @@ mod tests {
 
     #[test]
     fn test_reputation_decay() {
-        let mut rep = TeamReputation::new(500, 500, 500);
+        let mut rep = TeamReputation::new(5000, 5000, 5000);
         let initial_home = rep.home;
 
         rep.apply_monthly_decay();
