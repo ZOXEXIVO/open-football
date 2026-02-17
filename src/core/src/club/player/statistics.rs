@@ -28,6 +28,7 @@ pub struct PlayerStatisticsHistory {
 pub struct PlayerStatisticsHistoryItem {
     pub season: Season,
     pub team_name: String,
+    pub team_slug: String,
     pub is_loan: bool,
     pub statistics: PlayerStatistics,
 }

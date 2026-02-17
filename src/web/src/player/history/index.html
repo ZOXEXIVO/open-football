@@ -51,7 +51,7 @@
                 {% for item in items %}
                 <tr>
                     <td>{{ item.season }}</td>
-                    <td>{{ item.team_name }}{% if item.is_loan %} <span class="fm-loan-badge">On Loan</span>{% endif %}</td>
+                    <td>{% if !item.team_slug.is_empty() %}<a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">On Loan</span>{% endif %}</td>
                     <td>{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
                     <td>{{ item.stats.goals }}</td>
                     <td>{{ item.stats.assists }}</td>

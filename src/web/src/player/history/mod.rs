@@ -35,6 +35,7 @@ pub struct PlayerHistoryTemplate {
 pub struct PlayerHistorySeasonItem {
     pub season: String,
     pub team_name: String,
+    pub team_slug: String,
     pub is_loan: bool,
     pub stats: PlayerHistoryStats,
 }
@@ -107,6 +108,7 @@ pub async fn player_history_action(
             PlayerHistorySeasonItem {
                 season: season_str,
                 team_name: item.team_name.clone(),
+                team_slug: item.team_slug.clone(),
                 is_loan: item.is_loan,
                 stats: PlayerHistoryStats {
                     played: item.statistics.played,

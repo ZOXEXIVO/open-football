@@ -785,6 +785,7 @@ impl CountryResult {
         // Find selling club and take the player out
         let mut player = None;
         let mut selling_team_name = String::new();
+        let mut selling_team_slug = String::new();
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
             selling_team_name = selling_club.name.clone();
@@ -792,6 +793,7 @@ impl CountryResult {
             for team in &mut selling_club.teams.teams {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
+                    selling_team_slug = team.slug.clone();
                     // Remove from team transfer list too
                     team.transfer_list.remove(player_id);
                     break;
@@ -814,6 +816,7 @@ impl CountryResult {
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::OneYear(season_year),
                 team_name: selling_team_name,
+                team_slug: selling_team_slug,
                 is_loan: false,
                 statistics: old_stats,
             });
@@ -870,6 +873,7 @@ impl CountryResult {
         // Take player from selling club
         let mut player = None;
         let mut selling_team_name = String::new();
+        let mut selling_team_slug = String::new();
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
             selling_team_name = selling_club.name.clone();
@@ -877,6 +881,7 @@ impl CountryResult {
             for team in &mut selling_club.teams.teams {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
+                    selling_team_slug = team.slug.clone();
                     team.transfer_list.remove(player_id);
                     break;
                 }
@@ -898,19 +903,25 @@ impl CountryResult {
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::OneYear(season_year),
                 team_name: selling_team_name,
+                team_slug: selling_team_slug,
                 is_loan: false,
                 statistics: old_stats,
             });
 
             // Add loan history entry for the new club
-            let buying_club_name = country.clubs.iter()
-                .find(|c| c.id == buying_club_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_default();
+            let mut buying_club_name = String::new();
+            let mut buying_team_slug = String::new();
+            if let Some(buying_club) = country.clubs.iter().find(|c| c.id == buying_club_id) {
+                buying_club_name = buying_club.name.clone();
+                if let Some(first_team) = buying_club.teams.teams.first() {
+                    buying_team_slug = first_team.slug.clone();
+                }
+            }
 
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::OneYear(season_year),
                 team_name: buying_club_name,
+                team_slug: buying_team_slug,
                 is_loan: true,
                 statistics: PlayerStatistics::default(),
             });

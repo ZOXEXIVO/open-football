@@ -273,6 +273,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+  margin-top: 12px;
 }
 
 .fm-transfers-row .fm-panel {
@@ -622,8 +623,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .fm-squad .sq-inf { width: 45px; text-align: center; }
-.fm-squad .sq-name a { color: #d8dee4; font-weight: 500; }
-.fm-squad .sq-name a:hover { color: #fff; text-decoration: underline !important; }
+.fm-squad a { color: #d8dee4; }
+.fm-squad a:hover { color: #fff; text-decoration: underline !important; }
+.fm-squad .sq-name a { font-weight: 500; }
 .fm-squad .sq-pos { color: #7a868e; font-size: 12px; }
 .fm-squad .sq-nat { width: 50px; }
 .fm-squad .sq-cond { width: 130px; }
@@ -1274,6 +1276,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .fm-stats tbody td:first-child { text-align: left; padding-left: 14px; font-weight: 600; color: #c0ccd6; }
+
+.fm-stats a { color: #d8dee4; }
+.fm-stats a:hover { color: #fff; text-decoration: underline !important; }
 
 .fm-stats-current td {
   background: rgba(74, 157, 91, 0.08);
