@@ -22,6 +22,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   padding: 0 !important;
   min-height: 100vh;
   border-right: 1px solid #1f2a32;
+  flex: 0 0 11.111%;
+  max-width: 11.111%;
 }
 
 .fm-sidebar-nav {
