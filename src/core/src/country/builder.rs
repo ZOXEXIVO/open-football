@@ -1,6 +1,6 @@
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
-use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, InternationalCompetition, MediaCoverage};
+use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings, InternationalCompetition, MediaCoverage};
 
 #[derive(Default)]
 pub struct CountryBuilder {
@@ -8,10 +8,12 @@ pub struct CountryBuilder {
     code: Option<String>,
     slug: Option<String>,
     name: Option<String>,
+    color: Option<String>,
     continent_id: Option<u32>,
     leagues: Option<LeagueCollection>,
     clubs: Option<Vec<Club>>,
     reputation: Option<u16>,
+    settings: Option<CountrySettings>,
     generator_data: Option<CountryGeneratorData>,
     transfer_market: Option<TransferMarket>,
     economic_factors: Option<CountryEconomicFactors>,
@@ -45,6 +47,11 @@ impl CountryBuilder {
         self
     }
 
+    pub fn color(mut self, color: String) -> Self {
+        self.color = Some(color);
+        self
+    }
+
     pub fn continent_id(mut self, continent_id: u32) -> Self {
         self.continent_id = Some(continent_id);
         self
@@ -62,6 +69,11 @@ impl CountryBuilder {
 
     pub fn reputation(mut self, reputation: u16) -> Self {
         self.reputation = Some(reputation);
+        self
+    }
+
+    pub fn settings(mut self, settings: CountrySettings) -> Self {
+        self.settings = Some(settings);
         self
     }
 
@@ -101,10 +113,12 @@ impl CountryBuilder {
             code: self.code.ok_or("code is required")?,
             slug: self.slug.ok_or("slug is required")?,
             name: self.name.ok_or("name is required")?,
+            color: self.color.unwrap_or_else(|| "#1e272d".to_string()),
             continent_id: self.continent_id.ok_or("continent_id is required")?,
             leagues: self.leagues.ok_or("leagues is required")?,
             clubs: self.clubs.ok_or("clubs is required")?,
             reputation: self.reputation.unwrap_or(500), // Default reputation
+            settings: self.settings.unwrap_or_default(),
             generator_data: self.generator_data.unwrap_or_else(CountryGeneratorData::empty),
             transfer_market: self.transfer_market.unwrap_or_else(TransferMarket::new),
             economic_factors: self.economic_factors.unwrap_or_else(CountryEconomicFactors::new),

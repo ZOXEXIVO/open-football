@@ -54,7 +54,11 @@ pub struct PlayerValuationCalculator;
 
 impl PlayerValuationCalculator {
     pub fn calculate_value(player: &Player, date: NaiveDate) -> CurrencyValue {
-        let base_value = PlayerValueCalculator::calculate(player, date);
+        Self::calculate_value_with_price_level(player, date, 1.0)
+    }
+
+    pub fn calculate_value_with_price_level(player: &Player, date: NaiveDate, price_level: f32) -> CurrencyValue {
+        let base_value = PlayerValueCalculator::calculate(player, date, price_level);
 
         // Transfer-listed players face market discount (buyer leverage)
         let mut market_value = base_value;

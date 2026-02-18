@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::views::{self, MenuSection};
+use crate::views::MenuSection;
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -20,6 +20,8 @@ pub struct CountryGetTemplate {
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub header_color: String,
+    pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub leagues: Vec<LeagueDto>,
 }
@@ -75,7 +77,9 @@ pub async fn country_get_action(
         title: country.name.clone(),
         sub_title: continent.name.clone(),
         sub_title_link: "/countries".to_string(),
-        menu_sections: views::country_menu(),
+        header_color: country.color.clone(),
+        foreground_color: String::new(),
+        menu_sections: vec![],
         leagues,
     })
 }

@@ -51,6 +51,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   background: rgba(255, 255, 255, 0.03);
 }
 
+.fm-nav-section li.active a {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.06);
+  border-left: 2px solid #4a9eff;
+  padding-left: 14px;
+}
+
 .fm-nav-section li a i {
   width: 18px;
   text-align: center;
@@ -95,6 +102,29 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #4a9d5b;
 }
 
+.fm-header-colored {
+  border-bottom-color: var(--header-border, rgba(0, 0, 0, 0.2));
+}
+
+.fm-header-colored .fm-header-title h1 {
+  color: #fff;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.fm-header-colored .fm-header-sub {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.fm-header-colored .fm-header-sub:hover {
+  color: #fff;
+}
+
+.fm-header-colored .fm-menu-toggle span,
+.fm-header-colored .fm-menu-toggle span::before,
+.fm-header-colored .fm-menu-toggle span::after {
+  background: #fff;
+}
+
 .fm-header-actions {
   display: flex;
   align-items: stretch;
@@ -118,7 +148,6 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   letter-spacing: 1px;
   cursor: pointer;
   transition: background 0.15s;
-  border-left: 1px solid #e0e3e6;
 }
 
 .fm-process-btn:hover {
@@ -136,12 +165,12 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-date-main {
   font-size: 15px;
   font-weight: 700;
-  color: #1e272d;
+  color: var(--tab-fg-active, #1e272d);
 }
 
 .fm-date-sub {
   font-size: 12px;
-  color: #6b7580;
+  color: var(--tab-fg, #6b7580);
 }
 
 /* Spinner */
@@ -176,8 +205,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
    ============================================ */
 
 .fm-tabbar {
-  background: #fff;
-  border-bottom: 1px solid #e0e3e6;
+  background: var(--header-bg, #fff);
+  border-bottom: 1px solid var(--header-border, #e0e3e6);
   display: flex;
   padding: 0 16px;
   overflow-x: auto;
@@ -190,7 +219,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-weight: 400;
   text-transform: uppercase;
   letter-spacing: 0.7px;
-  color: #8a939b;
+  color: var(--tab-fg, #8a939b);
   border-bottom: 2px solid transparent;
   cursor: pointer;
   white-space: nowrap;
@@ -198,13 +227,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .fm-tab:hover {
-  color: #1e272d;
-  background: #f5f6f7;
+  color: var(--tab-fg-active, #1e272d);
+  background: var(--tab-hover-bg, #f5f6f7);
 }
 
 .fm-tab.active {
-  color: #1e272d;
-  border-bottom-color: #4a9d5b;
+  color: var(--tab-fg-active, #1e272d);
+  border-bottom-color: var(--tab-active-border, #4a9d5b);
 }
 
 /* ============================================
@@ -629,6 +658,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-squad .sq-pos { color: #7a868e; font-size: 12px; }
 .fm-squad .sq-nat { width: 50px; }
 .fm-squad .sq-cond { width: 130px; }
+
+.fm-squad tbody tr.sq-loan-in a { color: #437fa2 !important; }
+.fm-squad tbody tr.sq-loan-out a { color: #07385a; }
 
 /* ============================================
    TEAM SCHEDULE PAGE
@@ -1257,7 +1289,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   background: rgba(0, 0, 0, 0.08);
 }
 
-.fm-stats thead th:first-child { text-align: left; padding-left: 14px; }
+.fm-stats thead th:first-child { text-align: left; padding-left: 14px; width: 1em; }
 
 .fm-stats tbody tr {
   transition: background 0.1s;
@@ -1287,6 +1319,10 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   border-top: 1px solid #263340;
 }
 
+.fm-stats .sq-club,
+.fm-stats thead th.sq-club { text-align: left; padding-left: 14px; }
+.fm-stats .sq-club-loan { padding-left: 2em; }
+
 .fm-loan-badge {
   display: inline-block;
   font-size: 10px;
@@ -1296,6 +1332,18 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   padding: 1px 6px;
   border-radius: 3px;
   margin-left: 6px;
+  vertical-align: middle;
+}
+
+.fm-transfer-fee {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  color: #4a9d5b;
+  background: rgba(74, 157, 91, 0.12);
+  padding: 1px 6px;
+  border-radius: 3px;
+  margin-left: 4px;
   vertical-align: middle;
 }
 
@@ -2203,18 +2251,10 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 /* Below sm breakpoint (< 576px) */
 
 @media (max-width: 767.98px) {
-  /* Player banner: stack photo above identity */
-  .fm-ph-banner {
-    flex-direction: column;
-  }
-
+  /* Player banner: keep photo and identity side by side */
   .fm-ph-photo {
-    width: 100%;
-    flex-direction: row;
-    padding: 14px 16px;
-    gap: 14px;
-    border-right: none;
-    border-bottom: 1px solid #263340;
+    width: 100px;
+    padding: 14px 10px;
   }
 
   .fm-ph-identity {

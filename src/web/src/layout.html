@@ -20,7 +20,7 @@
                     {% for section in menu_sections %}
                     <ul class="fm-nav-section">
                         {% for item in section.items %}
-                        <li>
+                        <li{% if item.active %} class="active"{% endif %}>
                             <a href="{{ item.url }}">
                                 <i class="fa {{ item.icon }}"></i>
                                 <span>{{ item.title }}</span>
@@ -36,8 +36,8 @@
             <div class="col m-0 p-0">
                 <div class="container-fluid">
                     <div class="row">
-                        <div class="col m-0 p-0">
-                            <div class="fm-header">
+                        <div class="col m-0 p-0"{% if !header_color.is_empty() %} style="--header-bg: {{ header_color }}; --header-border: {{ foreground_color }}33; --tab-fg: {{ foreground_color }}99; --tab-fg-active: {{ foreground_color }}; --tab-hover-bg: rgba(0,0,0,0.1); --tab-active-border: {{ foreground_color }};"{% endif %}>
+                            <div class="fm-header{% if !header_color.is_empty() %} fm-header-colored{% endif %}" {% if !header_color.is_empty() %}style="background: {{ header_color }};"{% endif %}>
                                 <button class="fm-menu-toggle d-lg-none" onclick="document.body.classList.toggle('fm-sidebar-open')" aria-label="Toggle menu">
                                     <span></span>
                                 </button>

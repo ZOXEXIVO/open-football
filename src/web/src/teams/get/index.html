@@ -33,7 +33,7 @@
             </thead>
             <tbody>
                 {% for player in players %}
-                <tr>
+                <tr{% if player.is_loan %} class="sq-loan-in"{% endif %}{% if player.is_loaned_out %} class="sq-loan-out"{% endif %}>
                     <td class="sq-inf">
                         {% if player.injured %}
                         <span class="fm-badge fm-badge-inj">Inj</span>
@@ -41,12 +41,9 @@
                         {% if player.transfer_listed %}
                         <span class="fm-badge fm-badge-lst">Lst</span>
                         {% endif %}
-                        {% if player.is_loan %}
-                        <span class="fm-badge fm-badge-loan-in">Loan</span>
-                        {% endif %}
                     </td>
                     <td class="sq-name">
-                        <a href="/teams/{{ team_slug }}/players/{{ player.id }}">
+                        <a href="/teams/{{ player.player_team_slug }}/players/{{ player.id }}">
                             {{ player.last_name }}&nbsp;{{ player.first_name }}
                         </a>
                     </td>

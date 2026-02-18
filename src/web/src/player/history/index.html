@@ -18,7 +18,7 @@
             <thead>
                 <tr>
                     <th>Season</th>
-                    <th>Club</th>
+                    <th class="sq-club">Club</th>
                     <th>Apps</th>
                     <th>Gls</th>
                     <th>Ast</th>
@@ -35,7 +35,7 @@
             <tbody>
                 <tr class="fm-stats-current">
                     <td>{{ current_season }}</td>
-                    <td>{{ current_club }}</td>
+                    <td class="sq-club"><a href="/teams/{{ team_slug }}">{{ current_club }}</a>{% if current_is_loan %} <span class="fm-loan-badge">Loan</span>{% endif %}</td>
                     <td>{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
                     <td>{{ current.goals }}</td>
                     <td>{{ current.assists }}</td>
@@ -51,7 +51,7 @@
                 {% for item in items %}
                 <tr>
                     <td>{{ item.season }}</td>
-                    <td>{% if !item.team_slug.is_empty() %}<a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">On Loan</span>{% endif %}</td>
+                    <td class="sq-club{% if item.is_loan %} sq-club-loan{% endif %}">{% if !item.team_slug.is_empty() %}<a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">Loan</span>{% endif %}{% if !item.transfer_fee.is_empty() %} <span class="fm-transfer-fee">{{ item.transfer_fee }}</span>{% endif %}</td>
                     <td>{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
                     <td>{{ item.stats.goals }}</td>
                     <td>{{ item.stats.assists }}</td>

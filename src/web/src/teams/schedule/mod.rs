@@ -20,6 +20,8 @@ pub struct TeamScheduleTemplate {
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub header_color: String,
+    pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
     pub league_slug: String,
@@ -66,13 +68,12 @@ pub async fn team_schedule_get_action(
         .team(team_id)
         .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
-    let league = simulator_data
-        .league(team.league_id)
-        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", team.league_id)))?;
+    let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let schedule = league.schedule.get_matches_for_team(team.id);
+    let schedule = league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default();
 
-    let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
     let items: Vec<TeamScheduleItem> = schedule
         .iter()
@@ -96,7 +97,7 @@ pub async fn team_schedule_get_action(
                     home_team_data.name.clone()
                 },
                 is_home,
-                competition_name: league.name.clone(),
+                competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
                 result: schedule.result.as_ref().map(|res| TeamScheduleItemResult {
                     match_id: schedule.id.clone(),
                     home_goals: res.home_team.get(),
@@ -109,34 +110,30 @@ pub async fn team_schedule_get_action(
     Ok(TeamScheduleTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: team.name.clone(),
-        sub_title: league.name.clone(),
-        sub_title_link: format!("/leagues/{}", &league.slug),
-        menu_sections: views::team_menu(&neighbor_teams, &team.slug),
+        sub_title: league.map(|l| l.name.clone()).unwrap_or_default(),
+        sub_title_link: league.map(|l| format!("/leagues/{}", &l.slug)).unwrap_or_default(),
+        header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
+        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
+        menu_sections: views::team_menu(&neighbor_refs, &team.slug, &format!("/teams/{}/schedule", &team.slug)),
         team_slug: team.slug.clone(),
-        league_slug: league.slug.clone(),
+        league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
     })
 }
 
-fn get_neighbor_teams<'a>(
+fn get_neighbor_teams(
     club_id: u32,
-    data: &'a SimulatorData,
-) -> Result<Vec<(&'a str, &'a str)>, ApiError> {
+    data: &SimulatorData,
+) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
-    let mut teams: Vec<(&str, &str, u16)> = club
+    let mut teams: Vec<(String, String, u16)> = club
         .teams
         .teams
         .iter()
-        .map(|team| {
-            (
-                team.name.as_str(),
-                team.slug.as_str(),
-                team.reputation.world,
-            )
-        })
+        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

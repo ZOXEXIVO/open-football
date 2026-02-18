@@ -449,7 +449,7 @@ mod tests {
     fn generate_test_team() -> Team {
         let mut team = TeamBuilder::new()
             .id(1)
-            .league_id(1)
+            .league_id(Some(1))
             .club_id(1)
             .name("Test Team".to_string())
             .slug("test-team".to_string())

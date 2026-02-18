@@ -113,7 +113,7 @@ impl League {
         // Check for fixture congestion
         for club in clubs {
             for team in &club.teams.teams {
-                if team.league_id == self.id {
+                if team.league_id == Some(self.id) {
                     self.check_fixture_congestion(team, current_date);
                 }
             }

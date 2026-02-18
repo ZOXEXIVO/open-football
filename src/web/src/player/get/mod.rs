@@ -28,6 +28,8 @@ pub struct PlayerGetTemplate {
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub header_color: String,
+    pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub player: PlayerViewModel,
 }
@@ -222,7 +224,8 @@ pub async fn player_get_action(
 
     let now = simulator_data.date.date();
 
-    let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
     let contract = player.contract.as_ref().map(|c| PlayerContractDto {
         salary: c.salary / 1000,
@@ -262,7 +265,9 @@ pub async fn player_get_action(
         title,
         sub_title: team.name.clone(),
         sub_title_link: format!("/teams/{}", &team.slug),
-        menu_sections: views::player_menu(&neighbor_teams, &team.slug),
+        header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
+        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
+        menu_sections: views::player_menu(&neighbor_refs, &team.slug, &format!("/teams/{}", &team.slug)),
         player: player_vm,
     })
 }
@@ -320,25 +325,19 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
     }
 }
 
-fn get_neighbor_teams<'a>(
+fn get_neighbor_teams(
     club_id: u32,
-    data: &'a SimulatorData,
-) -> Result<Vec<(&'a str, &'a str)>, ApiError> {
+    data: &SimulatorData,
+) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
-    let mut teams: Vec<(&str, &str, u16)> = club
+    let mut teams: Vec<(String, String, u16)> = club
         .teams
         .teams
         .iter()
-        .map(|team| {
-            (
-                team.name.as_str(),
-                team.slug.as_str(),
-                team.reputation.world,
-            )
-        })
+        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

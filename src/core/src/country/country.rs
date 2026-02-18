@@ -22,10 +22,12 @@ pub struct Country {
     pub code: String,
     pub slug: String,
     pub name: String,
+    pub color: String,
     pub continent_id: u32,
     pub leagues: LeagueCollection,
     pub clubs: Vec<Club>,
     pub reputation: u16,
+    pub settings: CountrySettings,
     pub generator_data: CountryGeneratorData,
 
     pub transfer_market: TransferMarket,
@@ -34,6 +36,32 @@ pub struct Country {
     pub media_coverage: MediaCoverage,
     pub regulations: CountryRegulations,
     pub scouting_interests: Vec<ScoutingInterest>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CountrySettings {
+    pub pricing: CountryPricing,
+}
+
+impl Default for CountrySettings {
+    fn default() -> Self {
+        CountrySettings {
+            pricing: CountryPricing::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CountryPricing {
+    pub price_level: f32,
+}
+
+impl Default for CountryPricing {
+    fn default() -> Self {
+        CountryPricing {
+            price_level: 1.0,
+        }
+    }
 }
 
 impl Country {

@@ -6,6 +6,21 @@ use crate::context::GlobalContext;
 use crate::shared::Location;
 use crate::TeamCollection;
 
+#[derive(Debug, Clone)]
+pub struct ClubColors {
+    pub primary: String,
+    pub secondary: String,
+}
+
+impl Default for ClubColors {
+    fn default() -> Self {
+        ClubColors {
+            primary: "#1e272d".to_string(),
+            secondary: "#ffffff".to_string(),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Club {
     pub id: u32,
@@ -21,6 +36,8 @@ pub struct Club {
 
     pub academy: ClubAcademy,
 
+    pub colors: ClubColors,
+
     pub teams: TeamCollection,
 }
 
@@ -32,6 +49,7 @@ impl Club {
         finance: ClubFinances,
         academy: ClubAcademy,
         status: ClubStatus,
+        colors: ClubColors,
         teams: TeamCollection,
     ) -> Self {
         Club {
@@ -41,6 +59,7 @@ impl Club {
             finance,
             status,
             academy,
+            colors,
             board: ClubBoard::new(),
             teams,
         }

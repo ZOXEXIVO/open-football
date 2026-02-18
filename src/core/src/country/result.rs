@@ -140,6 +140,7 @@ impl CountryResult {
         // Collect player listing data to avoid borrow conflicts
         // Tuple: (player_id, club_id, team_id, asking_price, listing_type)
         let mut listings_to_add = Vec::new();
+        let price_level = country.settings.pricing.price_level;
 
         for club in &country.clubs {
             // Analyze squad and determine transfer needs
@@ -148,7 +149,7 @@ impl CountryResult {
             // List surplus players
             for player in &club.teams.teams[0].players.players {
                 if Self::should_loan_player(player, &squad_analysis, date) {
-                    let asking_price = Self::calculate_asking_price(player, club, date);
+                    let asking_price = Self::calculate_asking_price(player, club, date, price_level);
                     listings_to_add.push((
                         player.id,
                         club.id,
@@ -157,7 +158,7 @@ impl CountryResult {
                         TransferListingType::Loan,
                     ));
                 } else if Self::should_list_player(player, &squad_analysis, club) {
-                    let asking_price = Self::calculate_asking_price(player, club, date);
+                    let asking_price = Self::calculate_asking_price(player, club, date, price_level);
                     listings_to_add.push((
                         player.id,
                         club.id,
@@ -304,6 +305,7 @@ impl CountryResult {
                             player,
                             country.clubs.iter().find(|c| c.id == selling_club_id).unwrap(),
                             date,
+                            country.settings.pricing.price_level,
                         );
 
                         let offer = strategy.calculate_initial_offer(player, &asking_price, date);
@@ -713,10 +715,11 @@ impl CountryResult {
         player: &crate::Player,
         club: &Club,
         date: NaiveDate,
+        price_level: f32,
     ) -> CurrencyValue {
         use crate::transfers::window::PlayerValuationCalculator;
 
-        let base_value = PlayerValuationCalculator::calculate_value(player, date);
+        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level);
 
         let multiplier = if club.finance.balance.balance < 0 {
             0.9 // Financial pressure

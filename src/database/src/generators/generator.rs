@@ -12,7 +12,7 @@ use core::utils::IntegerUtils;
 use core::ClubStatus;
 use core::TeamCollection;
 use core::{
-    Club, ClubBoard, ClubFinances, Country, CountryGeneratorData, Player,
+    Club, ClubBoard, ClubColors, ClubFinances, Country, CountryGeneratorData, CountryPricing, CountrySettings, Player,
     PlayerCollection, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
 };
@@ -74,15 +74,23 @@ impl DatabaseGenerator {
                     DatabaseGenerator::generate_leagues(country.id, data)
                 );
 
+                let settings = CountrySettings {
+                    pricing: CountryPricing {
+                        price_level: country.settings.pricing.price_level,
+                    },
+                };
+
                 Country::builder()
                     .id(country.id)
                     .code(country.code.clone())
                     .slug(country.slug.clone())
                     .name(country.name.clone())
+                    .color(country.color.clone())
                     .continent_id(continent.id)
                     .leagues(leagues)
                     .clubs(clubs)
                     .reputation(country.reputation)
+                    .settings(settings)
                     .generator_data(generator_data)
                     .build()
                     .expect("Failed to build Country")
@@ -135,6 +143,10 @@ impl DatabaseGenerator {
                 status: ClubStatus::Professional,
                 finance: ClubFinances::new(club.finance.balance, Vec::new()),
                 academy: ClubAcademy::new(100),
+                colors: ClubColors {
+                    primary: club.colors.primary.clone(),
+                    secondary: club.colors.secondary.clone(),
+                },
                 teams: TeamCollection::new(
                     club.teams
                         .iter()

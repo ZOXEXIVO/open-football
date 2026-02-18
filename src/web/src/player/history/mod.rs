@@ -6,8 +6,9 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::league::Season;
+use core::utils::FormattingUtils;
 use chrono::Datelike;
-use core::{Player, SimulatorData, Team};
+use core::{ContractType, Player, SimulatorData, Team};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -23,11 +24,14 @@ pub struct PlayerHistoryTemplate {
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub header_color: String,
+    pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
     pub player_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
     pub current_club: String,
+    pub current_is_loan: bool,
     pub current_season: String,
     pub current: PlayerHistoryStats,
 }
@@ -37,6 +41,7 @@ pub struct PlayerHistorySeasonItem {
     pub team_name: String,
     pub team_slug: String,
     pub is_loan: bool,
+    pub transfer_fee: String,
     pub stats: PlayerHistoryStats,
 }
 
@@ -93,7 +98,28 @@ pub async fn player_history_action(
             ))
         })?;
 
-    let neighbor_teams: Vec<(&str, &str)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+
+    // Get transfer history for this player
+    let country = simulator_data.country_by_club(team.club_id);
+
+    let player_transfers: Vec<_> = country
+        .map(|c| {
+            c.transfer_market.transfer_history.iter()
+                .filter(|t| t.player_id == player.id)
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let is_loaned_in = country
+        .map(|c| {
+            c.transfer_market.transfer_history.iter()
+                .any(|t| t.player_id == player.id
+                    && t.to_club_id == team.club_id
+                    && matches!(&t.transfer_type, core::transfers::TransferType::Loan(_)))
+        })
+        .unwrap_or(false);
 
     let mut items: Vec<PlayerHistorySeasonItem> = player
         .statistics_history
@@ -105,11 +131,28 @@ pub async fn player_history_action(
                 Season::TwoYear(y1, y2) => format!("{}/{}", y1, y2 % 100),
             };
 
+            let season_start_year = match &item.season {
+                Season::OneYear(y) => *y,
+                Season::TwoYear(y1, _) => *y1,
+            };
+
+            let transfer_fee = player_transfers.iter()
+                .find(|t| t.season_year == season_start_year)
+                .map(|t| {
+                    if t.fee.amount > 0.0 {
+                        FormattingUtils::format_money(t.fee.amount)
+                    } else {
+                        String::new()
+                    }
+                })
+                .unwrap_or_default();
+
             PlayerHistorySeasonItem {
                 season: season_str,
                 team_name: item.team_name.clone(),
                 team_slug: item.team_slug.clone(),
                 is_loan: item.is_loan,
+                transfer_fee,
                 stats: PlayerHistoryStats {
                     played: item.statistics.played,
                     played_subs: item.statistics.played_subs,
@@ -162,35 +205,35 @@ pub async fn player_history_action(
         title,
         sub_title: team.name.clone(),
         sub_title_link: format!("/teams/{}", &team.slug),
-        menu_sections: views::player_menu(&neighbor_teams, &team.slug),
+        header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
+        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
+        menu_sections: views::player_menu(&neighbor_refs, &team.slug, &format!("/teams/{}", &team.slug)),
         team_slug: team.slug.clone(),
         player_id: route_params.player_id,
         items,
         current_club: team.name.clone(),
+        current_is_loan: player.contract.as_ref()
+            .map(|c| c.contract_type == ContractType::Loan)
+            .unwrap_or(false)
+            || is_loaned_in,
         current_season,
         current,
     })
 }
 
-fn get_neighbor_teams<'a>(
+fn get_neighbor_teams(
     club_id: u32,
-    data: &'a SimulatorData,
-) -> Result<Vec<(&'a str, &'a str)>, ApiError> {
+    data: &SimulatorData,
+) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
 
-    let mut teams: Vec<(&str, &str, u16)> = club
+    let mut teams: Vec<(String, String, u16)> = club
         .teams
         .teams
         .iter()
-        .map(|team| {
-            (
-                team.name.as_str(),
-                team.slug.as_str(),
-                team.reputation.world,
-            )
-        })
+        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

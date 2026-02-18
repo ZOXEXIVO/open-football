@@ -4,7 +4,7 @@ use chrono::NaiveDate;
 pub struct PlayerValueCalculator;
 
 impl PlayerValueCalculator {
-    pub fn calculate(player: &Player, now: NaiveDate) -> f64 {
+    pub fn calculate(player: &Player, now: NaiveDate, price_level: f32) -> f64 {
         let base_value = determine_base_value(player);
         let age_factor = determine_age_factor(player, now);
         let potential_factor = determine_potential_factor(player, now);
@@ -21,29 +21,56 @@ impl PlayerValueCalculator {
             * contract_factor
             * performance_factor
             * reputation_factor
-            * position_factor;
+            * position_factor
+            * price_level as f64;
 
-        value.max(10_000.0)
+        round_market_value(value.max(5_000.0))
     }
 }
 
-/// Base value derived from current_ability using exponential curve.
-/// ability 40 → ~200K, 80 → ~3M, 120 → ~20M, 160 → ~60M, 200 → ~150M
+/// Round to a "clean" market value (like real transfer fees)
+fn round_market_value(value: f64) -> f64 {
+    if value >= 10_000_000.0 {
+        (value / 1_000_000.0).round() * 1_000_000.0
+    } else if value >= 1_000_000.0 {
+        (value / 100_000.0).round() * 100_000.0
+    } else if value >= 100_000.0 {
+        (value / 50_000.0).round() * 50_000.0
+    } else if value >= 10_000.0 {
+        (value / 10_000.0).round() * 10_000.0
+    } else {
+        (value / 1_000.0).round() * 1_000.0
+    }
+}
+
+/// Base value from current_ability using a steep exponential curve.
+///
+/// FM-style value tiers (approximate, before other factors):
+///   ability 20  → ~10K
+///   ability 40  → ~75K
+///   ability 60  → ~350K
+///   ability 80  → ~1.5M
+///   ability 100 → ~5M
+///   ability 120 → ~15M
+///   ability 140 → ~35M
+///   ability 160 → ~65M
+///   ability 180 → ~110M
+///   ability 200 → ~175M
 fn determine_base_value(player: &Player) -> f64 {
     let ability = player.player_attributes.current_ability as f64;
 
-    // Exponential: small base + steep growth for high ability
+    // Use power-of-4 curve: steep growth that keeps low-ability values tiny
     let normalized = ability / 200.0; // 0.0 to 1.0
-    let exponential = normalized * normalized * normalized; // cubic growth
+    let curve = normalized * normalized * normalized * normalized; // quartic
 
-    // Skill quality bonus (average of all skills, 1-20 range)
+    // Skill quality: subtle modifier (average of all skill groups, 1-20 range)
     let technical = player.skills.technical.average() as f64;
     let mental = player.skills.mental.average() as f64;
     let physical = player.skills.physical.average() as f64;
     let skill_avg = (technical + mental + physical) / 3.0;
-    let skill_factor = 0.7 + (skill_avg / 20.0) * 0.6; // 0.7 to 1.3
+    let skill_factor = 0.85 + (skill_avg / 20.0) * 0.3; // 0.85 to 1.15
 
-    150_000_000.0 * exponential * skill_factor
+    175_000_000.0 * curve * skill_factor
 }
 
 /// Age factor: peak value at 25-28, premium for young players, steep decline 30+
@@ -51,22 +78,23 @@ fn determine_age_factor(player: &Player, date: NaiveDate) -> f64 {
     let age = player.age(date);
 
     match age {
-        a if a < 18 => 0.3,
-        18 => 0.5,
-        19 => 0.65,
-        20 => 0.8,
-        21 => 0.9,
-        22 => 0.95,
-        23 => 1.0,
-        24 => 1.05,
-        25..=28 => 1.1,  // Peak years
-        29 => 0.95,
-        30 => 0.8,
-        31 => 0.65,
-        32 => 0.5,
-        33 => 0.35,
-        34 => 0.25,
-        _ => 0.15,
+        a if a < 17 => 0.15,
+        17 => 0.25,
+        18 => 0.40,
+        19 => 0.55,
+        20 => 0.70,
+        21 => 0.82,
+        22 => 0.90,
+        23 => 0.95,
+        24 => 1.0,
+        25..=28 => 1.05,  // Peak years
+        29 => 0.90,
+        30 => 0.72,
+        31 => 0.55,
+        32 => 0.40,
+        33 => 0.28,
+        34 => 0.18,
+        _ => 0.10,
     }
 }
 
@@ -81,10 +109,16 @@ fn determine_potential_factor(player: &Player, date: NaiveDate) -> f64 {
     }
 
     let gap = potential - current;
-    let age_bonus = if age < 22 { 1.5 } else { 1.0 };
+    let age_bonus = if age < 21 {
+        1.5
+    } else if age < 24 {
+        1.2
+    } else {
+        1.0
+    };
 
-    // Potential gap adds 1-50% value for young players
-    1.0 + (gap / 200.0) * age_bonus * 0.5
+    // Potential gap adds 1-40% value for young players
+    1.0 + (gap / 200.0) * age_bonus * 0.4
 }
 
 /// Player statuses that affect value
@@ -222,6 +256,35 @@ fn determine_position_factor(player: &Player) -> f64 {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn calculate_is_correct() {}
+    fn base_value_low_ability_is_cheap() {
+        // ability 40 with avg skill ~5: base_value ~259K
+        // After age/contract factors this becomes ~100-200K final value
+        let normalized: f64 = 40.0 / 200.0;
+        let curve = normalized.powi(4);
+        let skill_factor = 0.85 + (5.0 / 20.0) * 0.3;
+        let value = 175_000_000.0 * curve * skill_factor;
+        assert!(value < 300_000.0, "ability 40 base_value = {}", value);
+    }
+
+    #[test]
+    fn base_value_high_ability_is_expensive() {
+        // ability 160 with avg skill ~15 should be tens of millions
+        let normalized: f64 = 160.0 / 200.0;
+        let curve = normalized.powi(4);
+        let skill_factor = 0.85 + (15.0 / 20.0) * 0.3;
+        let value = 175_000_000.0 * curve * skill_factor;
+        assert!(value > 50_000_000.0, "ability 160 base_value = {}", value);
+    }
+
+    #[test]
+    fn round_market_value_rounds_correctly() {
+        assert_eq!(round_market_value(15_432_100.0), 15_000_000.0);
+        assert_eq!(round_market_value(1_567_000.0), 1_600_000.0);
+        assert_eq!(round_market_value(237_000.0), 250_000.0);
+        assert_eq!(round_market_value(43_000.0), 40_000.0);
+        assert_eq!(round_market_value(7_500.0), 8_000.0);
+    }
 }

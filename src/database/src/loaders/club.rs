@@ -9,7 +9,14 @@ pub struct ClubEntity {
     pub country_id: u32,
     pub location: ClubLocationEntity,
     pub finance: ClubFinanceEntity,
+    pub colors: ClubColorsEntity,
     pub teams: Vec<ClubTeamEntity>,
+}
+
+#[derive(Deserialize)]
+pub struct ClubColorsEntity {
+    pub primary: String,
+    pub secondary: String,
 }
 
 #[derive(Deserialize)]
@@ -35,7 +42,7 @@ pub struct ClubTeamEntity {
     pub name: String,
     pub slug: String,
     pub team_type: String,
-    pub league_id: u32,
+    pub league_id: Option<u32>,
     pub finance: Option<ClubFinanceEntity>,
     pub reputation: ClubReputationEntity,
 }

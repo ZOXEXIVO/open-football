@@ -144,6 +144,20 @@ impl SimulatorData {
         self.indexes.as_ref().unwrap().get_team_data(id)
     }
 
+    pub fn country_by_club(&self, club_id: u32) -> Option<&Country> {
+        self.indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_club_location(club_id))
+            .and_then(|(club_continent_id, club_country_id)| {
+                self.continent(club_continent_id).and_then(|continent| {
+                    continent
+                        .countries
+                        .iter()
+                        .find(|country| country.id == club_country_id)
+                })
+            })
+    }
+
     pub fn club(&self, id: u32) -> Option<&Club> {
         self.indexes
             .as_ref()

@@ -7,6 +7,7 @@ use crate::shared::CurrencyValue;
 use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, RecommendationPriority, StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
 use log::{debug, info};
 use std::borrow::Cow;
+use std::fmt;
 use std::str::FromStr;
 use crate::club::team::builder::TeamBuilder;
 
@@ -20,10 +21,23 @@ pub enum TeamType {
     U23 = 5,
 }
 
+impl fmt::Display for TeamType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            TeamType::Main => write!(f, "First team"),
+            TeamType::B => write!(f, "Reserve"),
+            TeamType::U18 => write!(f, "Under 18s"),
+            TeamType::U19 => write!(f, "Under 19s"),
+            TeamType::U21 => write!(f, "Under 21s"),
+            TeamType::U23 => write!(f, "Under 23s"),
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct Team {
     pub id: u32,
-    pub league_id: u32,
+    pub league_id: Option<u32>,
     pub club_id: u32,
     pub name: String,
     pub slug: String,

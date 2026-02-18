@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::views::{self, MenuSection};
+use crate::views::MenuSection;
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::State;
@@ -13,6 +13,8 @@ pub struct CountryListTemplate {
     pub title: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub header_color: String,
+    pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub continents: Vec<ContinentDto>,
 }
@@ -60,7 +62,9 @@ pub async fn country_list_action(
         title: "Select country".to_string(),
         sub_title: "Select any country to inspect it all".to_string(),
         sub_title_link: "/".to_string(),
-        menu_sections: views::home_menu(),
+        header_color: String::new(),
+        foreground_color: String::new(),
+        menu_sections: vec![],
         continents,
     })
 }

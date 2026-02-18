@@ -31,7 +31,7 @@ pub use club::{
     // Person exports
     Person, PersonAttributes, PersonBehaviour, PersonBehaviourState,
     // Club itself
-    Club, ClubBoard, ClubResult,
+    Club, ClubBoard, ClubColors, ClubResult,
     ClubContext,
     // Finance exports
     ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,
@@ -107,7 +107,7 @@ pub use country::{
     Country, CountryResult, CountryContext,
     CountryEconomicFactors, InternationalCompetition, MediaCoverage,
     MediaStory, StoryType, CountryRegulations, CountryGeneratorData,
-    PeopleNameGeneratorData,
+    PeopleNameGeneratorData, CountrySettings, CountryPricing,
 };
 
 // Namespace conflicting CompetitionType enums

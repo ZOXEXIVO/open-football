@@ -39,7 +39,7 @@ impl TeamCollection {
     pub fn with_league(&self, league_id: u32) -> Vec<u32> {
         self.teams
             .iter()
-            .filter(|t| t.league_id == league_id)
+            .filter(|t| t.league_id == Some(league_id))
             .map(|t| t.id)
             .collect()
     }

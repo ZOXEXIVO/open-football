@@ -4,7 +4,7 @@ use crate::{MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, Team
 #[derive(Default)]
 pub struct TeamBuilder {
     id: Option<u32>,
-    league_id: Option<u32>,
+    league_id: Option<Option<u32>>,
     club_id: Option<u32>,
     name: Option<String>,
     slug: Option<String>,
@@ -29,7 +29,7 @@ impl TeamBuilder {
         self
     }
 
-    pub fn league_id(mut self, league_id: u32) -> Self {
+    pub fn league_id(mut self, league_id: Option<u32>) -> Self {
         self.league_id = Some(league_id);
         self
     }
@@ -97,7 +97,7 @@ impl TeamBuilder {
     pub fn build(self) -> Result<Team, String> {
         Ok(Team {
             id: self.id.ok_or("id is required")?,
-            league_id: self.league_id.ok_or("league_id is required")?,
+            league_id: self.league_id.ok_or("league_id is required")?,  // Option<Option<u32>> → Option<u32>
             club_id: self.club_id.ok_or("club_id is required")?,
             name: self.name.ok_or("name is required")?,
             slug: self.slug.ok_or("slug is required")?,

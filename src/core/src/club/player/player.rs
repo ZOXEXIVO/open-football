@@ -254,7 +254,11 @@ impl Player {
     }
 
     pub fn value(&self, date: NaiveDate) -> f64 {
-        PlayerValueCalculator::calculate(self, date)
+        PlayerValueCalculator::calculate(self, date, 1.0)
+    }
+
+    pub fn value_with_price_level(&self, date: NaiveDate, price_level: f32) -> f64 {
+        PlayerValueCalculator::calculate(self, date, price_level)
     }
 
     #[inline]

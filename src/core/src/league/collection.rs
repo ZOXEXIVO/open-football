@@ -14,7 +14,7 @@ impl LeagueCollection {
     }
 
     pub fn simulate(&mut self, clubs: &[Club], ctx: &GlobalContext<'_>) -> Vec<LeagueResult> {
-        let teams_ids: Vec<(u32, u32)> = clubs
+        let teams_ids: Vec<(u32, Option<u32>)> = clubs
             .iter()
             .flat_map(|c| &c.teams.teams)
             .map(|c| (c.id, c.league_id))
@@ -25,7 +25,7 @@ impl LeagueCollection {
             .map(|league| {
                 let league_team_ids: Vec<u32> = teams_ids
                     .iter()
-                    .filter(|(_, league_id)| *league_id == league.id)
+                    .filter(|(_, league_id)| *league_id == Some(league.id))
                     .map(|(id, _)| *id)
                     .collect();
                 {
