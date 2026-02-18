@@ -54,7 +54,8 @@
       "WebFetch(domain:sportcolorcodes.com)",
       "WebFetch(domain:logotyp.us)",
       "WebFetch(domain:whatthelogo.com)",
-      "WebFetch(domain:brandfetch.com)"
+      "WebFetch(domain:brandfetch.com)",
+      "Bash(grep:*)"
     ],
     "deny": [],
     "ask": []

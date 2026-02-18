@@ -2115,7 +2115,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   flex-shrink: 0;
   background: none;
   border: none;
-  border-right: 1px solid #e0e3e6;
+  border-right: 1px solid var(--header-border, rgba(0, 0, 0, 0.2));
   cursor: pointer;
   padding: 0;
 }
