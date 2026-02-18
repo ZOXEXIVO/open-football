@@ -48,10 +48,9 @@ impl PlayerGenerator {
 
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
-            .full_name(FullName::with_full(
+            .full_name(FullName::new(
                 self.generate_first_name(),
                 self.generate_last_name(),
-                StringUtils::random_string(17),
             ))
             .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
             .country_id(country_id)

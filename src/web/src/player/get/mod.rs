@@ -5,6 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::ContractType;
 use core::Person;
 use core::Player;
 use core::PlayerPositionType;
@@ -12,6 +13,7 @@ use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
+use core::transfers::TransferType;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
 
@@ -58,6 +60,13 @@ pub struct PlayerViewModel {
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
+    pub loan_status: Option<PlayerLoanDto>,
+}
+
+pub struct PlayerLoanDto {
+    pub is_loan_in: bool,
+    pub club_name: String,
+    pub club_slug: String,
 }
 
 pub struct PositionMapDto {
@@ -235,6 +244,8 @@ pub async fn player_get_action(
 
     let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
 
+    let loan_status = get_loan_status(player, team, simulator_data);
+
     let player_vm = PlayerViewModel {
         id: player.id,
         first_name: player.full_name.first_name.clone(),
@@ -258,6 +269,7 @@ pub async fn player_get_action(
         statistics: get_statistics(player),
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
+        loan_status,
     };
 
     Ok(PlayerGetTemplate {
@@ -389,6 +401,60 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
         PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "N/A",
     }
     .to_string()
+}
+
+fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
+    let is_loan_contract = player.contract.as_ref()
+        .map(|c| c.contract_type == ContractType::Loan)
+        .unwrap_or(false);
+
+    let club_id = team.club_id;
+
+    if let Some(country) = data.country_by_club(club_id) {
+        // Check if player is loaned IN (contract is Loan type, or transfer record says so)
+        let loan_in_record = country.transfer_market.transfer_history.iter().find(|t| {
+            t.player_id == player.id
+                && t.to_club_id == club_id
+                && matches!(&t.transfer_type, TransferType::Loan(_))
+        });
+
+        if is_loan_contract || loan_in_record.is_some() {
+            if let Some(record) = loan_in_record {
+                let club_slug = data.club(record.from_club_id)
+                    .and_then(|c| c.teams.teams.first())
+                    .map(|t| t.slug.clone())
+                    .unwrap_or_default();
+
+                return Some(PlayerLoanDto {
+                    is_loan_in: true,
+                    club_name: record.from_team_name.clone(),
+                    club_slug,
+                });
+            }
+        }
+
+        // Check if player is loaned OUT from this club
+        let loan_out_record = country.transfer_market.transfer_history.iter().find(|t| {
+            t.player_id == player.id
+                && t.from_club_id == club_id
+                && matches!(&t.transfer_type, TransferType::Loan(_))
+        });
+
+        if let Some(record) = loan_out_record {
+            let club_slug = data.club(record.to_club_id)
+                .and_then(|c| c.teams.teams.first())
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
+
+            return Some(PlayerLoanDto {
+                is_loan_in: false,
+                club_name: record.to_team_name.clone(),
+                club_slug,
+            });
+        }
+    }
+
+    None
 }
 
 fn get_position_map(player: &Player) -> PositionMapDto {

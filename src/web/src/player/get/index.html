@@ -32,6 +32,15 @@
                     <span class="fm-ph-sep"></span>
                     <span class="fm-ph-born">{{ player.birth_date }}</span>
                 </div>
+                {% if let Some(loan) = player.loan_status %}
+                <div class="fm-ph-loan">
+                    {% if loan.is_loan_in %}
+                    <span class="fm-ph-loan-label loan-in">On loan</span> <span class="fm-ph-loan-text">from <a href="/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                    {% else %}
+                    <span class="fm-ph-loan-label loan-out">On loan</span> <span class="fm-ph-loan-text">to <a href="/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                    {% endif %}
+                </div>
+                {% endif %}
                 <div class="fm-ph-ratings">
                     <div class="fm-ph-rating-item">
                         <span class="fm-ph-rlabel">Ability</span>

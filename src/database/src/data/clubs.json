@@ -48,13 +48,13 @@
       }
     ],
     "colors": {
-      "primary": "#000000",
-      "secondary": "#ffffff"
+      "primary": "#ffffff",
+      "secondary": "#000000"
     }
   },
   {
     "id": 46,
-    "name": "Inter Milan",
+    "name": "Inter",
     "country_id": 776,
     "location": {
       "city_id": 2
@@ -65,8 +65,8 @@
     "teams": [
       {
         "id": 66,
-        "name": "Inter Milan",
-        "slug": "inter-milan",
+        "name": "Inter",
+        "slug": "inter",
         "team_type": "Main",
         "league_id": 2,
         "reputation": {
@@ -77,8 +77,8 @@
       },
       {
         "id": 166,
-        "name": "Inter Milan",
-        "slug": "inter-milan-reserve",
+        "name": "Inter",
+        "slug": "inter-reserve",
         "team_type": "B",
         "league_id": null,
         "reputation": {
@@ -89,8 +89,8 @@
       },
       {
         "id": 266,
-        "name": "Inter Milan",
-        "slug": "inter-milan-u18",
+        "name": "Inter",
+        "slug": "inter-u18",
         "team_type": "U18",
         "league_id": null,
         "reputation": {
@@ -101,8 +101,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#000000",
+      "secondary": "#2915ef"
     }
   },
   {
@@ -154,8 +154,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#000000",
+      "secondary": "#a00404"
     }
   },
   {
@@ -207,7 +207,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#05619e",
       "secondary": "#ffffff"
     }
   },
@@ -260,7 +260,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#4d1f1f",
       "secondary": "#ffffff"
     }
   },
@@ -313,7 +313,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#5ca0cd",
       "secondary": "#ffffff"
     }
   },
@@ -366,7 +366,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#1528e2",
       "secondary": "#ffffff"
     }
   },
@@ -419,7 +419,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#52007e",
       "secondary": "#ffffff"
     }
   },
@@ -472,7 +472,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#000d92",
       "secondary": "#ffffff"
     }
   },
@@ -525,7 +525,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#530101",
       "secondary": "#ffffff"
     }
   },
@@ -631,8 +631,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#ffffff",
+      "secondary": "#000000"
     }
   },
   {
@@ -790,7 +790,7 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
+      "primary": "#496bff",
       "secondary": "#ffffff"
     }
   },
@@ -843,8 +843,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#ddc512",
+      "secondary": "#023386"
     }
   },
   {
@@ -896,8 +896,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#ddc512",
+      "secondary": "#f53434"
     }
   },
   {
@@ -949,8 +949,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#003580",
+      "secondary": "#000000"
     }
   },
   {
@@ -1002,8 +1002,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#63000b",
+      "secondary": "#746767"
     }
   },
   {
@@ -1055,8 +1055,8 @@
       }
     ],
     "colors": {
-      "primary": "#1e272d",
-      "secondary": "#ffffff"
+      "primary": "#ddc512",
+      "secondary": "#023386"
     }
   }
 ]

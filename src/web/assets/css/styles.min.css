@@ -110,16 +110,16 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .fm-header-colored .fm-header-title h1 {
-  color: #fff;
+  color: var(--tab-fg-active, #fff);
   text-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
 }
 
 .fm-header-colored .fm-header-sub {
-  color: rgba(255, 255, 255, 0.7);
+  color: var(--tab-fg, rgba(255, 255, 255, 0.7));
 }
 
 .fm-header-colored .fm-header-sub:hover {
-  color: #fff;
+  color: var(--tab-fg-active, #fff);
 }
 
 .fm-header-colored .fm-menu-toggle span,
@@ -913,6 +913,24 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-size: 12px;
   color: #546a78;
 }
+
+/* --- Loan status label --- */
+
+.fm-ph-loan {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.fm-ph-loan-label {
+  font-weight: 600;
+}
+
+.fm-ph-loan-label.loan-in { color: #437fa2; }
+.fm-ph-loan-label.loan-out { color: #00838f; }
+
+.fm-ph-loan-text { color: #94a3af; }
+.fm-ph-loan-text a { color: #94a3af; }
+.fm-ph-loan-text a:hover { color: #edf1f5; }
 
 /* --- Star ratings & condition --- */
 
@@ -2394,6 +2412,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   /* Player ratings: stack */
   .fm-ph-ratings {
     flex-direction: column;
+    align-items: flex-start;
     gap: 8px;
   }
 
