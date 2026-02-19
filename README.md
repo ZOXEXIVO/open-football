@@ -20,18 +20,20 @@ Currently available nation for simulation - **Italy**
 ---
 
 
-[Match example (click on any goals)](https://open-football.org/leagues/italian-serie-a)
+[Match example (click on any goals)](https://open-football.org/en/leagues/italian-serie-a)
+
+![alt text](.docs/images/match.jpg "Match page")
 
 ![alt text](.docs/images/match.avif "Match page")
 
-[Player page example (click on any player)](https://open-football.org/teams/juventus)
+[Player page example (click on any player)](https://open-football.org/en/teams/napoli)
 ![alt text](.docs/images/player.jpg "Player page")
 
-[Club page example](https://open-football.org/teams/juventus)
+[Club page example](https://open-football.org/en/teams/napoli)
 
 ![alt text](.docs/images/club.jpg "Club page")
 
-[League page example](https://open-football.org/leagues/italian-serie-a)
+[League page example](https://open-football.org/en/leagues/italian-serie-a)
 
 ![alt text](.docs/images/league.jpg "League page")
 

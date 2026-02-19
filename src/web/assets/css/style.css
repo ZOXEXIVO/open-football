@@ -715,7 +715,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-squad .sq-nat { width: 32px; }
 .fm-squad .sq-ability { width: 3.5em; }
 .fm-squad .sq-potential { width: 3.5em; }
-.fm-squad .sq-age { width: 2em; text-align: center; }
+.fm-squad .sq-age { width: 6em; text-align: center; }
 .fm-squad .sq-games { text-align: center; }
 .fm-squad .sq-cond { width: 12em; }
 .fm-squad .sq-morale { text-align: center; }

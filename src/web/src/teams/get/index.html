@@ -24,11 +24,11 @@
                     <th class="sq-name">{{ i18n.t("name") }}</th>
                     <th>{{ i18n.t("position") }}</th>
                     <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                    <th class="sq-age">{{ i18n.t("age") }}</th>
                     <th class="sq-ability">{{ i18n.t("ability") }}</th>
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
                     <th class="sq-cond">{{ i18n.t("condition") }}</th>
                     <th class="sq-morale">{{ i18n.t("morale") }}</th>
-                    <th class="sq-age">{{ i18n.t("age") }}</th>
                     <th class="sq-games">{{ i18n.t("apps") }}</th>
                     <th class="sq-value">{{ i18n.t("value") }}</th>
                 </tr>
@@ -55,6 +55,7 @@
                             <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                         </a>
                     </td>
+                    <td class="sq-age">{{ player.age }}</td>
                     <td>
                         <div class="fm-stars">
                             {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
@@ -72,7 +73,6 @@
                         </div>
                     </td>
                     <td class="sq-morale">{{ player.behaviour }}</td>
-                    <td class="sq-age">{{ player.age }}</td>
                     <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
                     <td class="sq-value">{{ player.value }}</td>
                 </tr>
