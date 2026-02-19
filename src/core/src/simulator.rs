@@ -228,26 +228,83 @@ impl SimulatorData {
     }
 
     pub fn player(&self, id: u32) -> Option<&Player> {
-        let (player_continent_id, player_country_id, player_club_id, player_team_id) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_player_location(id))?;
+        // Fast path: indexed lookup
+        if let Some((player_continent_id, player_country_id, player_club_id, player_team_id)) =
+            self.indexes.as_ref().and_then(|indexes| indexes.get_player_location(id))
+        {
+            let found = self
+                .continent(player_continent_id)
+                .and_then(|continent| {
+                    continent
+                        .countries
+                        .iter()
+                        .find(|country| country.id == player_country_id)
+                })
+                .and_then(|country| country.clubs.iter().find(|club| club.id == player_club_id))
+                .and_then(|club| {
+                    club.teams
+                        .teams
+                        .iter()
+                        .find(|team| team.id == player_team_id)
+                })
+                .and_then(|team| team.players.players.iter().find(|c| c.id == id));
 
-        self.continent(player_continent_id)
-            .and_then(|continent| {
-                continent
-                    .countries
-                    .iter()
-                    .find(|country| country.id == player_country_id)
-            })
-            .and_then(|country| country.clubs.iter().find(|club| club.id == player_club_id))
-            .and_then(|club| {
-                club.teams
-                    .teams
-                    .iter()
-                    .find(|team| team.id == player_team_id)
-            })
-            .and_then(|team| team.players.players.iter().find(|c| c.id == id))
+            if found.is_some() {
+                return found;
+            }
+        }
+
+        // Fallback: brute-force scan (index may be stale after transfers)
+        self.player_brute_force(id)
+    }
+
+    pub fn player_with_team(&self, player_id: u32) -> Option<(&Player, &Team)> {
+        // Fast path: indexed lookup
+        if let Some((continent_id, country_id, club_id, team_id)) =
+            self.indexes.as_ref().and_then(|idx| idx.get_player_location(player_id))
+        {
+            let result = self
+                .continent(continent_id)
+                .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
+                .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
+                .and_then(|cl| cl.teams.teams.iter().find(|t| t.id == team_id))
+                .and_then(|team| {
+                    team.players.players.iter().find(|p| p.id == player_id).map(|p| (p, team))
+                });
+
+            if result.is_some() {
+                return result;
+            }
+        }
+
+        // Fallback: brute-force
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+                            return Some((player, team));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn player_brute_force(&self, id: u32) -> Option<&Player> {
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if let Some(player) = team.players.players.iter().find(|p| p.id == id) {
+                            return Some(player);
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn player_mut(&mut self, id: u32) -> Option<&mut Player> {

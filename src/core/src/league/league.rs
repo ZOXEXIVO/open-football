@@ -2,7 +2,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use crate::{Club, Team};
+use crate::{Club, Player, Team};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -198,9 +198,17 @@ impl League {
             table,
         );
 
-        // Prepare squads with psychological modifiers
-        let mut home_squad = home_team.get_enhanced_match_squad();
-        let mut away_squad = away_team.get_enhanced_match_squad();
+        // Gather reserve players from the same club for each team
+        let home_reserves: Vec<&Player> = Self::collect_reserve_players(
+            clubs, home_team.club_id, home_team.id,
+        );
+        let away_reserves: Vec<&Player> = Self::collect_reserve_players(
+            clubs, away_team.club_id, away_team.id,
+        );
+
+        // Prepare squads with reserve pool and psychological modifiers
+        let mut home_squad = home_team.get_enhanced_match_squad(&home_reserves);
+        let mut away_squad = away_team.get_enhanced_match_squad(&away_reserves);
 
         Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
         Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
@@ -228,6 +236,28 @@ impl League {
         scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
 
         match_result
+    }
+
+    /// Collect available reserve/youth players from the same club (excluding the main team)
+    fn collect_reserve_players<'a>(
+        clubs: &'a [Club],
+        club_id: u32,
+        team_id: u32,
+    ) -> Vec<&'a Player> {
+        let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
+            return Vec::new();
+        };
+
+        club.teams
+            .teams
+            .iter()
+            .filter(|t| t.id != team_id) // skip the team itself
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| {
+                !p.player_attributes.is_injured
+                    && !p.player_attributes.is_banned
+            })
+            .collect()
     }
 
     #[allow(dead_code)]

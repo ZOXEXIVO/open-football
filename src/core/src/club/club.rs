@@ -74,7 +74,9 @@ impl Club {
         );
 
         if ctx.simulation.is_week_beginning() {
+            let date = ctx.simulation.date.date();
             self.process_salaries(ctx);
+            self.teams.manage_squad_composition(date);
         }
 
         result

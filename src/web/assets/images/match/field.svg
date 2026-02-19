@@ -1,9 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="950" viewBox="0 0 1400 950">
-  <rect width="1400" height="950" fill="#206e52"/>
+  <defs>
+    <clipPath id="field-clip">
+      <rect x="62" y="60" width="1260" height="810"/>
+    </clipPath>
+  </defs>
 
-  <!-- Field grass -->
-  <rect x="62" y="60" width="1260" height="810" fill="#206e52"/>
+  <!-- Grass stripes (alternating mow pattern) -->
+  <g clip-path="url(#field-clip)">
+    <rect x="62"   y="60" width="126" height="810" fill="#257a4a"/>
+    <rect x="188"  y="60" width="126" height="810" fill="#1e6a3e"/>
+    <rect x="314"  y="60" width="126" height="810" fill="#257a4a"/>
+    <rect x="440"  y="60" width="126" height="810" fill="#1e6a3e"/>
+    <rect x="566"  y="60" width="126" height="810" fill="#257a4a"/>
+    <rect x="692"  y="60" width="126" height="810" fill="#1e6a3e"/>
+    <rect x="818"  y="60" width="126" height="810" fill="#257a4a"/>
+    <rect x="944"  y="60" width="126" height="810" fill="#1e6a3e"/>
+    <rect x="1070" y="60" width="126" height="810" fill="#257a4a"/>
+    <rect x="1196" y="60" width="126" height="810" fill="#1e6a3e"/>
+  </g>
 
   <!-- Field outline -->
   <rect x="62" y="60" width="1260" height="810" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
@@ -11,41 +26,40 @@
   <!-- Center line -->
   <line x1="692" y1="60" x2="692" y2="870" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
-  <!-- Center circle (radius ~73 backend units) -->
+  <!-- Center circle -->
   <ellipse cx="692" cy="465" rx="110" ry="109" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
   <!-- Center spot -->
   <circle cx="692" cy="465" r="4" fill="white" fill-opacity="0.7"/>
 
-  <!-- Left penalty area (132 deep x 322 wide in backend) -->
+  <!-- Left penalty area -->
   <rect x="62" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
   <!-- Right penalty area -->
   <rect x="1124" y="226" width="198" height="478" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
-  <!-- Left goal area (44 deep x 146 wide in backend) -->
+  <!-- Left goal area -->
   <rect x="62" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
   <!-- Right goal area -->
   <rect x="1256" y="356" width="66" height="218" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
-  <!-- Left penalty spot (88 units from goal in backend) -->
+  <!-- Left penalty spot -->
   <circle cx="194" cy="465" r="3" fill="white" fill-opacity="0.7"/>
 
   <!-- Right penalty spot -->
   <circle cx="1190" cy="465" r="3" fill="white" fill-opacity="0.7"/>
 
-  <!-- Left penalty arc (outside penalty area) -->
+  <!-- Left penalty arc -->
   <path d="M 260 378 A 110 109 0 0 1 260 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
-  <!-- Right penalty arc (outside penalty area) -->
+  <!-- Right penalty arc -->
   <path d="M 1124 378 A 110 109 0 0 0 1124 552" fill="none" stroke="white" stroke-width="2" stroke-opacity="0.7"/>
 
-  <!-- Goal nets behind goal line -->
-  <!-- Left goal: GOAL_WIDTH=60 => y from 376 to 554 (backend y 212.5..332.5) -->
+  <!-- Left goal net -->
   <rect x="42" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
 
-  <!-- Right goal -->
+  <!-- Right goal net -->
   <rect x="1322" y="376" width="20" height="178" fill="white" fill-opacity="0.1" stroke="white" stroke-width="2.5"/>
 
   <!-- Corner arcs -->

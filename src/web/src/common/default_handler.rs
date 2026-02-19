@@ -1,6 +1,5 @@
-use axum::extract::Path;
 use axum::http::{header, StatusCode};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Redirect};
 
 use rust_embed::RustEmbed;
 
@@ -22,29 +21,40 @@ fn cache_control_for(path: &str) -> &'static str {
     }
 }
 
-/// Serves static files from the embedded assets
-pub async fn default_handler(Path(path): Path<String>) -> impl IntoResponse {
-    let path_str = path.trim_start_matches('/');
+/// Serves static files from the embedded assets, or redirects lang-less page routes
+pub async fn default_handler(uri: axum::http::Uri) -> axum::response::Response {
+    let path_str = uri.path().trim_start_matches('/');
 
-    match Assets::get(path_str) {
-        Some(content) => {
-            let mime = mime_guess::from_path(path_str).first_or_octet_stream();
-            (
-                StatusCode::OK,
-                [
-                    (header::CONTENT_TYPE, mime.to_string()),
-                    (header::CACHE_CONTROL, cache_control_for(path_str).to_string()),
-                ],
-                content.data,
-            )
-        }
-        None => (
-            StatusCode::NOT_FOUND,
+    // Try serving as static asset first
+    if let Some(content) = Assets::get(path_str) {
+        let mime = mime_guess::from_path(path_str).first_or_octet_stream();
+        return (
+            StatusCode::OK,
             [
-                (header::CONTENT_TYPE, "text/plain".to_string()),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
+                (header::CONTENT_TYPE, mime.to_string()),
+                (header::CACHE_CONTROL, cache_control_for(path_str).to_string()),
             ],
-            "404 Not Found".as_bytes().into(),
-        ),
+            content.data,
+        )
+            .into_response();
     }
+
+    // Check if path is missing a language prefix — redirect to default language
+    let first_segment = path_str.split('/').next().unwrap_or("");
+    let has_lang_prefix = crate::i18n::I18nManager::is_supported_language(first_segment);
+
+    if !has_lang_prefix && !path_str.is_empty() {
+        let redirect_url = format!("/{}/{}", crate::i18n::DEFAULT_LANGUAGE, path_str);
+        return Redirect::permanent(&redirect_url).into_response();
+    }
+
+    (
+        StatusCode::NOT_FOUND,
+        [
+            (header::CONTENT_TYPE, "text/plain".to_string()),
+            (header::CACHE_CONTROL, "no-cache".to_string()),
+        ],
+        axum::body::Bytes::from_static(b"404 Not Found"),
+    )
+        .into_response()
 }

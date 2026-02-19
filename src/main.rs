@@ -3,7 +3,7 @@ use core::utils::TimeEstimation;
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
 use log::{info};
-use web::{FootballSimulatorServer, GameAppData};
+use web::{FootballSimulatorServer, GameAppData, I18nManager};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
@@ -36,7 +36,8 @@ async fn main() {
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(game_data))),
-        is_one_shot_game
+        i18n: Arc::new(I18nManager::new()),
+        is_one_shot_game,
     };
     
     FootballSimulatorServer::new(data).run().await;

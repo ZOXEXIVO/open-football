@@ -21,6 +21,19 @@ pub enum TeamType {
     U23 = 5,
 }
 
+impl TeamType {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match self {
+            TeamType::Main => "first_team",
+            TeamType::B => "reserve_team",
+            TeamType::U18 => "under_18s",
+            TeamType::U19 => "under_19s",
+            TeamType::U21 => "under_21s",
+            TeamType::U23 => "under_23s",
+        }
+    }
+}
+
 impl fmt::Display for TeamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -117,11 +130,12 @@ impl Team {
     }
 
     /// Enhanced get_match_squad that uses improved tactical analysis
-    pub fn get_enhanced_match_squad(&self) -> MatchSquad {
+    /// Accepts optional reserve players that can be selected for the match squad
+    pub fn get_enhanced_match_squad(&self, reserve_players: &[&Player]) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
-        
-        // Step 2: Use enhanced squad selection
-        let squad_result = SquadSelector::select(self, head_coach);
+
+        // Use squad selection with reserve pool
+        let squad_result = SquadSelector::select_with_reserves(self, head_coach, reserve_players);
 
         // Step 3: Create match squad with selected tactics
         let final_tactics = self

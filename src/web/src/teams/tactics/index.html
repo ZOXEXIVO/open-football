@@ -2,12 +2,12 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
-    <a class="fm-tab active" href="/teams/{{ team_slug }}/tactics">Tactics</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -16,12 +16,12 @@
     <div class="fm-tactics-grid">
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Starting XI</h3>
+                <h3>{{ i18n.t("starting_xi") }}</h3>
                 <span class="fm-panel-action">{{ formation_name }}</span>
             </div>
             <div class="fm-tactics-list">
                 {% for fp in formation_players %}
-                <a class="fm-tactic-row" href="/teams/{{ team_slug }}/players/{{ fp.id }}">
+                <a class="fm-tactic-row" href="/{{ lang }}/players/{{ fp.id }}">
                     <span class="fm-tactic-num">{{ loop.index }}</span>
                     <span class="fm-tactic-pos">{{ fp.position_short }}</span>
                     <span class="fm-tactic-name">{{ fp.last_name }}</span>
@@ -31,7 +31,7 @@
         </section>
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Formation</h3>
+                <h3>{{ i18n.t("formation") }}</h3>
                 <span class="fm-panel-action">{{ formation_name }}</span>
             </div>
             <div class="fm-pitch fm-pitch-compact">
@@ -50,7 +50,7 @@
                     <div class="fm-pitch-corner-bl"></div>
                     <div class="fm-pitch-corner-br"></div>
                     {% for fp in formation_players %}
-                    <a class="fm-pitch-player {{ fp.css_class }}" href="/teams/{{ team_slug }}/players/{{ fp.id }}">
+                    <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.id }}">
                         <div class="fm-pitch-player-dot"></div>
                         <div class="fm-pitch-player-name">{{ fp.last_name }}</div>
                     </a>

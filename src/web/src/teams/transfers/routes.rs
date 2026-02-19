@@ -4,7 +4,7 @@ use axum::Router;
 
 pub fn routes() -> Router<GameAppData> {
     Router::new().route(
-        "/teams/{team_slug}/transfers",
+        "/{lang}/teams/{team_slug}/transfers",
         get(super::team_transfers_action),
     )
 }

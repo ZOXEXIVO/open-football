@@ -10,7 +10,7 @@
         </div>
         <div class="fm-country-grid">
             {% for country in continent.countries %}
-            <a href="/countries/{{ country.slug }}" class="fm-country-item">
+            <a href="/{{ lang }}/countries/{{ country.slug }}" class="fm-country-item">
                 <span class="flag flag-{{ country.code }}"></span>
                 <span>{{ country.name }}</span>
             </a>

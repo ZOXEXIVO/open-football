@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct CountryGetRequest {
+    lang: String,
     country_slug: String,
 }
 
@@ -18,11 +19,15 @@ pub struct CountryGetRequest {
 pub struct CountryGetTemplate {
     pub css_version: &'static str,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub leagues: Vec<LeagueDto>,
 }
 
@@ -35,6 +40,7 @@ pub async fn country_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<CountryGetRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -75,11 +81,15 @@ pub async fn country_get_action(
     Ok(CountryGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: country.name.clone(),
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
         sub_title: continent.name.clone(),
-        sub_title_link: "/countries".to_string(),
+        sub_title_link: format!("/{}/countries", route_params.lang),
         header_color: country.color.clone(),
-        foreground_color: String::new(),
+        foreground_color: if country.color.is_empty() { String::new() } else { "#ffffff".to_string() },
         menu_sections: vec![],
+        lang: route_params.lang,
+        i18n,
         leagues,
     })
 }

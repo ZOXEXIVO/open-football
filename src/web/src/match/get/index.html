@@ -2,25 +2,68 @@
 
 {% block content %}
 <div class="fm-page fm-match-page">
+    <div class="fm-match-scoreboard">
+        <a href="/{{ lang }}/leagues/{{ league_slug }}" class="fm-sb-league">{{ league_name }}</a>
+        <div class="fm-sb-main">
+            <div class="fm-sb-team fm-sb-team-home">
+                <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
+                <div class="fm-sb-goals{% if home_goal_events.len() <= 2 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
+                    {% for goal in home_goal_events %}
+                    <a href="/{{ lang }}/players/{{ goal.player_id }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                    {% endfor %}
+                </div>
+                {% if home_goal_events.len() > 2 %}
+                <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ home_goal_events.len() - 2 }}'">
+                    ···  +{{ home_goal_events.len() - 2 }}
+                </button>
+                {% endif %}
+            </div>
+            <div class="fm-sb-score">
+                <span class="fm-sb-digit">{{ home_goals }}</span>
+                <span class="fm-sb-sep"></span>
+                <span class="fm-sb-digit">{{ away_goals }}</span>
+            </div>
+            <div class="fm-sb-team fm-sb-team-away">
+                <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
+                <div class="fm-sb-goals{% if away_goal_events.len() <= 2 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
+                    {% for goal in away_goal_events %}
+                    <a href="/{{ lang }}/players/{{ goal.player_id }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
+                    {% endfor %}
+                </div>
+                {% if away_goal_events.len() > 2 %}
+                <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ away_goal_events.len() - 2 }}'">
+                    ···  +{{ away_goal_events.len() - 2 }}
+                </button>
+                {% endif %}
+            </div>
+        </div>
+        <div class="fm-sb-ft">{{ i18n.t("full_time") }}</div>
+    </div>
     <div class="container-fluid">
         <div class="row">
             <div class="col-lg-2 d-none d-lg-block">
                 <div class="fm-match-squad fm-match-squad-home">
-                    <a href="/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                    <div class="fm-squad-hdr">
+                        <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
+                        <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                    </div>
                     <div class="fm-squad-section">
                         {% for player in home_squad_main %}
-                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
-                            {{ player.last_name }} {{ player.first_name }}
+                        <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}">
                             <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
                         </a>
                         {% endfor %}
                     </div>
-                    <div class="fm-squad-divider">Substitutes</div>
+                    <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
                     <div class="fm-squad-section">
                         {% for player in home_squad_subs %}
-                        <a href="/teams/{{ home_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
-                            {{ player.last_name }} {{ player.first_name }}
+                        <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}">
+                            {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                             <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
                         </a>
                         {% endfor %}
                     </div>
@@ -31,13 +74,13 @@
                     <div class="time-scrollbar-wrapper" id="time-scrollbar-wrapper" style="display:none">
                         <div class="time-scrollbar-container">
                             <div class="half-labels">
-                                <span class="half-label">1st Half</span>
-                                <span class="half-label">2nd Half</span>
+                                <span class="half-label">{{ i18n.t("first_half") }}</span>
+                                <span class="half-label">{{ i18n.t("second_half") }}</span>
                             </div>
                             <div class="time-scrollbar-track" id="time-scrollbar-track">
                                 <div class="halftime-delimiter" style="left:50%">
                                     <div class="delimiter-line"></div>
-                                    <div class="delimiter-label">HT</div>
+                                    <div class="delimiter-label">{{ i18n.t("ht") }}</div>
                                 </div>
                                 <div id="goal-markers"></div>
                                 <div class="time-progress" id="time-progress"></div>
@@ -50,7 +93,7 @@
                     <div id="match-container">
                         <div class="loading-spinner" id="loading-spinner">
                             <i class="fas fa-spinner fa-spin fa-2x"></i>
-                            <p>Loading match data...</p>
+                            <p>{{ i18n.t("loading_match") }}</p>
                         </div>
                         <div id="pixi-container" class="match-container"></div>
                     </div>
@@ -58,21 +101,27 @@
             </div>
             <div class="col-lg-2 d-none d-lg-block">
                 <div class="fm-match-squad fm-match-squad-away">
-                    <a href="/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                    <div class="fm-squad-hdr">
+                        <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
+                        <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                    </div>
                     <div class="fm-squad-section">
                         {% for player in away_squad_main %}
-                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
-                            {{ player.last_name }} {{ player.first_name }}
+                        <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}">
                             <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
                         </a>
                         {% endfor %}
                     </div>
-                    <div class="fm-squad-divider">Substitutes</div>
+                    <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
                     <div class="fm-squad-section">
                         {% for player in away_squad_subs %}
-                        <a href="/teams/{{ away_team_slug }}/players/{{ player.id }}" class="fm-squad-player">
-                            {{ player.last_name }} {{ player.first_name }}
+                        <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}">
+                            {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
                             <small>{{ player.position }}</small>
+                            <span class="fm-sp-name">{{ player.last_name }}</span>
+                            {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
                         </a>
                         {% endfor %}
                     </div>
@@ -92,6 +141,10 @@
     const matchTimeMsTotal = {{ match_time_ms }};
     const goalsData = {{ goals_json|safe }};
     const playersData = {{ players_json|safe }};
+    const homeColorPrimary = "{{ home_color_primary }}";
+    const homeColorSecondary = "{{ home_color_secondary }}";
+    const awayColorPrimary = "{{ away_color_primary }}";
+    const awayColorSecondary = "{{ away_color_secondary }}";
 
     const maxWidth = 1400;
     const maxHeight = 950;
@@ -342,32 +395,39 @@
         if (!isDragging) updateSlider();
     }
 
-    function getPlayerColor(player) {
-        if (player.position === 'GK') return 0xf7e300;
-        return player.is_home ? 0x00307d : 0xb33f00;
+    function hexToInt(hex) {
+        return parseInt(hex.replace('#', ''), 16);
     }
+
+    const homeBg = hexToInt(homeColorPrimary);
+    const homeFg = hexToInt(homeColorSecondary);
+    const awayBg = hexToInt(awayColorPrimary);
+    const awayFg = hexToInt(awayColorSecondary);
+    const gkColor = 0xf7e300;
 
     function createPlayerGraphic(x, y, player) {
         const container = new PIXI.Container();
         container.position.x = x - 10;
         container.position.y = y - 10;
 
-        const color = getPlayerColor(player);
-        const borderColor = color === 0xf7e300 ? 0x000000 : 0xffffff;
+        const isGK = player.position === 'GK';
+        const fillColor = isGK ? gkColor : (player.is_home ? homeBg : awayBg);
+        const textColor = isGK ? 'black' : (player.is_home ? homeColorSecondary : awayColorSecondary);
+        const borderColor = isGK ? 0x000000 : (player.is_home ? homeFg : awayFg);
 
         const border = new PIXI.Graphics();
         border.circle(6, 6, 19).fill(borderColor);
         container.addChild(border);
 
         const circle = new PIXI.Graphics();
-        circle.circle(6, 6, 16).fill(color);
+        circle.circle(6, 6, 16).fill(fillColor);
         container.addChild(circle);
 
         const numStyle = new PIXI.TextStyle({
             fontFamily: 'Arial, sans-serif',
             fontSize: 14,
             fontWeight: 'bold',
-            fill: player.position === 'GK' ? 'black' : 'white',
+            fill: textColor,
             align: 'center'
         });
         const numText = new PIXI.Text({text: String(player.shirt_number), style: numStyle});
@@ -418,7 +478,7 @@
             resolution: window.devicePixelRatio,
             width: maxWidth,
             height: maxHeight,
-            backgroundColor: 0x283238
+            backgroundAlpha: 0
         });
 
         const container = document.getElementById('pixi-container');

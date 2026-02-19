@@ -98,6 +98,10 @@ impl TransferMarket {
         buying_club_id: u32,
         offer: TransferOffer,
         current_date: NaiveDate,
+        selling_reputation: f32,
+        buying_reputation: f32,
+        player_age: u8,
+        player_ambition: f32,
     ) -> Option<u32> {
         // Find the listing
         if let Some(listing_index) = self.listings.iter().position(|l|
@@ -117,6 +121,10 @@ impl TransferMarket {
                 buying_club_id,
                 offer,
                 current_date,
+                selling_reputation,
+                buying_reputation,
+                player_age,
+                player_ambition,
             );
 
             // Update listing status

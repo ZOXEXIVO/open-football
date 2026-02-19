@@ -2,12 +2,12 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab active" href="/teams/{{ team_slug }}">Squad</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/tactics">Tactics</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -15,20 +15,22 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Squad</h3>
+            <h3>{{ i18n.t("squad") }}</h3>
         </div>
         <table class="fm-squad">
             <thead>
                 <tr>
                     <th class="sq-inf"></th>
-                    <th class="sq-name">Name</th>
-                    <th>Position</th>
-                    <th class="sq-nat">Nat</th>
-                    <th>Ability</th>
-                    <th>Potential</th>
-                    <th>Morale</th>
-                    <th class="sq-cond">Condition</th>
-                    <th>Value</th>
+                    <th class="sq-name">{{ i18n.t("name") }}</th>
+                    <th>{{ i18n.t("position") }}</th>
+                    <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                    <th class="sq-ability">{{ i18n.t("ability") }}</th>
+                    <th class="sq-potential">{{ i18n.t("potential") }}</th>
+                    <th class="sq-cond">{{ i18n.t("condition") }}</th>
+                    <th class="sq-morale">{{ i18n.t("morale") }}</th>
+                    <th class="sq-age">{{ i18n.t("age") }}</th>
+                    <th class="sq-games">{{ i18n.t("apps") }}</th>
+                    <th class="sq-value">{{ i18n.t("value") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -36,20 +38,20 @@
                 <tr{% if player.is_loan %} class="sq-loan-in"{% endif %}{% if player.is_loaned_out %} class="sq-loan-out"{% endif %}>
                     <td class="sq-inf">
                         {% if player.injured %}
-                        <span class="fm-badge fm-badge-inj">Inj</span>
+                        <span class="fm-badge fm-badge-inj">{{ i18n.t("inj") }}</span>
                         {% endif %}
                         {% if player.transfer_listed %}
-                        <span class="fm-badge fm-badge-lst">Lst</span>
+                        <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                         {% endif %}
                     </td>
                     <td class="sq-name">
-                        <a href="/teams/{{ player.player_team_slug }}/players/{{ player.id }}">
+                        <a href="/{{ lang }}/players/{{ player.id }}">
                             {{ player.last_name }}&nbsp;{{ player.first_name }}
                         </a>
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
                     <td class="sq-nat">
-                        <a href="/countries/{{ player.country_slug }}">
+                        <a href="/{{ lang }}/countries/{{ player.country_slug }}">
                             <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                         </a>
                     </td>
@@ -63,14 +65,16 @@
                             {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
                         </div>
                     </td>
-                    <td>{{ player.behaviour }}</td>
                     <td class="sq-cond">
                         <div class="fm-cond">
                             <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
                         </div>
                     </td>
-                    <td>{{ player.value }}</td>
+                    <td class="sq-morale">{{ player.behaviour }}</td>
+                    <td class="sq-age">{{ player.age }}</td>
+                    <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
+                    <td class="sq-value">{{ player.value }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct TeamScheduleGetRequest {
+    lang: String,
     team_slug: String,
 }
 
@@ -17,7 +18,11 @@ pub struct TeamScheduleGetRequest {
 #[template(path = "teams/schedule/index.html")]
 pub struct TeamScheduleTemplate {
     pub css_version: &'static str,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
@@ -54,6 +59,8 @@ pub async fn team_schedule_get_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
+    let i18n = state.i18n.for_lang(&route_params.lang);
+
     let team_id = simulator_data
         .indexes
         .as_ref()
@@ -72,7 +79,7 @@ pub async fn team_schedule_get_action(
 
     let schedule = league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default();
 
-    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
     let items: Vec<TeamScheduleItem> = schedule
@@ -107,14 +114,21 @@ pub async fn team_schedule_get_action(
         })
         .collect();
 
+    let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/schedule", &route_params.lang, &team.slug));
+    let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };
+
     Ok(TeamScheduleTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        title: team.name.clone(),
+        i18n,
+        lang: route_params.lang.clone(),
+        title,
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
         sub_title: league.map(|l| l.name.clone()).unwrap_or_default(),
-        sub_title_link: league.map(|l| format!("/leagues/{}", &l.slug)).unwrap_or_default(),
+        sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
         foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
-        menu_sections: views::team_menu(&neighbor_refs, &team.slug, &format!("/teams/{}/schedule", &team.slug)),
+        menu_sections,
         team_slug: team.slug.clone(),
         league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
@@ -124,6 +138,7 @@ pub async fn team_schedule_get_action(
 fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
+    i18n: &crate::I18n,
 ) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
@@ -133,7 +148,7 @@ fn get_neighbor_teams(
         .teams
         .teams
         .iter()
-        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
+        .map(|team| (i18n.t(team.team_type.as_i18n_key()).to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

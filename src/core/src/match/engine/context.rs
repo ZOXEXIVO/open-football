@@ -2,6 +2,14 @@ use nalgebra::Vector3;
 use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
+const MAX_SUBSTITUTIONS_PER_TEAM: usize = 5;
+
+pub struct SubstitutionRecord {
+    pub team_id: u32,
+    pub player_out_id: u32,
+    pub player_in_id: u32,
+    pub match_time: u64,
+}
 
 pub struct MatchContext {
     pub state: GameState,
@@ -20,6 +28,8 @@ pub struct MatchContext {
 
     // Track cumulative time across all match states
     pub total_match_time: u64,
+
+    pub substitutions: Vec<SubstitutionRecord>,
 }
 
 impl MatchContext {
@@ -36,6 +46,7 @@ impl MatchContext {
             field_away_team_id: field.away_team_id,
             logging_enabled: false,
             total_match_time: 0,
+            substitutions: Vec::new(),
         }
     }
 
@@ -87,6 +98,23 @@ impl MatchContext {
 
     pub fn enable_logging(&mut self) {
         self.logging_enabled = true;
+    }
+
+    pub fn subs_used_by_team(&self, team_id: u32) -> usize {
+        self.substitutions.iter().filter(|s| s.team_id == team_id).count()
+    }
+
+    pub fn can_substitute(&self, team_id: u32) -> bool {
+        self.subs_used_by_team(team_id) < MAX_SUBSTITUTIONS_PER_TEAM
+    }
+
+    pub fn record_substitution(&mut self, team_id: u32, player_out_id: u32, player_in_id: u32, match_time: u64) {
+        self.substitutions.push(SubstitutionRecord {
+            team_id,
+            player_out_id,
+            player_in_id,
+            match_time,
+        });
     }
 
     pub fn penalty_area(&self, is_home_team: bool) -> PenaltyArea {

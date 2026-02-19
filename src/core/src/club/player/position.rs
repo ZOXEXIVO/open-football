@@ -34,6 +34,33 @@ impl Display for PlayerPositionType {
 }
 
 impl PlayerPositionType {
+    pub fn as_i18n_key(&self) -> &'static str {
+        match *self {
+            PlayerPositionType::Goalkeeper => "pos_goalkeeper",
+            PlayerPositionType::Sweeper => "pos_sweeper",
+            PlayerPositionType::DefenderLeft => "pos_defender_left",
+            PlayerPositionType::DefenderCenterLeft => "pos_defender_center_left",
+            PlayerPositionType::DefenderCenter => "pos_defender_center",
+            PlayerPositionType::DefenderCenterRight => "pos_defender_center_right",
+            PlayerPositionType::DefenderRight => "pos_defender_right",
+            PlayerPositionType::DefensiveMidfielder => "pos_defensive_midfielder",
+            PlayerPositionType::MidfielderLeft => "pos_midfielder_left",
+            PlayerPositionType::MidfielderCenterLeft => "pos_midfielder_center_left",
+            PlayerPositionType::MidfielderCenter => "pos_midfielder_center",
+            PlayerPositionType::MidfielderCenterRight => "pos_midfielder_center_right",
+            PlayerPositionType::MidfielderRight => "pos_midfielder_right",
+            PlayerPositionType::AttackingMidfielderLeft => "pos_attacking_midfielder_left",
+            PlayerPositionType::AttackingMidfielderCenter => "pos_attacking_midfielder_center",
+            PlayerPositionType::AttackingMidfielderRight => "pos_attacking_midfielder_right",
+            PlayerPositionType::WingbackLeft => "pos_wingback_left",
+            PlayerPositionType::WingbackRight => "pos_wingback_right",
+            PlayerPositionType::ForwardLeft => "pos_forward_left",
+            PlayerPositionType::ForwardCenter => "pos_forward_center",
+            PlayerPositionType::ForwardRight => "pos_forward_right",
+            PlayerPositionType::Striker => "pos_striker",
+        }
+    }
+
     #[inline]
     pub fn get_short_name(&self) -> &'static str {
         match *self {
@@ -224,7 +251,7 @@ mod tests {
     }
 }
 
-#[derive(PartialEq, Eq, Hash, Debug)]
+#[derive(PartialEq, Eq, Hash, Debug, Clone, Copy)]
 pub enum PlayerFieldPositionGroup {
     Goalkeeper,
     Defender,

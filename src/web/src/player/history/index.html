@@ -2,9 +2,9 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}">Overview</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}/matches">Matches</a>
-    <a class="fm-tab active" href="/teams/{{ team_slug }}/players/{{ player_id }}/history">History</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/matches">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -12,30 +12,30 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Career Statistics</h3>
+            <h3>{{ i18n.t("career_statistics") }}</h3>
         </div>
         <table class="fm-stats">
             <thead>
                 <tr>
-                    <th>Season</th>
-                    <th class="sq-club">Club</th>
-                    <th>Apps</th>
-                    <th>Gls</th>
-                    <th>Ast</th>
-                    <th>Pen</th>
-                    <th>PoM</th>
-                    <th>YC</th>
-                    <th>RC</th>
-                    <th>SoT</th>
-                    <th>PAS%</th>
-                    <th>TCK W</th>
-                    <th>AV RAT</th>
+                    <th>{{ i18n.t("season") }}</th>
+                    <th class="sq-club">{{ i18n.t("club") }}</th>
+                    <th>{{ i18n.t("apps") }}</th>
+                    <th>{{ i18n.t("gls") }}</th>
+                    <th>{{ i18n.t("ast") }}</th>
+                    <th>{{ i18n.t("pen") }}</th>
+                    <th>{{ i18n.t("pom") }}</th>
+                    <th>{{ i18n.t("yc") }}</th>
+                    <th>{{ i18n.t("rc") }}</th>
+                    <th>{{ i18n.t("sot") }}</th>
+                    <th>{{ i18n.t("pass_pct") }}</th>
+                    <th>{{ i18n.t("tck_w") }}</th>
+                    <th>{{ i18n.t("av_rat") }}</th>
                 </tr>
             </thead>
             <tbody>
                 <tr class="fm-stats-current">
                     <td>{{ current_season }}</td>
-                    <td class="sq-club"><a href="/teams/{{ team_slug }}">{{ current_club }}</a>{% if current_is_loan %} <span class="fm-loan-badge">Loan</span>{% endif %}</td>
+                    <td class="sq-club"><a href="/{{ lang }}/teams/{{ team_slug }}">{{ current_club }}</a>{% if current_is_loan %} <span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% endif %}</td>
                     <td>{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
                     <td>{{ current.goals }}</td>
                     <td>{{ current.assists }}</td>
@@ -51,7 +51,7 @@
                 {% for item in items %}
                 <tr>
                     <td>{{ item.season }}</td>
-                    <td class="sq-club{% if item.is_loan %} sq-club-loan{% endif %}">{% if !item.team_slug.is_empty() %}<a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">Loan</span>{% endif %}{% if !item.transfer_fee.is_empty() %} <span class="fm-transfer-fee">{{ item.transfer_fee }}</span>{% endif %}</td>
+                    <td class="sq-club{% if item.is_loan %} sq-club-loan{% endif %}">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% endif %}{% if !item.transfer_fee.is_empty() %} <span class="fm-transfer-fee">{{ item.transfer_fee }}</span>{% endif %}</td>
                     <td>{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
                     <td>{{ item.stats.goals }}</td>
                     <td>{{ item.stats.assists }}</td>

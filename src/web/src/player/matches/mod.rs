@@ -6,12 +6,11 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::SimulatorData;
-use core::Team;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct PlayerMatchesRequest {
-    pub team_slug: String,
+    pub lang: String,
     pub player_id: u32,
 }
 
@@ -20,12 +19,15 @@ pub struct PlayerMatchesRequest {
 pub struct PlayerMatchesTemplate {
     pub css_version: &'static str,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub team_slug: String,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub player_id: u32,
     pub league_slug: String,
     pub items: Vec<PlayerMatchItem>,
@@ -51,44 +53,24 @@ pub async fn player_matches_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerMatchesRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let indexes = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?;
-
-    let team_id = indexes
-        .slug_indexes
-        .get_team_by_slug(&route_params.team_slug)
+    let (player, team) = simulator_data
+        .player_with_team(route_params.player_id)
         .ok_or_else(|| {
-            ApiError::NotFound(format!("Team '{}' not found", route_params.team_slug))
-        })?;
-
-    let team: &Team = simulator_data
-        .team(team_id)
-        .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
-
-    let players = team.players.players();
-    let player = players
-        .iter()
-        .find(|p| p.id == route_params.player_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!(
-                "Player with ID {} not found in team",
-                route_params.player_id
-            ))
+            ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id))
         })?;
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
     let schedule = league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default();
 
-    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
     let items: Vec<PlayerMatchItem> = schedule
@@ -123,17 +105,20 @@ pub async fn player_matches_action(
         })
         .collect();
 
-    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
+    let title = format!("{} {} - {}", player.full_name.first_name, player.full_name.last_name, team.name);
 
     Ok(PlayerMatchesTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
+        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
+        sub_title_suffix: if team.team_type == core::TeamType::Main { String::new() } else { i18n.t(team.team_type.as_i18n_key()).to_string() },
         sub_title: team.name.clone(),
-        sub_title_link: format!("/teams/{}", &team.slug),
+        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
         foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
-        menu_sections: views::player_menu(&neighbor_refs, &team.slug, &format!("/teams/{}", &team.slug)),
-        team_slug: team.slug.clone(),
+        menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug)),
+        i18n,
+        lang: route_params.lang.clone(),
         player_id: route_params.player_id,
         league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
@@ -143,6 +128,7 @@ pub async fn player_matches_action(
 fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
+    i18n: &crate::I18n,
 ) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
@@ -152,7 +138,7 @@ fn get_neighbor_teams(
         .teams
         .teams
         .iter()
-        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
+        .map(|team| (i18n.t(team.team_type.as_i18n_key()).to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

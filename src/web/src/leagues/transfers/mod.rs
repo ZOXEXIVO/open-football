@@ -10,6 +10,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct LeagueTransfersRequest {
+    lang: String,
     league_slug: String,
 }
 
@@ -18,11 +19,15 @@ pub struct LeagueTransfersRequest {
 pub struct LeagueTransfersTemplate {
     pub css_version: &'static str,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub league_slug: String,
     pub completed_transfers: Vec<CompletedTransferItem>,
     pub current_listings: Vec<ListingItem>,
@@ -31,7 +36,6 @@ pub struct LeagueTransfersTemplate {
 
 pub struct CompletedTransferItem {
     pub player_id: u32,
-    pub player_team_slug: String,
     pub player_name: String,
     pub from_team: String,
     pub from_team_slug: String,
@@ -53,7 +57,6 @@ pub struct ListingItem {
 
 pub struct NegotiationItem {
     pub player_id: u32,
-    pub player_team_slug: String,
     pub player_name: String,
     pub selling_team: String,
     pub selling_team_slug: String,
@@ -67,6 +70,7 @@ pub async fn league_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueTransfersRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard
@@ -116,7 +120,6 @@ pub async fn league_transfers_action(
             let to_team_slug = get_first_team_slug(country, t.to_club_id);
             CompletedTransferItem {
                 player_id: t.player_id,
-                player_team_slug: to_team_slug.clone(),
                 player_name: t.player_name.clone(),
                 from_team: t.from_team_name.clone(),
                 from_team_slug,
@@ -192,7 +195,6 @@ pub async fn league_transfers_action(
                 .unwrap_or_default();
             Some(NegotiationItem {
                 player_id: n.player_id,
-                player_team_slug: selling_team_slug.clone(),
                 player_name,
                 selling_team: selling_club.name.clone(),
                 selling_team_slug,
@@ -207,21 +209,27 @@ pub async fn league_transfers_action(
     Ok(LeagueTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: format!("{} - Transfers", league.name),
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/countries/{}", &country.slug),
+        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
         header_color: String::new(),
         foreground_color: String::new(),
         menu_sections: views::league_menu(
+            &i18n,
+            &route_params.lang,
             &country.name,
             &country.slug,
             &league.name,
             &league.slug,
-            &format!("/leagues/{}/transfers", &league.slug),
+            &format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug),
         ),
         league_slug: league.slug.clone(),
         completed_transfers,
         current_listings,
         active_negotiations,
+        lang: route_params.lang,
+        i18n,
     })
 }
 

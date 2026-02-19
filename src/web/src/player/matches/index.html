@@ -2,9 +2,9 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}">Overview</a>
-    <a class="fm-tab active" href="/teams/{{ team_slug }}/players/{{ player_id }}/matches">Matches</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/players/{{ player_id }}/history">History</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/players/{{ player_id }}/matches">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -12,18 +12,18 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Season Matches</h3>
+            <h3>{{ i18n.t("season_matches") }}</h3>
             <span class="fm-panel-count">{{ items.len() }}</span>
         </div>
         <table class="fm-schedule">
             <thead>
                 <tr>
-                    <th>Date</th>
-                    <th>Time</th>
-                    <th class="sch-venue">Venue</th>
-                    <th>Opponent</th>
-                    <th>Competition</th>
-                    <th class="sch-result">Result</th>
+                    <th>{{ i18n.t("date") }}</th>
+                    <th>{{ i18n.t("time") }}</th>
+                    <th class="sch-venue">{{ i18n.t("venue") }}</th>
+                    <th>{{ i18n.t("opponent") }}</th>
+                    <th>{{ i18n.t("competition") }}</th>
+                    <th class="sch-result">{{ i18n.t("result") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -38,11 +38,11 @@
                         <span class="fm-venue venue-a">A</span>
                         {% endif %}
                     </td>
-                    <td><a href="/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a></td>
+                    <td><a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a></td>
                     <td class="sch-comp">{{ item.competition_name }}</td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
-                        <a href="/leagues/{{ league_slug }}/matches/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
+                        <a href="/{{ lang }}/leagues/{{ league_slug }}/matches/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
                         {% else %}
                         <span class="fm-pending">-</span>
                         {% endif %}

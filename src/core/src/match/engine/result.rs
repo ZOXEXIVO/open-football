@@ -5,6 +5,14 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Debug, Clone)]
+pub struct SubstitutionInfo {
+    pub team_id: u32,
+    pub player_out_id: u32,
+    pub player_in_id: u32,
+    pub match_time_ms: u64,
+}
+
+#[derive(Debug, Clone)]
 pub struct PlayerMatchEndStats {
     pub shots_on_target: u16,
     pub shots_total: u16,
@@ -29,6 +37,8 @@ pub struct MatchResultRaw {
     pub additional_time_ms: u64,
 
     pub player_stats: HashMap<u32, PlayerMatchEndStats>,
+
+    pub substitutions: Vec<SubstitutionInfo>,
 }
 
 impl Clone for MatchResultRaw {
@@ -41,6 +51,7 @@ impl Clone for MatchResultRaw {
             match_time_ms: self.match_time_ms,
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
+            substitutions: self.substitutions.clone(),
         }
     }
 }
@@ -55,6 +66,7 @@ impl MatchResultRaw {
             match_time_ms,
             additional_time_ms: 0,
             player_stats: HashMap::new(),
+            substitutions: Vec::new(),
         }
     }
 
@@ -67,6 +79,7 @@ impl MatchResultRaw {
             match_time_ms: self.match_time_ms,
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
+            substitutions: self.substitutions.clone(),
         }
     }
 
@@ -85,6 +98,7 @@ pub struct FieldSquad {
     pub team_id: u32,
     pub main: Vec<u32>,
     pub substitutes: Vec<u32>,
+    pub substitutes_used: Vec<u32>,
 }
 
 impl FieldSquad {
@@ -93,6 +107,7 @@ impl FieldSquad {
             team_id: 0,
             main: Vec::new(),
             substitutes: Vec::new(),
+            substitutes_used: Vec::new(),
         }
     }
 
@@ -101,6 +116,7 @@ impl FieldSquad {
             team_id: field_squad.team_id,
             main: field_squad.main.to_vec(),
             substitutes: field_squad.substitutes.to_vec(),
+            substitutes_used: field_squad.substitutes_used.to_vec(),
         }
     }
 
@@ -109,6 +125,13 @@ impl FieldSquad {
             team_id: squad.team_id,
             main: squad.main_squad.iter().map(|p| p.id).collect(),
             substitutes: squad.substitutes.iter().map(|p| p.id).collect(),
+            substitutes_used: Vec::new(),
+        }
+    }
+
+    pub fn mark_substitute_used(&mut self, player_id: u32) {
+        if self.substitutes.contains(&player_id) && !self.substitutes_used.contains(&player_id) {
+            self.substitutes_used.push(player_id);
         }
     }
 

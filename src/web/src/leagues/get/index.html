@@ -2,13 +2,13 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab active" href="/leagues/{{ league_slug }}">Overview</a>
-    <a class="fm-tab">Matches</a>
-    <a class="fm-tab">News</a>
-    <a class="fm-tab">Stats</a>
-    <a class="fm-tab" href="/leagues/{{ league_slug }}/transfers">Transfers</a>
-    <a class="fm-tab">Awards</a>
-    <a class="fm-tab">History</a>
+    <a class="fm-tab active" href="/{{ lang }}/leagues/{{ league_slug }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab">{{ i18n.t("news") }}</a>
+    <a class="fm-tab">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/leagues/{{ league_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab">{{ i18n.t("awards") }}</a>
+    <a class="fm-tab">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -18,20 +18,20 @@
         <div class="col-md-12 col-lg-5">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>League Table</h3>
-                    <span class="fm-panel-action">Stages ›</span>
+                    <h3>{{ i18n.t("league_table") }}</h3>
+                    <span class="fm-panel-action">{{ i18n.t("stages") }} ›</span>
                 </div>
                 <table class="fm-standings">
                     <thead>
                         <tr>
                             <th class="st-pos">#</th>
-                            <th class="st-club">Club</th>
-                            <th>P</th>
-                            <th>W</th>
-                            <th>D</th>
-                            <th>L</th>
-                            <th>GD</th>
-                            <th class="st-pts">Pts</th>
+                            <th class="st-club">{{ i18n.t("club") }}</th>
+                            <th>{{ i18n.t("p") }}</th>
+                            <th>{{ i18n.t("w") }}</th>
+                            <th>{{ i18n.t("d") }}</th>
+                            <th>{{ i18n.t("l") }}</th>
+                            <th>{{ i18n.t("gd") }}</th>
+                            <th class="st-pts">{{ i18n.t("pts") }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -39,7 +39,7 @@
                         <tr class="{% if loop.index <= 4 %}zone-ucl{% else if loop.index <= 6 %}zone-uel{% else if loop.index > table_rows.len() - 3 %}zone-rel{% endif %}">
                             <td class="st-pos">{{ loop.index }}</td>
                             <td class="st-club">
-                                <a href="/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
+                                <a href="/{{ lang }}/teams/{{ row.team_slug }}">{{ row.team_name }}</a>
                             </td>
                             <td>{{ row.played }}</td>
                             <td>{{ row.win }}</td>
@@ -54,26 +54,29 @@
                     </tbody>
                 </table>
                 <div class="fm-legend">
-                    <span><i class="legend-dot ucl"></i> Champions League</span>
-                    <span><i class="legend-dot uel"></i> Europa League</span>
-                    <span><i class="legend-dot rel"></i> Relegation</span>
+                    <span><i class="legend-dot ucl"></i> {{ i18n.t("champions_league") }}</span>
+                    <span><i class="legend-dot uel"></i> {{ i18n.t("europa_league") }}</span>
+                    <span><i class="legend-dot rel"></i> {{ i18n.t("relegation") }}</span>
                 </div>
             </section>
         </div>
         <div class="col-md-7 col-lg-4">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Fixtures & Results</h3>
+                    <h3>{{ i18n.t("fixtures_results") }}</h3>
                 </div>
                 <div class="fm-fixtures">
+                    {% if current_tour_schedule.is_empty() %}
+                    <div class="fm-empty">{{ i18n.t("no_fixtures") }}</div>
+                    {% else %}
                     {% for tour_schedule in current_tour_schedule %}
                     <div class="fm-matchday-hd">{{ tour_schedule.date }}</div>
                     {% for item in tour_schedule.matches %}
                     <div class="fm-fixture">
                         <div class="fx-home">
-                            <a href="/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
+                            <a href="/{{ lang }}/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
                         </div>
-                        <a href="/match/{{ league_slug }}/{{ item.match_id }}" class="fx-score">
+                        <a href="/{{ lang }}/match/{{ league_slug }}/{{ item.match_id }}" class="fx-score">
                             {% if let Some(result) = item.result %}
                             {{ result.home_goals }} – {{ result.away_goals }}
                             {% else %}
@@ -81,22 +84,26 @@
                             {% endif %}
                         </a>
                         <div class="fx-away">
-                            <a href="/teams/{{ item.away_team_slug }}">{{ item.away_team_name }}</a>
+                            <a href="/{{ lang }}/teams/{{ item.away_team_slug }}">{{ item.away_team_name }}</a>
                         </div>
                     </div>
                     {% endfor %}
                     {% endfor %}
+                    {% endif %}
                 </div>
             </section>
         </div>
         <div class="col-md-5 col-lg-3">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Competition Reputation</h3>
+                    <h3>{{ i18n.t("competition_reputation") }}</h3>
                 </div>
                 <div class="fm-rep-list">
+                    {% if competition_reputation.is_empty() %}
+                    <div class="fm-empty">{{ i18n.t("no_reputation_data") }}</div>
+                    {% else %}
                     {% for item in competition_reputation %}
-                    <a href="/leagues/{{ item.league_slug }}" class="fm-rep-row">
+                    <a href="/{{ lang }}/leagues/{{ item.league_slug }}" class="fm-rep-row">
                         <span class="rep-pos">{{ loop.index }}</span>
                         <span class="rep-flag"><span class="flag flag-{{ item.country_code }}"></span></span>
                         <span class="rep-detail">
@@ -105,6 +112,7 @@
                         </span>
                     </a>
                     {% endfor %}
+                    {% endif %}
                 </div>
             </section>
         </div>
@@ -114,18 +122,18 @@
         <div class="col-lg-4">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Top Scorers</h3>
+                    <h3>{{ i18n.t("top_scorers") }}</h3>
                 </div>
                 {% if top_scorers.is_empty() %}
-                <div class="fm-empty">No goals scored yet</div>
+                <div class="fm-empty">{{ i18n.t("no_goals_scored") }}</div>
                 {% else %}
                 <table class="fm-player-stats">
                     <thead>
                         <tr>
                             <th class="ps-pos">#</th>
-                            <th class="ps-name">Player</th>
-                            <th class="ps-apps">Apps</th>
-                            <th class="ps-val">Gls</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("gls") }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -133,8 +141,8 @@
                         <tr>
                             <td class="ps-pos">{{ loop.index }}</td>
                             <td class="ps-name">
-                                <a href="/teams/{{ item.team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
-                                <span class="ps-team"><a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                                <a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
                             </td>
                             <td class="ps-apps">{{ item.played }}</td>
                             <td class="ps-val">{{ item.stat_value }}</td>
@@ -148,18 +156,18 @@
         <div class="col-lg-4">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Top Assisters</h3>
+                    <h3>{{ i18n.t("top_assisters") }}</h3>
                 </div>
                 {% if top_assisters.is_empty() %}
-                <div class="fm-empty">No assists recorded yet</div>
+                <div class="fm-empty">{{ i18n.t("no_assists_recorded") }}</div>
                 {% else %}
                 <table class="fm-player-stats">
                     <thead>
                         <tr>
                             <th class="ps-pos">#</th>
-                            <th class="ps-name">Player</th>
-                            <th class="ps-apps">Apps</th>
-                            <th class="ps-val">Ast</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("ast") }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -167,8 +175,8 @@
                         <tr>
                             <td class="ps-pos">{{ loop.index }}</td>
                             <td class="ps-name">
-                                <a href="/teams/{{ item.team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
-                                <span class="ps-team"><a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                                <a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
                             </td>
                             <td class="ps-apps">{{ item.played }}</td>
                             <td class="ps-val">{{ item.stat_value }}</td>
@@ -182,18 +190,18 @@
         <div class="col-lg-4">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Top Rated</h3>
+                    <h3>{{ i18n.t("top_rated") }}</h3>
                 </div>
                 {% if top_rated.is_empty() %}
-                <div class="fm-empty">No ratings available yet</div>
+                <div class="fm-empty">{{ i18n.t("no_ratings_available") }}</div>
                 {% else %}
                 <table class="fm-player-stats">
                     <thead>
                         <tr>
                             <th class="ps-pos">#</th>
-                            <th class="ps-name">Player</th>
-                            <th class="ps-apps">Apps</th>
-                            <th class="ps-val">Rat</th>
+                            <th class="ps-name">{{ i18n.t("player") }}</th>
+                            <th class="ps-apps">{{ i18n.t("apps") }}</th>
+                            <th class="ps-val">{{ i18n.t("rat") }}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -201,8 +209,8 @@
                         <tr>
                             <td class="ps-pos">{{ loop.index }}</td>
                             <td class="ps-name">
-                                <a href="/teams/{{ item.team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
-                                <span class="ps-team"><a href="/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
+                                <a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a>
+                                <span class="ps-team"><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></span>
                             </td>
                             <td class="ps-apps">{{ item.played }}</td>
                             <td class="ps-val">{{ item.stat_value }}</td>

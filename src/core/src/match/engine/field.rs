@@ -88,6 +88,48 @@ impl MatchField {
     pub fn get_player_mut(&mut self, id: u32) -> Option<&mut MatchPlayer> {
         self.players.iter_mut().find(|p| p.id == id)
     }
+
+    pub fn substitute_player(&mut self, player_out_id: u32, player_in_id: u32) -> bool {
+        // Find the outgoing player's position info
+        let out_info = match self.players.iter().find(|p| p.id == player_out_id) {
+            Some(p) => (
+                p.side,
+                p.tactical_position.current_position,
+                p.start_position,
+            ),
+            None => return false,
+        };
+
+        let (side, position, start_pos) = out_info;
+
+        // Find and remove the substitute from the bench
+        let sub_idx = match self.substitutes.iter().position(|p| p.id == player_in_id) {
+            Some(idx) => idx,
+            None => return false,
+        };
+
+        let mut player_in = self.substitutes.remove(sub_idx);
+
+        // Set up the substitute with the outgoing player's tactical role
+        player_in.side = side;
+        player_in.tactical_position.current_position = position;
+        player_in.tactical_position.regenerate_waypoints(side);
+        player_in.start_position = start_pos;
+        player_in.position = start_pos;
+        player_in.set_default_state();
+
+        // Replace the outgoing player in the field
+        if let Some(out_slot) = self.players.iter_mut().find(|p| p.id == player_out_id) {
+            *out_slot = player_in;
+
+            // Clear any ball references to the substituted-out player
+            self.ball.clear_player_reference(player_out_id);
+
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn setup_player_on_field(

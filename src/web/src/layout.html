@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="{{ lang }}">
 <head>
     <meta charset="utf-8">
     <title>{{ title }} - OpenFootball</title>
@@ -31,21 +31,42 @@
                     {% endfor %}
                 </nav>
             </div>
-            {% endif %}
             <div class="fm-sidebar-overlay" onclick="document.body.classList.remove('fm-sidebar-open')"></div>
+            {% endif %}
             <div class="col m-0 p-0">
                 <div class="container-fluid">
                     <div class="row">
-                        <div class="col m-0 p-0"{% if !header_color.is_empty() %} style="--header-bg: {{ header_color }}; --header-border: {{ foreground_color }}33; --tab-fg: {{ foreground_color }}99; --tab-fg-active: {{ foreground_color }}; --tab-hover-bg: rgba(0,0,0,0.1); --tab-active-border: {{ foreground_color }};"{% endif %}>
+                        <div class="col m-0 p-0"{% if !header_color.is_empty() %} style="--header-bg: {{ header_color }};{% if !foreground_color.is_empty() %} --header-border: {{ foreground_color }}33; --tab-fg: {{ foreground_color }}99; --tab-fg-active: {{ foreground_color }}; --tab-active-border: {{ foreground_color }};{% endif %} --tab-hover-bg: rgba(0,0,0,0.1);"{% endif %}>
                             <div class="fm-header{% if !header_color.is_empty() %} fm-header-colored{% endif %}" {% if !header_color.is_empty() %}style="background: {{ header_color }};"{% endif %}>
-                                <button class="fm-menu-toggle d-lg-none" onclick="document.body.classList.toggle('fm-sidebar-open')" aria-label="Toggle menu">
+                                {% if !menu_sections.is_empty() %}
+                                <button class="fm-menu-toggle d-xl-none" onclick="document.body.classList.toggle('fm-sidebar-open')" aria-label="Toggle menu">
                                     <span></span>
                                 </button>
+                                {% endif %}
                                 <div class="fm-header-title">
                                     <h1>{{ title }}</h1>
-                                    <a href="{{ sub_title_link }}" class="fm-header-sub">{{ sub_title }}</a>
+                                    <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}<a href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
                                 <div class="fm-header-actions">
+                                    <div class="fm-lang-dropdown">
+                                        <div class="fm-lang-current">
+                                            <span class="flag flag-{% if lang == "es" %}es{% else if lang == "ru" %}ru{% else %}us{% endif %}"></span>
+                                        </div>
+                                        <div class="fm-lang-menu">
+                                            <a class="fm-lang-option" data-lang="en">
+                                                <span class="flag flag-us"></span>
+                                                <span>English</span>
+                                            </a>
+                                            <a class="fm-lang-option" data-lang="es">
+                                                <span class="flag flag-es"></span>
+                                                <span>Español</span>
+                                            </a>
+                                            <a class="fm-lang-option" data-lang="ru">
+                                                <span class="flag flag-ru"></span>
+                                                <span>Русский</span>
+                                            </a>
+                                        </div>
+                                    </div>
                                     <div class="fm-date">
                                         <div class="fm-date-main" id="date-up"></div>
                                         <div class="fm-date-sub" id="date-down"></div>
@@ -53,7 +74,7 @@
                                     <div class="fm-process-btn"
                                          hx-post="/api/game/process"
                                          hx-disabled-elt="this">
-                                        <span class="fm-process-label">Process</span>
+                                        <span class="fm-process-label">{{ i18n.t("process") }}</span>
                                         <div class="spinner-wrapper" id="process-spinner">
                                             <div class="spinner"></div>
                                         </div>
@@ -79,6 +100,25 @@
             } catch(e) {}
         }
         updateDate();
+
+        document.querySelectorAll('.fm-lang-option').forEach(function(el) {
+            var lang = el.dataset.lang;
+            var path = window.location.pathname.replace(/^\/[a-z]{2}(\/|$)/, '/' + lang + '$1');
+            if (path === '/' + lang) path = '/' + lang;
+            el.href = path;
+        });
+
+        (function() {
+            var dd = document.querySelector('.fm-lang-dropdown');
+            if (!dd) return;
+            dd.addEventListener('click', function(e) {
+                if (e.target.closest('.fm-lang-option')) return;
+                dd.classList.toggle('fm-lang-open');
+            });
+            document.addEventListener('click', function(e) {
+                if (!dd.contains(e.target)) dd.classList.remove('fm-lang-open');
+            });
+        })();
     </script>
     {% block scripts %}{% endblock %}
 

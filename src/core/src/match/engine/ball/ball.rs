@@ -1018,6 +1018,21 @@ impl Ball {
         self.clear_pass_history();
     }
 
+    pub fn clear_player_reference(&mut self, player_id: u32) {
+        if self.current_owner == Some(player_id) {
+            self.current_owner = None;
+            self.ownership_duration = 0;
+        }
+        if self.previous_owner == Some(player_id) {
+            self.previous_owner = None;
+        }
+        if self.pass_target_player_id == Some(player_id) {
+            self.pass_target_player_id = None;
+        }
+        self.take_ball_notified_players.retain(|&id| id != player_id);
+        self.recent_passers.retain(|&id| id != player_id);
+    }
+
     /// Record a passer in the recent passers ring buffer.
     /// Skips consecutive duplicates and caps at 5 entries.
     pub fn record_passer(&mut self, passer_id: u32) {

@@ -14,6 +14,7 @@ use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct LeagueGetRequest {
+    pub lang: String,
     pub league_slug: String,
 }
 
@@ -22,11 +23,15 @@ pub struct LeagueGetRequest {
 pub struct LeagueGetTemplate {
     pub css_version: &'static str,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub league_slug: String,
     pub table_rows: Vec<LeagueTableRow>,
     pub current_tour_schedule: Vec<TourSchedule>,
@@ -98,6 +103,7 @@ pub async fn league_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<LeagueGetRequest>,
 ) -> ApiResult<impl IntoResponse> {
+    let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
     let simulator_data = guard.as_ref().unwrap();
@@ -356,11 +362,13 @@ pub async fn league_get_action(
     Ok(LeagueGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: league.name.clone(),
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
-        sub_title_link: format!("/countries/{}", &country.slug),
+        sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
         header_color: String::new(),
         foreground_color: String::new(),
-        menu_sections: views::league_menu(&country.name, &country.slug, &league.name, &league.slug, &format!("/leagues/{}", &league.slug)),
+        menu_sections: views::league_menu(&i18n, &route_params.lang, &country.name, &country.slug, &league.name, &league.slug, &format!("/{}/leagues/{}", &route_params.lang, &league.slug)),
         league_slug: league.slug.clone(),
         table_rows,
         current_tour_schedule,
@@ -368,5 +376,7 @@ pub async fn league_get_action(
         top_scorers,
         top_assisters,
         top_rated,
+        lang: route_params.lang,
+        i18n,
     })
 }

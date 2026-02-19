@@ -2,12 +2,12 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/tactics">Tactics</a>
-    <a class="fm-tab active" href="/teams/{{ team_slug }}/schedule">Schedule</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/transfers">Transfers</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -15,17 +15,17 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Schedule</h3>
+            <h3>{{ i18n.t("schedule") }}</h3>
         </div>
         <table class="fm-schedule">
             <thead>
                 <tr>
-                    <th class="sch-date">Date</th>
-                    <th class="sch-time">Time</th>
-                    <th>Opposition</th>
-                    <th class="sch-venue">Venue</th>
-                    <th class="sch-result">Result</th>
-                    <th>Competition</th>
+                    <th class="sch-date">{{ i18n.t("date") }}</th>
+                    <th class="sch-time">{{ i18n.t("time") }}</th>
+                    <th>{{ i18n.t("opposition") }}</th>
+                    <th class="sch-venue">{{ i18n.t("venue") }}</th>
+                    <th class="sch-result">{{ i18n.t("result") }}</th>
+                    <th>{{ i18n.t("competition") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -34,16 +34,16 @@
                     <td class="sch-date">{{ item.date }}</td>
                     <td class="sch-time">{{ item.time }}</td>
                     <td>
-                        <a href="/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>
+                        <a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>
                     </td>
                     <td class="sch-venue">
                         <span class="fm-venue {% if item.is_home %}venue-h{% else %}venue-a{% endif %}">
-                            {% if item.is_home %}H{% else %}A{% endif %}
+                            {% if item.is_home %}{{ i18n.t("h") }}{% else %}{{ i18n.t("a") }}{% endif %}
                         </span>
                     </td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
-                        <a href="/match/{{ league_slug }}/{{ result.match_id }}" class="fm-result">
+                        <a href="/{{ lang }}/match/{{ league_slug }}/{{ result.match_id }}" class="fm-result">
                             {{ result.home_goals }} – {{ result.away_goals }}
                         </a>
                         {% else %}

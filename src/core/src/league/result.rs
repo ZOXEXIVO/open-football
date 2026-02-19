@@ -87,7 +87,7 @@ impl LeagueResult {
                 player.statistics.played += 1;
             }
         }
-        for player_id in &details.left_team_players.substitutes {
+        for player_id in &details.left_team_players.substitutes_used {
             if let Some(player) = data.player_mut(*player_id) {
                 player.statistics.played_subs += 1;
             }
@@ -97,7 +97,7 @@ impl LeagueResult {
                 player.statistics.played += 1;
             }
         }
-        for player_id in &details.right_team_players.substitutes {
+        for player_id in &details.right_team_players.substitutes_used {
             if let Some(player) = data.player_mut(*player_id) {
                 player.statistics.played_subs += 1;
             }

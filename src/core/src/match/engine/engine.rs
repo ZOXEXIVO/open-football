@@ -5,8 +5,8 @@ use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::PlayerMatchEndStats;
-use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, Score, StateManager};
-use crate::{PlayerFieldPositionGroup, Tactics};
+use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
+use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
 use nalgebra::Vector3;
 use std::collections::HashMap;
 
@@ -51,6 +51,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 Self::play_inner(&mut field, &mut context, &mut match_position_data);
 
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
+
+            // Halftime substitutions: after first half finishes, make up to 3 subs per team
+            if state == MatchState::FirstHalf {
+                Self::process_substitutions(&mut field, &mut context, 3);
+            }
         }
 
         let mut result = MatchResultRaw::with_match_time(context.total_match_time);
@@ -73,6 +78,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Home team is on the right side (after swap)
             result.left_team_players = right_side_squad;
             result.right_team_players = left_side_squad;
+        }
+
+        // Mark substitutes used in FieldSquads and copy substitution records to result
+        for sub_record in &context.substitutions {
+            if sub_record.team_id == result.left_team_players.team_id {
+                result.left_team_players.mark_substitute_used(sub_record.player_in_id);
+            } else {
+                result.right_team_players.mark_substitute_used(sub_record.player_in_id);
+            }
+
+            result.substitutions.push(SubstitutionInfo {
+                team_id: sub_record.team_id,
+                player_out_id: sub_record.player_out_id,
+                player_in_id: sub_record.player_in_id,
+                match_time_ms: sub_record.match_time,
+            });
         }
 
         result.position_data = match_position_data;
@@ -132,8 +153,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) -> PlayMatchStateResult {
         let result = PlayMatchStateResult::default();
 
+        // Track last substitution check time for periodic second-half subs
+        let mut last_sub_check_ms: u64 = 0;
+        // Check every 15 game-minutes during second half
+        const SUB_CHECK_INTERVAL_MS: u64 = 15 * 60 * 1000;
+
         while context.increment_time() {
             Self::game_tick(field, context, match_data);
+
+            // Periodic substitution check during second half
+            if context.state.match_state == MatchState::SecondHalf {
+                let period_time = context.time.time;
+                if period_time >= last_sub_check_ms + SUB_CHECK_INTERVAL_MS {
+                    last_sub_check_ms = period_time;
+                    Self::process_substitutions(field, context, 1);
+                }
+            }
         }
 
         result
@@ -194,6 +229,132 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .iter_mut()
             .map(|player| player.update(context, tick_context, events))
             .collect()
+    }
+
+    fn process_substitutions(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        max_subs_per_team: usize,
+    ) {
+        let team_ids = [field.home_team_id, field.away_team_id];
+
+        for &team_id in &team_ids {
+            if !context.can_substitute(team_id) {
+                continue;
+            }
+
+            // Collect candidates to substitute off, sorted by condition (worst first)
+            let mut tired_players: Vec<(u32, i16, PlayerPositionType)> = field
+                .players
+                .iter()
+                .filter(|p| p.team_id == team_id)
+                .filter(|p| {
+                    let condition = p.player_attributes.condition;
+                    let is_gk = p.tactical_position.current_position == PlayerPositionType::Goalkeeper;
+                    if is_gk {
+                        // Only sub GK if critically low
+                        condition < 2000
+                    } else {
+                        condition < 5000
+                    }
+                })
+                .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
+                .collect();
+
+            // Sort by condition ascending (most tired first)
+            tired_players.sort_by_key(|&(_, cond, _)| cond);
+
+            let mut subs_made = 0;
+            for (player_out_id, _, position) in &tired_players {
+                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                    break;
+                }
+
+                // Check if there are bench players available for this team
+                let has_bench = field.substitutes.iter().any(|p| p.team_id == team_id);
+                if !has_bench {
+                    break;
+                }
+
+                let position_group = position.position_group();
+
+                // Try to find a bench player with matching position group
+                let sub_id = Self::find_best_substitute(field, team_id, position_group);
+
+                if let Some(player_in_id) = sub_id {
+                    if field.substitute_player(*player_out_id, player_in_id) {
+                        context.record_substitution(
+                            team_id,
+                            *player_out_id,
+                            player_in_id,
+                            context.total_match_time,
+                        );
+
+                        // Remove substituted-out player from context so AI
+                        // strategies don't try to look up their position
+                        context.players.remove_player(*player_out_id);
+
+                        // Mark in the appropriate FieldSquad
+                        let left_squad = field.left_side_players.as_mut();
+                        let right_squad = field.right_side_players.as_mut();
+                        if let Some(squad) = left_squad {
+                            if squad.team_id == team_id {
+                                squad.mark_substitute_used(player_in_id);
+                            }
+                        }
+                        if let Some(squad) = right_squad {
+                            if squad.team_id == team_id {
+                                squad.mark_substitute_used(player_in_id);
+                            }
+                        }
+
+                        subs_made += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    fn find_best_substitute(
+        field: &MatchField,
+        team_id: u32,
+        position_group: PlayerFieldPositionGroup,
+    ) -> Option<u32> {
+        let team_subs: Vec<&MatchPlayer> = field
+            .substitutes
+            .iter()
+            .filter(|p| p.team_id == team_id)
+            .collect();
+
+        if team_subs.is_empty() {
+            return None;
+        }
+
+        // Try to find a sub with matching position group
+        let position_match = team_subs
+            .iter()
+            .filter(|p| p.tactical_position.current_position.position_group() == position_group)
+            .max_by_key(|p| p.player_attributes.current_ability);
+
+        if let Some(sub) = position_match {
+            return Some(sub.id);
+        }
+
+        // Fallback: best available outfield sub (avoid using GK as outfield replacement)
+        let fallback = team_subs
+            .iter()
+            .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
+            .max_by_key(|p| p.player_attributes.current_ability);
+
+        if let Some(sub) = fallback {
+            return Some(sub.id);
+        }
+
+        // Last resort: any available sub
+        team_subs
+            .iter()
+            .max_by_key(|p| p.player_attributes.current_ability)
+            .map(|p| p.id)
     }
 
     /// Calculate a Football Manager-style match rating (1.0 - 10.0, base 6.0)
@@ -412,6 +573,10 @@ impl MatchPlayerCollection {
 
     pub fn raw_players(&self) -> Vec<&MatchPlayer> {
         self.players.values().collect()
+    }
+
+    pub fn remove_player(&mut self, player_id: u32) {
+        self.players.remove(&player_id);
     }
 }
 

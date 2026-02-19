@@ -2,12 +2,12 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab" href="/teams/{{ team_slug }}">Squad</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/tactics">Tactics</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/schedule">Schedule</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/stats">Stats</a>
-    <a class="fm-tab active" href="/teams/{{ team_slug }}/transfers">Transfers</a>
-    <a class="fm-tab" href="/teams/{{ team_slug }}/history">History</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -15,24 +15,24 @@
 <div class="fm-page">
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Transfer List</h3>
+            <h3>{{ i18n.t("transfer_list") }}</h3>
             <span class="fm-panel-count">{{ items.len() }}</span>
         </div>
         {% if items.is_empty() %}
-        <div class="fm-empty">No players on the transfer list</div>
+        <div class="fm-empty">{{ i18n.t("no_transfer_list") }}</div>
         {% else %}
         <table class="fm-squad">
             <thead>
                 <tr>
-                    <th>Player</th>
-                    <th>Position</th>
-                    <th>Value</th>
+                    <th>{{ i18n.t("player") }}</th>
+                    <th>{{ i18n.t("position") }}</th>
+                    <th>{{ i18n.t("value") }}</th>
                 </tr>
             </thead>
             <tbody>
                 {% for item in items %}
                 <tr>
-                    <td class="sq-name"><a href="/teams/{{ team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
                     <td class="sq-pos">{{ item.position }}</td>
                     <td>{{ item.value }}</td>
                 </tr>
@@ -45,26 +45,26 @@
     <div class="fm-transfers-row">
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Incoming Transfers</h3>
+                <h3>{{ i18n.t("incoming_transfers") }}</h3>
                 <span class="fm-panel-count">{{ incoming_transfers.len() }}</span>
             </div>
             {% if incoming_transfers.is_empty() %}
-            <div class="fm-empty">No incoming transfers</div>
+            <div class="fm-empty">{{ i18n.t("no_incoming_transfers") }}</div>
             {% else %}
             <table class="fm-squad">
                 <thead>
                     <tr>
-                        <th>Player</th>
-                        <th>From</th>
-                        <th>Fee</th>
-                        <th>Date</th>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("from") }}</th>
+                        <th>{{ i18n.t("fee") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in incoming_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.fee }}</td>
                         <td>{{ item.date }}</td>
                     </tr>
@@ -76,26 +76,26 @@
 
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Outgoing Transfers</h3>
+                <h3>{{ i18n.t("outgoing_transfers") }}</h3>
                 <span class="fm-panel-count">{{ outgoing_transfers.len() }}</span>
             </div>
             {% if outgoing_transfers.is_empty() %}
-            <div class="fm-empty">No outgoing transfers</div>
+            <div class="fm-empty">{{ i18n.t("no_outgoing_transfers") }}</div>
             {% else %}
             <table class="fm-squad">
                 <thead>
                     <tr>
-                        <th>Player</th>
-                        <th>To</th>
-                        <th>Fee</th>
-                        <th>Date</th>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th>{{ i18n.t("fee") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in outgoing_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.fee }}</td>
                         <td>{{ item.date }}</td>
                     </tr>
@@ -109,26 +109,26 @@
     <div class="fm-transfers-row">
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Incoming Loans</h3>
+                <h3>{{ i18n.t("incoming_loans") }}</h3>
                 <span class="fm-panel-count">{{ incoming_loans.len() }}</span>
             </div>
             {% if incoming_loans.is_empty() %}
-            <div class="fm-empty">No incoming loans</div>
+            <div class="fm-empty">{{ i18n.t("no_incoming_loans") }}</div>
             {% else %}
             <table class="fm-squad">
                 <thead>
                     <tr>
-                        <th>Player</th>
-                        <th>From</th>
-                        <th>Date</th>
-                        <th>End Date</th>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("from") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
+                        <th>{{ i18n.t("end_date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in incoming_loans %}
                     <tr>
-                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.date }}</td>
                         <td>{{ item.end_date }}</td>
                     </tr>
@@ -140,26 +140,26 @@
 
         <section class="fm-panel">
             <div class="fm-panel-head">
-                <h3>Outgoing Loans</h3>
+                <h3>{{ i18n.t("outgoing_loans") }}</h3>
                 <span class="fm-panel-count">{{ outgoing_loans.len() }}</span>
             </div>
             {% if outgoing_loans.is_empty() %}
-            <div class="fm-empty">No outgoing loans</div>
+            <div class="fm-empty">{{ i18n.t("no_outgoing_loans") }}</div>
             {% else %}
             <table class="fm-squad">
                 <thead>
                     <tr>
-                        <th>Player</th>
-                        <th>To</th>
-                        <th>Date</th>
-                        <th>End Date</th>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
+                        <th>{{ i18n.t("end_date") }}</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for item in outgoing_loans %}
                     <tr>
-                        <td class="sq-name"><a href="/teams/{{ item.player_team_slug }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                        <td><a href="/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.date }}</td>
                         <td>{{ item.end_date }}</td>
                     </tr>

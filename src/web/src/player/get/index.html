@@ -2,9 +2,9 @@
 
 {% block submenu %}
 <div class="fm-tabbar">
-    <a class="fm-tab active" href="/teams/{{ player.team_slug }}/players/{{ player.id }}">Overview</a>
-    <a class="fm-tab" href="/teams/{{ player.team_slug }}/players/{{ player.id }}/matches">Matches</a>
-    <a class="fm-tab" href="/teams/{{ player.team_slug }}/players/{{ player.id }}/history">History</a>
+    <a class="fm-tab active" href="/{{ lang }}/players/{{ player.id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/matches">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
@@ -20,38 +20,38 @@
             </div>
             <div class="fm-ph-identity">
                 <div class="fm-ph-name-row">
-                    <a href="/countries/{{ player.country_slug }}" class="fm-ph-flag">
+                    <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
                         <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                     </a>
                     <h2 class="fm-ph-name">{{ player.first_name }} {{ player.last_name }}</h2>
                 </div>
                 <div class="fm-ph-meta">
-                    <span class="fm-ph-nat">{{ player.country_name }}</span>
+                    <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-nat">{{ player.country_name }}</a>
                     <span class="fm-ph-sep"></span>
-                    <span class="fm-ph-age">{{ player.age }} years old</span>
+                    <span class="fm-ph-age">{{ player.age }} {{ i18n.t("years_old") }}</span>
                     <span class="fm-ph-sep"></span>
                     <span class="fm-ph-born">{{ player.birth_date }}</span>
                 </div>
                 {% if let Some(loan) = player.loan_status %}
                 <div class="fm-ph-loan">
                     {% if loan.is_loan_in %}
-                    <span class="fm-ph-loan-label loan-in">On loan</span> <span class="fm-ph-loan-text">from <a href="/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                    <span class="fm-ph-loan-label loan-in">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">from <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
                     {% else %}
-                    <span class="fm-ph-loan-label loan-out">On loan</span> <span class="fm-ph-loan-text">to <a href="/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                    <span class="fm-ph-loan-label loan-out">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">to <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
                     {% endif %}
                 </div>
                 {% endif %}
                 <div class="fm-ph-ratings">
                     <div class="fm-ph-rating-item">
-                        <span class="fm-ph-rlabel">Ability</span>
+                        <span class="fm-ph-rlabel">{{ i18n.t("ability") }}</span>
                         <span class="fm-stars fm-stars-lg">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
                     </div>
                     <div class="fm-ph-rating-item">
-                        <span class="fm-ph-rlabel">Potential</span>
+                        <span class="fm-ph-rlabel">{{ i18n.t("potential") }}</span>
                         <span class="fm-stars fm-stars-lg">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
                     </div>
                     <div class="fm-ph-rating-item fm-ph-cond-item">
-                        <span class="fm-ph-rlabel">Condition</span>
+                        <span class="fm-ph-rlabel">{{ i18n.t("condition") }}</span>
                         <div class="fm-cond">
                             <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
@@ -63,22 +63,22 @@
         <div class="fm-ph-details">
             <div class="fm-ph-col">
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Club</span>
-                    <span class="fm-detail-value"><a href="/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
+                    <span class="fm-detail-label">{{ i18n.t("club") }}</span>
+                    <span class="fm-detail-value"><a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
                 </div>
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Preferred Foot</span>
+                    <span class="fm-detail-label">{{ i18n.t("preferred_foot") }}</span>
                     <span class="fm-detail-value">{{ player.preferred_foot }}</span>
                 </div>
             </div>
             <div class="fm-ph-col">
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Value</span>
+                    <span class="fm-detail-label">{{ i18n.t("value") }}</span>
                     <span class="fm-detail-value fm-val-highlight">${{ player.value }}</span>
                 </div>
                 {% if let Some(contract) = player.contract %}
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Wage</span>
+                    <span class="fm-detail-label">{{ i18n.t("wage") }}</span>
                     <span class="fm-detail-value">${{ contract.salary }}K p/w</span>
                 </div>
                 {% endif %}
@@ -86,23 +86,23 @@
             <div class="fm-ph-col">
                 {% if let Some(contract) = player.contract %}
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Contract</span>
+                    <span class="fm-detail-label">{{ i18n.t("contract") }}</span>
                     <span class="fm-detail-value">until {{ contract.expiration }}</span>
                 </div>
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">Status</span>
+                    <span class="fm-detail-label">{{ i18n.t("status") }}</span>
                     <span class="fm-detail-value">{{ contract.squad_status }}</span>
                 </div>
                 {% endif %}
             </div>
             <div class="fm-ph-col">
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">International</span>
+                    <span class="fm-detail-label">{{ i18n.t("international") }}</span>
                     <span class="fm-detail-value">{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</span>
                 </div>
                 {% if player.player_attributes.under_21_international_apps > 0 %}
                 <div class="fm-detail-row">
-                    <span class="fm-detail-label">U21</span>
+                    <span class="fm-detail-label">{{ i18n.t("u21") }}</span>
                     <span class="fm-detail-value">{{ player.player_attributes.under_21_international_apps }} caps / {{ player.player_attributes.under_21_international_goals }} goals</span>
                 </div>
                 {% endif %}
@@ -114,7 +114,7 @@
         <div class="fm-player-grid-left">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Positions</h3>
+                    <h3>{{ i18n.t("positions") }}</h3>
                 </div>
                 <div class="fp-pitch">
                     <div class="fp-field">
@@ -149,7 +149,7 @@
                     </div>
                 </div>
                 <div class="fm-pref-foot">
-                    <span class="fm-detail-label">Preferred foot</span>
+                    <span class="fm-detail-label">{{ i18n.t("preferred_foot") }}</span>
                     <span class="fm-detail-value">{{ player.preferred_foot }}</span>
                 </div>
             </section>
@@ -157,55 +157,55 @@
         <div class="fm-player-grid-right">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Attributes</h3>
+                    <h3>{{ i18n.t("attributes") }}</h3>
                 </div>
                 <div class="fm-skills-grid">
                     <div class="fm-skill-col">
-                        <h4>Technical</h4>
+                        <h4>{{ i18n.t("technical") }}</h4>
                         <table class="fm-skills">
-                            <tr><td>Corners</td><td class="td_{{ player.skills.technical.corners }}">{{ player.skills.technical.corners }}</td></tr>
-                            <tr><td>Crossing</td><td class="td_{{ player.skills.technical.crossing }}">{{ player.skills.technical.crossing }}</td></tr>
-                            <tr><td>Finishing</td><td class="td_{{ player.skills.technical.finishing }}">{{ player.skills.technical.finishing }}</td></tr>
-                            <tr><td>First touch</td><td class="td_{{ player.skills.technical.first_touch }}">{{ player.skills.technical.first_touch }}</td></tr>
-                            <tr><td>Free kick taking</td><td class="td_{{ player.skills.technical.free_kick_taking }}">{{ player.skills.technical.free_kick_taking }}</td></tr>
-                            <tr><td>Heading</td><td class="td_{{ player.skills.technical.heading }}">{{ player.skills.technical.heading }}</td></tr>
-                            <tr><td>Long shots</td><td class="td_{{ player.skills.technical.long_shots }}">{{ player.skills.technical.long_shots }}</td></tr>
-                            <tr><td>Long throws</td><td class="td_{{ player.skills.technical.long_throws }}">{{ player.skills.technical.long_throws }}</td></tr>
-                            <tr><td>Marking</td><td class="td_{{ player.skills.technical.marking }}">{{ player.skills.technical.marking }}</td></tr>
-                            <tr><td>Passing</td><td class="td_{{ player.skills.technical.passing }}">{{ player.skills.technical.passing }}</td></tr>
-                            <tr><td>Penalty taking</td><td class="td_{{ player.skills.technical.penalty_taking }}">{{ player.skills.technical.penalty_taking }}</td></tr>
-                            <tr><td>Tackling</td><td class="td_{{ player.skills.technical.tackling }}">{{ player.skills.technical.tackling }}</td></tr>
-                            <tr><td>Technique</td><td class="td_{{ player.skills.technical.technique }}">{{ player.skills.technical.technique }}</td></tr>
+                            <tr><td>{{ i18n.t("corners") }}</td><td class="td_{{ player.skills.technical.corners }}">{{ player.skills.technical.corners }}</td></tr>
+                            <tr><td>{{ i18n.t("crossing") }}</td><td class="td_{{ player.skills.technical.crossing }}">{{ player.skills.technical.crossing }}</td></tr>
+                            <tr><td>{{ i18n.t("finishing") }}</td><td class="td_{{ player.skills.technical.finishing }}">{{ player.skills.technical.finishing }}</td></tr>
+                            <tr><td>{{ i18n.t("first_touch") }}</td><td class="td_{{ player.skills.technical.first_touch }}">{{ player.skills.technical.first_touch }}</td></tr>
+                            <tr><td>{{ i18n.t("free_kick_taking") }}</td><td class="td_{{ player.skills.technical.free_kick_taking }}">{{ player.skills.technical.free_kick_taking }}</td></tr>
+                            <tr><td>{{ i18n.t("heading") }}</td><td class="td_{{ player.skills.technical.heading }}">{{ player.skills.technical.heading }}</td></tr>
+                            <tr><td>{{ i18n.t("long_shots") }}</td><td class="td_{{ player.skills.technical.long_shots }}">{{ player.skills.technical.long_shots }}</td></tr>
+                            <tr><td>{{ i18n.t("long_throws") }}</td><td class="td_{{ player.skills.technical.long_throws }}">{{ player.skills.technical.long_throws }}</td></tr>
+                            <tr><td>{{ i18n.t("marking") }}</td><td class="td_{{ player.skills.technical.marking }}">{{ player.skills.technical.marking }}</td></tr>
+                            <tr><td>{{ i18n.t("passing") }}</td><td class="td_{{ player.skills.technical.passing }}">{{ player.skills.technical.passing }}</td></tr>
+                            <tr><td>{{ i18n.t("penalty_taking") }}</td><td class="td_{{ player.skills.technical.penalty_taking }}">{{ player.skills.technical.penalty_taking }}</td></tr>
+                            <tr><td>{{ i18n.t("tackling") }}</td><td class="td_{{ player.skills.technical.tackling }}">{{ player.skills.technical.tackling }}</td></tr>
+                            <tr><td>{{ i18n.t("technique") }}</td><td class="td_{{ player.skills.technical.technique }}">{{ player.skills.technical.technique }}</td></tr>
                         </table>
                     </div>
                     <div class="fm-skill-col">
-                        <h4>Mental</h4>
+                        <h4>{{ i18n.t("mental") }}</h4>
                         <table class="fm-skills">
-                            <tr><td>Aggression</td><td class="td_{{ player.skills.mental.aggression }}">{{ player.skills.mental.aggression }}</td></tr>
-                            <tr><td>Anticipation</td><td class="td_{{ player.skills.mental.anticipation }}">{{ player.skills.mental.anticipation }}</td></tr>
-                            <tr><td>Composure</td><td class="td_{{ player.skills.mental.composure }}">{{ player.skills.mental.composure }}</td></tr>
-                            <tr><td>Concentration</td><td class="td_{{ player.skills.mental.concentration }}">{{ player.skills.mental.concentration }}</td></tr>
-                            <tr><td>Decisions</td><td class="td_{{ player.skills.mental.decisions }}">{{ player.skills.mental.decisions }}</td></tr>
-                            <tr><td>Determination</td><td class="td_{{ player.skills.mental.determination }}">{{ player.skills.mental.determination }}</td></tr>
-                            <tr><td>Flair</td><td class="td_{{ player.skills.mental.flair }}">{{ player.skills.mental.flair }}</td></tr>
-                            <tr><td>Leadership</td><td class="td_{{ player.skills.mental.leadership }}">{{ player.skills.mental.leadership }}</td></tr>
-                            <tr><td>Off the ball</td><td class="td_{{ player.skills.mental.off_the_ball }}">{{ player.skills.mental.off_the_ball }}</td></tr>
-                            <tr><td>Positioning</td><td class="td_{{ player.skills.mental.positioning }}">{{ player.skills.mental.positioning }}</td></tr>
-                            <tr><td>Teamwork</td><td class="td_{{ player.skills.mental.teamwork }}">{{ player.skills.mental.teamwork }}</td></tr>
-                            <tr><td>Vision</td><td class="td_{{ player.skills.mental.vision }}">{{ player.skills.mental.vision }}</td></tr>
-                            <tr><td>Work rate</td><td class="td_{{ player.skills.mental.work_rate }}">{{ player.skills.mental.work_rate }}</td></tr>
+                            <tr><td>{{ i18n.t("aggression") }}</td><td class="td_{{ player.skills.mental.aggression }}">{{ player.skills.mental.aggression }}</td></tr>
+                            <tr><td>{{ i18n.t("anticipation") }}</td><td class="td_{{ player.skills.mental.anticipation }}">{{ player.skills.mental.anticipation }}</td></tr>
+                            <tr><td>{{ i18n.t("composure") }}</td><td class="td_{{ player.skills.mental.composure }}">{{ player.skills.mental.composure }}</td></tr>
+                            <tr><td>{{ i18n.t("concentration") }}</td><td class="td_{{ player.skills.mental.concentration }}">{{ player.skills.mental.concentration }}</td></tr>
+                            <tr><td>{{ i18n.t("decisions") }}</td><td class="td_{{ player.skills.mental.decisions }}">{{ player.skills.mental.decisions }}</td></tr>
+                            <tr><td>{{ i18n.t("determination") }}</td><td class="td_{{ player.skills.mental.determination }}">{{ player.skills.mental.determination }}</td></tr>
+                            <tr><td>{{ i18n.t("flair") }}</td><td class="td_{{ player.skills.mental.flair }}">{{ player.skills.mental.flair }}</td></tr>
+                            <tr><td>{{ i18n.t("leadership") }}</td><td class="td_{{ player.skills.mental.leadership }}">{{ player.skills.mental.leadership }}</td></tr>
+                            <tr><td>{{ i18n.t("off_the_ball") }}</td><td class="td_{{ player.skills.mental.off_the_ball }}">{{ player.skills.mental.off_the_ball }}</td></tr>
+                            <tr><td>{{ i18n.t("positioning") }}</td><td class="td_{{ player.skills.mental.positioning }}">{{ player.skills.mental.positioning }}</td></tr>
+                            <tr><td>{{ i18n.t("teamwork") }}</td><td class="td_{{ player.skills.mental.teamwork }}">{{ player.skills.mental.teamwork }}</td></tr>
+                            <tr><td>{{ i18n.t("vision") }}</td><td class="td_{{ player.skills.mental.vision }}">{{ player.skills.mental.vision }}</td></tr>
+                            <tr><td>{{ i18n.t("work_rate") }}</td><td class="td_{{ player.skills.mental.work_rate }}">{{ player.skills.mental.work_rate }}</td></tr>
                         </table>
                     </div>
                     <div class="fm-skill-col">
-                        <h4>Physical</h4>
+                        <h4>{{ i18n.t("physical") }}</h4>
                         <table class="fm-skills">
-                            <tr><td>Acceleration</td><td class="td_{{ player.skills.physical.acceleration }}">{{ player.skills.physical.acceleration }}</td></tr>
-                            <tr><td>Agility</td><td class="td_{{ player.skills.physical.agility }}">{{ player.skills.physical.agility }}</td></tr>
-                            <tr><td>Jumping reach</td><td class="td_{{ player.skills.physical.jumping_reach }}">{{ player.skills.physical.jumping_reach }}</td></tr>
-                            <tr><td>Natural fitness</td><td class="td_{{ player.skills.physical.natural_fitness }}">{{ player.skills.physical.natural_fitness }}</td></tr>
-                            <tr><td>Pace</td><td class="td_{{ player.skills.physical.pace }}">{{ player.skills.physical.pace }}</td></tr>
-                            <tr><td>Stamina</td><td class="td_{{ player.skills.physical.stamina }}">{{ player.skills.physical.stamina }}</td></tr>
-                            <tr><td>Strength</td><td class="td_{{ player.skills.physical.strength }}">{{ player.skills.physical.strength }}</td></tr>
+                            <tr><td>{{ i18n.t("acceleration") }}</td><td class="td_{{ player.skills.physical.acceleration }}">{{ player.skills.physical.acceleration }}</td></tr>
+                            <tr><td>{{ i18n.t("agility") }}</td><td class="td_{{ player.skills.physical.agility }}">{{ player.skills.physical.agility }}</td></tr>
+                            <tr><td>{{ i18n.t("jumping_reach") }}</td><td class="td_{{ player.skills.physical.jumping_reach }}">{{ player.skills.physical.jumping_reach }}</td></tr>
+                            <tr><td>{{ i18n.t("natural_fitness") }}</td><td class="td_{{ player.skills.physical.natural_fitness }}">{{ player.skills.physical.natural_fitness }}</td></tr>
+                            <tr><td>{{ i18n.t("pace") }}</td><td class="td_{{ player.skills.physical.pace }}">{{ player.skills.physical.pace }}</td></tr>
+                            <tr><td>{{ i18n.t("stamina") }}</td><td class="td_{{ player.skills.physical.stamina }}">{{ player.skills.physical.stamina }}</td></tr>
+                            <tr><td>{{ i18n.t("strength") }}</td><td class="td_{{ player.skills.physical.strength }}">{{ player.skills.physical.strength }}</td></tr>
                         </table>
                     </div>
                 </div>
@@ -215,28 +215,28 @@
 
     <section class="fm-panel mt-3">
         <div class="fm-panel-head">
-            <h3>Statistics</h3>
+            <h3>{{ i18n.t("statistics") }}</h3>
         </div>
         <table class="fm-stats">
             <thead>
                 <tr>
-                    <th>Competition</th>
-                    <th>Apps</th>
-                    <th>Gls</th>
-                    <th>Ast</th>
-                    <th>Pen</th>
-                    <th>PoM</th>
-                    <th>YC</th>
-                    <th>RC</th>
-                    <th>SoT</th>
-                    <th>PAS%</th>
-                    <th>TCK W</th>
-                    <th>AV RAT</th>
+                    <th>{{ i18n.t("competition") }}</th>
+                    <th>{{ i18n.t("apps") }}</th>
+                    <th>{{ i18n.t("gls") }}</th>
+                    <th>{{ i18n.t("ast") }}</th>
+                    <th>{{ i18n.t("pen") }}</th>
+                    <th>{{ i18n.t("pom") }}</th>
+                    <th>{{ i18n.t("yc") }}</th>
+                    <th>{{ i18n.t("rc") }}</th>
+                    <th>{{ i18n.t("sot") }}</th>
+                    <th>{{ i18n.t("pass_pct") }}</th>
+                    <th>{{ i18n.t("tck_w") }}</th>
+                    <th>{{ i18n.t("av_rat") }}</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td>League</td>
+                    <td>{{ i18n.t("league") }}</td>
                     <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
                     <td>{{ player.statistics.goals }}</td>
                     <td>{{ player.statistics.assists }}</td>

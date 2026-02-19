@@ -11,12 +11,13 @@ use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
 use core::transfers::TransferType;
-use core::utils::FormattingUtils;
+use core::utils::{DateUtils, FormattingUtils};
 use core::{SimulatorData, Team};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
 pub struct TeamGetRequest {
+    pub lang: String,
     pub team_slug: String,
 }
 
@@ -24,7 +25,11 @@ pub struct TeamGetRequest {
 #[template(path = "teams/get/index.html")]
 pub struct TeamGetTemplate {
     pub css_version: &'static str,
+    pub i18n: crate::I18n,
+    pub lang: String,
     pub title: String,
+    pub sub_title_prefix: String,
+    pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
     pub header_color: String,
@@ -36,7 +41,6 @@ pub struct TeamGetTemplate {
 
 pub struct TeamPlayer {
     pub id: u32,
-    pub player_team_slug: String,
     pub last_name: String,
     pub first_name: String,
     pub behaviour: String,
@@ -53,6 +57,9 @@ pub struct TeamPlayer {
     pub conditions: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
+    pub age: u8,
+    pub played: u16,
+    pub played_subs: u16,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
 }
@@ -66,6 +73,8 @@ pub async fn team_get_action(
     let simulator_data = guard
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
+
+    let i18n = state.i18n.for_lang(&route_params.lang);
 
     let indexes = simulator_data
         .indexes
@@ -86,7 +95,6 @@ pub async fn team_get_action(
     let now = simulator_data.date.date();
 
     let club_id = team.club_id;
-    let team_slug_owned = team.slug.clone();
 
     // Build a set of player IDs loaned IN to this club from transfer history
     let loaned_in_player_ids: Vec<u32> = simulator_data
@@ -119,7 +127,6 @@ pub async fn team_get_action(
 
             Some(TeamPlayer {
                 id: p.id,
-                player_team_slug: team_slug_owned.clone(),
                 first_name: p.full_name.first_name.clone(),
                 position_sort: p.position(),
                 position,
@@ -136,6 +143,9 @@ pub async fn team_get_action(
                 value: FormattingUtils::format_money(p.value(now)),
                 current_ability: get_current_ability_stars(p),
                 potential_ability: get_potential_ability_stars(p),
+                age: DateUtils::age(p.birth_date, now),
+                played: p.statistics.played,
+                played_subs: p.statistics.played_subs,
                 status: PlayerStatusDto::new(p.statuses.get()),
             })
         })
@@ -172,13 +182,12 @@ pub async fn team_get_action(
                 None
             });
 
-            if let Some((player, loan_team_slug)) = found {
+            if let Some((player, _)) = found {
                 let player_country = simulator_data.country(player.country_id);
                 let position = player.positions.display_positions().join(", ");
 
                 players.push(TeamPlayer {
                     id: player.id,
-                    player_team_slug: loan_team_slug,
                     first_name: player.full_name.first_name.clone(),
                     position_sort: player.position(),
                     position,
@@ -195,6 +204,9 @@ pub async fn team_get_action(
                     value: FormattingUtils::format_money(player.value(now)),
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars(player),
+                    age: DateUtils::age(player.birth_date, now),
+                    played: player.statistics.played,
+                    played_subs: player.statistics.played_subs,
                     status: PlayerStatusDto::new(player.statuses.get()),
                 });
             }
@@ -210,17 +222,24 @@ pub async fn team_get_action(
         })
     });
 
-    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data)?;
+    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+
+    let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug));
+    let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };
 
     Ok(TeamGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        title: team.name.clone(),
+        i18n,
+        lang: route_params.lang.clone(),
+        title,
+        sub_title_prefix: String::new(),
+        sub_title_suffix: String::new(),
         sub_title: league.map(|l| l.name.clone()).unwrap_or_default(),
-        sub_title_link: league.map(|l| format!("/leagues/{}", &l.slug)).unwrap_or_default(),
+        sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
         foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
-        menu_sections: views::team_menu(&neighbor_refs, &team.slug, &format!("/teams/{}", &team.slug)),
+        menu_sections,
         team_slug: team.slug.clone(),
         players,
     })
@@ -229,6 +248,7 @@ pub async fn team_get_action(
 fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
+    i18n: &crate::I18n,
 ) -> Result<Vec<(String, String)>, ApiError> {
     let club = data
         .club(club_id)
@@ -238,7 +258,7 @@ fn get_neighbor_teams(
         .teams
         .teams
         .iter()
-        .map(|team| (team.team_type.to_string(), team.slug.clone(), team.reputation.world))
+        .map(|team| (i18n.t(team.team_type.as_i18n_key()).to_string(), team.slug.clone(), team.reputation.world))
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));

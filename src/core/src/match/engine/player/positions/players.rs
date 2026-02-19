@@ -21,7 +21,11 @@ impl PlayerFieldData {
             .iter()
             .find(|p| p.player_id == player_id)
             .map(|p| p.position)
-            .unwrap_or_else(|| panic!("no position for player = {}", player_id))
+            .unwrap_or_else(|| Vector3::new(-1000.0, -1000.0, 0.0))
+    }
+
+    pub fn has_player(&self, player_id: u32) -> bool {
+        self.items.iter().any(|p| p.player_id == player_id)
     }
 
     pub fn velocity(&self, player_id: u32) -> Vector3<f32> {
@@ -29,7 +33,7 @@ impl PlayerFieldData {
             .iter()
             .find(|p| p.player_id == player_id)
             .map(|p| p.velocity)
-            .unwrap_or_else(|| panic!("no velocity for player = {}", player_id))
+            .unwrap_or_else(|| Vector3::zeros())
     }
 }
 
