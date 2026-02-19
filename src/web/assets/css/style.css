@@ -1967,11 +1967,21 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
    MATCH - PIXI CONTAINER & TIME SCROLLBAR
    ============================================ */
 
+#match-container {
+  width: 100%;
+  overflow: hidden;
+}
+
 .match-container {
   width: 100%;
-  height: 100%;
   overflow: hidden;
   position: relative;
+}
+
+.match-container canvas {
+  display: block;
+  width: 100% !important;
+  height: auto !important;
 }
 
 .time-scrollbar-wrapper {

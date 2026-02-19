@@ -261,10 +261,8 @@ pub async fn match_get_action(
         .collect();
 
     let title = format!(
-        "{} {} - {} {}",
+        "{} - {}",
         home_team.name,
-        home_goals,
-        away_goals,
         away_team.name
     );
 

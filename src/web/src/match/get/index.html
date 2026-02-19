@@ -586,13 +586,13 @@
 
     function resizeApp() {
         if (!app || !background || !gameContainer) return;
-        const parent = document.getElementById('pixi-container').parentElement;
-        let w = parent.clientWidth;
-        let h = parent.clientHeight || (w / aspectRatio);
+        const container = document.getElementById('pixi-container');
+        // Reset canvas inline size so the container can shrink freely
+        app.canvas.style.width = '';
+        app.canvas.style.height = '';
 
-        const ar = w / h;
-        if (ar > aspectRatio) w = h * aspectRatio;
-        else h = w / aspectRatio;
+        let w = container.clientWidth;
+        let h = w / aspectRatio;
 
         app.renderer.resize(w, h);
         const scale = Math.min(w / maxWidth, h / maxHeight);
@@ -603,6 +603,10 @@
         );
         background.width = maxWidth;
         background.height = maxHeight;
+
+        // Let CSS handle responsive scaling
+        app.canvas.style.width = '100%';
+        app.canvas.style.height = 'auto';
     }
 
     init();
