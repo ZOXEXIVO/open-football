@@ -42,6 +42,9 @@
                         {% if player.transfer_listed %}
                         <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                         {% endif %}
+                        {% if player.is_youth %}
+                        <span class="fm-badge fm-badge-yth">Yth</span>
+                        {% endif %}
                     </td>
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">

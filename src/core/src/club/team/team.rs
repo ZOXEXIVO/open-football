@@ -32,6 +32,17 @@ impl TeamType {
             TeamType::U23 => "under_23s",
         }
     }
+
+    /// Maximum player age allowed on this team type (None = no limit)
+    pub fn max_age(&self) -> Option<u8> {
+        match self {
+            TeamType::U18 => Some(18),
+            TeamType::U19 => Some(19),
+            TeamType::U21 => Some(21),
+            TeamType::U23 => Some(23),
+            TeamType::B | TeamType::Main => None,
+        }
+    }
 }
 
 impl fmt::Display for TeamType {

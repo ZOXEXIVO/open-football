@@ -34,17 +34,31 @@ pub enum PositionType {
 }
 
 impl PlayerGenerator {
-    pub fn generate(&mut self, country_id: u32, position: PositionType, team_reputation: u16) -> Player {
+    pub fn generate(&mut self, country_id: u32, position: PositionType, team_reputation: u16, min_age: i32, max_age: i32, is_youth: bool) -> Player {
         let now = Utc::now();
 
         let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
 
-        let year = IntegerUtils::random(now.year() - 35, now.year() - 15) as u32;
+        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
 
         let salary_min = (2000.0 + rep_factor * 30000.0) as i32;
         let salary_max = (10000.0 + rep_factor * 190000.0) as i32;
+
+        let base_salary = IntegerUtils::random(salary_min, salary_max) as u32;
+        let salary = if is_youth {
+            base_salary / IntegerUtils::random(10, 100) as u32
+        } else {
+            base_salary
+        };
+        let expiration = NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap();
+
+        let contract = if is_youth {
+            PlayerClubContract::new_youth(salary, expiration)
+        } else {
+            PlayerClubContract::new(salary, expiration)
+        };
 
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
@@ -57,10 +71,7 @@ impl PlayerGenerator {
             .skills(Self::generate_skills(rep_factor))
             .attributes(Self::generate_person_attributes())
             .player_attributes(Self::generate_player_attributes(rep_factor))
-            .contract(Some(PlayerClubContract::new(
-                IntegerUtils::random(salary_min, salary_max) as u32,
-                NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap(),
-            )))
+            .contract(Some(contract))
             .positions(Self::generate_positions(position))
             .build()
             .expect("Failed to build Player")

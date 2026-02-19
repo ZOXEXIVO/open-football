@@ -5,6 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::transfers::TransferType;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
 
@@ -42,6 +43,7 @@ pub struct CompletedTransferItem {
     pub to_team: String,
     pub to_team_slug: String,
     pub fee: String,
+    pub is_loan: bool,
     pub date: String,
 }
 
@@ -126,6 +128,7 @@ pub async fn league_transfers_action(
                 to_team: t.to_team_name.clone(),
                 to_team_slug,
                 fee: FormattingUtils::format_money(t.fee.amount),
+                is_loan: matches!(&t.transfer_type, TransferType::Loan(_)),
                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
             }
         })

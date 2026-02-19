@@ -51,6 +51,7 @@ pub struct TeamPlayer {
     pub transfer_listed: bool,
     pub is_loan: bool,
     pub is_loaned_out: bool,
+    pub is_youth: bool,
     pub country_slug: String,
     pub country_code: String,
     pub country_name: String,
@@ -125,6 +126,10 @@ pub async fn team_get_action(
                 .unwrap_or(false)
                 || loaned_in_player_ids.contains(&p.id);
 
+            let is_youth = p.contract.as_ref()
+                .map(|c| c.contract_type == ContractType::Youth)
+                .unwrap_or(false);
+
             Some(TeamPlayer {
                 id: p.id,
                 first_name: p.full_name.first_name.clone(),
@@ -135,6 +140,7 @@ pub async fn team_get_action(
                 transfer_listed: p.statuses.get().contains(&PlayerStatusType::Lst),
                 is_loan,
                 is_loaned_out: false,
+                is_youth,
                 country_slug: country.slug.clone(),
                 country_code: country.code.clone(),
                 country_name: country.name.clone(),
@@ -196,6 +202,7 @@ pub async fn team_get_action(
                     transfer_listed: false,
                     is_loan: false,
                     is_loaned_out: true,
+                    is_youth: false,
                     country_slug: player_country.map(|c| c.slug.clone()).unwrap_or_default(),
                     country_code: player_country.map(|c| c.code.clone()).unwrap_or_default(),
                     country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),

@@ -404,6 +404,11 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #e0f7fa;
 }
 
+.fm-badge-yth {
+  background: #2e7d32;
+  color: #fff;
+}
+
 /* ============================================
    FM STARS
    ============================================ */
@@ -723,6 +728,11 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
 .fm-squad tbody tr.sq-loan-in a { color: #437fa2 !important; }
 .fm-squad tbody tr.sq-loan-out a { color: #07385a; }
+
+.fm-squad-center thead th,
+.fm-squad-center tbody td {
+  text-align: center;
+}
 
 /* ============================================
    TEAM SCHEDULE PAGE
@@ -1369,8 +1379,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   background: rgba(0, 0, 0, 0.08);
 }
 
-.fm-stats thead th:first-child { text-align: left; padding-left: 14px; }
-.fm-stats thead th:not(:first-child) { width: 1px; white-space: nowrap; }
+.fm-stats thead th:first-child { text-align: left; padding-left: 14px; width: 3em; white-space: nowrap; }
+.fm-stats thead th.sq-club { width: 25em; }
+.fm-stats thead th:not(:first-child):not(.sq-club) { white-space: nowrap; }
 
 .fm-stats tbody tr {
   transition: background 0.1s;
@@ -2651,6 +2662,15 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
   .fm-squad .sq-cond { width: 100px; }
   .fm-squad .sq-name a { font-size: 12px; }
+
+  /* Transfers page: stack side-by-side panels */
+  .fm-transfers-row {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-transfers-row .fm-squad {
+    min-width: 0;
+  }
 
   /* Tactics page: stack */
   .fm-tactics-grid {

@@ -67,6 +67,21 @@ impl PlayerClubContract {
         }
     }
 
+    pub fn new_youth(salary: u32, expiration: NaiveDate) -> Self {
+        PlayerClubContract {
+            shirt_number: None,
+            salary,
+            contract_type: ContractType::Youth,
+            squad_status: PlayerSquadStatus::NotYetSet,
+            transfer_status: None,
+            is_transfer_listed: false,
+            started: Option::None,
+            expiration,
+            bonuses: vec![],
+            clauses: vec![],
+        }
+    }
+
     pub fn new_loan(salary: u32, expiration: NaiveDate) -> Self {
         PlayerClubContract {
             shirt_number: None,

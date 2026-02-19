@@ -174,6 +174,7 @@ impl DatabaseGenerator {
                                     player_generator,
                                     country_id,
                                     team_rep,
+                                    &TeamType::from_str(&t.team_type).unwrap(),
                                 )))
                                 .staffs(StaffCollection::new(
                                     Self::generate_staffs(staff_generator, country_id, team_rep)
@@ -187,23 +188,35 @@ impl DatabaseGenerator {
             .collect()
     }
 
-    fn generate_players(player_generator: &mut PlayerGenerator, country_id: u32, team_reputation: u16) -> Vec<Player> {
+    fn generate_players(player_generator: &mut PlayerGenerator, country_id: u32, team_reputation: u16, team_type: &TeamType) -> Vec<Player> {
         let mut players = Vec::with_capacity(100);
 
+        // Age range based on team type
+        let (min_age, max_age) = match team_type {
+            TeamType::U18 => (15, 18),
+            TeamType::U19 => (15, 19),
+            TeamType::U21 => (16, 21),
+            TeamType::U23 => (17, 23),
+            TeamType::B => (17, 28),
+            TeamType::Main => (17, 35),
+        };
+
+        let is_youth = matches!(team_type, TeamType::U18 | TeamType::U19);
+
         let mut goalkeepers: Vec<Player> = (0..IntegerUtils::random(3, 5))
-            .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper, team_reputation))
+            .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper, team_reputation, min_age, max_age, is_youth))
             .collect();
 
         let mut defenders: Vec<Player> = (0..IntegerUtils::random(13, 27))
-            .map(|_| player_generator.generate(country_id, PositionType::Defender, team_reputation))
+            .map(|_| player_generator.generate(country_id, PositionType::Defender, team_reputation, min_age, max_age, is_youth))
             .collect();
 
         let mut midfielders: Vec<Player> = (0..IntegerUtils::random(17, 23))
-            .map(|_| player_generator.generate(country_id, PositionType::Midfielder, team_reputation))
+            .map(|_| player_generator.generate(country_id, PositionType::Midfielder, team_reputation, min_age, max_age, is_youth))
             .collect();
 
         let mut strikers: Vec<Player> = (0..IntegerUtils::random(13, 16))
-            .map(|_| player_generator.generate(country_id, PositionType::Striker, team_reputation))
+            .map(|_| player_generator.generate(country_id, PositionType::Striker, team_reputation, min_age, max_age, is_youth))
             .collect();
 
         players.append(&mut goalkeepers);

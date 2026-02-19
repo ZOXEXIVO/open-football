@@ -1,5 +1,5 @@
 use crate::context::GlobalContext;
-use crate::utils::Logging;
+use crate::utils::{DateUtils, Logging};
 use crate::{
     ContractType, Player, PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, Team,
     TeamResult, TeamType,
@@ -68,6 +68,18 @@ impl TeamCollection {
         // Phase 1: Demotions (main -> reserves)
         if let Some(res_idx) = reserve_idx {
             let demotions = Self::identify_demotions(&self.teams[main_idx], date);
+            // Filter out players who are too old for the target team
+            let max_age = self.teams[res_idx].team_type.max_age();
+            let demotions: Vec<u32> = if let Some(max) = max_age {
+                demotions.into_iter().filter(|&pid| {
+                    self.teams[main_idx].players.players.iter()
+                        .find(|p| p.id == pid)
+                        .map(|p| DateUtils::age(p.birth_date, date) <= max)
+                        .unwrap_or(false)
+                }).collect()
+            } else {
+                demotions
+            };
             if !demotions.is_empty() {
                 debug!(
                     "Squad management: demoting {} players to reserves",
@@ -110,9 +122,8 @@ impl TeamCollection {
         }
     }
 
-    /// Find the best reserve team: B > U23 > U21
+    /// Find the best reserve team: B > U23 > U21 > U19 > U18
     fn find_reserve_team_index(&self) -> Option<usize> {
-        // Priority: B team first, then U23, then U21
         self.teams
             .iter()
             .position(|t| t.team_type == TeamType::B)
@@ -126,17 +137,27 @@ impl TeamCollection {
                     .iter()
                     .position(|t| t.team_type == TeamType::U21)
             })
-    }
-
-    /// Find the best youth team: U19 > U18
-    fn find_youth_team_index(&self) -> Option<usize> {
-        self.teams
-            .iter()
-            .position(|t| t.team_type == TeamType::U19)
+            .or_else(|| {
+                self.teams
+                    .iter()
+                    .position(|t| t.team_type == TeamType::U19)
+            })
             .or_else(|| {
                 self.teams
                     .iter()
                     .position(|t| t.team_type == TeamType::U18)
+            })
+    }
+
+    /// Find the best youth team: U18 > U19
+    fn find_youth_team_index(&self) -> Option<usize> {
+        self.teams
+            .iter()
+            .position(|t| t.team_type == TeamType::U18)
+            .or_else(|| {
+                self.teams
+                    .iter()
+                    .position(|t| t.team_type == TeamType::U19)
             })
     }
 

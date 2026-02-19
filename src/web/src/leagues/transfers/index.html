@@ -22,7 +22,7 @@
         {% if completed_transfers.is_empty() %}
         <div class="fm-empty">{{ i18n.t("no_completed_transfers") }}</div>
         {% else %}
-        <table class="fm-squad">
+        <table class="fm-squad fm-squad-center">
             <thead>
                 <tr>
                     <th>{{ i18n.t("player") }}</th>
@@ -38,7 +38,7 @@
                     <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
                     <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
                     <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
-                    <td>{{ item.fee }}</td>
+                    <td>{% if item.is_loan %}<span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% else %}<span class="fm-transfer-fee">{{ item.fee }}</span>{% endif %}</td>
                     <td>{{ item.date }}</td>
                 </tr>
                 {% endfor %}
