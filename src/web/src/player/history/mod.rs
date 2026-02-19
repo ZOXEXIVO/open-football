@@ -120,7 +120,10 @@ pub async fn player_history_action(
             };
 
             let transfer_fee = player_transfers.iter()
-                .find(|t| t.season_year == season_start_year)
+                .find(|t| {
+                    t.to_team_name == item.team_name
+                        && (season_start_year == t.season_year || season_start_year == t.season_year + 1)
+                })
                 .map(|t| {
                     if t.fee.amount > 0.0 {
                         FormattingUtils::format_money(t.fee.amount)

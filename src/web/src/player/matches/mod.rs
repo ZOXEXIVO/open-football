@@ -75,6 +75,20 @@ pub async fn player_matches_action(
 
     let items: Vec<PlayerMatchItem> = schedule
         .iter()
+        .filter(|schedule_item| {
+            // Only show matches where the player actually participated
+            if schedule_item.result.is_none() {
+                return false;
+            }
+            if let Some(l) = league {
+                if let Some(match_result) = l.matches.get(&schedule_item.id) {
+                    if let Some(details) = &match_result.details {
+                        return details.player_stats.contains_key(&player.id);
+                    }
+                }
+            }
+            false
+        })
         .map(|schedule_item| {
             let is_home = schedule_item.home_team_id == team.id;
 
