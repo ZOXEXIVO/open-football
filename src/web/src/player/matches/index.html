@@ -42,7 +42,7 @@
                     <td class="sch-comp">{{ item.competition_name }}</td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
-                        <a href="/{{ lang }}/leagues/{{ league_slug }}/matches/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
+                        <a href="/{{ lang }}/match/{{ league_slug }}/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
                         {% else %}
                         <span class="fm-pending">-</span>
                         {% endif %}

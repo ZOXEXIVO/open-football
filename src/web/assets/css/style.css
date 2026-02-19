@@ -2623,15 +2623,17 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     margin-left: 0;
   }
 
-  /* Wide tables: horizontal scroll */
+  /* Wide tables: horizontal scroll via wrapper-less approach */
+  .fm-panel {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
   .fm-stats,
   .fm-schedule,
   .fm-squad {
-    display: block;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
     width: 100%;
-    min-width: 100%;
+    min-width: 600px;
   }
 
   .fm-schedule thead th,
