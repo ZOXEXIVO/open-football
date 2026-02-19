@@ -1,5 +1,4 @@
 pub mod get;
-pub mod history;
 pub mod schedule;
 pub mod stats;
 pub mod tactics;
@@ -15,5 +14,4 @@ pub fn team_routes() -> Router<GameAppData> {
         .merge(schedule::routes::routes())
         .merge(stats::routes::routes())
         .merge(transfers::routes::routes())
-        .merge(history::routes::routes())
 }

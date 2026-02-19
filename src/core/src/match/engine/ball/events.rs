@@ -21,6 +21,7 @@ pub enum GoalSide {
 pub struct BallGoalEventMetadata {
     pub side: GoalSide,
     pub goalscorer_player_id: u32,
+    pub assist_player_id: Option<u32>,
     pub auto_goal: bool,
 }
 
@@ -52,6 +53,10 @@ impl BallEventDispatcher {
                     metadata.goalscorer_player_id,
                     metadata.auto_goal,
                 )));
+
+                if let Some(assist_id) = metadata.assist_player_id {
+                    remaining_events.push(Event::PlayerEvent(PlayerEvent::Assist(assist_id)));
+                }
 
                 field.reset_players_positions();
             }

@@ -61,7 +61,7 @@ pub struct PlayerHistoryStats {
     pub shots_on_target: f32,
     pub passes: u8,
     pub tackling: f32,
-    pub average_rating: f32,
+    pub average_rating: String,
 }
 
 pub async fn player_history_action(
@@ -148,7 +148,7 @@ pub async fn player_history_action(
                     shots_on_target: item.statistics.shots_on_target,
                     passes: item.statistics.passes,
                     tackling: item.statistics.tackling,
-                    average_rating: item.statistics.average_rating,
+                    average_rating: format!("{:.2}", item.statistics.average_rating),
                 },
             }
         })
@@ -169,7 +169,7 @@ pub async fn player_history_action(
         shots_on_target: player.statistics.shots_on_target,
         passes: player.statistics.passes,
         tackling: player.statistics.tackling,
-        average_rating: player.statistics.average_rating,
+        average_rating: format!("{:.2}", player.statistics.average_rating),
     };
 
     let title = format!("{} {} - {}", player.full_name.first_name, player.full_name.last_name, team.name);

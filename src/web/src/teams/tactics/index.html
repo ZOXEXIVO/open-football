@@ -7,57 +7,39 @@
     <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
     <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
     <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
-    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/history">{{ i18n.t("history") }}</a>
 </div>
 {% endblock %}
 
 {% block content %}
 <div class="fm-page">
-    <div class="fm-tactics-grid">
-        <section class="fm-panel">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("starting_xi") }}</h3>
-                <span class="fm-panel-action">{{ formation_name }}</span>
-            </div>
-            <div class="fm-tactics-list">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("formation") }}</h3>
+            <span class="fm-panel-action">{{ formation_name }}</span>
+        </div>
+        <div class="fm-pitch fm-pitch-compact">
+            <div class="fm-pitch-surface">
+                <div class="fm-pitch-half-line"></div>
+                <div class="fm-pitch-center-circle"></div>
+                <div class="fm-pitch-center-dot"></div>
+                <div class="fm-pitch-box-top"></div>
+                <div class="fm-pitch-box-bottom"></div>
+                <div class="fm-pitch-goal-top"></div>
+                <div class="fm-pitch-goal-bottom"></div>
+                <div class="fm-pitch-arc-top"></div>
+                <div class="fm-pitch-arc-bottom"></div>
+                <div class="fm-pitch-corner-tl"></div>
+                <div class="fm-pitch-corner-tr"></div>
+                <div class="fm-pitch-corner-bl"></div>
+                <div class="fm-pitch-corner-br"></div>
                 {% for fp in formation_players %}
-                <a class="fm-tactic-row" href="/{{ lang }}/players/{{ fp.id }}">
-                    <span class="fm-tactic-num">{{ loop.index }}</span>
-                    <span class="fm-tactic-pos">{{ fp.position_short }}</span>
-                    <span class="fm-tactic-name">{{ fp.last_name }}</span>
+                <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.id }}">
+                    <div class="fm-pitch-player-dot"></div>
+                    <div class="fm-pitch-player-name">{{ fp.last_name }}</div>
                 </a>
                 {% endfor %}
             </div>
-        </section>
-        <section class="fm-panel">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("formation") }}</h3>
-                <span class="fm-panel-action">{{ formation_name }}</span>
-            </div>
-            <div class="fm-pitch fm-pitch-compact">
-                <div class="fm-pitch-surface">
-                    <div class="fm-pitch-half-line"></div>
-                    <div class="fm-pitch-center-circle"></div>
-                    <div class="fm-pitch-center-dot"></div>
-                    <div class="fm-pitch-box-top"></div>
-                    <div class="fm-pitch-box-bottom"></div>
-                    <div class="fm-pitch-goal-top"></div>
-                    <div class="fm-pitch-goal-bottom"></div>
-                    <div class="fm-pitch-arc-top"></div>
-                    <div class="fm-pitch-arc-bottom"></div>
-                    <div class="fm-pitch-corner-tl"></div>
-                    <div class="fm-pitch-corner-tr"></div>
-                    <div class="fm-pitch-corner-bl"></div>
-                    <div class="fm-pitch-corner-br"></div>
-                    {% for fp in formation_players %}
-                    <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.id }}">
-                        <div class="fm-pitch-player-dot"></div>
-                        <div class="fm-pitch-player-name">{{ fp.last_name }}</div>
-                    </a>
-                    {% endfor %}
-                </div>
-            </div>
-        </section>
-    </div>
+        </div>
+    </section>
 </div>
 {% endblock %}

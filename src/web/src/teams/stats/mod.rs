@@ -46,7 +46,7 @@ pub struct TeamPlayerStats {
     pub shots_on_target: f32,
     pub passes: u8,
     pub tackling: f32,
-    pub average_rating: f32,
+    pub average_rating: String,
 }
 
 pub async fn team_stats_action(
@@ -82,10 +82,17 @@ pub async fn team_stats_action(
     let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
-    let mut players: Vec<TeamPlayerStats> = team
+    let mut raw_players: Vec<(&core::Player, f32)> = team
         .players()
         .iter()
-        .map(|p| TeamPlayerStats {
+        .map(|p| (*p, p.statistics.average_rating))
+        .collect();
+
+    raw_players.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    let players: Vec<TeamPlayerStats> = raw_players
+        .iter()
+        .map(|(p, _)| TeamPlayerStats {
             id: p.id,
             last_name: p.full_name.last_name.clone(),
             first_name: p.full_name.first_name.clone(),
@@ -99,11 +106,9 @@ pub async fn team_stats_action(
             shots_on_target: p.statistics.shots_on_target,
             passes: p.statistics.passes,
             tackling: p.statistics.tackling,
-            average_rating: p.statistics.average_rating,
+            average_rating: format!("{:.2}", p.statistics.average_rating),
         })
         .collect();
-
-    players.sort_by(|a, b| b.average_rating.partial_cmp(&a.average_rating).unwrap_or(std::cmp::Ordering::Equal));
 
     let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/stats", &route_params.lang, &team.slug));
     let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };

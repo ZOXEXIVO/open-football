@@ -165,6 +165,7 @@
     let loadingChunks = new Set();
     let totalChunks = 0;
     let chunkDurationMs = 300000;
+    let playerMap = {};
     let isDragging = false;
 
     // Debug event logging
@@ -247,6 +248,17 @@
                 const positions = entries[i][1];
                 if (!playerPositions[id]) {
                     playerPositions[id] = positions;
+                    // Create graphic for substitute entering the field
+                    if (gameContainer && !playerGraphics[id] && positions.length > 0) {
+                        const player = playerMap[Number(id)];
+                        if (player) {
+                            const pos = translateToField(positions[0].position[0], positions[0].position[1]);
+                            const gfx = createPlayerGraphic(pos.x, pos.y, player);
+                            playerGraphics[id] = gfx;
+                            playerIds.push(id);
+                            gameContainer.addChild(gfx);
+                        }
+                    }
                 } else {
                     playerPositions[id] = mergeSorted(playerPositions[id], positions);
                 }
@@ -322,6 +334,15 @@
             const pi = findIndexNear(positions, time, hint);
             lastPlayerIdx[id] = pi;
             if (pi >= 0) {
+                // Hide player if current time is past their last position data
+                // (subbed off) or before their first (not yet on field)
+                const lastTs = positions[positions.length - 1].timestamp;
+                const firstTs = positions[0].timestamp;
+                if (time > lastTs + 1000 || time < firstTs - 1000) {
+                    gfx.visible = false;
+                    continue;
+                }
+                gfx.visible = true;
                 const pos3 = interpolatePosition(positions, pi, time);
                 const pos = translateToField(pos3[0], pos3[1]);
                 gfx.position.x = pos.x - 10;
@@ -494,7 +515,6 @@
         app.stage.addChild(gameContainer);
 
         // Build a lookup map for players by id
-        const playerMap = {};
         for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
 
         const chunkPlayers = Object.entries(firstChunk.players || {});

@@ -1,5 +1,7 @@
 {% extends "layout.html" %}
 
+{% block html_title %}{{ title }} - {{ player.team_name }}{% endblock %}
+
 {% block submenu %}
 <div class="fm-tabbar">
     <a class="fm-tab active" href="/{{ lang }}/players/{{ player.id }}">{{ i18n.t("overview") }}</a>

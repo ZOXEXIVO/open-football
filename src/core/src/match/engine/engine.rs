@@ -294,6 +294,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                         // strategies don't try to look up their position
                         context.players.remove_player(*player_out_id);
 
+                        // Update the substitute's entry in context.players with
+                        // their new tactical position/role from the field
+                        if let Some(field_player) = field.get_player(player_in_id) {
+                            context.players.update_player(player_in_id, field_player.clone());
+                        }
+
                         // Mark in the appropriate FieldSquad
                         let left_squad = field.left_side_players.as_mut();
                         let right_squad = field.right_side_players.as_mut();
@@ -577,6 +583,10 @@ impl MatchPlayerCollection {
 
     pub fn remove_player(&mut self, player_id: u32) {
         self.players.remove(&player_id);
+    }
+
+    pub fn update_player(&mut self, player_id: u32, player: MatchPlayer) {
+        self.players.insert(player_id, player);
     }
 }
 

@@ -1369,7 +1369,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   background: rgba(0, 0, 0, 0.08);
 }
 
-.fm-stats thead th:first-child { text-align: left; padding-left: 14px; width: 1em; }
+.fm-stats thead th:first-child { text-align: left; padding-left: 14px; }
+.fm-stats thead th:not(:first-child) { width: 1px; white-space: nowrap; }
 
 .fm-stats tbody tr {
   transition: background 0.1s;
@@ -2619,6 +2620,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     display: block;
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    width: 100%;
+    min-width: 100%;
   }
 
   .fm-schedule thead th,

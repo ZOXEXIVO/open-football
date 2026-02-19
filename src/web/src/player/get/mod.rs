@@ -111,7 +111,7 @@ pub struct PlayerStatistics {
     pub shots_on_target: f32,
     pub tackling: f32,
     pub passes: u8,
-    pub average_rating: f32,
+    pub average_rating: String,
 }
 
 pub struct PlayerContractDto {
@@ -225,7 +225,7 @@ pub async fn player_get_action(
         squad_status: format_squad_status(&c.squad_status),
     });
 
-    let title = format!("{} {} - {}", player.full_name.first_name, player.full_name.last_name, team.name);
+    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
 
     let loan_status = get_loan_status(player, team, simulator_data);
 
@@ -361,7 +361,7 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
         shots_on_target: player.statistics.shots_on_target,
         tackling: player.statistics.tackling,
         passes: player.statistics.passes,
-        average_rating: player.statistics.average_rating,
+        average_rating: format!("{:.2}", player.statistics.average_rating),
     }
 }
 

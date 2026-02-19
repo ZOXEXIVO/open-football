@@ -833,9 +833,21 @@ impl Ball {
                     _ => false
                 };
 
+                // Find assist provider: most recent passer who isn't the goalscorer
+                let assist_player_id = if !is_auto_goal {
+                    self.recent_passers
+                        .iter()
+                        .rev()
+                        .find(|&&id| id != goalscorer)
+                        .copied()
+                } else {
+                    None
+                };
+
                 let goal_event_metadata = BallGoalEventMetadata {
                     side: goal_side,
                     goalscorer_player_id: goalscorer,
+                    assist_player_id,
                     auto_goal: is_auto_goal,
                 };
 
