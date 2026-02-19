@@ -27,6 +27,9 @@ pub struct Ball {
     pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
     pub pass_target_player_id: Option<u32>,  // Intended receiver of a pass
     pub recent_passers: VecDeque<u32>,  // Ring buffer of recent passers (up to 5)
+    pub contested_claim_count: u32,  // Track rapid contested ownership changes
+    pub unowned_ticks: u32,  // How long ball has been unowned (unconditional counter)
+    pub goal_scored: bool,  // Flag set when goal detected, used to force reset after event dispatch
 }
 
 #[derive(Default)]
@@ -66,6 +69,9 @@ impl Ball {
             claim_cooldown: 0,
             pass_target_player_id: None,
             recent_passers: VecDeque::with_capacity(5),
+            contested_claim_count: 0,
+            unowned_ticks: 0,
+            goal_scored: false,
         }
     }
 
@@ -89,11 +95,15 @@ impl Ball {
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
         self.force_claim_if_deadlock(players, events);
 
+        // Unconditional unowned safety net - forces nearest players to TakeBall
+        self.force_takeball_if_unowned_too_long(players, events);
+
         self.process_ownership(context, players, events);
 
         // Move ball FIRST, then check goal/boundary on new position
         self.move_to(tick_context);
         self.check_goal(context, events);
+        self.check_over_goal(context, players, events);
         self.check_boundary_collision(context);
     }
 
@@ -462,6 +472,34 @@ impl Ball {
         }
     }
 
+    /// Unconditional safety net: if ball has been unowned for too long (regardless of speed/height),
+    /// force the nearest player from each team into TakeBall state.
+    fn force_takeball_if_unowned_too_long(
+        &mut self,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        const UNOWNED_THRESHOLD: u32 = 300;
+
+        if self.current_owner.is_some() {
+            self.unowned_ticks = 0;
+            return;
+        }
+
+        self.unowned_ticks += 1;
+
+        if self.unowned_ticks >= UNOWNED_THRESHOLD {
+            // Send TakeMe to nearest player per team (forces them into TakeBall state)
+            let notified = self.notify_nearest_player(players, events);
+            if !notified.is_empty() {
+                self.take_ball_notified_players = notified;
+                self.notification_timeout = 0;
+            }
+            // Reset counter to allow re-triggering every 300 ticks if still unowned
+            self.unowned_ticks = 0;
+        }
+    }
+
     fn notify_nearest_player(
         &self,
         players: &[MatchPlayer],
@@ -796,11 +834,28 @@ impl Ball {
                 self.current_owner = Some(player.id);
                 self.pass_target_player_id = None;
                 self.ownership_duration = 0;
-                self.claim_cooldown = 15; // Same as CLAIM_COOLDOWN_TICKS
+
+                // Track contested ownership changes and escalate cooldown
+                self.contested_claim_count += 1;
+                let cooldown = if self.contested_claim_count > 6 {
+                    90 // ~1.5s - force resolution
+                } else if self.contested_claim_count > 3 {
+                    45 // ~0.75s
+                } else {
+                    15 // Normal cooldown
+                };
+                self.claim_cooldown = cooldown;
+                // Also set in_flight to prevent ClaimBall events from tackling states
+                self.flags.in_flight_state = cooldown as usize;
+
                 events.add_ball_event(BallEvent::Claimed(player.id));
             } else {
                 // Same owner - just increment duration
                 self.ownership_duration += 1;
+                // Decay contested counter when ownership is stable
+                if self.ownership_duration > 30 && self.contested_claim_count > 0 {
+                    self.contested_claim_count = 0;
+                }
             }
         }
     }
@@ -854,7 +909,57 @@ impl Ball {
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));
             }
 
+            self.goal_scored = true;
             self.reset();
+        }
+    }
+
+    /// Ball crossed goal line within goal width but above crossbar — goal kick.
+    /// Place ball near the 6-yard box and give it to the defending goalkeeper.
+    fn check_over_goal(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let over_side = match context.goal_positions.is_over_goal(self.position) {
+            Some(side) => side,
+            None => return,
+        };
+
+        // Determine which side's goalkeeper defends this goal
+        // GoalSide::Home = left goal (x=0) → defended by PlayerSide::Left
+        // GoalSide::Away = right goal (x=field_width) → defended by PlayerSide::Right
+        let defending_side = match over_side {
+            GoalSide::Home => PlayerSide::Left,
+            GoalSide::Away => PlayerSide::Right,
+        };
+
+        // Find the goalkeeper on the defending side
+        if let Some(gk) = players.iter().find(|p| {
+            p.side == Some(defending_side)
+                && p.tactical_position.current_position.is_goalkeeper()
+        }) {
+            // Place ball at the 6-yard area in front of the goal
+            let goal_kick_x = match over_side {
+                GoalSide::Home => 50.0,  // ~6 yards from left goal line
+                GoalSide::Away => self.field_width - 50.0,
+            };
+
+            self.position.x = goal_kick_x;
+            self.position.y = context.goal_positions.left.y; // Center of goal
+            self.position.z = 0.0;
+            self.velocity = Vector3::zeros();
+
+            // Give ball to goalkeeper
+            self.current_owner = Some(gk.id);
+            self.previous_owner = None;
+            self.ownership_duration = 0;
+            self.claim_cooldown = 30; // Protection so no one steals immediately
+            self.flags.in_flight_state = 30;
+            self.pass_target_player_id = None;
+
+            events.add_ball_event(BallEvent::Claimed(gk.id));
         }
     }
 
@@ -908,9 +1013,12 @@ impl Ball {
                     self.velocity.y *= friction_factor;
                 }
 
-                // Keep ball on ground
-                self.velocity.z = 0.0;
-                self.position.z = 0.0;
+                // Keep ball on ground, but allow upward kicks to take effect
+                // (positive z velocity means ball is being kicked into the air)
+                if self.velocity.z <= 0.0 {
+                    self.velocity.z = 0.0;
+                    self.position.z = 0.0;
+                }
             } else {
                 // AERIAL PHYSICS: Air drag (proportional to v²) + gravity
                 // Air drag is gentler than ground friction for realistic flight
@@ -1022,12 +1130,20 @@ impl Ball {
     pub fn reset(&mut self) {
         self.position.x = self.start_position.x;
         self.position.y = self.start_position.y;
+        self.position.z = 0.0;
 
         self.velocity = Vector3::zeros();
+
+        self.current_owner = None;
+        self.previous_owner = None;
+        self.ownership_duration = 0;
+        self.claim_cooldown = 0;
 
         self.flags.reset();
         self.pass_target_player_id = None;
         self.clear_pass_history();
+        self.contested_claim_count = 0;
+        self.unowned_ticks = 0;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {

@@ -157,7 +157,7 @@ impl DefenderPassingState {
             return false;
         }
 
-        let under_immediate_pressure = ctx.players().opponents().exists(5.0);
+        let under_immediate_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let has_clear_option = ctx.player().passing().find_best_pass_option().is_some();
 
         // Adjust position if not under immediate pressure and no clear options

@@ -47,6 +47,12 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                         DefenderState::Pressing,
                     ));
                 }
+                // Support press if close enough
+                if ctx.player().defensive().can_support_press(&opponent_with_ball) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
             }
         }
 
@@ -107,12 +113,12 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         let distance = to_target.magnitude();
 
         // Define thresholds for movement
-        const MIN_DISTANCE_THRESHOLD: f32 = 2.0;
-        const SLOWING_DISTANCE: f32 = 10.0;
+        const MIN_DISTANCE_THRESHOLD: f32 = 1.0;
+        const SLOWING_DISTANCE: f32 = 5.0;
 
-        // Base movement speed - walking/jogging pace for positional adjustments
+        // Base movement speed - jogging pace for positional adjustments
         let pace_influence = (ctx.player.skills.physical.pace / 20.0).clamp(0.6, 1.2);
-        let base_speed = 1.5 * pace_influence;
+        let base_speed = 3.0 * pace_influence;
 
         if distance > MIN_DISTANCE_THRESHOLD {
             let direction = to_target.normalize();

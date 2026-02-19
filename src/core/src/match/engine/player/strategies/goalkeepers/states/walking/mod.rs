@@ -119,7 +119,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
                     angle: IntegerUtils::random(0, 360) as f32,
                 }
                     .calculate(ctx.player)
-                    .velocity * 0.5, // Slow movement for fine positioning
+                    .velocity * 0.7, // Active movement for fine positioning
             )
         } else {
             // Need to reposition - use arrive for smooth movement
@@ -249,7 +249,7 @@ impl GoalkeeperWalkingState {
         };
 
         // Base distance from goal line
-        let mut optimal_distance = 3.0; // Start closer to goal
+        let mut optimal_distance = 8.0; // Base distance from goal
 
         // Adjust based on ball position and goalkeeper skills
         if ctx.ball().on_own_side() {
@@ -257,14 +257,14 @@ impl GoalkeeperWalkingState {
             let threat_factor = ball_distance_to_goal / (ctx.context.field_size.width as f32 * 0.5);
 
             // Better command of area = more aggressive positioning
-            optimal_distance += (15.0 - threat_factor * 10.0) * command_of_area;
+            optimal_distance += (25.0 - threat_factor * 15.0) * command_of_area;
 
             // Better positioning = more accurate placement
-            optimal_distance *= 0.8 + positioning_skill * 0.4;
+            optimal_distance *= 0.7 + positioning_skill * 0.6;
 
             // If ball is wide, adjust position laterally
             let ball_y_offset = ball_position.y - goal_position.y;
-            let lateral_adjustment = ball_y_offset * 0.1 * positioning_skill; // Better positioning = better angle coverage
+            let lateral_adjustment = ball_y_offset * 0.25 * positioning_skill; // Better positioning = better angle coverage
 
             // Calculate the position
             let mut new_position = goal_position + angle_to_ball * optimal_distance;
@@ -277,7 +277,7 @@ impl GoalkeeperWalkingState {
             let sweeper_keeper_ability = (command_of_area + communication) / 2.0;
 
             // Modern sweeper-keeper positioning
-            optimal_distance = 8.0 + (sweeper_keeper_ability * 12.0); // 8-20 units from goal
+            optimal_distance = 14.0 + (sweeper_keeper_ability * 16.0); // 14-30 units from goal
 
             // Position more centrally when ball is far
             let mut new_position = goal_position;

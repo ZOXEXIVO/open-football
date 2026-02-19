@@ -85,7 +85,8 @@ impl DatabaseGenerator {
                     .code(country.code.clone())
                     .slug(country.slug.clone())
                     .name(country.name.clone())
-                    .color(country.color.clone())
+                    .background_color(country.background_color.clone())
+                    .foreground_color(country.foreground_color.clone())
                     .continent_id(continent.id)
                     .leagues(leagues)
                     .clubs(clubs)
@@ -144,8 +145,8 @@ impl DatabaseGenerator {
                 finance: ClubFinances::new(club.finance.balance, Vec::new()),
                 academy: ClubAcademy::new(100),
                 colors: ClubColors {
-                    primary: club.colors.primary.clone(),
-                    secondary: club.colors.secondary.clone(),
+                    background: club.colors.background.clone(),
+                    foreground: club.colors.foreground.clone(),
                 },
                 teams: TeamCollection::new(
                     club.teams

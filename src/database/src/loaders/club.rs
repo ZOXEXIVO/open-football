@@ -15,8 +15,8 @@ pub struct ClubEntity {
 
 #[derive(Deserialize)]
 pub struct ClubColorsEntity {
-    pub primary: String,
-    pub secondary: String,
+    pub background: String,
+    pub foreground: String,
 }
 
 #[derive(Deserialize)]

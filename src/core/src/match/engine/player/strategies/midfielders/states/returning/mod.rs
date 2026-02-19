@@ -18,6 +18,13 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::TakeBall,
+            ));
+        }
+
         // CRITICAL: Tackle if an opponent has the ball nearby
         // Using new chaining syntax: nearby(30.0).with_ball(ctx)
         if let Some(opponent) = ctx.players().opponents().nearby(30.0).with_ball(ctx).next() {

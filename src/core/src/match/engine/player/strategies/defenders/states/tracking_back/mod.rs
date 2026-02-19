@@ -14,6 +14,13 @@ pub struct DefenderTrackingBackState {}
 
 impl StateProcessingHandler for DefenderTrackingBackState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
+        }
+
         // Check if the defender has reached their starting position
         if ctx.player().distance_from_start_position() < CLOSE_TO_START_DISTANCE {
             return Some(StateChangeResult::with_defender_state(

@@ -394,7 +394,7 @@ impl MidfielderAttackSupportingState {
         let field_height = ctx.context.field_size.height as f32;
 
         // Check pressure
-        let under_pressure = ctx.players().opponents().exists(15.0);
+        let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
 
         if under_pressure {
             // Under pressure - make quick decision

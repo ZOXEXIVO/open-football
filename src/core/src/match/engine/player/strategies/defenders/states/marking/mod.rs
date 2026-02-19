@@ -19,6 +19,13 @@ pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
+        }
+
         // 1. Check if the defender has enough stamina to continue marking
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina < STAMINA_THRESHOLD {

@@ -32,7 +32,6 @@ pub enum MemoryEventType {
 
 const MAX_INTENTIONS: usize = 3;
 const MAX_EVENTS: usize = 8;
-const SHOT_COOLDOWN_TICKS: u64 = 300;
 
 #[derive(Debug, Clone)]
 pub struct PlayerMemory {
@@ -130,11 +129,8 @@ impl PlayerMemory {
         }
     }
 
-    pub fn can_shoot(&self, current_tick: u64) -> bool {
-        if self.last_shot_tick == 0 {
-            return true;
-        }
-        current_tick.saturating_sub(self.last_shot_tick) >= SHOT_COOLDOWN_TICKS
+    pub fn can_shoot(&self, _current_tick: u64) -> bool {
+        true
     }
 
     pub fn record_shot(&mut self, tick: u64, on_target: bool) {

@@ -53,13 +53,11 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Calculate base Arrive behavior
-        let mut arrive_velocity = SteeringBehavior::Arrive {
-            target: ctx.tick_context.positions.ball.position,
-            slowing_distance: 2.0,
-        }
-        .calculate(ctx.player)
-        .velocity;
+        // Use Seek for full-speed approach - no slowing when chasing a loose ball
+        let target = ctx.tick_context.positions.ball.position;
+        let mut arrive_velocity = SteeringBehavior::Seek { target }
+            .calculate(ctx.player)
+            .velocity;
 
         // Add separation force to prevent player stacking
         // BUT reduce separation when very close to ball to allow claiming
@@ -68,7 +66,6 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         const BALL_CLAIM_DISTANCE: f32 = 10.0;
         const NO_SEPARATION_DISTANCE: f32 = 5.0;
 
-        let target = ctx.tick_context.positions.ball.position;
         let distance_to_ball = (ctx.player.position - target).magnitude();
         let separation_factor = if distance_to_ball < NO_SEPARATION_DISTANCE {
             0.0 // No separation at all — let the keeper reach the ball

@@ -91,15 +91,21 @@
     </div>
     <script src="/js/bootstrap.bundle.min.js"></script>
     <script>
-        async function updateDate() {
+        async function updateDate(retries) {
+            retries = retries || 0;
             try {
                 const res = await fetch('/api/date');
                 const data = await res.json();
                 document.getElementById('date-up').textContent = data.date;
                 document.getElementById('date-down').textContent = data.time;
-            } catch(e) {}
+            } catch(e) {
+                if (retries < 3) {
+                    setTimeout(function() { updateDate(retries + 1); }, 300);
+                }
+            }
         }
         updateDate();
+        document.body.addEventListener('htmx:afterRequest', function() { updateDate(); });
 
         document.querySelectorAll('.fm-lang-option').forEach(function(el) {
             var lang = el.dataset.lang;

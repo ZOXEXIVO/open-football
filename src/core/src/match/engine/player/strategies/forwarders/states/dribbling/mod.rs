@@ -28,14 +28,24 @@ impl StateProcessingHandler for ForwardDribblingState {
             }
         }
 
-        // PRIORITY 1: Use xG-based shot quality check instead of multiple distance thresholds
+        // PRIORITY 1: In shooting range — shoot
+        if ctx.player().shooting().in_shooting_range() {
+            if ctx.player().has_clear_shot() || distance_to_goal < 60.0 {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
+        }
+
+        // PRIORITY 1b: xG-based fallback
         if ctx.player().should_attempt_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
         // Prevent infinite dribbling - timeout after 40 ticks to reassess
         if ctx.in_state_time > 40 {
-            // On timeout, redirect to Passing (not Shooting)
+            // Prefer shooting when close to goal
+            if distance_to_goal < 300.0 {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 

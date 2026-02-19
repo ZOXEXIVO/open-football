@@ -8,15 +8,15 @@ use crate::TeamCollection;
 
 #[derive(Debug, Clone)]
 pub struct ClubColors {
-    pub primary: String,
-    pub secondary: String,
+    pub background: String,
+    pub foreground: String,
 }
 
 impl Default for ClubColors {
     fn default() -> Self {
         ClubColors {
-            primary: "#1e272d".to_string(),
-            secondary: "#ffffff".to_string(),
+            background: "#1e272d".to_string(),
+            foreground: "#ffffff".to_string(),
         }
     }
 }

@@ -41,13 +41,21 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
-        // Priority: Press ball carrier if we're closest and in range
+        // Priority: Press ball carrier if we're closest and in range, or support press
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
-            if distance < 40.0 && ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Pressing,
-                ));
+            if distance < 40.0 {
+                if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+                // Support press if close enough
+                if ctx.player().defensive().can_support_press(&opponent_with_ball) {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
             }
         }
 
@@ -97,10 +105,15 @@ impl StateProcessingHandler for DefenderCoveringState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let target = self.calculate_optimal_covering_position(ctx);
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        // Project ball movement influence onto covering position
+        let ball_influence = ball_velocity * 0.3;
+
         Some(
             SteeringBehavior::Pursuit {
-                target: self.calculate_optimal_covering_position(ctx),
-                target_velocity: Vector3::zeros(), // Static target position
+                target,
+                target_velocity: ball_influence,
             }
             .calculate(ctx.player)
             .velocity,

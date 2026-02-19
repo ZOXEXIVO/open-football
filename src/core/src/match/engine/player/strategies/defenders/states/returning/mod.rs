@@ -17,6 +17,13 @@ impl StateProcessingHandler for DefenderReturningState {
             ));
         }
 
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::TakeBall,
+            ));
+        }
+
         if ctx.player().distance_from_start_position() < 10.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
@@ -31,17 +38,6 @@ impl StateProcessingHandler for DefenderReturningState {
             }
         }
         else {
-            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 1.0 {
-                    // Ball is stopped or nearly stopped - take it directly
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::TakeBall,
-                    ));
-                }
-            }
-
             if ctx.ball().distance() < 100.0 {
                 if ctx.players().opponents().with_ball().next().is_some() {
                     return Some(StateChangeResult::with_defender_state(

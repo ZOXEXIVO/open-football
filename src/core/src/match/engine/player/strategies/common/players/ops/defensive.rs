@@ -296,8 +296,8 @@ impl<'p> DefensiveOperationsImpl<'p> {
                 alignment.max(0.0) * 0.3 + (1.0 / (teammate_distance + 1.0)) * 0.7
             };
 
-            // Significant advantage threshold - 20% better positioning
-            if teammate_distance < my_distance * 0.8 {
+            // Significant advantage threshold - 40% better positioning (loosened from 0.8)
+            if teammate_distance < my_distance * 0.6 {
                 return false;
             }
 
@@ -378,6 +378,43 @@ impl<'p> DefensiveOperationsImpl<'p> {
         score += (100.0 - ball_distance.min(100.0)) / 2.0;
 
         score
+    }
+
+    /// Check if this defender can support the press as a second presser
+    /// Allows a second defender to press when within range, ball is on own side,
+    /// and there aren't already 2 pressers on the ball carrier
+    pub fn can_support_press(&self, opponent: &MatchPlayerLite) -> bool {
+        let my_distance = (self.ctx.player.position - opponent.position).magnitude();
+
+        // Must be within support pressing range
+        if my_distance > 40.0 {
+            return false;
+        }
+
+        // Ball must be on own side for urgent support
+        if !self.ctx.ball().on_own_side() {
+            return false;
+        }
+
+        // Count how many defenders are already pressing this opponent
+        let pressing_count = self.ctx.players().teammates().defenders()
+            .filter(|d| d.id != self.ctx.player.id)
+            .filter(|d| {
+                let d_distance = (d.position - opponent.position).magnitude();
+                let d_velocity = d.velocity(self.ctx);
+                let to_opponent = (opponent.position - d.position).normalize();
+                let alignment = if d_velocity.norm() > 1.0 {
+                    d_velocity.normalize().dot(&to_opponent)
+                } else {
+                    0.0
+                };
+                // Teammate is close AND moving toward opponent
+                d_distance < my_distance && d_distance < 35.0 && alignment > 0.5
+            })
+            .count();
+
+        // Allow at most 2 pressers total (1 primary + 1 support)
+        pressing_count < 2
     }
 
     /// Check if engaging this opponent would leave a dangerous space uncovered

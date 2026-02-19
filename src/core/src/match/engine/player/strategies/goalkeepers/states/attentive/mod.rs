@@ -87,35 +87,35 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
         let agility = ctx.player.skills.physical.agility / 20.0;
 
         // Movement speed based on how far from optimal position
-        if distance_to_optimal < 3.0 {
-            // Very close to optimal - make micro-adjustments while staying alert
+        if distance_to_optimal < 5.0 {
+            // Close to optimal - make adjustments while staying alert
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 2.0,
+                    slowing_distance: 3.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (0.2 + positioning_skill * 0.1), // Very slow, precise movements
+                .velocity * (0.4 + positioning_skill * 0.15), // Active, precise movements
             )
-        } else if distance_to_optimal < 10.0 {
-            // Close - smooth repositioning
-            Some(
-                SteeringBehavior::Arrive {
-                    target: optimal_position,
-                    slowing_distance: 5.0,
-                }
-                .calculate(ctx.player)
-                .velocity * (0.4 + agility * 0.2), // Moderate speed
-            )
-        } else {
-            // Need to reposition more urgently
+        } else if distance_to_optimal < 20.0 {
+            // Moderate distance - smooth repositioning
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
                     slowing_distance: 8.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (0.6 + positioning_skill * 0.2), // Faster movement
+                .velocity * (0.6 + agility * 0.2), // Purposeful speed
+            )
+        } else {
+            // Need to reposition urgently
+            Some(
+                SteeringBehavior::Arrive {
+                    target: optimal_position,
+                    slowing_distance: 12.0,
+                }
+                .calculate(ctx.player)
+                .velocity * (0.8 + positioning_skill * 0.2), // Fast movement
             )
         }
     }
@@ -261,8 +261,8 @@ impl GoalkeeperAttentiveState {
         let positioning_skill = ctx.player.skills.mental.positioning / 20.0; // Normalize to 0-1
 
         // Determine optimal distance - better goalkeepers position more optimally
-        let base_distance = 30.0;
-        let skill_adjusted_distance = base_distance * (0.8 + positioning_skill * 0.4);
+        let base_distance = 45.0;
+        let skill_adjusted_distance = base_distance * (0.7 + positioning_skill * 0.6);
 
         // Position is on the line between goal and ball, but closer to goal
         let new_position = if goal_to_ball.magnitude() > 0.1 {

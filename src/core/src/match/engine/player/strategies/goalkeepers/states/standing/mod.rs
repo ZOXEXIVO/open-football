@@ -147,38 +147,38 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
 
         // If we're close to optimal position, make small adjustments
-        if distance_to_optimal < 5.0 {
-            // Very small movements to stay alert and ready
+        if distance_to_optimal < 8.0 {
+            // Small movements to stay alert and ready
             Some(
                 SteeringBehavior::Wander {
                     target: optimal_position,
-                    radius: 2.0,
-                    jitter: 0.5,
-                    distance: 2.0,
+                    radius: 3.0,
+                    jitter: 0.8,
+                    distance: 3.0,
                     angle: (ctx.in_state_time % 360) as f32,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.2, // Very slow movement
+                .velocity * 0.4, // Gentle movement
             )
-        } else if distance_to_optimal < 15.0 {
-            // Small repositioning needed
+        } else if distance_to_optimal < 25.0 {
+            // Repositioning needed
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 5.0,
+                    slowing_distance: 8.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.4, // Moderate speed
+                .velocity * 0.65, // Moderate speed
             )
         } else {
-            // Need to move to better position
+            // Need to move to better position quickly
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 10.0,
+                    slowing_distance: 12.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.6, // Faster movement
+                .velocity * 0.85, // Faster movement
             )
         }
     }
@@ -255,7 +255,7 @@ impl GoalkeeperStandingState {
         let distance_to_ball = goal_to_ball.magnitude();
 
         // Base distance from goal line (in meters/units)
-        let mut optimal_distance_from_goal = 4.0; // Start about 4 units from goal line
+        let mut optimal_distance_from_goal = 10.0; // Start about 10 units from goal line
 
         // Adjust based on ball position
         if ctx.ball().on_own_side() {
@@ -263,10 +263,10 @@ impl GoalkeeperStandingState {
             let threat_distance = distance_to_ball.min(300.0) / 300.0; // Normalize to 0-1
 
             // Closer ball = come out more (but not too far)
-            optimal_distance_from_goal += (1.0 - threat_distance) * 8.0 * command_of_area;
+            optimal_distance_from_goal += (1.0 - threat_distance) * 20.0 * command_of_area;
 
             // Better positioning = more accurate placement
-            optimal_distance_from_goal *= 0.9 + positioning_skill * 0.2;
+            optimal_distance_from_goal *= 0.8 + positioning_skill * 0.4;
 
             // Narrow the angle - position on line between goal and ball
             let direction_to_ball = if distance_to_ball > 1.0 {
@@ -279,14 +279,14 @@ impl GoalkeeperStandingState {
 
             // Lateral adjustment for angle coverage
             let ball_y_offset = ball_position.y - goal_center.y;
-            let lateral_adjustment = ball_y_offset * 0.05 * positioning_skill;
+            let lateral_adjustment = ball_y_offset * 0.2 * positioning_skill;
             new_position.y += lateral_adjustment;
 
             // Keep within penalty area
             self.clamp_to_penalty_area(ctx, new_position)
         } else {
             // Ball on opponent's half - stay closer to goal but ready
-            optimal_distance_from_goal = 6.0 + command_of_area * 4.0;
+            optimal_distance_from_goal = 12.0 + command_of_area * 8.0;
 
             let mut new_position = goal_center;
             new_position.x += optimal_distance_from_goal * (if ctx.player.side == Some(PlayerSide::Left) { 1.0 } else { -1.0 });

@@ -1,13 +1,13 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
-static DEBUG_MODE: AtomicBool = AtomicBool::new(false);
+static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
 
-pub fn set_debug_mode(enabled: bool) {
-    DEBUG_MODE.store(enabled, Ordering::SeqCst);
+pub fn set_match_events_mode(enabled: bool) {
+    STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
 }
 
-pub fn is_debug_mode() -> bool {
-    DEBUG_MODE.load(Ordering::SeqCst)
+pub fn is_match_events_mode() -> bool {
+    STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
 }
 
 pub mod simulator;

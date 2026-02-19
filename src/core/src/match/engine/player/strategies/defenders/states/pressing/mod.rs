@@ -52,19 +52,23 @@ impl StateProcessingHandler for DefenderPressingState {
             }
 
             // COORDINATION: Check if another defender is already pressing and closer
-            // If so, drop back to cover instead of double-pressing
+            // If so, check if we can support-press, otherwise drop back
             if !ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
-                // Another defender is better positioned - switch to covering
-                // Check if there are unmarked threats we should handle instead
-                if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(60.0) {
+                // Not the best defender — but can we support the press?
+                if ctx.player().defensive().can_support_press(&opponent) {
+                    // Stay pressing as a support presser
+                } else {
+                    // Check if there are unmarked threats we should handle instead
+                    if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(60.0) {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Marking,
+                        ));
+                    }
+                    // No unmarked threats, drop back to cover
                     return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Marking,
+                        DefenderState::Covering,
                     ));
                 }
-                // No unmarked threats, drop back to cover
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Covering,
-                ));
             }
 
             // Check if pressing is creating dangerous gaps
@@ -127,9 +131,9 @@ impl StateProcessingHandler for DefenderPressingState {
             // Reduce separation velocity when actively pressing to allow close approach
             // When very close, disable separation entirely to enable tackling
             let separation = if distance_to_opponent < CLOSE_PRESSING_DISTANCE {
-                ctx.player().separation_velocity() * 0.2 // Minimal separation when close
+                ctx.player().separation_velocity() * 0.05 // Almost no separation when actively pressing
             } else {
-                ctx.player().separation_velocity() * 0.5 // Reduced separation when pressing
+                ctx.player().separation_velocity() * 0.15 // Minimal separation when pressing
             };
 
             return Some(pressing_velocity + separation);

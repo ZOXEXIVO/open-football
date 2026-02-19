@@ -356,8 +356,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let mut separation = Vector3::zeros();
 
         // Balanced parameters to prevent oscillation while maintaining separation
-        const SEPARATION_RADIUS: f32 = 30.0;
-        const SEPARATION_STRENGTH: f32 = 20.0; // Reduced from 25.0 to prevent excessive force
+        const SEPARATION_RADIUS: f32 = 20.0;
+        const SEPARATION_STRENGTH: f32 = 15.0; // Reduced to prevent separation canceling pressing forces
         const MIN_SEPARATION_DISTANCE: f32 = 3.0; // Reduced threshold for emergency separation
 
         // Apply separation from teammates

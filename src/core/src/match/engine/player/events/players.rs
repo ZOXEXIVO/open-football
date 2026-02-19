@@ -187,6 +187,9 @@ impl PlayerEventDispatcher {
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field);
             }
+            PlayerEvent::CommitFoul => {
+                Self::handle_commit_foul_event(field);
+            }
             _ => {} // Ignore unsupported events
         }
 
@@ -347,7 +350,7 @@ impl PlayerEventDispatcher {
         );
 
         // CRITICAL: Validate velocity to prevent cosmic-speed passes
-        const MAX_PASS_VELOCITY: f32 = 10.0; // Maximum realistic pass velocity per tick
+        const MAX_PASS_VELOCITY: f32 = 7.2; // Maximum realistic pass velocity per tick (reduced 20%)
 
         // Check for NaN or infinity
         if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
@@ -400,7 +403,7 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        const PASS_FORCE_MULTIPLIER: f32 = 5.0;
+        const PASS_FORCE_MULTIPLIER: f32 = 4.0;
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
         horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
     }
@@ -807,7 +810,7 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 6.0; // Maximum realistic shot velocity per tick
+        const MAX_SHOT_VELOCITY: f32 = 3.2; // Maximum realistic shot velocity per tick (reduced 20%)
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -916,7 +919,7 @@ impl PlayerEventDispatcher {
 
         // Calculate horizontal velocity with skill-based power
         let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
-        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier;
+        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 0.8;
 
         // Add power randomness (better players have more consistent power)
         let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04
@@ -1047,9 +1050,19 @@ impl PlayerEventDispatcher {
         }
     }
 
+    fn handle_commit_foul_event(field: &mut MatchField) {
+        // When a foul is committed, the current ball owner (victim) gets protected possession
+        // This simulates a free kick - the victim gets time to act without being challenged
+        if field.ball.current_owner.is_some() {
+            field.ball.claim_cooldown = 60; // ~1 second of protection
+            field.ball.flags.in_flight_state = 60; // Prevent ClaimBall events from tackling states
+            field.ball.contested_claim_count = 0; // Reset contested counter
+        }
+    }
+
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
         // Cap clearance velocity to prevent unrealistic ball speed
-        const MAX_CLEAR_VELOCITY: f32 = 10.0;
+        const MAX_CLEAR_VELOCITY: f32 = 8.0;
         let speed = velocity.norm();
         let capped_velocity = if speed > MAX_CLEAR_VELOCITY {
             velocity * (MAX_CLEAR_VELOCITY / speed)

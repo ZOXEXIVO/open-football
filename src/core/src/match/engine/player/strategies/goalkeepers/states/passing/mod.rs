@@ -22,7 +22,7 @@ enum GoalkeeperDistributionType {
     Throw,
 }
 
-const UNDER_PRESSURE_DISTANCE: f32 = 25.0;
+const UNDER_PRESSURE_DISTANCE: f32 = 1.0;
 const SAFE_PASS_DISTANCE: f32 = 30.0;
 const MEDIUM_PASS_DISTANCE: f32 = 60.0;
 const LONG_KICK_MIN_DISTANCE: f32 = 60.0; // Reduced from 100.0

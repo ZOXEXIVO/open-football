@@ -25,8 +25,15 @@ impl StateProcessingHandler for ForwardPassingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Only allow shooting at point-blank range (< 30 units) with xG check
-        if distance_to_goal < 30.0 && ctx.player().should_attempt_shot() {
+        // Close to goal — always prefer shooting over passing
+        if distance_to_goal < 120.0 {
+            if ctx.player().has_clear_shot() || distance_to_goal < 60.0 {
+                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            }
+        }
+
+        // In shooting range — redirect to shooting
+        if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
@@ -455,11 +462,7 @@ impl ForwardPassingState {
 
     /// Check if player is under heavy pressure from opponents
     fn is_under_heavy_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        const PRESSURE_DISTANCE: f32 = 20.0; // Forwards consider closer pressure
-        const PRESSURE_THRESHOLD: usize = 1; // Even one opponent is significant for forwards
-
-        let pressing_opponents = ctx.players().opponents().nearby(PRESSURE_DISTANCE).count();
-        pressing_opponents > PRESSURE_THRESHOLD
+        ctx.player().pressure().is_under_heavy_pressure()
     }
 
     /// Determine if player can effectively dribble out of pressure

@@ -28,7 +28,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
-        let mut match_position_data = if crate::is_debug_mode() {
+        let mut match_position_data = if crate::is_match_events_mode() {
             ResultMatchPositionData::new_with_tracking()
         } else {
             ResultMatchPositionData::new()
@@ -38,7 +38,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut context = MatchContext::new(&field, players, score);
 
-        if crate::is_debug_mode() {
+        if crate::is_match_events_mode() {
             context.enable_logging();
         }
 
@@ -188,6 +188,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // dispatch events
         EventDispatcher::dispatch(events.to_vec(), field, context, match_data, true);
+
+        // After all events are dispatched, force-reset positions if a goal was scored.
+        // This prevents stale events (ClaimBall, PassTo, etc.) from overriding the goal reset.
+        if field.ball.goal_scored {
+            field.reset_players_positions();
+            field.ball.reset();
+            field.ball.goal_scored = false;
+        }
 
         // Use total cumulative match time for positions
         Self::write_match_positions(field, context.total_match_time, match_data);
@@ -497,9 +505,15 @@ impl From<&MatchFieldSize> for GoalPosition {
 }
 
 pub const GOAL_WIDTH: f32 = 60.0;
+pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
 
 impl GoalPosition {
     pub fn is_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
+        // Ball must be below the crossbar to count as a goal
+        if ball_position.z > GOAL_HEIGHT {
+            return None;
+        }
+
         // Check if ball has crossed or reached the left goal line (x <= 0)
         if ball_position.x <= self.left.x {
             let top_goal_bound = self.left.y - GOAL_WIDTH;
@@ -511,6 +525,37 @@ impl GoalPosition {
         }
 
         // Check if ball has crossed or reached the right goal line (x >= field_width)
+        if ball_position.x >= self.right.x {
+            let top_goal_bound = self.right.y - GOAL_WIDTH;
+            let bottom_goal_bound = self.right.y + GOAL_WIDTH;
+
+            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
+                return Some(GoalSide::Away);
+            }
+        }
+
+        None
+    }
+
+    /// Check if ball crossed the goal line within goal width but ABOVE the crossbar.
+    /// Returns which side the ball went over (goal kick for the defending team).
+    pub fn is_over_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
+        // Only triggers when ball is above the crossbar
+        if ball_position.z <= GOAL_HEIGHT {
+            return None;
+        }
+
+        // Check left goal line
+        if ball_position.x <= self.left.x {
+            let top_goal_bound = self.left.y - GOAL_WIDTH;
+            let bottom_goal_bound = self.left.y + GOAL_WIDTH;
+
+            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
+                return Some(GoalSide::Home);
+            }
+        }
+
+        // Check right goal line
         if ball_position.x >= self.right.x {
             let top_goal_bound = self.right.y - GOAL_WIDTH;
             let bottom_goal_bound = self.right.y + GOAL_WIDTH;

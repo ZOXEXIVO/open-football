@@ -105,7 +105,7 @@ pub async fn player_matches_action(
         })
         .collect();
 
-    let title = format!("{} {} - {}", player.full_name.first_name, player.full_name.last_name, team.name);
+    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
 
     Ok(PlayerMatchesTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
@@ -114,8 +114,8 @@ pub async fn player_matches_action(
         sub_title_suffix: if team.team_type == core::TeamType::Main { String::new() } else { i18n.t(team.team_type.as_i18n_key()).to_string() },
         sub_title: team.name.clone(),
         sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.primary.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.secondary.clone()).unwrap_or_default(),
+        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
+        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
         menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug)),
         i18n,
         lang: route_params.lang.clone(),

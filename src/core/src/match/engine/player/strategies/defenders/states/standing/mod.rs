@@ -71,6 +71,12 @@ impl StateProcessingHandler for DefenderStandingState {
                         DefenderState::Pressing,
                     ));
                 } else {
+                    // Not the best defender — check if we can support the press
+                    if ctx.player().defensive().can_support_press(&opponent) {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
                     // Another defender is better positioned - look for unmarked opponents
                     if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
                         return Some(StateChangeResult::with_defender_state(
@@ -188,6 +194,18 @@ impl StateProcessingHandler for DefenderStandingState {
                     .calculate(ctx.player)
                     .velocity * 0.5, // Slower speed when standing
                 );
+            }
+        }
+
+        // When ball is on own side and nearby, move toward covering position
+        if ctx.ball().on_own_side() && ctx.ball().distance() < 150.0 {
+            let goal_pos = ctx.ball().direction_to_own_goal();
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            // Move toward ball-goal midpoint for active positioning
+            let midpoint = (ball_pos + goal_pos) * 0.5;
+            let to_midpoint = midpoint - ctx.player.position;
+            if to_midpoint.magnitude() > 5.0 {
+                return Some(to_midpoint.normalize() * 2.0);
             }
         }
 

@@ -38,6 +38,13 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
+        }
+
         // Check if team lost possession
         if !ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));

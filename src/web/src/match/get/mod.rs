@@ -47,10 +47,10 @@ pub struct MatchGetTemplate {
     pub match_time_ms: u64,
     pub goals_json: String,
     pub players_json: String,
-    pub home_color_primary: String,
-    pub home_color_secondary: String,
-    pub away_color_primary: String,
-    pub away_color_secondary: String,
+    pub home_color_background: String,
+    pub home_color_foreground: String,
+    pub away_color_background: String,
+    pub away_color_foreground: String,
 }
 
 pub struct GoalEventDisplay {
@@ -348,21 +348,21 @@ pub async fn match_get_action(
         match_time_ms: result_details.match_time_ms,
         goals_json: serde_json::to_string(&goals_json).unwrap_or_else(|_| "[]".to_string()),
         players_json: serde_json::to_string(&players_json).unwrap_or_else(|_| "[]".to_string()),
-        home_color_primary: simulator_data
+        home_color_background: simulator_data
             .club(home_team.club_id)
-            .map(|c| c.colors.primary.clone())
+            .map(|c| c.colors.background.clone())
             .unwrap_or_else(|| "#00307d".to_string()),
-        home_color_secondary: simulator_data
+        home_color_foreground: simulator_data
             .club(home_team.club_id)
-            .map(|c| c.colors.secondary.clone())
+            .map(|c| c.colors.foreground.clone())
             .unwrap_or_else(|| "#ffffff".to_string()),
-        away_color_primary: simulator_data
+        away_color_background: simulator_data
             .club(away_team.club_id)
-            .map(|c| c.colors.primary.clone())
+            .map(|c| c.colors.background.clone())
             .unwrap_or_else(|| "#b33f00".to_string()),
-        away_color_secondary: simulator_data
+        away_color_foreground: simulator_data
             .club(away_team.club_id)
-            .map(|c| c.colors.secondary.clone())
+            .map(|c| c.colors.foreground.clone())
             .unwrap_or_else(|| "#ffffff".to_string()),
     })
 }

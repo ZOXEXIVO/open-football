@@ -132,8 +132,8 @@ impl StateProcessingHandler for DefenderRunningState {
 
 impl DefenderRunningState {
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
-        // Original: Clear if in own penalty area with nearby opponents
-        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(100.0) {
+        // Clear if in own penalty area with opponents pressing close
+        if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(30.0) {
             return true;
         }
 

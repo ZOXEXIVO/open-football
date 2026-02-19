@@ -15,6 +15,13 @@ impl StateProcessingHandler for ForwardReturningState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
+        }
+
         if ctx.team().is_control_ball(){
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,

@@ -368,11 +368,7 @@ impl MidfielderPassingState {
 
     /// Check if under heavy pressure
     fn is_under_heavy_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        const PRESSURE_DISTANCE: f32 = 10.0;
-        const PRESSURE_THRESHOLD: usize = 2;
-
-        let pressing_opponents = ctx.players().opponents().nearby(PRESSURE_DISTANCE).count();
-        pressing_opponents >= PRESSURE_THRESHOLD
+        ctx.player().pressure().is_under_heavy_pressure()
     }
 
     /// Check if should adjust position

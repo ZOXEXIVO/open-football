@@ -10,9 +10,9 @@ impl<'p> PressureOperationsImpl<'p> {
         PressureOperationsImpl { ctx }
     }
 
-    /// Check if player is under immediate pressure (at least one opponent very close)
+    /// Check if player is under immediate pressure (at least one opponent within 1m)
     pub fn is_under_immediate_pressure(&self) -> bool {
-        self.is_under_immediate_pressure_with_distance(30.0)
+        self.is_under_immediate_pressure_with_distance(5.0)
     }
 
     /// Check if player is under immediate pressure with custom distance
@@ -20,9 +20,9 @@ impl<'p> PressureOperationsImpl<'p> {
         self.ctx.players().opponents().exists(distance)
     }
 
-    /// Check if player is under heavy pressure (multiple opponents nearby)
+    /// Check if player is under heavy pressure (multiple opponents within 1m)
     pub fn is_under_heavy_pressure(&self) -> bool {
-        self.is_under_heavy_pressure_with_params(8.0, 2)
+        self.is_under_heavy_pressure_with_params(3.0, 2)
     }
 
     /// Check if player is under heavy pressure with custom parameters

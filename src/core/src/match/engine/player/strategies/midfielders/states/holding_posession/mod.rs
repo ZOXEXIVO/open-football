@@ -75,7 +75,7 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
 
 impl MidfielderHoldingPossessionState {
     pub fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(50.0)
+        ctx.player().pressure().is_under_immediate_pressure()
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {

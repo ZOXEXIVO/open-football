@@ -5,6 +5,7 @@ styles.min.css
 **/target
 
 .idea/
+.claude/
 
 training_result.json
 

@@ -25,11 +25,11 @@ impl ShotQualityEvaluator {
         // 4. Defensive pressure
         let pressure_factor = Self::pressure_factor(ctx);
 
-        // 5. Clear shot check
+        // 5. Clear shot check — partial obstruction still allows a decent chance
         let clear_factor = if ctx.player().has_clear_shot() {
             1.0
         } else {
-            0.15
+            0.4
         };
 
         // 6. Player skill factor
@@ -43,19 +43,19 @@ impl ShotQualityEvaluator {
 
     fn distance_factor(distance: f32) -> f32 {
         if distance <= 10.0 {
-            0.40
+            0.80 // Point-blank: very high chance
         } else if distance <= 30.0 {
-            // Interpolate 0.40 -> 0.30
-            0.40 - (distance - 10.0) / 20.0 * 0.10
+            // Interpolate 0.80 -> 0.45
+            0.80 - (distance - 10.0) / 20.0 * 0.35
         } else if distance <= 60.0 {
-            // Interpolate 0.30 -> 0.10
-            0.30 - (distance - 30.0) / 30.0 * 0.20
+            // Interpolate 0.45 -> 0.15
+            0.45 - (distance - 30.0) / 30.0 * 0.30
         } else if distance <= 120.0 {
-            // Interpolate 0.10 -> 0.02
-            0.10 - (distance - 60.0) / 60.0 * 0.08
+            // Interpolate 0.15 -> 0.04
+            0.15 - (distance - 60.0) / 60.0 * 0.11
         } else if distance <= 200.0 {
-            // Interpolate 0.02 -> 0.005
-            0.02 - (distance - 120.0) / 80.0 * 0.015
+            // Interpolate 0.04 -> 0.01
+            0.04 - (distance - 120.0) / 80.0 * 0.03
         } else {
             0.005
         }

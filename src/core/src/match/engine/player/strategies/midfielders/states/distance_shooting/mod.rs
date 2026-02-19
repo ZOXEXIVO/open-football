@@ -171,8 +171,7 @@ impl MidfielderDistanceShootingState {
     }
 
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        let pressure_distance = 15.0;
-        ctx.players().opponents().exists(pressure_distance)
+        ctx.player().pressure().is_under_immediate_pressure()
     }
 
     fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {

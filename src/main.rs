@@ -15,9 +15,9 @@ async fn main() {
         .default_filter_or("debug")
     ).init();
 
-    let is_debug = env::args().any(|arg| arg == "--debug");
-    if is_debug {
-        core::set_debug_mode(true);
+    let is_match_events_enabled = env::args().any(|arg| arg == "--match-events");
+    if is_match_events_enabled {
+        core::set_match_events_mode(true);
         info!("Debug mode enabled - match events will be recorded");
     }
 

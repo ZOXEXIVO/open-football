@@ -591,7 +591,7 @@ impl PassEvaluator {
 
         // Calculate minimum pass distance based on pressure
         // NOTE: This filter prevents "too short" passes that don't progress the ball
-        let is_under_pressure = ctx.players().opponents().exists(25.0);
+        let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let min_pass_distance = if is_under_pressure {
             // Under pressure, allow any distance
             0.0

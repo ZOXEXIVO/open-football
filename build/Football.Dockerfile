@@ -3,7 +3,7 @@ ARG RUST_VERSION=1.93
 
 # BUILD BACKEND
 
-FROM rust:${RUST_VERSION} as build-backend
+FROM rust:${RUST_VERSION} AS build-backend
 WORKDIR /src
 
 COPY ./ ./

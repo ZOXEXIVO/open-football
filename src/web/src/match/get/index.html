@@ -141,10 +141,10 @@
     const matchTimeMsTotal = {{ match_time_ms }};
     const goalsData = {{ goals_json|safe }};
     const playersData = {{ players_json|safe }};
-    const homeColorPrimary = "{{ home_color_primary }}";
-    const homeColorSecondary = "{{ home_color_secondary }}";
-    const awayColorPrimary = "{{ away_color_primary }}";
-    const awayColorSecondary = "{{ away_color_secondary }}";
+    const homeColorBackground = "{{ home_color_background }}";
+    const homeColorForeground = "{{ home_color_foreground }}";
+    const awayColorBackground = "{{ away_color_background }}";
+    const awayColorForeground = "{{ away_color_foreground }}";
 
     const maxWidth = 1400;
     const maxHeight = 950;
@@ -420,10 +420,10 @@
         return parseInt(hex.replace('#', ''), 16);
     }
 
-    const homeBg = hexToInt(homeColorPrimary);
-    const homeFg = hexToInt(homeColorSecondary);
-    const awayBg = hexToInt(awayColorPrimary);
-    const awayFg = hexToInt(awayColorSecondary);
+    const homeBg = hexToInt(homeColorBackground);
+    const homeFg = hexToInt(homeColorForeground);
+    const awayBg = hexToInt(awayColorBackground);
+    const awayFg = hexToInt(awayColorForeground);
     const gkColor = 0xf7e300;
 
     function createPlayerGraphic(x, y, player) {
@@ -433,7 +433,7 @@
 
         const isGK = player.position === 'GK';
         const fillColor = isGK ? gkColor : (player.is_home ? homeBg : awayBg);
-        const textColor = isGK ? 'black' : (player.is_home ? homeColorSecondary : awayColorSecondary);
+        const textColor = isGK ? 'black' : (player.is_home ? homeColorForeground : awayColorForeground);
         const borderColor = isGK ? 0x000000 : (player.is_home ? homeFg : awayFg);
 
         const border = new PIXI.Graphics();

@@ -8,7 +8,8 @@ pub struct CountryBuilder {
     code: Option<String>,
     slug: Option<String>,
     name: Option<String>,
-    color: Option<String>,
+    background_color: Option<String>,
+    foreground_color: Option<String>,
     continent_id: Option<u32>,
     leagues: Option<LeagueCollection>,
     clubs: Option<Vec<Club>>,
@@ -47,8 +48,13 @@ impl CountryBuilder {
         self
     }
 
-    pub fn color(mut self, color: String) -> Self {
-        self.color = Some(color);
+    pub fn background_color(mut self, color: String) -> Self {
+        self.background_color = Some(color);
+        self
+    }
+
+    pub fn foreground_color(mut self, color: String) -> Self {
+        self.foreground_color = Some(color);
         self
     }
 
@@ -113,7 +119,8 @@ impl CountryBuilder {
             code: self.code.ok_or("code is required")?,
             slug: self.slug.ok_or("slug is required")?,
             name: self.name.ok_or("name is required")?,
-            color: self.color.unwrap_or_else(|| "#1e272d".to_string()),
+            background_color: self.background_color.unwrap_or_else(|| "#1e272d".to_string()),
+            foreground_color: self.foreground_color.unwrap_or_else(|| "#ffffff".to_string()),
             continent_id: self.continent_id.ok_or("continent_id is required")?,
             leagues: self.leagues.ok_or("leagues is required")?,
             clubs: self.clubs.ok_or("clubs is required")?,

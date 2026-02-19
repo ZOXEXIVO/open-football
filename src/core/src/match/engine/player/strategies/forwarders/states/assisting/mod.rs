@@ -8,6 +8,13 @@ pub struct ForwardAssistingState {}
 
 impl StateProcessingHandler for ForwardAssistingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Priority 0: Free ball nearby - go claim it
+        if ctx.ball().should_take_ball_immediately() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::TakeBall,
+            ));
+        }
+
         if !ctx.team().is_control_ball(){
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,
@@ -86,7 +93,7 @@ impl StateProcessingHandler for ForwardAssistingState {
 
 impl ForwardAssistingState {
     fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(30.0)
+        ctx.player().pressure().is_under_immediate_pressure()
     }
 
     fn should_make_quick_pass(&self, ctx: &StateProcessingContext) -> bool {

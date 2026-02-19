@@ -75,13 +75,10 @@ impl StateProcessingHandler for ForwardTakeBallState {
         // If ball is aerial, target the landing position instead of current position
         let target = ctx.tick_context.positions.ball.landing_position;
 
-        // Calculate base Arrive behavior
-        let mut arrive_velocity = SteeringBehavior::Arrive {
-            target,
-            slowing_distance: 2.0,
-        }
-        .calculate(ctx.player)
-        .velocity;
+        // Use Seek for full-speed approach - no slowing when chasing a loose ball
+        let mut arrive_velocity = SteeringBehavior::Seek { target }
+            .calculate(ctx.player)
+            .velocity;
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering
