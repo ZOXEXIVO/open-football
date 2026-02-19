@@ -409,6 +409,49 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #fff;
 }
 
+/* Badge Deck — stacked card interaction */
+.fm-badge-deck {
+  position: relative;
+  display: inline-block;
+  vertical-align: middle;
+}
+
+.fm-badge-deck[data-count] {
+  cursor: pointer;
+}
+
+.fm-badge-deck[data-count] .fm-badge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  white-space: nowrap;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1),
+              box-shadow 0.25s ease;
+}
+
+.fm-badge-deck[data-count] .fm-badge:first-child {
+  position: relative;
+  left: auto;
+  top: auto;
+}
+
+.fm-badge-deck[data-count] .fm-badge:nth-child(2) {
+  transition-delay: 30ms;
+}
+
+.fm-badge-deck[data-count] .fm-badge:nth-child(3) {
+  transition-delay: 60ms;
+}
+
+.fm-badge-deck.open {
+  z-index: 100;
+}
+
+.fm-badge-deck.open .fm-badge {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
+}
+
 /* ============================================
    FM STARS
    ============================================ */
