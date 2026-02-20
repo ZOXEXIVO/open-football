@@ -41,6 +41,9 @@
                             {% if player.injured %}
                             <span class="fm-badge fm-badge-inj">{{ i18n.t("inj") }}</span>
                             {% endif %}
+                            {% if player.unhappy %}
+                            <span class="fm-badge fm-badge-unh">{{ i18n.t("unh") }}</span>
+                            {% endif %}
                             {% if player.transfer_listed %}
                             <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                             {% endif %}

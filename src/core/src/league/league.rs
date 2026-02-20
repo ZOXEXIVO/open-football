@@ -2,7 +2,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use crate::{Club, Player, Team};
+use crate::{Club, Player, PlayerStatusType, Team};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -254,8 +254,11 @@ impl League {
             .filter(|t| t.id != team_id) // skip the team itself
             .flat_map(|t| t.players.players.iter())
             .filter(|p| {
+                let statuses = p.statuses.get();
                 !p.player_attributes.is_injured
                     && !p.player_attributes.is_banned
+                    && !statuses.contains(&PlayerStatusType::Lst)
+                    && !statuses.contains(&PlayerStatusType::Loa)
             })
             .collect()
     }

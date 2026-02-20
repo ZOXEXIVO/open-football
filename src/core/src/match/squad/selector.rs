@@ -1,6 +1,6 @@
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{Player, Tactics, Team};
+use crate::{Player, PlayerStatusType, Tactics, Team};
 use log::{debug, warn};
 use std::borrow::Borrow;
 
@@ -32,13 +32,20 @@ impl SquadSelector {
             .players
             .players()
             .iter()
-            .filter(|&&p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
+            .filter(|&&p| {
+                !p.player_attributes.is_injured
+                    && !p.player_attributes.is_banned
+                    && !p.statuses.get().contains(&PlayerStatusType::Lst)
+                    && !p.statuses.get().contains(&PlayerStatusType::Loa)
+            })
             .copied()
             .collect();
 
         for &rp in reserve_players {
             if !rp.player_attributes.is_injured
                 && !rp.player_attributes.is_banned
+                && !rp.statuses.get().contains(&PlayerStatusType::Lst)
+                && !rp.statuses.get().contains(&PlayerStatusType::Loa)
                 && !available.iter().any(|p| p.id == rp.id)
             {
                 available.push(rp);

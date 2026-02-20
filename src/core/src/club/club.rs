@@ -77,10 +77,16 @@ impl Club {
             self.academy.simulate(ctx.clone()),
         );
 
+        let date = ctx.simulation.date.date();
+
         if ctx.simulation.is_week_beginning() {
-            let date = ctx.simulation.date.date();
+            // Weekly: comprehensive review (demotions, recalls, youth promotions, salaries)
+            // Subsumes daily critical moves to avoid double-processing
             self.process_salaries(ctx);
             self.teams.manage_squad_composition(date);
+        } else {
+            // Daily: only immediate demotions + ability swaps
+            self.teams.manage_critical_squad_moves(date);
         }
 
         result

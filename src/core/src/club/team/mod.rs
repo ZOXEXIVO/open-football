@@ -1,5 +1,6 @@
 pub mod behaviour;
 pub mod builder;
+pub mod coach_perception;
 pub mod collection;
 pub mod context;
 pub mod matches;
@@ -12,6 +13,7 @@ pub mod transfers;
 
 pub use behaviour::*;
 pub use builder::*;
+pub use coach_perception::*;
 pub use collection::*;
 pub use context::*;
 pub use matches::*;

@@ -559,6 +559,11 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #c8f0d0;
 }
 
+.fm-badge-unh {
+  background: #2a7a3f;
+  color: #c8f0d0;
+}
+
 .fm-badge-loan-in {
   background: #b2ebf2;
   color: #00606e;
@@ -1221,7 +1226,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-ph-rating-item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 45px;
 }
 
 .fm-ph-rating-item .fm-cond {
@@ -1234,7 +1239,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.8px;
-  min-width: 5.5em;
+  width: 6em;
+  flex-shrink: 0;
 }
 
 .fm-detail-row {
@@ -1313,6 +1319,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fp-field {
   position: relative;
   width: 100%;
+  margin: 0 auto;
   aspect-ratio: 0.58;
   background: linear-gradient(180deg, #173017 0%, #1a3a1a 30%, #16321a 60%, #143014 100%);
   border: 2px solid rgba(255, 255, 255, 0.12);
@@ -2835,7 +2842,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     padding: 12px 12px;
   }
 
-  /* Player page: stack grid, 2-col details */
+  /* Player page: stack grid */
   .fm-player-grid {
     grid-template-columns: 1fr;
     gap: 12px;
@@ -2844,19 +2851,31 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   .fm-player-grid-left { order: 2; }
   .fm-player-grid-right { order: 1; }
 
-  .fm-ph-id-cols {
-    grid-template-columns: 1fr 1fr;
+  .fp-field {
+    max-width: 20em;
   }
 
-  .fm-ph-id-col:nth-child(2) {
+  .fm-ph-identity {
+    padding: 14px 16px;
+  }
+
+  .fm-ph-id-cols {
+    grid-template-columns: 1fr;
+  }
+
+  .fm-ph-id-col {
     border-right: none;
+    border-bottom: 1px solid #263340;
+    padding: 8px 0;
+  }
+
+  .fm-ph-id-col:first-child {
+    padding-top: 0;
   }
 
   .fm-ph-id-col:last-child {
-    grid-column: 1 / -1;
-    border-right: none;
-    border-top: 1px solid #263340;
-    padding-top: 10px;
+    border-bottom: none;
+    padding-bottom: 0;
     flex-direction: row;
     flex-wrap: wrap;
     gap: 6px 24px;
@@ -3087,24 +3106,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     padding: 10px 8px;
   }
 
-  /* Player identity: single column */
-  .fm-ph-id-cols {
-    grid-template-columns: 1fr;
-  }
-
-  .fm-ph-id-col {
-    border-right: none;
-    border-bottom: 1px solid #263340;
-    padding: 8px 0;
-  }
-
-  .fm-ph-id-col:first-child {
-    padding-top: 0;
-  }
-
+  /* Player identity: stack ratings vertically on small screens */
   .fm-ph-id-col:last-child {
-    border-bottom: none;
-    border-top: none;
     flex-direction: column;
     gap: 6px;
   }
