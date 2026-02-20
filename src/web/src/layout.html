@@ -50,6 +50,7 @@
                                 <div class="fm-header-actions">
                                     <div class="fm-lang-dropdown">
                                         <div class="fm-lang-current">
+                                            <span class="fm-date-compact" id="date-up-compact"></span>
                                             <span class="flag flag-{% if lang == "es" %}es{% else if lang == "ru" %}ru{% else %}us{% endif %}"></span>
                                         </div>
                                         <div class="fm-lang-menu">
@@ -97,8 +98,14 @@
             try {
                 const res = await fetch('/api/date');
                 const data = await res.json();
-                document.getElementById('date-up').textContent = data.date;
-                document.getElementById('date-down').textContent = data.time;
+                var lang = document.documentElement.lang || 'en';
+                var d = new Date(data.iso);
+                var dateStr = d.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric' });
+                var timeStr = d.toLocaleDateString(lang, { weekday: 'short' }) + ' ' + data.time.split(' ').pop();
+                document.getElementById('date-up').textContent = dateStr;
+                document.getElementById('date-down').textContent = timeStr;
+                var compact = document.getElementById('date-up-compact');
+                if (compact) compact.textContent = dateStr;
             } catch(e) {
                 if (retries < 3) {
                     setTimeout(function() { updateDate(retries + 1); }, 300);

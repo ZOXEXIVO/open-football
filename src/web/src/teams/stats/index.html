@@ -16,36 +16,36 @@
         <div class="fm-panel-head">
             <h3>{{ i18n.t("player_statistics") }}</h3>
         </div>
-        <table class="fm-stats">
+        <table class="fm-stats fm-team-stats">
             <thead>
                 <tr>
-                    <th>{{ i18n.t("player") }}</th>
-                    <th>{{ i18n.t("pos") }}</th>
-                    <th>{{ i18n.t("apps") }}</th>
-                    <th>{{ i18n.t("gls") }}</th>
-                    <th>{{ i18n.t("ast") }}</th>
-                    <th>{{ i18n.t("yc") }}</th>
-                    <th>{{ i18n.t("rc") }}</th>
-                    <th>{{ i18n.t("sot") }}</th>
-                    <th>{{ i18n.t("pass_pct") }}</th>
-                    <th>{{ i18n.t("tck_w") }}</th>
-                    <th>{{ i18n.t("av_rat") }}</th>
+                    <th class="ts-pos">{{ i18n.t("pos") }}</th>
+                    <th class="ts-name">{{ i18n.t("player") }}</th>
+                    <th class="ts-col">{{ i18n.t("apps") }}</th>
+                    <th class="ts-col">{{ i18n.t("gls") }}</th>
+                    <th class="ts-col">{{ i18n.t("ast") }}</th>
+                    <th class="ts-col">{{ i18n.t("yc") }}</th>
+                    <th class="ts-col">{{ i18n.t("rc") }}</th>
+                    <th class="ts-col">{{ i18n.t("sot") }}</th>
+                    <th class="ts-col">{{ i18n.t("pass_pct") }}</th>
+                    <th class="ts-col">{{ i18n.t("tck_w") }}</th>
+                    <th class="ts-col">{{ i18n.t("av_rat") }}</th>
                 </tr>
             </thead>
             <tbody>
                 {% for p in players %}
                 <tr>
-                    <td><a href="/{{ lang }}/players/{{ p.id }}">{{ p.last_name }} {{ p.first_name }}</a></td>
-                    <td style="color:#7a868e;font-size:12px">{{ p.position }}</td>
-                    <td>{{ p.played }}{% if p.played_subs > 0 %} ({{ p.played_subs }}){% endif %}</td>
-                    <td>{{ p.goals }}</td>
-                    <td>{{ p.assists }}</td>
-                    <td>{{ p.yellow_cards }}</td>
-                    <td>{{ p.red_cards }}</td>
-                    <td>{{ p.shots_on_target }}</td>
-                    <td>{{ p.passes }}</td>
-                    <td>{{ p.tackling }}</td>
-                    <td>{{ p.average_rating }}</td>
+                    <td class="ts-pos">{{ p.position }}</td>
+                    <td class="ts-name"><a href="/{{ lang }}/players/{{ p.id }}">{{ p.last_name }} {{ p.first_name }}</a></td>
+                    <td class="ts-col">{{ p.played }}{% if p.played_subs > 0 %} ({{ p.played_subs }}){% endif %}</td>
+                    <td class="ts-col">{{ p.goals }}</td>
+                    <td class="ts-col">{{ p.assists }}</td>
+                    <td class="ts-col">{{ p.yellow_cards }}</td>
+                    <td class="ts-col">{{ p.red_cards }}</td>
+                    <td class="ts-col">{{ p.shots_on_target }}</td>
+                    <td class="ts-col">{{ p.passes }}</td>
+                    <td class="ts-col">{{ p.tackling }}</td>
+                    <td class="ts-col">{{ p.average_rating }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

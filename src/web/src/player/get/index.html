@@ -18,96 +18,72 @@
                 <div class="fm-ph-photo-frame">
                     <div class="fm-ph-photo-img"><img src="/api/players/{{ player.id }}/face.svg?age={{ player.age }}" alt="Player face"></div>
                 </div>
-                <span class="fm-ph-pos">{{ player.position }}</span>
             </div>
             <div class="fm-ph-identity">
-                <div class="fm-ph-name-row">
-                    <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
-                        <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
-                    </a>
-                    <h2 class="fm-ph-name">{{ player.first_name }} {{ player.last_name }}</h2>
-                </div>
-                <div class="fm-ph-meta">
-                    <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-nat">{{ player.country_name }}</a>
-                    <span class="fm-ph-sep"></span>
-                    <span class="fm-ph-age">{{ player.age }} {{ i18n.t("years_old") }}</span>
-                    <span class="fm-ph-sep"></span>
-                    <span class="fm-ph-born">{{ player.birth_date }}</span>
-                </div>
-                {% if let Some(loan) = player.loan_status %}
-                <div class="fm-ph-loan">
-                    {% if loan.is_loan_in %}
-                    <span class="fm-ph-loan-label loan-in">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">from <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
-                    {% else %}
-                    <span class="fm-ph-loan-label loan-out">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">to <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
-                    {% endif %}
-                </div>
-                {% endif %}
-                <div class="fm-ph-ratings">
-                    <div class="fm-ph-rating-item">
-                        <span class="fm-ph-rlabel">{{ i18n.t("ability") }}</span>
-                        <span class="fm-stars fm-stars-lg">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
+                <div class="fm-ph-id-cols">
+                    <div class="fm-ph-id-col">
+                        <div class="fm-ph-name-row">
+                            <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
+                                <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
+                            </a>
+                            <span class="fm-ph-age">{{ i18n.t("age") }}: {{ player.age }}</span>
+                            <span class="fm-ph-sep"></span>
+                            <span class="fm-ph-born">{{ player.birth_date }}</span>
+                        </div>
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value">{{ i18n.t("caps_goals").replace("{caps}", &player.player_attributes.international_apps.to_string()).replace("{goals}", &player.player_attributes.international_goals.to_string()) }}</span>
+                        </div>
+                        {% if player.player_attributes.under_21_international_apps > 0 %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value">{{ i18n.t("u21") }}: {{ i18n.t("caps_goals").replace("{caps}", &player.player_attributes.under_21_international_apps.to_string()).replace("{goals}", &player.player_attributes.under_21_international_goals.to_string()) }}</span>
+                        </div>
+                        {% endif %}
                     </div>
-                    <div class="fm-ph-rating-item">
-                        <span class="fm-ph-rlabel">{{ i18n.t("potential") }}</span>
-                        <span class="fm-stars fm-stars-lg">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
+                    <div class="fm-ph-id-col">
+                        {% if let Some(loan) = player.loan_status %}
+                        <div class="fm-ph-loan">
+                            {% if loan.is_loan_in %}
+                            <span class="fm-ph-loan-label loan-in">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">{{ i18n.t("loan_from") }} <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                            {% else %}
+                            <span class="fm-ph-loan-label loan-out">{{ i18n.t("on_loan") }}</span> <span class="fm-ph-loan-text">{{ i18n.t("loan_to") }} <a href="/{{ lang }}/teams/{{ loan.club_slug }}">{{ loan.club_name }}</a></span>
+                            {% endif %}
+                        </div>
+                        {% else %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value">{{ i18n.t("contracted_to") }} <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
+                        </div>
+                        {% endif %}
+                        {% if let Some(contract) = player.contract %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value">${{ contract.salary }}K {{ i18n.t("per_week") }}</span>
+                            <span class="fm-ph-sep"></span>
+                            <span class="fm-detail-value">{{ i18n.t("salary_until") }} {{ contract.expiration }}</span>
+                        </div>
+                        {% if !contract.squad_status.is_empty() %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value">{{ i18n.t(&contract.squad_status) }}</span>
+                        </div>
+                        {% endif %}
+                        {% endif %}
                     </div>
-                    <div class="fm-ph-rating-item fm-ph-cond-item">
-                        <span class="fm-ph-rlabel">{{ i18n.t("condition") }}</span>
-                        <div class="fm-cond">
-                            <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
-                            <span class="fm-cond-val">{{ player.conditions }}%</span>
+                    <div class="fm-ph-id-col">
+                        <div class="fm-ph-rating-item">
+                            <span class="fm-ph-rlabel">{{ i18n.t("condition") }}</span>
+                            <div class="fm-cond">
+                                <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
+                                <span class="fm-cond-val">{{ player.conditions }}%</span>
+                            </div>
+                        </div>
+                        <div class="fm-ph-rating-item">
+                            <span class="fm-ph-rlabel">{{ i18n.t("ability") }}</span>
+                            <span class="fm-stars fm-stars-lg">{% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}</span>
+                        </div>
+                        <div class="fm-ph-rating-item">
+                            <span class="fm-ph-rlabel">{{ i18n.t("potential") }}</span>
+                            <span class="fm-stars fm-stars-lg">{% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}</span>
                         </div>
                     </div>
                 </div>
-            </div>
-        </div>
-        <div class="fm-ph-details">
-            <div class="fm-ph-col">
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("club") }}</span>
-                    <span class="fm-detail-value"><a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
-                </div>
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("preferred_foot") }}</span>
-                    <span class="fm-detail-value">{{ player.preferred_foot }}</span>
-                </div>
-            </div>
-            <div class="fm-ph-col">
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("value") }}</span>
-                    <span class="fm-detail-value fm-val-highlight">${{ player.value }}</span>
-                </div>
-                {% if let Some(contract) = player.contract %}
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("wage") }}</span>
-                    <span class="fm-detail-value">${{ contract.salary }}K p/w</span>
-                </div>
-                {% endif %}
-            </div>
-            <div class="fm-ph-col">
-                {% if let Some(contract) = player.contract %}
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("contract") }}</span>
-                    <span class="fm-detail-value">until {{ contract.expiration }}</span>
-                </div>
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("status") }}</span>
-                    <span class="fm-detail-value">{{ contract.squad_status }}</span>
-                </div>
-                {% endif %}
-            </div>
-            <div class="fm-ph-col">
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("international") }}</span>
-                    <span class="fm-detail-value">{{ player.player_attributes.international_apps }} caps / {{ player.player_attributes.international_goals }} goals</span>
-                </div>
-                {% if player.player_attributes.under_21_international_apps > 0 %}
-                <div class="fm-detail-row">
-                    <span class="fm-detail-label">{{ i18n.t("u21") }}</span>
-                    <span class="fm-detail-value">{{ player.player_attributes.under_21_international_apps }} caps / {{ player.player_attributes.under_21_international_goals }} goals</span>
-                </div>
-                {% endif %}
             </div>
         </div>
     </section>

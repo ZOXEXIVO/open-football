@@ -1,5 +1,5 @@
 use crate::club::player::injury::InjuryType;
-use crate::{MentalGains, PhysicalGains, PlayerStatusType, SimulatorData, TechnicalGains, TrainingEffects};
+use crate::{HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, SimulatorData, TechnicalGains, TrainingEffects};
 
 pub struct PlayerTrainingResult {
     pub player_id: u32,
@@ -89,9 +89,18 @@ impl PlayerTrainingResult {
                 player.skills.physical.match_readiness = (player.skills.physical.match_readiness - 1.0).max(0.0);
             }
 
-            // Apply morale changes to happiness (simplified)
-            if self.effects.morale_change > 0.0 {
-                if rand::random::<f32>() < self.effects.morale_change {
+            // Apply morale changes to happiness system
+            if self.effects.morale_change.abs() > 0.001 {
+                let event_type = if self.effects.morale_change > 0.0 {
+                    HappinessEventType::GoodTraining
+                } else {
+                    HappinessEventType::PoorTraining
+                };
+                player.happiness.add_event(event_type, self.effects.morale_change * 5.0);
+                player.happiness.adjust_morale(self.effects.morale_change * 3.0);
+
+                // Good training still has a chance to improve behaviour
+                if self.effects.morale_change > 0.0 && rand::random::<f32>() < self.effects.morale_change {
                     player.behaviour.try_increase();
                 }
             }

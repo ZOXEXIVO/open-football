@@ -16,55 +16,46 @@
         <div class="fm-panel-head">
             <h3>{{ i18n.t("career_statistics") }}</h3>
         </div>
-        <table class="fm-stats">
+        <table class="fm-stats fm-history-table">
             <thead>
                 <tr>
                     <th>{{ i18n.t("season") }}</th>
                     <th class="sq-club">{{ i18n.t("club") }}</th>
-                    <th>{{ i18n.t("apps") }}</th>
-                    <th>{{ i18n.t("gls") }}</th>
-                    <th>{{ i18n.t("ast") }}</th>
-                    <th>{{ i18n.t("pen") }}</th>
-                    <th>{{ i18n.t("pom") }}</th>
-                    <th>{{ i18n.t("yc") }}</th>
-                    <th>{{ i18n.t("rc") }}</th>
-                    <th>{{ i18n.t("sot") }}</th>
-                    <th>{{ i18n.t("pass_pct") }}</th>
-                    <th>{{ i18n.t("tck_w") }}</th>
-                    <th>{{ i18n.t("av_rat") }}</th>
+                    <th class="sq-nat">{{ i18n.t("nat") }}</th>
+                    <th class="sq-league">{{ i18n.t("league") }}</th>
+                    <th class="sq-fee">{{ i18n.t("fee") }}</th>
+                    <th class="sq-stat">{{ i18n.t("apps") }}</th>
+                    <th class="sq-stat">{{ i18n.t("gls") }}</th>
+                    <th class="sq-stat">{{ i18n.t("ast") }}</th>
+                    <th class="sq-stat">{{ i18n.t("pom") }}</th>
+                    <th class="sq-stat">{{ i18n.t("av_rat") }}</th>
                 </tr>
             </thead>
             <tbody>
                 <tr class="fm-stats-current">
                     <td>{{ current_season }}</td>
-                    <td class="sq-club"><a href="/{{ lang }}/teams/{{ team_slug }}">{{ current_club }}</a>{% if current_is_loan %} <span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% endif %}</td>
-                    <td>{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
-                    <td>{{ current.goals }}</td>
-                    <td>{{ current.assists }}</td>
-                    <td>{{ current.penalties }}</td>
-                    <td>{{ current.player_of_the_match }}</td>
-                    <td>{{ current.yellow_cards }}</td>
-                    <td>{{ current.red_cards }}</td>
-                    <td>{{ current.shots_on_target }}</td>
-                    <td>{{ current.passes }}</td>
-                    <td>{{ current.tackling }}</td>
-                    <td>{{ current.average_rating }}</td>
+                    <td class="sq-club"><a href="/{{ lang }}/teams/{{ team_slug }}">{{ current_club }}</a></td>
+                    <td class="sq-nat">{% if !current_country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ current_country_slug }}"><span class="flag flag-{{ current_country_code }}" title="{{ current_country_name }}"></span> {{ current_country_name }}</a>{% endif %}</td>
+                    <td class="sq-league">{% if !current_league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ current_league_slug }}">{{ current_league_name }}</a>{% endif %}</td>
+                    <td class="sq-fee">{% if current_is_loan %}{{ i18n.t("loan") }}{% else if !current_transfer_fee.is_empty() %}{{ current_transfer_fee }}{% else if current_is_free_transfer %}{{ i18n.t("free") }}{% endif %}</td>
+                    <td class="sq-stat">{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
+                    <td class="sq-stat">{{ current.goals }}</td>
+                    <td class="sq-stat">{{ current.assists }}</td>
+                    <td class="sq-stat">{{ current.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ current.average_rating }}</td>
                 </tr>
                 {% for item in items %}
                 <tr>
                     <td>{{ item.season }}</td>
-                    <td class="sq-club{% if item.is_loan %} sq-club-loan{% endif %}">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}{% if item.is_loan %} <span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% endif %}{% if !item.transfer_fee.is_empty() %} <span class="fm-transfer-fee">{{ item.transfer_fee }}</span>{% endif %}</td>
-                    <td>{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
-                    <td>{{ item.stats.goals }}</td>
-                    <td>{{ item.stats.assists }}</td>
-                    <td>{{ item.stats.penalties }}</td>
-                    <td>{{ item.stats.player_of_the_match }}</td>
-                    <td>{{ item.stats.yellow_cards }}</td>
-                    <td>{{ item.stats.red_cards }}</td>
-                    <td>{{ item.stats.shots_on_target }}</td>
-                    <td>{{ item.stats.passes }}</td>
-                    <td>{{ item.stats.tackling }}</td>
-                    <td>{{ item.stats.average_rating }}</td>
+                    <td class="sq-club">{% if !item.team_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a>{% else %}{{ item.team_name }}{% endif %}</td>
+                    <td class="sq-nat">{% if !item.country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ item.country_slug }}"><span class="flag flag-{{ item.country_code }}" title="{{ item.country_name }}"></span> {{ item.country_name }}</a>{% endif %}</td>
+                    <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}</td>
+                    <td class="sq-fee">{% if item.is_loan %}{{ i18n.t("loan") }}{% else if !item.transfer_fee.is_empty() %}{{ item.transfer_fee }}{% else if item.is_free_transfer %}{{ i18n.t("free") }}{% endif %}</td>
+                    <td class="sq-stat">{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
+                    <td class="sq-stat">{{ item.stats.goals }}</td>
+                    <td class="sq-stat">{{ item.stats.assists }}</td>
+                    <td class="sq-stat">{{ item.stats.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ item.stats.average_rating }}</td>
                 </tr>
                 {% endfor %}
             </tbody>

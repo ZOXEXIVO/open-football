@@ -9,6 +9,7 @@ use serde::Serialize;
 pub struct CurrentDateModel {
     pub date: String,
     pub time: String,
+    pub iso: String,
 }
 
 pub async fn current_date_action(State(state): State<GameAppData>) -> Response {
@@ -22,6 +23,7 @@ pub async fn current_date_action(State(state): State<GameAppData>) -> Response {
     let model = CurrentDateModel {
         date: date.format("%d %b %Y").to_string(),
         time: date.format("%a %R").to_string(),
+        iso: date.format("%Y-%m-%dT%H:%M:%S").to_string(),
     };
 
     Json(model).into_response()

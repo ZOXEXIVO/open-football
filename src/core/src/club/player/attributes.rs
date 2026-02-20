@@ -35,6 +35,9 @@ pub struct PlayerAttributes {
     // injury tracking
     pub injury_days_remaining: u16,
     pub injury_type: Option<InjuryType>,
+
+    // match load tracking
+    pub days_since_last_match: u16,
 }
 
 impl PlayerAttributes {
@@ -103,6 +106,7 @@ mod tests {
             under_21_international_goals: 7,
             injury_days_remaining: 0,
             injury_type: None,
+            days_since_last_match: 0,
         }
     }
 

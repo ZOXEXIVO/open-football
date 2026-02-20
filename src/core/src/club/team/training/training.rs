@@ -1,5 +1,5 @@
 use crate::club::player::training::result::PlayerTrainingResult;
-use crate::{Player, PlayerPositionType, PlayerTraining, Staff, Team, TeamTrainingResult};
+use crate::{ChangeType, Player, PlayerPositionType, PlayerTraining, RelationshipChange, Staff, Team, TeamTrainingResult};
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
@@ -128,6 +128,37 @@ impl TeamTraining {
                 }
                 if let Some(player_j) = team.players.players.iter_mut().find(|p| p.id == participant_ids[j]) {
                     player_j.relations.update(participant_ids[i], 0.01);
+                }
+            }
+        }
+
+        // Coach-player relationship updates based on training quality
+        let coach_id = team.staffs.head_coach().id;
+        let coach_effectiveness = team.staffs.head_coach().recent_performance.training_effectiveness;
+
+        // Calculate average morale change across training results
+        let total_morale: f32 = training_results.player_results
+            .iter()
+            .map(|r| r.effects.morale_change)
+            .sum();
+        let avg_morale = if !training_results.player_results.is_empty() {
+            total_morale / training_results.player_results.len() as f32
+        } else {
+            0.0
+        };
+
+        // Positive training session: update coach-player relationships
+        if avg_morale > 0.0 {
+            let relationship_boost = 0.01 + coach_effectiveness * 0.02; // 0.01 to 0.03
+            let sim_date = chrono::Local::now().date_naive();
+
+            for &player_id in &participant_ids {
+                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                    let change = RelationshipChange::positive(
+                        ChangeType::CoachingSuccess,
+                        relationship_boost,
+                    );
+                    player.relations.update_staff_relationship(coach_id, change, sim_date);
                 }
             }
         }

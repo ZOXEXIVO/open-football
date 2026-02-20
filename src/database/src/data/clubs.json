@@ -472,7 +472,7 @@
       }
     ],
     "colors": {
-      "background": "#000d92",
+      "background": "#020a56",
       "foreground": "#ffffff"
     }
   },
@@ -684,8 +684,8 @@
       }
     ],
     "colors": {
-      "background": "#1e272d",
-      "foreground": "#ffffff"
+      "background": "#00144c",
+      "foreground": "#a92b2b"
     }
   },
   {
@@ -737,7 +737,7 @@
       }
     ],
     "colors": {
-      "background": "#1e272d",
+      "background": "#022e4c",
       "foreground": "#ffffff"
     }
   },

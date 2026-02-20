@@ -4,6 +4,7 @@ use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult};
 use crate::context::GlobalContext;
 use crate::shared::Location;
+use crate::transfers::pipeline::ClubTransferPlan;
 use crate::TeamCollection;
 
 #[derive(Debug, Clone)]
@@ -39,6 +40,8 @@ pub struct Club {
     pub colors: ClubColors,
 
     pub teams: TeamCollection,
+
+    pub transfer_plan: ClubTransferPlan,
 }
 
 impl Club {
@@ -62,6 +65,7 @@ impl Club {
             colors,
             board: ClubBoard::new(),
             teams,
+            transfer_plan: ClubTransferPlan::new(),
         }
     }
 

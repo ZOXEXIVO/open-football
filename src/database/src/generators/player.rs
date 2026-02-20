@@ -42,6 +42,7 @@ impl PlayerGenerator {
         let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
+        let age = (now.year() as u32).saturating_sub(year);
 
         let salary_min = (2000.0 + rep_factor * 30000.0) as i32;
         let salary_max = (10000.0 + rep_factor * 190000.0) as i32;
@@ -70,7 +71,7 @@ impl PlayerGenerator {
             .country_id(country_id)
             .skills(Self::generate_skills(rep_factor))
             .attributes(Self::generate_person_attributes())
-            .player_attributes(Self::generate_player_attributes(rep_factor))
+            .player_attributes(Self::generate_player_attributes(rep_factor, age))
             .contract(Some(contract))
             .positions(Self::generate_positions(position))
             .build()
@@ -260,7 +261,7 @@ impl PlayerGenerator {
         }
     }
 
-    fn generate_player_attributes(rep_factor: f32) -> PlayerAttributes {
+    fn generate_player_attributes(rep_factor: f32, age: u32) -> PlayerAttributes {
         let ca_min = (rep_factor * 80.0) as i32;
         let ca_max = (40.0 + rep_factor * 130.0).min(200.0) as i32;
         let current_ability = IntegerUtils::random(ca_min, ca_max).min(200) as u8;
@@ -270,6 +271,34 @@ impl PlayerGenerator {
         let potential_ability = IntegerUtils::random(pa_min, pa_max) as u8;
 
         let rep_base = (rep_factor * 3000.0) as i32;
+
+        // U21 caps: players 17-23 can accumulate U21 caps, older players retain what they had
+        let u21_apps = if age < 17 {
+            0
+        } else {
+            let u21_years = (age.min(23) - 17) as i32;
+            let max_u21 = (u21_years as f32 * rep_factor * 8.0) as i32;
+            IntegerUtils::random(0, max_u21.max(1)) as u16
+        };
+        let u21_goals = if u21_apps > 0 {
+            IntegerUtils::random(0, (u21_apps as f32 * 0.35) as i32) as u16
+        } else {
+            0
+        };
+
+        // Senior international caps: only from age 18+, scales with age and reputation
+        let intl_apps = if age < 18 {
+            0
+        } else {
+            let senior_years = (age - 18) as f32;
+            let max_caps = (senior_years * rep_factor * 7.0) as i32;
+            IntegerUtils::random(0, max_caps.max(1)) as u16
+        };
+        let intl_goals = if intl_apps > 0 {
+            IntegerUtils::random(0, (intl_apps as f32 * 0.3) as i32) as u16
+        } else {
+            0
+        };
 
         PlayerAttributes {
             is_banned: false,
@@ -285,12 +314,13 @@ impl PlayerGenerator {
             world_reputation: IntegerUtils::random((rep_base as f32 * 0.1) as i32, (rep_base as f32 * 0.4) as i32) as i16,
             current_ability,
             potential_ability,
-            international_apps: IntegerUtils::random(0, (rep_factor * 100.0) as i32) as u16,
-            international_goals: IntegerUtils::random(0, (rep_factor * 40.0) as i32) as u16,
-            under_21_international_apps: IntegerUtils::random(0, 30) as u16,
-            under_21_international_goals: IntegerUtils::random(0, 10) as u16,
+            international_apps: intl_apps,
+            international_goals: intl_goals,
+            under_21_international_apps: u21_apps,
+            under_21_international_goals: u21_goals,
             injury_days_remaining: 0,
             injury_type: None,
+            days_since_last_match: 0,
         }
     }
 

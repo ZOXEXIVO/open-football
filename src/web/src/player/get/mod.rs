@@ -379,14 +379,14 @@ pub fn get_potential_ability_stars(player: &Player) -> u8 {
 
 fn format_squad_status(status: &PlayerSquadStatus) -> String {
     match status {
-        PlayerSquadStatus::KeyPlayer => "Key Player",
-        PlayerSquadStatus::FirstTeamRegular => "First Team Regular",
-        PlayerSquadStatus::FirstTeamSquadRotation => "Squad Rotation",
-        PlayerSquadStatus::MainBackupPlayer => "Backup Player",
-        PlayerSquadStatus::HotProspectForTheFuture => "Hot Prospect",
-        PlayerSquadStatus::DecentYoungster => "Decent Youngster",
-        PlayerSquadStatus::NotNeeded => "Not Needed",
-        PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "N/A",
+        PlayerSquadStatus::KeyPlayer => "squad_key_player",
+        PlayerSquadStatus::FirstTeamRegular => "squad_first_team_regular",
+        PlayerSquadStatus::FirstTeamSquadRotation => "squad_rotation",
+        PlayerSquadStatus::MainBackupPlayer => "squad_backup_player",
+        PlayerSquadStatus::HotProspectForTheFuture => "squad_hot_prospect",
+        PlayerSquadStatus::DecentYoungster => "squad_decent_youngster",
+        PlayerSquadStatus::NotNeeded => "squad_not_needed",
+        PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "",
     }
     .to_string()
 }

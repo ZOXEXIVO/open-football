@@ -161,6 +161,12 @@ impl StaffCollection {
         let mut to_list = Vec::new();
 
         for player in players {
+            // Under-16: handled as free transfer at country level
+            let age = player.age(date);
+            if age < 16 {
+                continue;
+            }
+
             // Already listed
             if player.statuses.get().contains(&PlayerStatusType::Lst) {
                 continue;
@@ -288,7 +294,7 @@ impl Staff {
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> StaffResult {
         let now = ctx.simulation.date;
-        let mut result = StaffResult::new();
+        let mut result = StaffResult::new(self.id);
 
         // Birthday handling - improves mood
         if DateUtils::is_birthday(self.birth_date, now.date()) {
@@ -511,22 +517,14 @@ impl Staff {
     }
 
     fn process_relationships(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
-        // Daily relationship updates are minimal
-        // Major updates happen during training and matches
-
-        if ctx.simulation.date.hour() == 12 {  // Midday check
+        if ctx.simulation.date.hour() == 12 {
             // Small random relationship events
             if rand::random::<f32>() < 0.1 {
-                // Positive interaction with random player
                 result.relationship_event = Some(RelationshipEvent::PositiveInteraction);
-
-                // This would update the actual relations
-                // self.relations.update_simple(player_id, 0.5);
-            }
-
-            if rand::random::<f32>() < 0.05 && self.job_satisfaction < 40.0 {
-                // Conflict when satisfaction is low
+            } else if rand::random::<f32>() < 0.05 && self.job_satisfaction < 40.0 {
                 result.relationship_event = Some(RelationshipEvent::Conflict);
+            } else if rand::random::<f32>() < 0.02 && self.job_satisfaction > 70.0 {
+                result.relationship_event = Some(RelationshipEvent::TrustBuilt);
             }
         }
     }

@@ -222,6 +222,28 @@ impl TransferMarket {
         }
     }
 
+    /// Check if a specific player already has an active negotiation from a given buyer.
+    pub fn has_active_negotiation_for(&self, player_id: u32, buying_club_id: u32) -> bool {
+        self.negotiations.values().any(|n| {
+            n.player_id == player_id
+                && n.buying_club_id == buying_club_id
+                && (n.status == NegotiationStatus::Pending
+                    || n.status == NegotiationStatus::Countered)
+        })
+    }
+
+    /// Count how many active negotiations a specific club currently has as a buyer.
+    pub fn active_negotiation_count_for_club(&self, club_id: u32) -> u32 {
+        self.negotiations
+            .values()
+            .filter(|n| {
+                n.buying_club_id == club_id
+                    && (n.status == NegotiationStatus::Pending
+                        || n.status == NegotiationStatus::Countered)
+            })
+            .count() as u32
+    }
+
     pub fn check_transfer_window(&mut self, is_open: bool) {
         self.transfer_window_open = is_open;
 

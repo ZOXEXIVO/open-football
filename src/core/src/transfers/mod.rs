@@ -4,6 +4,9 @@ pub mod market;
 pub mod negotiation;
 pub mod offer;
 pub mod window;
+pub mod pipeline;
+pub mod pipeline_processor;
+pub mod staff_resolver;
 
 pub use market::*;
 pub use negotiation::*;
@@ -11,3 +14,6 @@ pub use offer::*;
 pub use pool::*;
 pub use transfer::*;
 pub use window::*;
+pub use pipeline::*;
+pub use pipeline_processor::*;
+pub use staff_resolver::*;

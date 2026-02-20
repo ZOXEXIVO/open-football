@@ -4,13 +4,13 @@ use log::{debug, info};
 use std::collections::HashMap;
 use crate::league::{LeagueResult, Season};
 use crate::simulator::SimulatorData;
-use crate::{Club, ClubResult, ClubTransferStrategy, Country, Person, PlayerClubContract,
+use crate::{Club, ClubResult, Country, Person, PlayerClubContract,
             PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PlayerStatistics,
             PlayerStatisticsHistoryItem, PlayerStatusType, SimulationResult};
-use crate::club::staff::result::ScoutRecommendation;
-use crate::shared::{Currency, CurrencyValue};
+use crate::shared::CurrencyValue;
 use crate::transfers::{TransferListing, TransferListingType, TransferListingStatus, TransferWindowManager};
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
+use crate::transfers::pipeline_processor::PipelineProcessor;
 
 pub struct CountryResult {
     pub country_id: u32,
@@ -69,24 +69,22 @@ impl CountryResult {
 
     fn is_preseason(date: NaiveDate) -> bool {
         let month = date.month();
-        // Preseason typically June-July in Europe
         month == 6 || month == 7
     }
 
     fn simulate_preseason_activities(&self, data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
-        info!("⚽ Running preseason activities...");
+        info!("Running preseason activities...");
 
         if let Some(country) = data.country_mut(country_id) {
-            // Schedule friendlies between clubs
             Self::schedule_friendly_matches(country, date);
-
-            // Training camps and tours
             Self::organize_training_camps(country);
-
-            // Preseason tournaments
             Self::organize_preseason_tournaments(country);
         }
     }
+
+    // ============================================================
+    // NEW: Pipeline-driven transfer market simulation
+    // ============================================================
 
     fn simulate_transfer_market(
         &self,
@@ -102,26 +100,34 @@ impl CountryResult {
             return summary;
         }
 
-        info!("💰 Transfer window is OPEN - simulating market activity");
+        info!("Transfer window is OPEN - simulating pipeline-driven market activity");
 
-        // Get country to access its data
         if let Some(country) = data.country_mut(country_id) {
-            // Phase 1: Resolve pending negotiations from previous days
+            // Step 1: Resolve pending negotiations from previous days [EXISTING - kept]
             Self::resolve_pending_negotiations(country, current_date, &mut summary);
 
-            // Phase 2: Clubs list players for transfer
-            Self::list_players_for_transfer(country, current_date, &mut summary);
+            // Step 2: Evaluate squads (periodic - not daily)
+            PipelineProcessor::evaluate_squads(country, current_date);
 
-            // Phase 3: Generate interest and start new negotiations
-            Self::negotiate_transfers(country, current_date, &mut summary);
+            // Step 3: Assign scouts to pending requests
+            PipelineProcessor::assign_scouts(country, current_date);
 
-            // Phase 4: Start loan deal negotiations
-            Self::process_loan_deals(country, current_date, &mut summary);
+            // Step 4: Process scouting observations (replaces random scouting)
+            PipelineProcessor::process_scouting(country, current_date);
 
-            // Phase 5: Free agents and contract expirations
+            // Step 5: Build shortlists from completed scouting
+            PipelineProcessor::build_shortlists(country, current_date);
+
+            // Step 6: Initiate negotiations from shortlists (replaces bulk negotiate_transfers)
+            PipelineProcessor::initiate_negotiations(country, current_date);
+
+            // Step 7: List players from pipeline decisions (loan-outs, surplus)
+            Self::list_players_from_pipeline(country, current_date, &mut summary);
+
+            // Step 8: Free agents and contract expirations [EXISTING - kept]
             Self::handle_free_agents(country, current_date, &mut summary);
 
-            // Phase 6: Expire stale negotiations
+            // Step 9: Expire stale negotiations [EXISTING - kept]
             country.transfer_market.update(current_date);
 
             debug!(
@@ -133,48 +139,58 @@ impl CountryResult {
         summary
     }
 
-    fn list_players_for_transfer(
+    /// List players for transfer based on pipeline decisions and staff evaluations.
+    /// Replaces the old list_players_for_transfer() which did bulk analysis.
+    fn list_players_from_pipeline(
         country: &mut Country,
         date: NaiveDate,
         summary: &mut TransferActivitySummary,
     ) {
-        // Collect player listing data to avoid borrow conflicts
-        // Tuple: (player_id, club_id, team_id, asking_price, listing_type)
         let mut listings_to_add = Vec::new();
         let price_level = country.settings.pricing.price_level;
 
         for club in &country.clubs {
-            // Analyze squad and determine transfer needs
             let squad_analysis = Self::analyze_squad_needs(club);
 
-            // List surplus players
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+
             for player in &club.teams.teams[0].players.players {
-                if Self::should_loan_player(player, &squad_analysis, date) {
-                    let asking_price = Self::calculate_asking_price(player, club, date, price_level);
-                    listings_to_add.push((
-                        player.id,
-                        club.id,
-                        club.teams.teams[0].id,
-                        asking_price,
-                        TransferListingType::Loan,
-                    ));
-                } else if Self::should_list_player(player, &squad_analysis, club) {
-                    let asking_price = Self::calculate_asking_price(player, club, date, price_level);
-                    listings_to_add.push((
-                        player.id,
-                        club.id,
-                        club.teams.teams[0].id,
-                        asking_price,
-                        TransferListingType::Transfer,
-                    ));
+                // Use existing should_list_player logic for non-pipeline listings
+                // (e.g., unhappy players, transfer-requested, NotNeeded)
+                if Self::should_list_player(player, &squad_analysis, club) {
+                    let age = player.age(date);
+
+                    if age < 16 {
+                        // Under-16: free transfer only, no transfer fee
+                        let free_price = CurrencyValue { amount: 0.0, currency: crate::shared::Currency::Usd };
+                        listings_to_add.push((
+                            player.id,
+                            club.id,
+                            club.teams.teams[0].id,
+                            free_price,
+                            TransferListingType::EndOfContract,
+                        ));
+                    } else {
+                        let asking_price = Self::calculate_asking_price(player, club, date, price_level);
+                        listings_to_add.push((
+                            player.id,
+                            club.id,
+                            club.teams.teams[0].id,
+                            asking_price,
+                            TransferListingType::Transfer,
+                        ));
+                    }
                 }
             }
         }
 
-        // Now add all listings and set statuses
+        // Apply listings
         for (player_id, club_id, team_id, asking_price, listing_type) in listings_to_add {
             let status_type = match listing_type {
                 TransferListingType::Loan => PlayerStatusType::Loa,
+                TransferListingType::EndOfContract => PlayerStatusType::Frt,
                 _ => PlayerStatusType::Lst,
             };
 
@@ -190,7 +206,6 @@ impl CountryResult {
             country.transfer_market.add_listing(listing);
             summary.total_listings += 1;
 
-            // Set status on player
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
@@ -203,160 +218,9 @@ impl CountryResult {
         }
     }
 
-    fn negotiate_transfers(
-        country: &mut Country,
-        date: NaiveDate,
-        summary: &mut TransferActivitySummary,
-    ) {
-        let mut negotiations_to_process = Vec::new();
-
-        // First pass: collect all potential negotiations
-        for buying_club in &country.clubs {
-            // Use real club budget instead of hardcoded value
-            let budget = buying_club.finance.transfer_budget.clone().unwrap_or(CurrencyValue {
-                amount: (buying_club.finance.balance.balance.max(0) as f64) * 0.3,
-                currency: Currency::Usd,
-            });
-
-            let analysis = Self::analyze_squad_needs(buying_club);
-
-            let strategy = ClubTransferStrategy {
-                club_id: buying_club.id,
-                budget: Some(budget),
-                selling_willingness: 0.5,
-                buying_aggressiveness: Self::calculate_buying_aggressiveness(buying_club),
-                target_positions: analysis.needed_positions,
-                reputation_level: analysis.quality_level as u16,
-            };
-
-            let available_listings: Vec<_> = country
-                .transfer_market
-                .get_available_listings()
-                .into_iter()
-                .filter(|listing| listing.club_id != buying_club.id)
-                .cloned()
-                .collect();
-
-            for listing in available_listings {
-                if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
-                    if strategy.decide_player_interest(player) {
-                        let offer = strategy.calculate_initial_offer(
-                            player,
-                            &listing.asking_price,
-                            date,
-                        );
-
-                        negotiations_to_process.push((
-                            listing.player_id,
-                            buying_club.id,
-                            listing.club_id,
-                            offer,
-                            false, // listed player, normal acceptance rate
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Scouted player negotiations: pursue players with Wnt status from scouting
-        let scouting_interests: Vec<_> = country.scouting_interests
-            .iter()
-            .filter(|i| i.recommendation == ScoutRecommendation::Sign)
-            .map(|i| (i.player_id, i.interested_club_id))
-            .collect();
-
-        for (player_id, interested_club_id) in scouting_interests {
-            // Skip if already in negotiations
-            if negotiations_to_process.iter().any(|(pid, bid, _, _, _)| *pid == player_id && *bid == interested_club_id) {
-                continue;
-            }
-
-            // Find which club owns the player
-            let selling_club_id = country.clubs.iter()
-                .find(|c| {
-                    c.teams.teams.iter().any(|t| t.players.players.iter().any(|p| p.id == player_id))
-                })
-                .map(|c| c.id);
-
-            let selling_club_id = match selling_club_id {
-                Some(id) if id != interested_club_id => id,
-                _ => continue,
-            };
-
-            if let Some(buying_club) = country.clubs.iter().find(|c| c.id == interested_club_id) {
-                let budget = buying_club.finance.transfer_budget.clone().unwrap_or(CurrencyValue {
-                    amount: (buying_club.finance.balance.balance.max(0) as f64) * 0.3,
-                    currency: Currency::Usd,
-                });
-
-                let analysis = Self::analyze_squad_needs(buying_club);
-                let strategy = ClubTransferStrategy {
-                    club_id: buying_club.id,
-                    budget: Some(budget),
-                    selling_willingness: 0.5,
-                    buying_aggressiveness: Self::calculate_buying_aggressiveness(buying_club),
-                    target_positions: analysis.needed_positions,
-                    reputation_level: analysis.quality_level as u16,
-                };
-
-                if let Some(player) = Self::find_player_in_country(country, player_id) {
-                    if strategy.decide_player_interest(player) {
-                        // Use player valuation as asking price (seller didn't list)
-                        let asking_price = Self::calculate_asking_price(
-                            player,
-                            country.clubs.iter().find(|c| c.id == selling_club_id).unwrap(),
-                            date,
-                            country.settings.pricing.price_level,
-                        );
-
-                        let offer = strategy.calculate_initial_offer(player, &asking_price, date);
-
-                        negotiations_to_process.push((
-                            player_id,
-                            interested_club_id,
-                            selling_club_id,
-                            offer,
-                            true, // scouted player, lower acceptance rate
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Second pass: start negotiations with reputation/player data
-        for (player_id, buying_club_id, _selling_club_id, offer, is_scouted) in negotiations_to_process {
-            // Skip if this player already has a pending negotiation
-            let already_negotiating = country.transfer_market.negotiations.values()
-                .any(|n| n.player_id == player_id && n.buying_club_id == buying_club_id
-                    && (n.status == crate::transfers::NegotiationStatus::Pending
-                        || n.status == crate::transfers::NegotiationStatus::Countered));
-            if already_negotiating {
-                continue;
-            }
-
-            // Extract reputation and player data for the negotiation
-            let selling_rep = Self::get_club_reputation(country, _selling_club_id);
-            let buying_rep = Self::get_club_reputation(country, buying_club_id);
-            let (p_age, p_ambition) = Self::get_player_negotiation_data(country, player_id, date);
-
-            if let Some(neg_id) = country.transfer_market.start_negotiation(
-                player_id,
-                buying_club_id,
-                offer,
-                date,
-                selling_rep,
-                buying_rep,
-                p_age,
-                p_ambition,
-            ) {
-                // Tag the negotiation with metadata for later resolution
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.is_unsolicited = is_scouted;
-                }
-                summary.active_negotiations += 1;
-            }
-        }
-    }
+    // ============================================================
+    // Resolve Pending Negotiations [KEPT - with pipeline callback]
+    // ============================================================
 
     fn resolve_pending_negotiations(
         country: &mut Country,
@@ -365,7 +229,6 @@ impl CountryResult {
     ) {
         use crate::utils::FloatUtils;
 
-        // Collect negotiations ready to resolve their current phase
         let ready_to_resolve: Vec<u32> = country
             .transfer_market
             .negotiations
@@ -375,7 +238,6 @@ impl CountryResult {
             .collect();
 
         for neg_id in ready_to_resolve {
-            // Extract all needed data from the negotiation
             let neg_data = match country.transfer_market.negotiations.get(&neg_id) {
                 Some(n) => {
                     let asking_price = country.transfer_market.listings
@@ -417,7 +279,6 @@ impl CountryResult {
                         35.0
                     };
 
-                    // Offer ratio vs asking price
                     if neg_data.asking_price > 0.0 {
                         let ratio = neg_data.offer_amount / neg_data.asking_price;
                         if ratio >= 1.0 {
@@ -429,7 +290,6 @@ impl CountryResult {
                         }
                     }
 
-                    // Buyer reputation advantage
                     let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
                     if rep_diff > 0.2 {
                         chance += 15.0;
@@ -441,16 +301,21 @@ impl CountryResult {
                     let roll = FloatUtils::random(0.0, 100.0);
 
                     if roll < chance {
-                        // Advance to club negotiation
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.advance_to_club_negotiation(date);
                         }
                     } else {
-                        // Seller refused
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
+                        // Pipeline callback: negotiation failed
+                        PipelineProcessor::on_negotiation_resolved(
+                            country,
+                            neg_data.buying_club_id,
+                            neg_data.player_id,
+                            false,
+                        );
                     }
                 }
 
@@ -468,20 +333,17 @@ impl CountryResult {
                         40.0
                     };
 
-                    // Player importance penalty
                     let importance = Self::calculate_player_importance(
                         country, neg_data.player_id, neg_data.selling_club_id,
                     );
                     chance -= importance * 30.0;
 
-                    // Financial need of selling club
                     if let Some(selling_club) = country.clubs.iter().find(|c| c.id == neg_data.selling_club_id) {
                         if selling_club.finance.balance.balance < 0 {
                             chance += 15.0;
                         }
                     }
 
-                    // Reputation gap bonus
                     let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
                     if rep_diff > 0.15 {
                         chance += 10.0;
@@ -491,23 +353,27 @@ impl CountryResult {
                     let roll = FloatUtils::random(0.0, 100.0);
 
                     if roll < chance {
-                        // Fee agreed, advance to personal terms
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.advance_to_personal_terms(date);
                         }
                     } else if round < 3 {
-                        // Counter-offer: buyer increases by 10%
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             let new_amount = negotiation.current_offer.base_fee.amount * 1.10;
                             negotiation.current_offer.base_fee.amount = new_amount;
                             negotiation.advance_club_negotiation_round(date);
                         }
                     } else {
-                        // 3 rounds exhausted, negotiation collapses
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
+                        // Pipeline callback: negotiation failed
+                        PipelineProcessor::on_negotiation_resolved(
+                            country,
+                            neg_data.buying_club_id,
+                            neg_data.player_id,
+                            false,
+                        );
                     }
                 }
 
@@ -515,19 +381,17 @@ impl CountryResult {
                 NegotiationPhase::PersonalTerms { .. } => {
                     let mut chance: f32 = 50.0;
 
-                    // Club reputation gap (biggest factor)
                     let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
                     if rep_diff > 0.3 {
-                        chance += 30.0; // Dream move
+                        chance += 30.0;
                     } else if rep_diff > 0.15 {
                         chance += 15.0;
                     } else if rep_diff < -0.3 {
-                        chance -= 30.0; // Big step down
+                        chance -= 30.0;
                     } else if rep_diff < -0.15 {
                         chance -= 15.0;
                     }
 
-                    // Salary improvement
                     if let Some(player) = Self::find_player_in_country(country, neg_data.player_id) {
                         let current_salary = player.contract.as_ref()
                             .map(|c| c.salary as f64)
@@ -542,30 +406,25 @@ impl CountryResult {
                             chance -= 20.0;
                         }
 
-                        // Age-based priorities
                         let age = neg_data.player_age;
                         if age < 23 {
-                            // Young: prioritize development, worry about playing time at mega clubs
                             if rep_diff > 0.4 {
-                                chance -= 5.0; // Might not get playing time
+                                chance -= 5.0;
                             }
                             if rep_diff > 0.1 {
-                                chance += 5.0; // Good development opportunity
+                                chance += 5.0;
                             }
                         } else if age <= 28 {
-                            // Peak: pickiest, won't step down easily
                             if rep_diff < -0.1 {
                                 chance -= 10.0;
                             }
                         } else {
-                            // 29+: more flexible, prioritize salary
                             if salary_ratio >= 1.5 {
                                 chance += 10.0;
                             }
-                            chance += 5.0; // Generally more open
+                            chance += 5.0;
                         }
 
-                        // Unhappy/requesting transfer bonus
                         let statuses = player.statuses.get();
                         if statuses.contains(&PlayerStatusType::Req) {
                             chance += 25.0;
@@ -573,12 +432,11 @@ impl CountryResult {
                             chance += 20.0;
                         }
 
-                        // Ambition factor
                         let ambition = neg_data.player_ambition;
                         if ambition > 0.7 && rep_diff > 0.1 {
-                            chance += 10.0; // Ambitious and step up
+                            chance += 10.0;
                         } else if ambition > 0.7 && rep_diff < -0.1 {
-                            chance -= 10.0; // Ambitious but step down
+                            chance -= 10.0;
                         }
                     }
 
@@ -586,22 +444,26 @@ impl CountryResult {
                     let roll = FloatUtils::random(0.0, 100.0);
 
                     if roll < chance {
-                        // Player agreed, advance to medical
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.advance_to_medical(date);
                         }
                     } else {
-                        // Player rejected
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
+                        // Pipeline callback: negotiation failed
+                        PipelineProcessor::on_negotiation_resolved(
+                            country,
+                            neg_data.buying_club_id,
+                            neg_data.player_id,
+                            false,
+                        );
                     }
                 }
 
                 // === Phase 4: Medical & Finalization ===
                 NegotiationPhase::MedicalAndFinalization { .. } => {
-                    // Small failure chance
                     let is_injured = Self::find_player_in_country(country, neg_data.player_id)
                         .map(|p| p.player_attributes.is_injured)
                         .unwrap_or(false);
@@ -609,7 +471,6 @@ impl CountryResult {
                     let roll = FloatUtils::random(0.0, 100.0);
 
                     if roll >= fail_chance {
-                        // Medical passed! Complete the transfer
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.accept();
                         }
@@ -655,18 +516,36 @@ impl CountryResult {
                                     date,
                                 );
                             }
+
+                            // Pipeline callback: negotiation succeeded
+                            PipelineProcessor::on_negotiation_resolved(
+                                country,
+                                neg_data.buying_club_id,
+                                neg_data.player_id,
+                                true,
+                            );
                         }
                     } else {
-                        // Medical failed
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                             negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
+                        // Pipeline callback: negotiation failed
+                        PipelineProcessor::on_negotiation_resolved(
+                            country,
+                            neg_data.buying_club_id,
+                            neg_data.player_id,
+                            false,
+                        );
                     }
                 }
             }
         }
     }
+
+    // ============================================================
+    // Remaining methods (kept as-is)
+    // ============================================================
 
     fn simulate_international_competitions(
         &self,
@@ -675,7 +554,6 @@ impl CountryResult {
         date: NaiveDate,
     ) {
         if let Some(country) = data.country_mut(country_id) {
-            // Simulate continental competitions (e.g., Champions League, Europa League)
             for competition in &mut country.international_competitions {
                 competition.simulate_round(date);
             }
@@ -688,7 +566,6 @@ impl CountryResult {
         country_id: u32,
         date: NaiveDate,
     ) {
-        // Update country's economic indicators monthly
         if date.day() == 1 {
             if let Some(country) = data.country_mut(country_id) {
                 country.economic_factors.monthly_update();
@@ -715,23 +592,16 @@ impl CountryResult {
         date: NaiveDate,
         club_results: &[ClubResult],
     ) {
-        // End of season processing
         if date.month() == 5 && date.day() == 31 {
-            info!("📅 End of season processing");
+            info!("End of season processing");
 
             if let Some(country) = data.country_mut(country_id) {
-                // Award ceremonies
                 Self::process_season_awards(country, club_results);
-
-                // Contract expirations
                 Self::process_contract_expirations(country);
-
-                // Retirements
                 Self::process_player_retirements(country, date);
             }
         }
 
-        // End of year processing
         if date.month() == 12 && date.day() == 31 {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_year_end_finances(country);
@@ -747,24 +617,19 @@ impl CountryResult {
         _club_results: &[ClubResult],
     ) {
         if let Some(country) = data.country_mut(country_id) {
-            // Base reputation change
             let mut reputation_change: i16 = 0;
 
-            // Factor 1: League competitiveness
             for league in &country.leagues.leagues {
                 let competitiveness = Self::calculate_league_competitiveness(league);
                 reputation_change += (competitiveness * 5.0) as i16;
             }
 
-            // Factor 2: International competition performance
             let international_success = Self::calculate_international_success(country);
             reputation_change += international_success as i16;
 
-            // Factor 3: Transfer market activity
             let transfer_reputation = Self::calculate_transfer_market_reputation(country);
             reputation_change += transfer_reputation as i16;
 
-            // Apply change with bounds
             let new_reputation = (country.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
 
             if new_reputation != country.reputation {
@@ -808,7 +673,6 @@ impl CountryResult {
             };
         }
 
-        // Count players by position group
         let mut group_counts: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
         let mut total_ability: u32 = 0;
         let mut total_age: u32 = 0;
@@ -824,7 +688,6 @@ impl CountryResult {
         let avg_ability = (total_ability / players.len() as u32) as u8;
         let avg_age = total_age as f32 / players.len() as f32;
 
-        // Ideal squad: 2 GK, 6 DEF, 6 MID, 4 FWD = 18 minimum
         let gk = *group_counts.get(&PlayerFieldPositionGroup::Goalkeeper).unwrap_or(&0);
         let def = *group_counts.get(&PlayerFieldPositionGroup::Defender).unwrap_or(&0);
         let mid = *group_counts.get(&PlayerFieldPositionGroup::Midfielder).unwrap_or(&0);
@@ -850,47 +713,6 @@ impl CountryResult {
         }
     }
 
-    fn should_loan_player(
-        player: &crate::Player,
-        analysis: &SquadAnalysis,
-        date: NaiveDate,
-    ) -> bool {
-        let statuses = player.statuses.get();
-
-        // Already listed for transfer or loan
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
-            return false;
-        }
-
-        // Player explicitly requested transfer — sell, don't loan
-        if statuses.contains(&PlayerStatusType::Req) || statuses.contains(&PlayerStatusType::Unh) {
-            return false;
-        }
-
-        let age = player.age(date);
-        let ability = player.player_attributes.current_ability;
-        let potential = player.player_attributes.potential_ability;
-
-        // Young players (under 21) with high potential but below squad level → loan for development
-        if age <= 21 && potential > ability + 5 && (ability as i16) < analysis.quality_level as i16 {
-            return true;
-        }
-
-        // Surplus position players who are decent but not the weakest → loan rather than sell
-        let player_group = player.position().position_group();
-        for surplus_pos in &analysis.surplus_positions {
-            if surplus_pos.position_group() == player_group {
-                // Close to squad level — loan, don't sell
-                let diff = (ability as i16) - (analysis.quality_level as i16);
-                if diff >= -5 && diff < 0 {
-                    return true;
-                }
-            }
-        }
-
-        false
-    }
-
     fn should_list_player(
         player: &crate::Player,
         analysis: &SquadAnalysis,
@@ -898,12 +720,10 @@ impl CountryResult {
     ) -> bool {
         let statuses = player.statuses.get();
 
-        // Already listed for transfer or loan
-        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) {
+        if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) || statuses.contains(&PlayerStatusType::Frt) {
             return false;
         }
 
-        // Players marked as NotNeeded in their contract
         if let Some(ref contract) = player.contract {
             if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
                 return true;
@@ -913,27 +733,22 @@ impl CountryResult {
             }
         }
 
-        // Players who have requested a transfer
         if player.statuses.get().contains(&PlayerStatusType::Req) {
             return true;
         }
 
-        // Unhappy players for more than a short period
         if player.statuses.get().contains(&PlayerStatusType::Unh) {
             return true;
         }
 
-        // Low-rated players relative to squad average (more than 15 points below)
         if analysis.quality_level > 15 &&
             (player.player_attributes.current_ability as i16) < (analysis.quality_level as i16 - 15) {
             return true;
         }
 
-        // Surplus position players
         let player_group = player.position().position_group();
         for surplus_pos in &analysis.surplus_positions {
             if surplus_pos.position_group() == player_group {
-                // Only list the weakest players from surplus positions
                 if (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 {
                     return true;
                 }
@@ -954,34 +769,15 @@ impl CountryResult {
         let base_value = PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level);
 
         let multiplier = if club.finance.balance.balance < 0 {
-            0.9 // Financial pressure
+            0.9
         } else {
-            1.1 // No pressure
+            1.1
         };
 
         CurrencyValue {
             amount: base_value.amount * multiplier,
             currency: base_value.currency,
         }
-    }
-
-    fn calculate_buying_aggressiveness(club: &Club) -> f32 {
-        let balance = club.finance.balance.balance as f64;
-        if balance > 10_000_000.0 {
-            0.8
-        } else if balance > 1_000_000.0 {
-            0.6
-        } else if balance > 0.0 {
-            0.4
-        } else {
-            0.2
-        }
-    }
-
-    #[allow(dead_code)]
-    fn identify_target_positions(club: &Club) -> Vec<crate::PlayerPositionType> {
-        let analysis = Self::analyze_squad_needs(club);
-        analysis.needed_positions
     }
 
     fn find_player_in_country(country: &Country, player_id: u32) -> Option<&crate::Player> {
@@ -995,7 +791,6 @@ impl CountryResult {
         None
     }
 
-    /// Calculate how important a player is to their current club (0.0 - 1.0)
     fn calculate_player_importance(country: &Country, player_id: u32, club_id: u32) -> f32 {
         if let Some(club) = country.clubs.iter().find(|c| c.id == club_id) {
             if club.teams.teams.is_empty() {
@@ -1013,9 +808,7 @@ impl CountryResult {
 
             if let Some(player) = players.iter().find(|p| p.id == player_id) {
                 let ability = player.player_attributes.current_ability as f32;
-                // Ratio of how far above/below average
                 let ratio = (ability - avg_ability) / avg_ability.max(1.0);
-                // Key player status bonus
                 let status_bonus = match &player.contract {
                     Some(c) => match c.squad_status {
                         PlayerSquadStatus::KeyPlayer => 0.3,
@@ -1033,7 +826,6 @@ impl CountryResult {
         }
     }
 
-    /// Reset listing back to Available when a negotiation is rejected
     fn reopen_listing_for_player(country: &mut Country, player_id: u32) {
         for listing in &mut country.transfer_market.listings {
             if listing.player_id == player_id
@@ -1045,22 +837,6 @@ impl CountryResult {
         }
     }
 
-    /// Get a club's main team reputation attractiveness factor
-    fn get_club_reputation(country: &Country, club_id: u32) -> f32 {
-        country.clubs.iter()
-            .find(|c| c.id == club_id)
-            .and_then(|c| c.teams.teams.first())
-            .map(|t| t.reputation.attractiveness_factor())
-            .unwrap_or(0.3)
-    }
-
-    /// Get player age and ambition for negotiation context
-    fn get_player_negotiation_data(country: &Country, player_id: u32, date: NaiveDate) -> (u8, f32) {
-        Self::find_player_in_country(country, player_id)
-            .map(|p| (p.age(date), p.attributes.ambition))
-            .unwrap_or((25, 0.5))
-    }
-
     fn execute_player_transfer(
         country: &mut Country,
         player_id: u32,
@@ -1069,7 +845,6 @@ impl CountryResult {
         fee: f64,
         date: NaiveDate,
     ) {
-        // Find selling club and take the player out
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
@@ -1081,18 +856,15 @@ impl CountryResult {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
                     selling_team_slug = team.slug.clone();
-                    // Remove from team transfer list too
                     team.transfer_list.remove(player_id);
                     break;
                 }
             }
 
-            // Selling club receives fee
             selling_club.finance.add_transfer_income(fee);
         }
 
         if let Some(mut player) = player {
-            // Archive current season stats
             let season_year = if date.month() >= 8 {
                 date.year() as u16
             } else {
@@ -1108,10 +880,8 @@ impl CountryResult {
                 statistics: old_stats,
             });
 
-            // Reset current stats
             player.statistics = PlayerStatistics::default();
 
-            // Clear transfer-related statuses
             player.statuses.remove(PlayerStatusType::Lst);
             player.statuses.remove(PlayerStatusType::Req);
             player.statuses.remove(PlayerStatusType::Unh);
@@ -1120,7 +890,6 @@ impl CountryResult {
             player.statuses.remove(PlayerStatusType::Wnt);
             player.statuses.remove(PlayerStatusType::Sct);
 
-            // Create new contract with buying club
             let contract_years = if player.age(date) < 24 { 5 }
             else if player.age(date) < 28 { 4 }
             else if player.age(date) < 32 { 3 }
@@ -1129,11 +898,10 @@ impl CountryResult {
             let expiry = date.checked_add_signed(chrono::Duration::days(contract_years * 365))
                 .unwrap_or(date);
 
-            let salary = (fee / 200.0).max(500.0) as u32; // Rough weekly salary from fee
+            let salary = (fee / 200.0).max(500.0) as u32;
 
             player.contract = Some(PlayerClubContract::new(salary, expiry));
 
-            // Add player to buying club's first team
             if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
                 buying_club.finance.spend_from_transfer_budget(fee);
 
@@ -1157,7 +925,6 @@ impl CountryResult {
         loan_fee: f64,
         date: NaiveDate,
     ) {
-        // Take player from selling club
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
@@ -1174,12 +941,10 @@ impl CountryResult {
                 }
             }
 
-            // Selling club receives loan fee
             selling_club.finance.add_transfer_income(loan_fee);
         }
 
         if let Some(mut player) = player {
-            // Archive current stats with old club
             let season_year = if date.month() >= 8 {
                 date.year() as u16
             } else {
@@ -1195,7 +960,6 @@ impl CountryResult {
                 statistics: old_stats,
             });
 
-            // Add loan history entry for the new club
             let mut buying_club_name = String::new();
             let mut buying_team_slug = String::new();
             if let Some(buying_club) = country.clubs.iter().find(|c| c.id == buying_club_id) {
@@ -1213,16 +977,13 @@ impl CountryResult {
                 statistics: PlayerStatistics::default(),
             });
 
-            // Reset current stats
             player.statistics = PlayerStatistics::default();
 
-            // Clear loan/transfer statuses
             player.statuses.remove(PlayerStatusType::Loa);
             player.statuses.remove(PlayerStatusType::Lst);
             player.statuses.remove(PlayerStatusType::Wnt);
             player.statuses.remove(PlayerStatusType::Sct);
 
-            // Create a loan contract (6 months default)
             let loan_end = date
                 .checked_add_signed(chrono::Duration::days(180))
                 .unwrap_or(date);
@@ -1230,7 +991,6 @@ impl CountryResult {
             let salary = (loan_fee / 50.0).max(200.0) as u32;
             player.contract = Some(PlayerClubContract::new_loan(salary, loan_end));
 
-            // Add player to buying club
             if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
                 buying_club.finance.spend_from_transfer_budget(loan_fee);
 
@@ -1258,104 +1018,20 @@ impl CountryResult {
         debug!("Organizing preseason tournaments");
     }
 
-    fn process_loan_deals(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
-        let mut loan_negotiations = Vec::new();
-
-        // First pass: find clubs interested in loan-listed players
-        for buying_club in &country.clubs {
-            let budget = buying_club.finance.transfer_budget.clone().unwrap_or(CurrencyValue {
-                amount: (buying_club.finance.balance.balance.max(0) as f64) * 0.1,
-                currency: Currency::Usd,
-            });
-
-            let analysis = Self::analyze_squad_needs(buying_club);
-
-            let strategy = ClubTransferStrategy {
-                club_id: buying_club.id,
-                budget: Some(budget),
-                selling_willingness: 0.5,
-                buying_aggressiveness: Self::calculate_buying_aggressiveness(buying_club),
-                target_positions: analysis.needed_positions,
-                reputation_level: analysis.quality_level as u16,
-            };
-
-            let loan_listings: Vec<_> = country
-                .transfer_market
-                .get_available_listings()
-                .into_iter()
-                .filter(|l| l.listing_type == TransferListingType::Loan && l.club_id != buying_club.id)
-                .cloned()
-                .collect();
-
-            for listing in loan_listings {
-                if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
-                    if strategy.decide_player_interest(player) {
-                        // Loan fee is typically much lower than transfer fee
-                        let loan_fee = CurrencyValue {
-                            amount: listing.asking_price.amount * 0.1,
-                            currency: listing.asking_price.currency.clone(),
-                        };
-
-                        let offer = strategy.calculate_initial_offer(player, &loan_fee, date);
-
-                        loan_negotiations.push((
-                            listing.player_id,
-                            buying_club.id,
-                            listing.club_id,
-                            offer,
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Second pass: start loan negotiations with reputation/player data
-        for (player_id, buying_club_id, _selling_club_id, offer) in loan_negotiations {
-            // Skip if already negotiating
-            let already_negotiating = country.transfer_market.negotiations.values()
-                .any(|n| n.player_id == player_id && n.buying_club_id == buying_club_id
-                    && (n.status == crate::transfers::NegotiationStatus::Pending
-                        || n.status == crate::transfers::NegotiationStatus::Countered));
-            if already_negotiating {
-                continue;
-            }
-
-            let selling_rep = Self::get_club_reputation(country, _selling_club_id);
-            let buying_rep = Self::get_club_reputation(country, buying_club_id);
-            let (p_age, p_ambition) = Self::get_player_negotiation_data(country, player_id, date);
-
-            if let Some(neg_id) = country.transfer_market.start_negotiation(
-                player_id,
-                buying_club_id,
-                offer,
-                date,
-                selling_rep,
-                buying_rep,
-                p_age,
-                p_ambition,
-            ) {
-                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                    negotiation.is_loan = true;
-                }
-                summary.active_negotiations += 1;
-            }
-        }
-    }
-
     fn handle_free_agents(_country: &mut Country, _date: NaiveDate, _summary: &mut TransferActivitySummary) {
         debug!("Handling free agents");
     }
 
     fn calculate_league_competitiveness(_league: &crate::league::League) -> f32 {
-        0.5 // Simplified
+        0.5
     }
 
     fn calculate_international_success(_country: &Country) -> i16 {
-        0 // Simplified
+        0
     }
 
     fn calculate_transfer_market_reputation(_country: &Country) -> i16 {
-        0 // Simplified
+        0
     }
 
     fn process_season_awards(_country: &mut Country, _club_results: &[ClubResult]) {
@@ -1375,7 +1051,7 @@ impl CountryResult {
     }
 }
 
-// Supporting structures (keep these in country.rs)
+// Supporting structures
 
 #[allow(dead_code)]
 #[derive(Debug)]

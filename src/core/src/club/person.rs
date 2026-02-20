@@ -52,6 +52,10 @@ impl PersonBehaviour {
         self.state == PersonBehaviourState::Poor
     }
 
+    pub fn is_good(&self) -> bool {
+        self.state == PersonBehaviourState::Good
+    }
+
     pub fn as_str(&self) -> &'static str {
         self.state.as_str()
     }

@@ -1,7 +1,7 @@
-use crate::club::team::behaviour::{PlayerRelationshipChangeResult, TeamBehaviourResult};
+use crate::club::team::behaviour::{ManagerTalkResult, ManagerTalkType, PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
-use crate::utils::FloatUtils;
-use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, StaffCollection};
+use crate::utils::{DateUtils, FloatUtils};
+use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType, StaffCollection, Staff, StaffPosition};
 use chrono::Datelike;
 use log::{debug, info};
 
@@ -81,7 +81,7 @@ impl TeamBehaviour {
     fn run_full_behaviour_simulation(
         &self,
         players: &mut PlayerCollection,
-        _staffs: &mut StaffCollection,
+        staffs: &mut StaffCollection,
         ctx: GlobalContext<'_>,
     ) -> TeamBehaviourResult {
         let mut result = TeamBehaviourResult::new();
@@ -105,9 +105,16 @@ impl TeamBehaviour {
         Self::process_injury_sympathy(players, &mut result, &ctx);
         Self::process_international_duty_bonds(players, &mut result, &ctx);
 
+        // Manager-player talks (weekly during full update)
+        Self::process_manager_player_talks(players, staffs, &mut result);
+
+        // Playing time complaints (player-initiated requests)
+        Self::process_playing_time_complaints(players, staffs, &mut result, &ctx);
+
         info!(
-            "Full team behaviour update complete - {} relationship changes",
-            result.players.relationship_result.len()
+            "Full team behaviour update complete - {} relationship changes, {} manager talks",
+            result.players.relationship_result.len(),
+            result.manager_talks.len()
         );
 
         result
@@ -117,9 +124,10 @@ impl TeamBehaviour {
     fn run_minor_behaviour_simulation(
         &self,
         players: &mut PlayerCollection,
-        _staffs: &mut StaffCollection,
+        staffs: &mut StaffCollection,
         ctx: GlobalContext<'_>,
     ) -> TeamBehaviourResult {
+        let _ = staffs; // Not used in minor updates
         let mut result = TeamBehaviourResult::new();
 
         Self::process_daily_interactions(players, &mut result, &ctx);
@@ -859,6 +867,273 @@ impl TeamBehaviour {
                     }
                 }
             }
+        }
+    }
+
+    // ========== MANAGER-PLAYER TALKS ==========
+
+    fn process_manager_player_talks(
+        players: &PlayerCollection,
+        staffs: &StaffCollection,
+        result: &mut TeamBehaviourResult,
+    ) {
+        // Find the manager
+        let manager = staffs.staffs.iter().find(|s| {
+            s.contract.as_ref().map(|c| c.position == StaffPosition::Manager).unwrap_or(false)
+        });
+        let manager = match manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        // Identify players who need talks, sorted by priority
+        let mut talk_candidates: Vec<(u32, ManagerTalkType, u8)> = Vec::new(); // (player_id, type, priority)
+
+        for player in &players.players {
+            let statuses = player.statuses.get();
+
+            // Highest priority: transfer request
+            if statuses.contains(&PlayerStatusType::Req) {
+                talk_candidates.push((player.id, ManagerTalkType::TransferDiscussion, 100));
+            }
+
+            // High priority: unhappy players
+            if statuses.contains(&PlayerStatusType::Unh) {
+                // Decide between playing time talk and morale talk
+                let talk_type = if player.happiness.factors.playing_time < -5.0 {
+                    ManagerTalkType::PlayingTimeTalk
+                } else {
+                    ManagerTalkType::MoraleTalk
+                };
+                talk_candidates.push((player.id, talk_type, 90));
+            }
+
+            // Medium priority: very low morale
+            if player.happiness.morale < 30.0
+                && !statuses.contains(&PlayerStatusType::Unh)
+                && !statuses.contains(&PlayerStatusType::Req)
+            {
+                talk_candidates.push((player.id, ManagerTalkType::Motivational, 70));
+            }
+
+            // Lower priority: praise good performers
+            if player.behaviour.is_good() && player.happiness.morale < 80.0 {
+                talk_candidates.push((player.id, ManagerTalkType::Praise, 30));
+            }
+
+            // Discipline for poor behaviour + high ability
+            if player.behaviour.is_poor() && player.player_attributes.current_ability > 100 {
+                talk_candidates.push((player.id, ManagerTalkType::Discipline, 60));
+            }
+        }
+
+        // Sort by priority (highest first)
+        talk_candidates.sort_by(|a, b| b.2.cmp(&a.2));
+
+        // Max 4 talks per week
+        let max_talks = 4.min(talk_candidates.len());
+
+        for i in 0..max_talks {
+            let (player_id, talk_type, _) = &talk_candidates[i];
+
+            if let Some(player) = players.players.iter().find(|p| p.id == *player_id) {
+                let talk_result = Self::conduct_manager_talk(manager, player, talk_type.clone());
+                result.manager_talks.push(talk_result);
+            }
+        }
+    }
+
+    fn conduct_manager_talk(
+        manager: &Staff,
+        player: &Player,
+        talk_type: ManagerTalkType,
+    ) -> ManagerTalkResult {
+        // Success chance formula
+        let man_management = manager.staff_attributes.mental.man_management as f32;
+        let motivating = manager.staff_attributes.mental.motivating as f32;
+        let temperament = player.attributes.temperament;
+        let professionalism = player.attributes.professionalism;
+        let loyalty = player.attributes.loyalty;
+
+        // Relationship bonus from existing relationship
+        let relationship_bonus = player.relations.get_staff(manager.id)
+            .map(|r| (r.level / 100.0) * 0.2)
+            .unwrap_or(0.0);
+
+        let success_chance = (0.5
+            + man_management / 40.0
+            + motivating / 60.0
+            - temperament / 60.0
+            + professionalism / 80.0
+            + loyalty / 80.0
+            + relationship_bonus)
+            .clamp(0.1, 0.95);
+
+        let success = rand::random::<f32>() < success_chance;
+
+        let (morale_change, relationship_change) = match (&talk_type, success) {
+            (ManagerTalkType::PlayingTimeTalk, true) => (10.0, 0.3),
+            (ManagerTalkType::PlayingTimeTalk, false) => (-5.0, -0.1),
+            (ManagerTalkType::MoraleTalk, true) => (8.0, 0.3),
+            (ManagerTalkType::MoraleTalk, false) => (-3.0, -0.2),
+            (ManagerTalkType::TransferDiscussion, true) => (5.0, 0.2),
+            (ManagerTalkType::TransferDiscussion, false) => (0.0, 0.0),
+            (ManagerTalkType::Praise, true) => (5.0, 0.5),
+            (ManagerTalkType::Praise, false) => (1.0, 0.1),
+            (ManagerTalkType::Discipline, true) => (-3.0, 0.1),
+            (ManagerTalkType::Discipline, false) => (-8.0, -0.5),
+            (ManagerTalkType::Motivational, true) => (6.0, 0.2),
+            (ManagerTalkType::Motivational, false) => (-2.0, -0.1),
+            (ManagerTalkType::PlayingTimeRequest, true) => (8.0, 0.3),
+            (ManagerTalkType::PlayingTimeRequest, false) => (-5.0, -0.2),
+            (ManagerTalkType::LoanRequest, true) => (5.0, 0.2),
+            (ManagerTalkType::LoanRequest, false) => (-3.0, -0.1),
+        };
+
+        // For transfer discussion, success means 30% chance of removing Req
+        let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
+            rand::random::<f32>() < 0.3
+        } else {
+            success
+        };
+
+        info!(
+            "Manager talk: {} with player {} - type {:?}, success: {}",
+            manager.full_name, player.full_name, talk_type, actual_success
+        );
+
+        ManagerTalkResult {
+            player_id: player.id,
+            staff_id: manager.id,
+            talk_type,
+            success: actual_success,
+            morale_change,
+            relationship_change,
+        }
+    }
+
+    // ========== PLAYING TIME COMPLAINTS ==========
+
+    fn process_playing_time_complaints(
+        players: &PlayerCollection,
+        staffs: &StaffCollection,
+        result: &mut TeamBehaviourResult,
+        ctx: &GlobalContext<'_>,
+    ) {
+        let manager = staffs.staffs.iter().find(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position == StaffPosition::Manager)
+                .unwrap_or(false)
+        });
+        let manager = match manager {
+            Some(m) => m,
+            None => return,
+        };
+
+        let current_date = ctx.simulation.date.date();
+
+        // Collect complaint candidates
+        let mut candidates: Vec<(u32, ManagerTalkType, u16)> = Vec::new();
+
+        for player in &players.players {
+            if player.player_attributes.is_injured {
+                continue;
+            }
+
+            // Under-16 players don't generate playing time complaints
+            let age = DateUtils::age(player.birth_date, current_date);
+            if age < 16 {
+                continue;
+            }
+
+            // Skip players marked as NotNeeded
+            if let Some(ref contract) = player.contract {
+                if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
+                    continue;
+                }
+            }
+
+            // Already has a transfer request or loan status
+            let statuses = player.statuses.get();
+            if statuses.contains(&PlayerStatusType::Req)
+                || statuses.contains(&PlayerStatusType::Loa)
+            {
+                continue;
+            }
+
+            let days = player.player_attributes.days_since_last_match;
+
+            // Ambition modifies threshold: ambitious players complain sooner
+            let ambition_modifier = 1.0 - player.attributes.ambition / 30.0;
+            let threshold = (21.0 * ambition_modifier.max(0.5)) as u16;
+
+            let playing_time_factor =
+                Self::calculate_playing_time_factor_for_complaint(player);
+
+            if days > threshold || playing_time_factor < -10.0 {
+                let age = DateUtils::age(player.birth_date, current_date);
+
+                let talk_type = if age < 23 {
+                    ManagerTalkType::LoanRequest
+                } else {
+                    ManagerTalkType::PlayingTimeRequest
+                };
+
+                candidates.push((player.id, talk_type, days));
+
+                // Add frustration event
+                if let Some(p) = players.players.iter().find(|p| p.id == player.id) {
+                    let _ = p; // We can't mutate here; the event will be applied via talk result
+                }
+            }
+        }
+
+        // Sort by days since last match descending (most urgent first)
+        candidates.sort_by(|a, b| b.2.cmp(&a.2));
+
+        // Max 2 complaints per week
+        let max_complaints = 2.min(candidates.len());
+
+        for i in 0..max_complaints {
+            let (player_id, talk_type, _) = &candidates[i];
+
+            if let Some(player) = players.players.iter().find(|p| p.id == *player_id) {
+                let talk_result =
+                    Self::conduct_manager_talk(manager, player, talk_type.clone());
+                result.manager_talks.push(talk_result);
+            }
+        }
+    }
+
+    fn calculate_playing_time_factor_for_complaint(player: &Player) -> f32 {
+        let total = player.statistics.played + player.statistics.played_subs;
+        if total < 5 {
+            return 0.0;
+        }
+
+        let play_ratio = player.statistics.played as f32 / total as f32;
+
+        let expected_ratio = if let Some(ref contract) = player.contract {
+            match contract.squad_status {
+                PlayerSquadStatus::KeyPlayer => 0.70,
+                PlayerSquadStatus::FirstTeamRegular => 0.50,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0.25,
+                PlayerSquadStatus::MainBackupPlayer => 0.20,
+                PlayerSquadStatus::HotProspectForTheFuture => 0.10,
+                PlayerSquadStatus::DecentYoungster => 0.10,
+                PlayerSquadStatus::NotNeeded => 0.05,
+                _ => 0.30,
+            }
+        } else {
+            0.30
+        };
+
+        if play_ratio >= expected_ratio {
+            0.0
+        } else {
+            let deficit = (expected_ratio - play_ratio) / expected_ratio.max(0.01);
+            -deficit * 20.0
         }
     }
 

@@ -16,6 +16,7 @@ use core::{
     PlayerCollection, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
 };
+use core::transfers::pipeline::ClubTransferPlan;
 use std::str::FromStr;
 
 pub struct DatabaseGenerator;
@@ -148,6 +149,7 @@ impl DatabaseGenerator {
                     background: club.colors.background.clone(),
                     foreground: club.colors.foreground.clone(),
                 },
+                transfer_plan: ClubTransferPlan::new(),
                 teams: TeamCollection::new(
                     club.teams
                         .iter()
@@ -207,15 +209,15 @@ impl DatabaseGenerator {
             .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper, team_reputation, min_age, max_age, is_youth))
             .collect();
 
-        let mut defenders: Vec<Player> = (0..IntegerUtils::random(13, 27))
+        let mut defenders: Vec<Player> = (0..IntegerUtils::random(4, 8))
             .map(|_| player_generator.generate(country_id, PositionType::Defender, team_reputation, min_age, max_age, is_youth))
             .collect();
 
-        let mut midfielders: Vec<Player> = (0..IntegerUtils::random(17, 23))
+        let mut midfielders: Vec<Player> = (0..IntegerUtils::random(7, 11))
             .map(|_| player_generator.generate(country_id, PositionType::Midfielder, team_reputation, min_age, max_age, is_youth))
             .collect();
 
-        let mut strikers: Vec<Player> = (0..IntegerUtils::random(13, 16))
+        let mut strikers: Vec<Player> = (0..IntegerUtils::random(2, 5))
             .map(|_| player_generator.generate(country_id, PositionType::Striker, team_reputation, min_age, max_age, is_youth))
             .collect();
 
