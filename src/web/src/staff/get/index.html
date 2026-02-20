@@ -1,0 +1,99 @@
+{% extends "layout.html" %}
+
+{% block html_title %}{{ title }} - {{ staff.team_name }}{% endblock %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab active" href="/{{ lang }}/staff/{{ staff.id }}">{{ i18n.t("overview") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("staff_profile") }}</h3>
+        </div>
+        <div class="fm-staff-profile">
+            <div class="fm-sp-header">
+                <div class="fm-sp-identity">
+                    <div class="fm-sp-info-row">
+                        <a href="/{{ lang }}/countries/{{ staff.country_slug }}" class="fm-ph-flag">
+                            <span class="flag flag-{{ staff.country_code }}" title="{{ staff.country_name }}"></span>
+                        </a>
+                        <span class="fm-sp-detail">{{ i18n.t("age") }}: {{ staff.age }}</span>
+                        <span class="fm-ph-sep"></span>
+                        <span class="fm-sp-detail">{{ staff.birth_date }}</span>
+                    </div>
+                    <div class="fm-sp-info-row">
+                        <span class="fm-sp-detail">{{ i18n.t("staff_role") }}: {{ i18n.t(&staff.role_key) }}</span>
+                    </div>
+                    <div class="fm-sp-info-row">
+                        <span class="fm-sp-detail">{{ i18n.t("contracted_to") }} <a href="/{{ lang }}/teams/{{ staff.team_slug }}">{{ staff.team_name }}</a></span>
+                    </div>
+                    {% if let Some(contract) = staff.contract %}
+                    <div class="fm-sp-info-row">
+                        <span class="fm-sp-detail">{{ contract.salary }} {{ i18n.t("per_week") }}</span>
+                        <span class="fm-ph-sep"></span>
+                        <span class="fm-sp-detail">{{ i18n.t("salary_until") }} {{ contract.expiration }}</span>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel fm-staff-group">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("attributes") }}</h3>
+        </div>
+        <div class="fm-staff-attrs">
+            <div class="fm-skill-col">
+                <h4>{{ i18n.t("staff_attr_coaching") }}</h4>
+                <table class="fm-skills">
+                    <tr><td>{{ i18n.t("staff_attacking") }}</td><td class="td_{{ staff.coaching.attacking }}">{{ staff.coaching.attacking }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_defending") }}</td><td class="td_{{ staff.coaching.defending }}">{{ staff.coaching.defending }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_fitness") }}</td><td class="td_{{ staff.coaching.fitness }}">{{ staff.coaching.fitness }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_mental_coaching") }}</td><td class="td_{{ staff.coaching.mental }}">{{ staff.coaching.mental }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_tactical") }}</td><td class="td_{{ staff.coaching.tactical }}">{{ staff.coaching.tactical }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_technical") }}</td><td class="td_{{ staff.coaching.technical }}">{{ staff.coaching.technical }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_working_youngsters") }}</td><td class="td_{{ staff.coaching.working_with_youngsters }}">{{ staff.coaching.working_with_youngsters }}</td></tr>
+                </table>
+            </div>
+            <div class="fm-skill-col">
+                <h4>{{ i18n.t("staff_attr_mental") }}</h4>
+                <table class="fm-skills">
+                    <tr><td>{{ i18n.t("staff_adaptability") }}</td><td class="td_{{ staff.mental.adaptability }}">{{ staff.mental.adaptability }}</td></tr>
+                    <tr><td>{{ i18n.t("determination") }}</td><td class="td_{{ staff.mental.determination }}">{{ staff.mental.determination }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_discipline") }}</td><td class="td_{{ staff.mental.discipline }}">{{ staff.mental.discipline }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_man_management") }}</td><td class="td_{{ staff.mental.man_management }}">{{ staff.mental.man_management }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_motivating") }}</td><td class="td_{{ staff.mental.motivating }}">{{ staff.mental.motivating }}</td></tr>
+                </table>
+            </div>
+            <div class="fm-skill-col">
+                <h4>{{ i18n.t("staff_attr_knowledge") }}</h4>
+                <table class="fm-skills">
+                    <tr><td>{{ i18n.t("staff_judging_ability") }}</td><td class="td_{{ staff.knowledge.judging_player_ability }}">{{ staff.knowledge.judging_player_ability }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_judging_potential") }}</td><td class="td_{{ staff.knowledge.judging_player_potential }}">{{ staff.knowledge.judging_player_potential }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_tactical_knowledge") }}</td><td class="td_{{ staff.knowledge.tactical_knowledge }}">{{ staff.knowledge.tactical_knowledge }}</td></tr>
+                </table>
+            </div>
+            <div class="fm-skill-col">
+                <h4>{{ i18n.t("staff_attr_goalkeeping") }}</h4>
+                <table class="fm-skills">
+                    <tr><td>{{ i18n.t("staff_distribution") }}</td><td class="td_{{ staff.goalkeeping.distribution }}">{{ staff.goalkeeping.distribution }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_handling") }}</td><td class="td_{{ staff.goalkeeping.handling }}">{{ staff.goalkeeping.handling }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_shot_stopping") }}</td><td class="td_{{ staff.goalkeeping.shot_stopping }}">{{ staff.goalkeeping.shot_stopping }}</td></tr>
+                </table>
+            </div>
+            <div class="fm-skill-col">
+                <h4>{{ i18n.t("staff_attr_medical") }}</h4>
+                <table class="fm-skills">
+                    <tr><td>{{ i18n.t("staff_physiotherapy") }}</td><td class="td_{{ staff.medical.physiotherapy }}">{{ staff.medical.physiotherapy }}</td></tr>
+                    <tr><td>{{ i18n.t("staff_sports_science") }}</td><td class="td_{{ staff.medical.sports_science }}">{{ staff.medical.sports_science }}</td></tr>
+                </table>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}

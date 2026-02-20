@@ -134,35 +134,6 @@ pub async fn league_transfers_action(
         })
         .collect();
 
-    // Current listings from league clubs
-    let current_listings: Vec<ListingItem> = country
-        .transfer_market
-        .listings
-        .iter()
-        .filter(|l| league_club_ids.contains(&l.club_id))
-        .filter_map(|l| {
-            let club = country.clubs.iter().find(|c| c.id == l.club_id)?;
-            let player = club
-                .teams
-                .teams
-                .iter()
-                .flat_map(|t| &t.players.players)
-                .find(|p| p.id == l.player_id)?;
-
-            let team_slug = club.teams.teams.first()
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
-            Some(ListingItem {
-                player_id: player.id,
-                player_name: player.full_name.to_string(),
-                team_name: club.name.clone(),
-                team_slug,
-                asking_price: FormattingUtils::format_money(l.asking_price.amount),
-                status: format!("{:?}", l.status),
-            })
-        })
-        .collect();
-
     // Active negotiations
     let active_negotiations: Vec<NegotiationItem> = country
         .transfer_market
@@ -205,6 +176,42 @@ pub async fn league_transfers_action(
                 buying_team_slug,
                 offer_amount: FormattingUtils::format_money(n.current_offer.base_fee.amount),
                 status: format!("{:?}", n.status),
+            })
+        })
+        .collect();
+
+    // Collect player IDs that have active negotiations
+    let negotiating_player_ids: Vec<u32> = active_negotiations
+        .iter()
+        .map(|n| n.player_id)
+        .collect();
+
+    // Current listings from league clubs, excluding those in active negotiations
+    let current_listings: Vec<ListingItem> = country
+        .transfer_market
+        .listings
+        .iter()
+        .filter(|l| league_club_ids.contains(&l.club_id))
+        .filter(|l| !negotiating_player_ids.contains(&l.player_id))
+        .filter_map(|l| {
+            let club = country.clubs.iter().find(|c| c.id == l.club_id)?;
+            let player = club
+                .teams
+                .teams
+                .iter()
+                .flat_map(|t| &t.players.players)
+                .find(|p| p.id == l.player_id)?;
+
+            let team_slug = club.teams.teams.first()
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
+            Some(ListingItem {
+                player_id: player.id,
+                player_name: player.full_name.to_string(),
+                team_name: club.name.clone(),
+                team_slug,
+                asking_price: FormattingUtils::format_money(l.asking_price.amount),
+                status: format!("{:?}", l.status),
             })
         })
         .collect();

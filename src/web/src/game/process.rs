@@ -1,34 +1,46 @@
 ﻿use crate::r#match::stores::MatchStore;
 use crate::GameAppData;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
 use axum::response::IntoResponse;
 use core::FootballSimulator;
 use core::SimulationResult;
 use log::debug;
+use serde::Deserialize;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
-pub async fn game_process_action(State(state): State<GameAppData>) -> impl IntoResponse {
+#[derive(Deserialize)]
+pub struct ProcessQuery {
+    pub days: Option<u32>,
+}
+
+pub async fn game_process_action(
+    State(state): State<GameAppData>,
+    Query(query): Query<ProcessQuery>,
+) -> impl IntoResponse {
     let data = Arc::clone(&state.data);
+    let days = query.days.unwrap_or(1).clamp(1, 30);
 
     let mut simulator_data_guard = data.write_owned().await;
 
     let result = tokio::task::spawn_blocking(move || {
         let simulator_data = simulator_data_guard.as_mut().unwrap();
 
-        if state.is_one_shot_game && simulator_data.match_played {
-            return;
-        }
+        for _ in 0..days {
+            if state.is_one_shot_game && simulator_data.match_played {
+                return;
+            }
 
-        let result = FootballSimulator::simulate(simulator_data);
-        if result.has_match_results() {
-            tokio::task::spawn(async {
-                write_match_results(result).await
-            });
+            let result = FootballSimulator::simulate(simulator_data);
+            if result.has_match_results() {
+                tokio::task::spawn(async {
+                    write_match_results(result).await
+                });
 
-            simulator_data.match_played = true;
+                simulator_data.match_played = true;
+            }
         }
     })
     .await;

@@ -6,6 +6,7 @@ pub struct SimulatorDataIndexes {
     pub club_indexes: HashMap<u32, (u32, u32)>,
     pub team_indexes: HashMap<u32, (u32, u32, u32)>,
     pub player_indexes: HashMap<u32, (u32, u32, u32, u32)>,
+    pub staff_indexes: HashMap<u32, (u32, u32, u32, u32)>,
     pub team_data_index: HashMap<u32, TeamData>,
     pub slug_indexes: SlugIndexes,
 }
@@ -17,6 +18,7 @@ impl SimulatorDataIndexes {
             club_indexes: HashMap::new(),
             team_indexes: HashMap::new(),
             player_indexes: HashMap::new(),
+            staff_indexes: HashMap::new(),
             team_data_index: HashMap::new(),
             slug_indexes: SlugIndexes::new(),
         }
@@ -55,6 +57,16 @@ impl SimulatorDataIndexes {
                         for player in &team.players.players {
                             self.add_player_location(
                                 player.id,
+                                continent.id,
+                                country.id,
+                                club.id,
+                                team.id,
+                            );
+                        }
+
+                        for staff in &team.staffs.staffs {
+                            self.add_staff_location(
+                                staff.id,
                                 continent.id,
                                 country.id,
                                 club.id,
@@ -152,6 +164,29 @@ impl SimulatorDataIndexes {
                     *player_club_id,
                     *player_team_id,
                 ))
+            }
+            None => None,
+        }
+    }
+
+    //staff indexes
+
+    pub fn add_staff_location(
+        &mut self,
+        staff_id: u32,
+        continent_id: u32,
+        country_id: u32,
+        club_id: u32,
+        team_id: u32,
+    ) {
+        self.staff_indexes
+            .insert(staff_id, (continent_id, country_id, club_id, team_id));
+    }
+
+    pub fn get_staff_location(&self, staff_id: u32) -> Option<(u32, u32, u32, u32)> {
+        match self.staff_indexes.get(&staff_id) {
+            Some((continent_id, country_id, club_id, team_id)) => {
+                Some((*continent_id, *country_id, *club_id, *team_id))
             }
             None => None,
         }

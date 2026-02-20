@@ -8,6 +8,7 @@ mod leagues;
 mod r#match;
 mod player;
 mod routes;
+mod staff;
 mod teams;
 mod views;
 mod common;

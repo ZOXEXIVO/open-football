@@ -47,38 +47,7 @@
         {% endif %}
     </section>
 
-    <section class="fm-panel">
-        <div class="fm-panel-head">
-            <h3>{{ i18n.t("transfer_listings") }}</h3>
-            <span class="fm-panel-count">{{ current_listings.len() }}</span>
-        </div>
-        {% if current_listings.is_empty() %}
-        <div class="fm-empty">{{ i18n.t("no_current_listings") }}</div>
-        {% else %}
-        <table class="fm-squad">
-            <thead>
-                <tr>
-                    <th>{{ i18n.t("player") }}</th>
-                    <th>{{ i18n.t("team") }}</th>
-                    <th>{{ i18n.t("asking_price") }}</th>
-                    <th>{{ i18n.t("status") }}</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in current_listings %}
-                <tr>
-                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                    <td><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></td>
-                    <td>{{ item.asking_price }}</td>
-                    <td>{{ item.status }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% endif %}
-    </section>
-
-    <section class="fm-panel">
+    <section class="fm-panel fm-staff-group">
         <div class="fm-panel-head">
             <h3>{{ i18n.t("active_negotiations") }}</h3>
             <span class="fm-panel-count">{{ active_negotiations.len() }}</span>
@@ -103,6 +72,37 @@
                     <td><a href="/{{ lang }}/teams/{{ item.selling_team_slug }}">{{ item.selling_team }}</a></td>
                     <td><a href="/{{ lang }}/teams/{{ item.buying_team_slug }}">{{ item.buying_team }}</a></td>
                     <td>{{ item.offer_amount }}</td>
+                    <td>{{ item.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    <section class="fm-panel fm-staff-group">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("transfer_listings") }}</h3>
+            <span class="fm-panel-count">{{ current_listings.len() }}</span>
+        </div>
+        {% if current_listings.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("no_current_listings") }}</div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>{{ i18n.t("player") }}</th>
+                    <th>{{ i18n.t("team") }}</th>
+                    <th>{{ i18n.t("asking_price") }}</th>
+                    <th>{{ i18n.t("status") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in current_listings %}
+                <tr>
+                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td><a href="/{{ lang }}/teams/{{ item.team_slug }}">{{ item.team_name }}</a></td>
+                    <td>{{ item.asking_price }}</td>
                     <td>{{ item.status }}</td>
                 </tr>
                 {% endfor %}

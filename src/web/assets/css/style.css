@@ -364,6 +364,162 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-style: italic;
 }
 
+/* Staff page */
+.fm-staff-group {
+  margin-top: 12px;
+}
+
+.fm-staff-table .st-name  { width: 30%; }
+.fm-staff-table .st-role  { width: 22%; color: #7a868e; font-size: 12px; }
+.fm-staff-table .st-nat   { width: 48px; }
+.fm-staff-table .st-age   { width: 60px; text-align: center; }
+.fm-staff-table .st-contract { width: 110px; }
+.fm-staff-table .st-wage  { width: 120px; }
+
+.fm-staff-table .st-name a { font-weight: 500; }
+
+/* Staff Profile Page */
+
+.fm-staff-profile {
+  padding: 16px;
+}
+
+.fm-sp-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 20px;
+}
+
+.fm-sp-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.fm-sp-info-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #8a949c;
+}
+
+.fm-sp-info-row a {
+  color: #4a9eff;
+}
+
+.fm-sp-detail {
+  color: #b0b8c0;
+}
+
+.fm-ph-sep {
+  width: 1px;
+  height: 12px;
+  background: #3a4650;
+  display: inline-block;
+}
+
+.fm-staff-attrs {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0;
+  padding: 0;
+}
+
+.fm-staff-attrs .fm-skill-col {
+  border-bottom: 1px solid #263340;
+}
+
+.fm-staff-attrs .fm-skill-col:nth-child(-n+3) {
+  border-bottom: 1px solid #263340;
+}
+
+.fm-staff-attrs .fm-skill-col:nth-child(4),
+.fm-staff-attrs .fm-skill-col:nth-child(5) {
+  border-bottom: none;
+}
+
+/* Player Transfer Tab */
+.fm-pt-section { margin-top: 12px; }
+
+.fm-pt-status {
+  padding: 14px 16px;
+}
+
+.fm-pt-status-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.fm-pt-info-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fm-pt-label {
+  color: #7a868e;
+  font-size: 12px;
+  min-width: 100px;
+  flex-shrink: 0;
+}
+
+.fm-pt-value {
+  color: #d0d6dc;
+  font-size: 13px;
+  font-weight: 500;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fm-pt-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 700;
+  border-radius: 3px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+}
+
+.fm-pt-badge-none {
+  background: #2a3640;
+  color: #7a868e;
+}
+
+.fm-pt-badge-listed {
+  background: #2a7a3f;
+  color: #c8f0d0;
+}
+
+.fm-pt-badge-agreed {
+  background: #1b6e3a;
+  color: #fff;
+}
+
+.fm-pt-badge-request {
+  background: #A71214;
+  color: #fff;
+}
+
+.fm-pt-badge-interest {
+  background: #1565a0;
+  color: #d0e8f8;
+}
+
+.fm-pt-table .pt-club   { width: 28%; }
+.fm-pt-table .pt-offer  { width: 18%; }
+.fm-pt-table .pt-type   { width: 14%; }
+.fm-pt-table .pt-phase  { width: 18%; color: #7a868e; font-size: 12px; }
+.fm-pt-table .pt-nstatus { width: 12%; }
+.fm-pt-table .pt-lstatus { width: 16%; }
+.fm-pt-table .pt-price  { width: 22%; }
+.fm-pt-table .pt-date   { width: 14%; color: #7a868e; font-size: 12px; }
+
+.fm-pt-table .pt-club a { font-weight: 500; }
+
 .fm-transfers-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -2744,6 +2900,12 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     min-width: 0;
   }
 
+  /* Player Transfer tab: hide less critical columns */
+  .fm-pt-table .pt-phase { display: none; }
+  .fm-pt-table .pt-date  { display: none; }
+
+  .fm-pt-label { min-width: 80px; }
+
   /* Tactics page: stack */
   .fm-tactics-grid {
     grid-template-columns: 1fr;
@@ -2772,13 +2934,23 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   }
 
   /* Skills grid: single column */
-  .fm-skills-grid {
+  .fm-skills-grid,
+  .fm-staff-attrs {
     grid-template-columns: 1fr;
   }
 
   .fm-skill-col {
     border-right: none;
     border-bottom: 1px solid #263340;
+  }
+
+  .fm-staff-attrs .fm-skill-col:nth-child(4),
+  .fm-staff-attrs .fm-skill-col:nth-child(5) {
+    border-bottom: 1px solid #263340;
+  }
+
+  .fm-staff-attrs .fm-skill-col:last-child {
+    border-bottom: none;
   }
 
   .fm-skill-col:last-child {
@@ -2943,6 +3115,16 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
   .fm-ph-name {
     font-size: 16px;
+  }
+
+  /* Staff profile: tighter on small */
+  .fm-staff-profile {
+    padding: 12px;
+  }
+
+  .fm-sp-info-row {
+    font-size: 12px;
+    flex-wrap: wrap;
   }
 
   /* Squad: tighter on small screens */

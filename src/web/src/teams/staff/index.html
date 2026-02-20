@@ -1,0 +1,64 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}/staff">{{ i18n.t("staff") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    {% if staff_groups.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("staff") }}</h3>
+        </div>
+        <div class="fm-empty">{{ i18n.t("no_staff") }}</div>
+    </section>
+    {% else %}
+        {% for group in staff_groups %}
+        <section class="fm-panel{% if !loop.first %} fm-staff-group{% endif %}">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t(&group.group_key) }}</h3>
+                <span class="fm-panel-count">{{ group.members.len() }}</span>
+            </div>
+            <table class="fm-squad fm-staff-table">
+                <thead>
+                    <tr>
+                        <th class="st-name">{{ i18n.t("name") }}</th>
+                        <th class="st-role">{{ i18n.t("staff_role") }}</th>
+                        <th class="st-nat">{{ i18n.t("nat") }}</th>
+                        <th class="st-age">{{ i18n.t("age") }}</th>
+                        <th class="st-contract">{{ i18n.t("contract") }}</th>
+                        <th class="st-wage">{{ i18n.t("wage") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for member in group.members %}
+                    <tr>
+                        <td class="st-name">
+                            <a href="/{{ lang }}/staff/{{ member.id }}">{{ member.last_name }}&nbsp;{{ member.first_name }}</a>
+                        </td>
+                        <td class="st-role">{{ i18n.t(&member.role_key) }}</td>
+                        <td class="st-nat">
+                            <a href="/{{ lang }}/countries/{{ member.country_slug }}">
+                                <span class="flag flag-{{ member.country_code }}" title="{{ member.country_name }}"></span>
+                            </a>
+                        </td>
+                        <td class="st-age">{{ member.age }}</td>
+                        <td class="st-contract">{{ member.contract_end }}</td>
+                        <td class="st-wage">{{ member.wage }} {{ i18n.t("per_week") }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </section>
+        {% endfor %}
+    {% endif %}
+</div>
+{% endblock %}

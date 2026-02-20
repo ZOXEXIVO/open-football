@@ -5,7 +5,7 @@ use crate::r#match::MatchResult;
 use crate::shared::{SimulatorDataIndexes, TeamData};
 use crate::transfers::TransferPool;
 use crate::utils::Logging;
-use crate::{Club, Country, Player, Team};
+use crate::{Club, Country, Player, Staff, Team};
 use chrono::{Duration, NaiveDateTime};
 
 pub struct FootballSimulator;
@@ -333,6 +333,40 @@ impl SimulatorData {
                     .find(|team| team.id == player_team_id)
             })
             .and_then(|team| team.players.players.iter_mut().find(|c| c.id == id))
+    }
+
+    pub fn staff_with_team(&self, staff_id: u32) -> Option<(&Staff, &Team)> {
+        // Fast path: indexed lookup
+        if let Some((continent_id, country_id, club_id, team_id)) =
+            self.indexes.as_ref().and_then(|idx| idx.get_staff_location(staff_id))
+        {
+            let result = self
+                .continent(continent_id)
+                .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
+                .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
+                .and_then(|cl| cl.teams.teams.iter().find(|t| t.id == team_id))
+                .and_then(|team| {
+                    team.staffs.staffs.iter().find(|s| s.id == staff_id).map(|s| (s, team))
+                });
+
+            if result.is_some() {
+                return result;
+            }
+        }
+
+        // Fallback: brute-force
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if let Some(staff) = team.staffs.staffs.iter().find(|s| s.id == staff_id) {
+                            return Some((staff, team));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 }
 

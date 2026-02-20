@@ -1,0 +1,160 @@
+{% extends "layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("transfers") }}{% endblock %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/matches">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/players/{{ player_id }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("transfer_status") }}</h3>
+        </div>
+        <div class="fm-pt-status">
+            <div class="fm-pt-status-grid">
+                <div class="fm-pt-info-row">
+                    <span class="fm-pt-label">{{ i18n.t("value") }}</span>
+                    <span class="fm-pt-value">{{ transfer_status.value }}</span>
+                </div>
+                {% if !transfer_status.asking_price.is_empty() %}
+                <div class="fm-pt-info-row">
+                    <span class="fm-pt-label">{{ i18n.t("asking_price") }}</span>
+                    <span class="fm-pt-value">{{ transfer_status.asking_price }}</span>
+                </div>
+                {% endif %}
+                <div class="fm-pt-info-row">
+                    <span class="fm-pt-label">{{ i18n.t("status") }}</span>
+                    <span class="fm-pt-value">
+                        {% if transfer_status.status_keys.is_empty() %}
+                        <span class="fm-pt-badge fm-pt-badge-none">{{ i18n.t("player_status_none") }}</span>
+                        {% else %}
+                            {% for key in transfer_status.status_keys %}
+                            <span class="fm-pt-badge{% if key == "player_status_listed" || key == "player_status_loan_listed" %} fm-pt-badge-listed{% else if key == "player_status_agreed" || key == "player_status_bid_accepted" %} fm-pt-badge-agreed{% else if key == "player_status_requested" || key == "player_status_free_transfer" || key == "player_status_unhappy" %} fm-pt-badge-request{% else if key == "player_status_wanted" || key == "player_status_enquiry" %} fm-pt-badge-interest{% else %} fm-pt-badge-none{% endif %}">{{ i18n.t(&key) }}</span>
+                            {% endfor %}
+                        {% endif %}
+                    </span>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    {% if let Some(listing) = listing %}
+    <section class="fm-panel fm-pt-section">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("transfer_listings") }}</h3>
+        </div>
+        <table class="fm-squad fm-pt-table">
+            <thead>
+                <tr>
+                    <th class="pt-type">{{ i18n.t("transfer_listing_type") }}</th>
+                    <th class="pt-price">{{ i18n.t("asking_price") }}</th>
+                    <th class="pt-date">{{ i18n.t("date") }}</th>
+                    <th class="pt-lstatus">{{ i18n.t("status") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td class="pt-type">{{ i18n.t(&listing.listing_type_key) }}</td>
+                    <td class="pt-price">{{ listing.asking_price }}</td>
+                    <td class="pt-date">{{ listing.listed_date }}</td>
+                    <td class="pt-lstatus"><span class="fm-pt-badge{% if listing.status_key == "listing_status_available" %} fm-pt-badge-listed{% else if listing.status_key == "listing_status_negotiating" %} fm-pt-badge-interest{% else if listing.status_key == "listing_status_completed" %} fm-pt-badge-agreed{% else %} fm-pt-badge-none{% endif %}">{{ i18n.t(&listing.status_key) }}</span></td>
+                </tr>
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    <section class="fm-panel fm-pt-section">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("active_negotiations") }}</h3>
+            <span class="fm-panel-count">{{ negotiations.len() }}</span>
+        </div>
+        {% if negotiations.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("no_active_negotiations") }}</div>
+        {% else %}
+        <table class="fm-squad fm-pt-table">
+            <thead>
+                <tr>
+                    <th class="pt-club">{{ i18n.t("buying_club") }}</th>
+                    <th class="pt-offer">{{ i18n.t("offer") }}</th>
+                    <th class="pt-type">{{ i18n.t("transfer_listing_type") }}</th>
+                    <th class="pt-phase">{{ i18n.t("neg_phase") }}</th>
+                    <th class="pt-nstatus">{{ i18n.t("status") }}</th>
+                    <th class="pt-date">{{ i18n.t("date") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for neg in negotiations %}
+                <tr>
+                    <td class="pt-club">
+                        {% if !neg.buying_club_slug.is_empty() %}
+                        <a href="/{{ lang }}/teams/{{ neg.buying_club_slug }}">{{ neg.buying_club_name }}</a>
+                        {% else %}
+                        {{ neg.buying_club_name }}
+                        {% endif %}
+                    </td>
+                    <td class="pt-offer">{{ neg.offer_amount }}</td>
+                    <td class="pt-type">{% if neg.is_loan %}{{ i18n.t("loan") }}{% else %}{{ i18n.t("transfers") }}{% endif %}</td>
+                    <td class="pt-phase">{{ i18n.t(&neg.phase_key) }}</td>
+                    <td class="pt-nstatus"><span class="fm-pt-badge{% if neg.status_key == "neg_status_pending" %} fm-pt-badge-interest{% else if neg.status_key == "neg_status_countered" %} fm-pt-badge-listed{% else if neg.status_key == "neg_status_accepted" %} fm-pt-badge-agreed{% else %} fm-pt-badge-request{% endif %}">{{ i18n.t(&neg.status_key) }}</span></td>
+                    <td class="pt-date">{{ neg.started_date }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+
+    <section class="fm-panel fm-pt-section">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("completed_transfers") }}</h3>
+            <span class="fm-panel-count">{{ completed.len() }}</span>
+        </div>
+        {% if completed.is_empty() %}
+        <div class="fm-empty">{{ i18n.t("no_completed_transfers") }}</div>
+        {% else %}
+        <table class="fm-squad fm-pt-table">
+            <thead>
+                <tr>
+                    <th class="pt-club">{{ i18n.t("from") }}</th>
+                    <th class="pt-club">{{ i18n.t("to") }}</th>
+                    <th class="pt-offer">{{ i18n.t("fee") }}</th>
+                    <th class="pt-type">{{ i18n.t("transfer_listing_type") }}</th>
+                    <th class="pt-date">{{ i18n.t("date") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for t in completed %}
+                <tr>
+                    <td class="pt-club">
+                        {% if !t.from_club_slug.is_empty() %}
+                        <a href="/{{ lang }}/teams/{{ t.from_club_slug }}">{{ t.from_club_name }}</a>
+                        {% else %}
+                        {{ t.from_club_name }}
+                        {% endif %}
+                    </td>
+                    <td class="pt-club">
+                        {% if !t.to_club_slug.is_empty() %}
+                        <a href="/{{ lang }}/teams/{{ t.to_club_slug }}">{{ t.to_club_name }}</a>
+                        {% else %}
+                        {{ t.to_club_name }}
+                        {% endif %}
+                    </td>
+                    <td class="pt-offer">{% if !t.fee.is_empty() %}{{ t.fee }}{% else %}{{ i18n.t("free") }}{% endif %}</td>
+                    <td class="pt-type">{{ i18n.t(&t.transfer_type_key) }}</td>
+                    <td class="pt-date">{{ t.date }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

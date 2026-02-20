@@ -6,6 +6,7 @@ use crate::i18n::detect_language;
 use crate::leagues::league_routes;
 use crate::player::player_routes;
 use crate::r#match::routes::match_routes;
+use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::GameAppData;
 use axum::http::header::ACCEPT_LANGUAGE;
@@ -35,6 +36,7 @@ impl ServerRoutes {
             .merge(league_routes())
             .merge(team_routes())
             .merge(player_routes())
+            .merge(staff_routes())
             .merge(match_routes())
             .merge(current_date_routes())
             .merge(face_routes())

@@ -179,7 +179,7 @@ impl DatabaseGenerator {
                                     &TeamType::from_str(&t.team_type).unwrap(),
                                 )))
                                 .staffs(StaffCollection::new(
-                                    Self::generate_staffs(staff_generator, country_id, team_rep)
+                                    Self::generate_staffs(staff_generator, country_id, team_rep, &TeamType::from_str(&t.team_type).unwrap())
                                 ))
                                 .build()
                                 .expect("Failed to build Team")
@@ -229,11 +229,14 @@ impl DatabaseGenerator {
         players
     }
 
-    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, team_reputation: u16) -> Vec<Staff> {
+    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
-        staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
-        staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
+        if *team_type == TeamType::Main {
+            // Only main team gets directors
+            staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
+            staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
+        }
 
         staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager, team_reputation));
         staffs.push(staff_generator.generate(country_id, StaffPosition::Coach, team_reputation));

@@ -35,7 +35,7 @@ impl StaffGenerator {
 
         let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
 
-        let year = IntegerUtils::random(now.year() - 35, now.year() - 15) as u32;
+        let year = IntegerUtils::random(now.year() - 65, now.year() - 30) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 29) as u32;
 

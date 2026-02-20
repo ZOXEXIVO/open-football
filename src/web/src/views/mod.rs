@@ -80,6 +80,19 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
         });
     }
 
+    let staff_url = format!("/{}/teams/{}/staff", lang, team_slug);
+
+    sections.push(MenuSection {
+        items: vec![
+            MenuItem {
+                active: current_path == staff_url,
+                title: i18n.t("staff").to_string(),
+                url: staff_url,
+                icon: "fa-id-badge".to_string(),
+            },
+        ],
+    });
+
     let tactics_url = format!("/{}/teams/{}/tactics", lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", lang, team_slug);
     let transfers_url = format!("/{}/teams/{}/transfers", lang, team_slug);
@@ -111,6 +124,10 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
 }
 
 pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str) -> Vec<MenuSection> {
+    team_menu(i18n, lang, neighbor_teams, team_slug, current_path)
+}
+
+pub fn staff_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str) -> Vec<MenuSection> {
     team_menu(i18n, lang, neighbor_teams, team_slug, current_path)
 }
 
