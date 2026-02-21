@@ -102,7 +102,7 @@
     ],
     "colors": {
       "background": "#000000",
-      "foreground": "#2915ef"
+      "foreground": "#0454a5"
     }
   },
   {
@@ -366,8 +366,8 @@
       }
     ],
     "colors": {
-      "background": "#1528e2",
-      "foreground": "#ffffff"
+      "background": "#0d56ed",
+      "foreground": "#000000"
     }
   },
   {
@@ -419,7 +419,7 @@
       }
     ],
     "colors": {
-      "background": "#52007e",
+      "background": "#710aa9",
       "foreground": "#ffffff"
     }
   },

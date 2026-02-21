@@ -100,8 +100,9 @@ pub async fn team_transfers_action(
         })?;
 
     let now = simulator_data.date.date();
-    let neighbor_teams: Vec<(String, String)> = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let (neighbor_teams, league_info) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    let league_refs: Option<(&str, &str)> = league_info.as_ref().map(|(n, s)| (n.as_str(), s.as_str()));
 
     let club_id = team.club_id;
 
@@ -206,7 +207,7 @@ pub async fn team_transfers_action(
         })
         .collect();
 
-    let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/transfers", &route_params.lang, &team.slug));
+    let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/transfers", &route_params.lang, &team.slug), league_refs);
     let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };
 
     Ok(TeamTransfersTemplate {
@@ -244,22 +245,35 @@ fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
     i18n: &crate::I18n,
-) -> Result<Vec<(String, String)>, ApiError> {
+) -> Result<(Vec<(String, String)>, Option<(String, String)>), ApiError> {
     let club = data
         .club(club_id)
         .ok_or_else(|| ApiError::InternalError(format!("Club with ID {} not found", club_id)))?;
+
+    let club_name = &club.name;
+
+    let mut league_info: Option<(String, String)> = None;
 
     let mut teams: Vec<(String, String, u16)> = club
         .teams
         .teams
         .iter()
-        .map(|team| (i18n.t(team.team_type.as_i18n_key()).to_string(), team.slug.clone(), team.reputation.world))
+        .map(|team| {
+            if team.team_type == core::TeamType::Main {
+                if let Some(league_id) = team.league_id {
+                    if let Some(league) = data.league(league_id) {
+                        league_info = Some((league.name.clone(), league.slug.clone()));
+                    }
+                }
+            }
+            (format!("{} {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+        })
         .collect();
 
     teams.sort_by(|a, b| b.2.cmp(&a.2));
 
-    Ok(teams
+    Ok((teams
         .into_iter()
         .map(|(name, slug, _)| (name, slug))
-        .collect())
+        .collect(), league_info))
 }
