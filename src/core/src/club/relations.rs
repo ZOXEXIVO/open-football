@@ -104,6 +104,7 @@ impl Relations {
         date: NaiveDate,
     ) {
         // Store values we need before taking mutable borrows
+        let is_rivalry = matches!(change.change_type, ChangeType::CompetitionRivalry);
         let (old_level, new_level, should_recalculate) = {
             // Create a scope for the mutable borrow
             let relation = self.players.get_or_create(player_id);
@@ -113,6 +114,11 @@ impl Relations {
 
             // Apply the change
             relation.apply_change(&change);
+
+            // Track rivalry with the actual target player ID
+            if is_rivalry {
+                relation.rivalry_with.insert(player_id);
+            }
 
             // Store the new level
             let new_level = relation.level;
@@ -427,7 +433,10 @@ impl Relationship for PlayerRelation {
     }
 
     fn apply_change(&mut self, change: &RelationshipChange) {
-        let magnitude = change.magnitude * (1.0 + self.momentum * 0.5);
+        // magnitude is always positive (abs stored in both positive() and negative()).
+        // The sign of the effect is determined by the change_type branch (+= or -=)
+        // and by is_positive for the catch-all branch.
+        let magnitude = change.magnitude.abs() * (1.0 + self.momentum * 0.5);
 
         match change.change_type {
             ChangeType::MatchCooperation => {
@@ -452,7 +461,6 @@ impl Relationship for PlayerRelation {
             ChangeType::CompetitionRivalry => {
                 self.level -= magnitude * 2.0;
                 self.professional_respect -= magnitude;
-                self.rivalry_with.insert(0); // Add to rivalry set
             }
             ChangeType::TrainingFriction => {
                 self.level -= magnitude;
@@ -474,12 +482,17 @@ impl Relationship for PlayerRelation {
                 self.professional_respect -= magnitude * 0.5;
             }
             _ => {
-                self.level += magnitude;
+                if change.is_positive {
+                    self.level += magnitude;
+                } else {
+                    self.level -= magnitude;
+                }
             }
         }
 
-        // Update momentum
-        self.momentum = (self.momentum + magnitude.signum() * 0.1).clamp(-1.0, 1.0);
+        // Update momentum — direction tracks whether this was a positive or negative change
+        let momentum_dir = if change.is_positive { 1.0 } else { -1.0 };
+        self.momentum = (self.momentum + momentum_dir * 0.1).clamp(-1.0, 1.0);
 
         // Update interaction frequency
         self.interaction_frequency = (self.interaction_frequency + 0.1).min(1.0);
@@ -558,7 +571,7 @@ impl Relationship for StaffRelation {
     }
 
     fn apply_change(&mut self, change: &RelationshipChange) {
-        let magnitude = change.magnitude;
+        let magnitude = change.magnitude.abs();
 
         match change.change_type {
             ChangeType::CoachingSuccess => {
@@ -582,7 +595,11 @@ impl Relationship for StaffRelation {
                 self.level -= magnitude;
             }
             _ => {
-                self.level += magnitude;
+                if change.is_positive {
+                    self.level += magnitude;
+                } else {
+                    self.level -= magnitude;
+                }
             }
         }
 
@@ -871,7 +888,7 @@ impl RelationshipChange {
     pub fn negative(change_type: ChangeType, magnitude: f32) -> Self {
         RelationshipChange {
             change_type,
-            magnitude: -magnitude.abs(),
+            magnitude: magnitude.abs(),
             is_positive: false,
         }
     }

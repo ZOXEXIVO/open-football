@@ -24,6 +24,7 @@ pub struct LeagueTransfersTemplate {
     pub sub_title_suffix: String,
     pub sub_title: String,
     pub sub_title_link: String,
+    pub sub_title_country_code: String,
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
@@ -223,17 +224,15 @@ pub async fn league_transfers_action(
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),
         sub_title_link: format!("/{}/countries/{}", &route_params.lang, &country.slug),
+        sub_title_country_code: country.code.clone(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
-        menu_sections: views::league_menu(
-            &i18n,
-            &route_params.lang,
-            &country.name,
-            &country.slug,
-            &league.name,
-            &league.slug,
-            &format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug),
-        ),
+        menu_sections: {
+            let mut cl: Vec<(u32, &str, &str)> = country.leagues.leagues.iter().map(|l| (l.id, l.name.as_str(), l.slug.as_str())).collect();
+            cl.sort_by_key(|(id, _, _)| *id);
+            let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
+            views::league_menu(&i18n, &route_params.lang, &country.name, &country.slug, &league.slug, &format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug), &cl_refs)
+        },
         league_slug: league.slug.clone(),
         completed_transfers,
         current_listings,

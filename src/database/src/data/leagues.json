@@ -1,22 +1,43 @@
 [
   {
-    "id": 2,
+    "id": 32,
     "slug": "italian-serie-a",
     "name": "Serie A",
     "country_id": 776,
-    "reputation": 8000,
+    "reputation": 8750,
     "settings": {
       "season_starting_half": {
-        "from_day": 1,
-        "from_month": 7,
-        "to_day": 5,
+        "from_day": 20,
+        "from_month": 8,
+        "to_day": 22,
         "to_month": 12
       },
       "season_ending_half": {
-        "from_day": 1,
-        "from_month": 3,
-        "to_day": 31,
+        "from_day": 7,
+        "from_month": 1,
+        "to_day": 28,
         "to_month": 5
+      }
+    }
+  },
+  {
+    "id": 33,
+    "slug": "italian-serie-b",
+    "name": "Serie B",
+    "country_id": 776,
+    "reputation": 5500,
+    "settings": {
+      "season_starting_half": {
+        "from_day": 26,
+        "from_month": 8,
+        "to_day": 22,
+        "to_month": 12
+      },
+      "season_ending_half": {
+        "from_day": 7,
+        "from_month": 1,
+        "to_day": 11,
+        "to_month": 6
       }
     }
   }

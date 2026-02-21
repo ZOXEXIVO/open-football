@@ -56,9 +56,10 @@ impl TeamBehaviour {
             Some(last) => {
                 let days_since = current_time.signed_duration_since(last).num_days();
                 days_since >= 7
-                    || current_time.weekday() == chrono::Weekday::Sat
-                    || current_time.weekday() == chrono::Weekday::Sun
-                    || current_time.day() == 1
+                    || (days_since >= 1
+                        && (current_time.weekday() == chrono::Weekday::Sat
+                            || current_time.weekday() == chrono::Weekday::Sun
+                            || current_time.day() == 1))
             }
         }
     }
@@ -69,10 +70,11 @@ impl TeamBehaviour {
             Some(last) => {
                 let days_since = current_time.signed_duration_since(last).num_days();
                 days_since >= 2
-                    || matches!(
-                        current_time.weekday(),
-                        chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu
-                    )
+                    || (days_since >= 1
+                        && matches!(
+                            current_time.weekday(),
+                            chrono::Weekday::Tue | chrono::Weekday::Wed | chrono::Weekday::Thu
+                        ))
             }
         }
     }
@@ -232,11 +234,20 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
     ) {
         for player in &players.players {
-            if player.statistics.goals > 0 && player.position().is_forward() {
-                // Star performers with high reputation get bigger boosts
+            // Require actual appearances and a notable goal ratio, not just goals > 0.
+            // This prevents a single early-season goal from generating boosts all year.
+            if player.statistics.played == 0 || !player.position().is_forward() {
+                continue;
+            }
+
+            let goals_per_game =
+                player.statistics.goals as f32 / player.statistics.played as f32;
+
+            if goals_per_game > 0.25 {
                 let rep_factor = (player.player_attributes.current_reputation as f32 / 10000.0)
                     .clamp(0.1, 1.0);
-                let popularity_boost = 0.03 + 0.04 * rep_factor;
+                // Scale down for minor-update frequency (~every 2 days vs weekly full update)
+                let popularity_boost = (0.03 + 0.04 * rep_factor) * 0.25;
 
                 for other_player in &players.players {
                     if player.id != other_player.id {
@@ -764,26 +775,29 @@ impl TeamBehaviour {
                 let player_i = &players.players[i];
                 let player_j = &players.players[j];
 
-                let contract_jealousy = Self::calculate_contract_jealousy(player_i, player_j);
+                let (jealousy_i_to_j, jealousy_j_to_i) =
+                    Self::calculate_contract_jealousy(player_i, player_j);
 
-                if contract_jealousy.abs() > 0.02 {
+                if jealousy_i_to_j.abs() > 0.02 {
                     result
                         .players
                         .relationship_result
                         .push(PlayerRelationshipChangeResult {
                             from_player_id: player_i.id,
                             to_player_id: player_j.id,
-                            relationship_change: contract_jealousy,
+                            relationship_change: jealousy_i_to_j,
                             change_type: ChangeType::PersonalConflict,
                         });
+                }
 
+                if jealousy_j_to_i.abs() > 0.02 {
                     result
                         .players
                         .relationship_result
                         .push(PlayerRelationshipChangeResult {
                             from_player_id: player_j.id,
                             to_player_id: player_i.id,
-                            relationship_change: contract_jealousy,
+                            relationship_change: jealousy_j_to_i,
                             change_type: ChangeType::PersonalConflict,
                         });
                 }
@@ -971,7 +985,17 @@ impl TeamBehaviour {
 
         let success = rand::random::<f32>() < success_chance;
 
-        let (morale_change, relationship_change) = match (&talk_type, success) {
+        // For transfer discussion, the talk succeeding doesn't guarantee the player
+        // withdraws the request — there's only a 30% chance of that happening.
+        let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
+            rand::random::<f32>() < 0.3
+        } else {
+            success
+        };
+
+        // Outcomes are determined by actual_success so that the morale/relationship
+        // effects are consistent with what the result processing sees.
+        let (morale_change, relationship_change) = match (&talk_type, actual_success) {
             (ManagerTalkType::PlayingTimeTalk, true) => (10.0, 0.3),
             (ManagerTalkType::PlayingTimeTalk, false) => (-5.0, -0.1),
             (ManagerTalkType::MoraleTalk, true) => (8.0, 0.3),
@@ -988,13 +1012,6 @@ impl TeamBehaviour {
             (ManagerTalkType::PlayingTimeRequest, false) => (-5.0, -0.2),
             (ManagerTalkType::LoanRequest, true) => (5.0, 0.2),
             (ManagerTalkType::LoanRequest, false) => (-3.0, -0.1),
-        };
-
-        // For transfer discussion, success means 30% chance of removing Req
-        let actual_success = if talk_type == ManagerTalkType::TransferDiscussion && success {
-            rand::random::<f32>() < 0.3
-        } else {
-            success
         };
 
         info!(
@@ -1179,37 +1196,40 @@ impl TeamBehaviour {
         // Players with high professionalism resist negative influence
         let resistance = other_player.attributes.professionalism / 20.0;
 
-        influence * (1.0 - resistance).max(0.0)
+        // Return negative: mood spread from unhappy players damages relationships
+        -(influence * (1.0 - resistance).max(0.0))
     }
 
-    fn calculate_contract_jealousy(player_a: &Player, player_b: &Player) -> f32 {
+    /// Returns (a_toward_b, b_toward_a) jealousy values.
+    /// The lower-paid player feels jealousy (negative); the higher-paid player is unaffected.
+    fn calculate_contract_jealousy(player_a: &Player, player_b: &Player) -> (f32, f32) {
         let salary_a = player_a.contract.as_ref().map(|c| c.salary).unwrap_or(0);
         let salary_b = player_b.contract.as_ref().map(|c| c.salary).unwrap_or(0);
 
         if salary_a == 0 || salary_b == 0 {
-            return 0.0;
+            return (0.0, 0.0);
         }
 
         let salary_ratio = salary_a as f32 / salary_b as f32;
 
         if salary_ratio > 2.0 || salary_ratio < 0.5 {
-            // Large salary differences create jealousy, amplified by reputation gap
             let rep_a = player_a.player_attributes.current_reputation as f32;
             let rep_b = player_b.player_attributes.current_reputation as f32;
 
-            // If the higher-paid player also has higher reputation, jealousy is reduced
-            // If higher-paid player has LOWER reputation, jealousy is amplified
-            let rep_alignment = if salary_ratio > 1.0 {
-                if rep_a > rep_b { 0.5 } else { 1.5 }
+            if salary_a > salary_b {
+                // A earns more — B feels jealousy toward A
+                // Jealousy is reduced if A also has higher reputation (justified pay)
+                let rep_alignment = if rep_a > rep_b { 0.5 } else { 1.5 };
+                let jealousy = -0.08 * (player_b.attributes.ambition / 20.0) * rep_alignment;
+                (0.0, jealousy)
             } else {
-                if rep_b > rep_a { 0.5 } else { 1.5 }
-            };
-
-            let jealousy_factor =
-                (player_a.attributes.ambition + player_b.attributes.ambition) / 40.0;
-            -0.08 * jealousy_factor * rep_alignment
+                // B earns more — A feels jealousy toward B
+                let rep_alignment = if rep_b > rep_a { 0.5 } else { 1.5 };
+                let jealousy = -0.08 * (player_a.attributes.ambition / 20.0) * rep_alignment;
+                (jealousy, 0.0)
+            }
         } else {
-            0.0
+            (0.0, 0.0)
         }
     }
 

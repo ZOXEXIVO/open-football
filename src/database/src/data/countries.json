@@ -5,14 +5,14 @@
     "slug": "afghanistan",
     "name": "Afghanistan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#000000",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 752,
@@ -20,14 +20,14 @@
     "slug": "albania",
     "name": "Albania",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#e41e20",
+    "foreground_color": "#000000"
   },
   {
     "id": 5,
@@ -35,13 +35,13 @@
     "slug": "algeria",
     "name": "Algeria",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5300,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#006233",
     "foreground_color": "#ffffff"
   },
   {
@@ -50,14 +50,14 @@
     "slug": "american samoa",
     "name": "American Samoa",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002868",
+    "foreground_color": "#bf0a30"
   },
   {
     "id": 753,
@@ -65,14 +65,14 @@
     "slug": "andorra",
     "name": "Andorra",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0032a0",
+    "foreground_color": "#fedf00"
   },
   {
     "id": 6,
@@ -80,14 +80,14 @@
     "slug": "angola",
     "name": "Angola",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#cc0000",
+    "foreground_color": "#000000"
   },
   {
     "id": 129514,
@@ -95,13 +95,13 @@
     "slug": "anguilla",
     "name": "Anguilla",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00247d",
     "foreground_color": "#ffffff"
   },
   {
@@ -110,14 +110,14 @@
     "slug": "antigua and barbuda",
     "name": "Antigua and Barbuda",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#000000"
   },
   {
     "id": 1649,
@@ -125,13 +125,13 @@
     "slug": "argentina",
     "name": "Argentina",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 8700,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#75aadb",
     "foreground_color": "#ffffff"
   },
   {
@@ -140,14 +140,14 @@
     "slug": "armenia",
     "name": "Armenia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#d90012",
+    "foreground_color": "#0033a0"
   },
   {
     "id": 360,
@@ -155,14 +155,14 @@
     "slug": "aruba",
     "name": "Aruba",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009ee0",
+    "foreground_color": "#f9d616"
   },
   {
     "id": 1435,
@@ -170,14 +170,14 @@
     "slug": "australia",
     "name": "Australia",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 0.45
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00843d",
+    "foreground_color": "#ffcd00"
   },
   {
     "id": 755,
@@ -185,13 +185,13 @@
     "slug": "austria",
     "name": "Austria",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6000,
     "settings": {
       "pricing": {
         "price_level": 0.65
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ed2939",
     "foreground_color": "#ffffff"
   },
   {
@@ -200,14 +200,14 @@
     "slug": "azerbaijan",
     "name": "Azerbaijan",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0092bc",
+    "foreground_color": "#e4002b"
   },
   {
     "id": 388,
@@ -215,14 +215,14 @@
     "slug": "bahamas",
     "name": "Bahamas",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00abc9",
+    "foreground_color": "#fae042"
   },
   {
     "id": 107,
@@ -230,13 +230,13 @@
     "slug": "bahrain",
     "name": "Bahrain",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -245,14 +245,14 @@
     "slug": "bangladesh",
     "name": "Bangladesh",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006a4e",
+    "foreground_color": "#f42a41"
   },
   {
     "id": 361,
@@ -260,14 +260,14 @@
     "slug": "barbados",
     "name": "Barbados",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00267f",
+    "foreground_color": "#ffc726"
   },
   {
     "id": 758,
@@ -275,14 +275,14 @@
     "slug": "belarus",
     "name": "Belarus",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#c8313e",
+    "foreground_color": "#4aa657"
   },
   {
     "id": 757,
@@ -290,14 +290,14 @@
     "slug": "belgium",
     "name": "Belgium",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 7200,
     "settings": {
       "pricing": {
         "price_level": 0.8
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ed2939",
+    "foreground_color": "#fae042"
   },
   {
     "id": 362,
@@ -305,14 +305,14 @@
     "slug": "belize",
     "name": "Belize",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003f87",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 7,
@@ -320,14 +320,14 @@
     "slug": "benin",
     "name": "Benin",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#008751",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 363,
@@ -335,14 +335,14 @@
     "slug": "bermuda",
     "name": "Bermuda",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#cf142b",
+    "foreground_color": "#00247d"
   },
   {
     "id": 131012,
@@ -350,14 +350,14 @@
     "slug": "bhutan",
     "name": "Bhutan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ff4e12",
+    "foreground_color": "#ffd520"
   },
   {
     "id": 1650,
@@ -365,14 +365,14 @@
     "slug": "bolivia",
     "name": "Bolivia",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 4800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007934",
+    "foreground_color": "#ffe000"
   },
   {
     "id": 759,
@@ -380,14 +380,14 @@
     "slug": "bosnia-herzegovina",
     "name": "Bosnia-Herzegovina",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002395",
+    "foreground_color": "#fecb00"
   },
   {
     "id": 8,
@@ -395,14 +395,14 @@
     "slug": "botswana",
     "name": "Botswana",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#75aadb",
+    "foreground_color": "#000000"
   },
   {
     "id": 1651,
@@ -410,14 +410,14 @@
     "slug": "brazil",
     "name": "Brazil",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 9200,
     "settings": {
       "pricing": {
         "price_level": 0.6
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffdf00",
+    "foreground_color": "#009c3b"
   },
   {
     "id": 129517,
@@ -425,13 +425,13 @@
     "slug": "british virgin islands",
     "name": "British Virgin Islands",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00247d",
     "foreground_color": "#ffffff"
   },
   {
@@ -440,14 +440,14 @@
     "slug": "brunei",
     "name": "Brunei",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#f7e017",
+    "foreground_color": "#000000"
   },
   {
     "id": 760,
@@ -455,14 +455,14 @@
     "slug": "bulgaria",
     "name": "Bulgaria",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#00966e"
   },
   {
     "id": 9,
@@ -470,14 +470,14 @@
     "slug": "burkina faso",
     "name": "Burkina Faso",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e49",
+    "foreground_color": "#ef2b2d"
   },
   {
     "id": 10,
@@ -485,14 +485,14 @@
     "slug": "burundi",
     "name": "Burundi",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#1eb53a",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 118,
@@ -500,14 +500,14 @@
     "slug": "cambodia",
     "name": "Cambodia",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#032ea1",
+    "foreground_color": "#e00025"
   },
   {
     "id": 11,
@@ -515,14 +515,14 @@
     "slug": "cameroon",
     "name": "Cameroon",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5600,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007a5e",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 364,
@@ -530,13 +530,13 @@
     "slug": "canada",
     "name": "Canada",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ff0000",
     "foreground_color": "#ffffff"
   },
   {
@@ -545,14 +545,14 @@
     "slug": "cape verde islands",
     "name": "Cape Verde Islands",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003893",
+    "foreground_color": "#cf2027"
   },
   {
     "id": 365,
@@ -560,13 +560,13 @@
     "slug": "cayman islands",
     "name": "Cayman Islands",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#003f87",
     "foreground_color": "#ffffff"
   },
   {
@@ -575,14 +575,14 @@
     "slug": "central african republic",
     "name": "Central African Republic",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003082",
+    "foreground_color": "#ffce00"
   },
   {
     "id": 14,
@@ -590,14 +590,14 @@
     "slug": "chad",
     "name": "Chad",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002664",
+    "foreground_color": "#fecb00"
   },
   {
     "id": 1652,
@@ -605,13 +605,13 @@
     "slug": "chile",
     "name": "Chile",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 7100,
     "settings": {
       "pricing": {
         "price_level": 0.35
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#d52b1e",
     "foreground_color": "#ffffff"
   },
   {
@@ -620,14 +620,14 @@
     "slug": "china",
     "name": "China",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 5000,
     "settings": {
       "pricing": {
         "price_level": 0.65
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#de2910",
+    "foreground_color": "#ffde00"
   },
   {
     "id": 138,
@@ -635,14 +635,14 @@
     "slug": "taiwan",
     "name": "Taiwan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#fe0000",
+    "foreground_color": "#000095"
   },
   {
     "id": 1653,
@@ -650,14 +650,14 @@
     "slug": "colombia",
     "name": "Colombia",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 7500,
     "settings": {
       "pricing": {
         "price_level": 0.4
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#fcd116",
+    "foreground_color": "#003893"
   },
   {
     "id": 919586,
@@ -665,13 +665,13 @@
     "slug": "comoros",
     "name": "Comoros",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#3a75c4",
     "foreground_color": "#ffffff"
   },
   {
@@ -680,14 +680,14 @@
     "slug": "congo",
     "name": "Congo",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009543",
+    "foreground_color": "#fbde4a"
   },
   {
     "id": 53,
@@ -695,14 +695,14 @@
     "slug": "congo dr",
     "name": "Congo DR",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007fff",
+    "foreground_color": "#f7d618"
   },
   {
     "id": 1436,
@@ -710,13 +710,13 @@
     "slug": "cook islands",
     "name": "Cook Islands",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00247d",
     "foreground_color": "#ffffff"
   },
   {
@@ -725,13 +725,13 @@
     "slug": "costa rica",
     "name": "Costa Rica",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -740,14 +740,14 @@
     "slug": "côte d'ivoire",
     "name": "Côte d'Ivoire",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5700,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ff8200",
+    "foreground_color": "#009e60"
   },
   {
     "id": 761,
@@ -755,13 +755,13 @@
     "slug": "croatia",
     "name": "Croatia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6900,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ff0000",
     "foreground_color": "#ffffff"
   },
   {
@@ -770,14 +770,14 @@
     "slug": "cuba",
     "name": "Cuba",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002a8f",
+    "foreground_color": "#cb1515"
   },
   {
     "id": 762,
@@ -785,13 +785,13 @@
     "slug": "cyprus",
     "name": "Cyprus",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#003f87",
     "foreground_color": "#ffffff"
   },
   {
@@ -800,13 +800,13 @@
     "slug": "czech republic",
     "name": "Czech Republic",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6500,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#d7141a",
     "foreground_color": "#ffffff"
   },
   {
@@ -815,13 +815,13 @@
     "slug": "denmark",
     "name": "Denmark",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6400,
     "settings": {
       "pricing": {
         "price_level": 0.6
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#c60c30",
     "foreground_color": "#ffffff"
   },
   {
@@ -830,14 +830,14 @@
     "slug": "djibouti",
     "name": "Djibouti",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#6ab2e7",
+    "foreground_color": "#12ad2b"
   },
   {
     "id": 368,
@@ -845,14 +845,14 @@
     "slug": "dominica",
     "name": "Dominica",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006b3f",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 142527,
@@ -860,14 +860,14 @@
     "slug": "dominican republic",
     "name": "Dominican Republic",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002d62",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 1654,
@@ -875,14 +875,14 @@
     "slug": "ecuador",
     "name": "Ecuador",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffce00",
+    "foreground_color": "#034ea2"
   },
   {
     "id": 16,
@@ -890,13 +890,13 @@
     "slug": "egypt",
     "name": "Egypt",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5600,
     "settings": {
       "pricing": {
         "price_level": 0.35
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -905,13 +905,13 @@
     "slug": "salvador",
     "name": "Salvador",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#0f47af",
     "foreground_color": "#ffffff"
   },
   {
@@ -920,14 +920,14 @@
     "slug": "england",
     "name": "England",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 8500,
     "settings": {
       "pricing": {
         "price_level": 1.5
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#cf081f"
   },
   {
     "id": 17,
@@ -935,14 +935,14 @@
     "slug": "equatorial guinea",
     "name": "Equatorial Guinea",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#3e9a00",
+    "foreground_color": "#e32118"
   },
   {
     "id": 129511,
@@ -950,14 +950,14 @@
     "slug": "eritrea",
     "name": "Eritrea",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#4189dd",
+    "foreground_color": "#ea0437"
   },
   {
     "id": 766,
@@ -965,14 +965,14 @@
     "slug": "estonia",
     "name": "Estonia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0072ce",
+    "foreground_color": "#000000"
   },
   {
     "id": 18,
@@ -980,14 +980,14 @@
     "slug": "ethiopia",
     "name": "Ethiopia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009b3a",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 767,
@@ -995,14 +995,14 @@
     "slug": "faroe islands",
     "name": "Faroe Islands",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#005bbb"
   },
   {
     "id": 1437,
@@ -1010,13 +1010,13 @@
     "slug": "fiji",
     "name": "Fiji",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#68bfe5",
     "foreground_color": "#ffffff"
   },
   {
@@ -1025,14 +1025,14 @@
     "slug": "finland",
     "name": "Finland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#003580"
   },
   {
     "id": 769,
@@ -1040,13 +1040,13 @@
     "slug": "france",
     "name": "France",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 8600,
     "settings": {
       "pricing": {
         "price_level": 1.1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#002395",
     "foreground_color": "#ffffff"
   },
   {
@@ -1055,14 +1055,14 @@
     "slug": "french guiana",
     "name": "French Guiana",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e60",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 781,
@@ -1070,14 +1070,14 @@
     "slug": "macedonia",
     "name": "Macedonia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce2028",
+    "foreground_color": "#f9d616"
   },
   {
     "id": 19,
@@ -1085,14 +1085,14 @@
     "slug": "gabon",
     "name": "Gabon",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e49",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 20,
@@ -1100,14 +1100,14 @@
     "slug": "gambia",
     "name": "Gambia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#0c1c8c"
   },
   {
     "id": 770,
@@ -1115,14 +1115,14 @@
     "slug": "georgia",
     "name": "Georgia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#ff0000"
   },
   {
     "id": 771,
@@ -1130,14 +1130,14 @@
     "slug": "germany",
     "name": "Germany",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 9100,
     "settings": {
       "pricing": {
         "price_level": 1.15
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#000000"
   },
   {
     "id": 21,
@@ -1145,14 +1145,14 @@
     "slug": "ghana",
     "name": "Ghana",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006b3f",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 214394,
@@ -1160,13 +1160,13 @@
     "slug": "gibraltar",
     "name": "Gibraltar",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#da121a",
     "foreground_color": "#ffffff"
   },
   {
@@ -1175,13 +1175,13 @@
     "slug": "greece",
     "name": "Greece",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6100,
     "settings": {
       "pricing": {
         "price_level": 0.55
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#001489",
     "foreground_color": "#ffffff"
   },
   {
@@ -1190,14 +1190,14 @@
     "slug": "grenada",
     "name": "Grenada",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 917498,
@@ -1205,14 +1205,14 @@
     "slug": "guadeloupe",
     "name": "Guadeloupe",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#000000",
+    "foreground_color": "#f9d616"
   },
   {
     "id": 129508,
@@ -1220,14 +1220,14 @@
     "slug": "guam",
     "name": "Guam",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003f87",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 373,
@@ -1235,13 +1235,13 @@
     "slug": "guatemala",
     "name": "Guatemala",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#4997d0",
     "foreground_color": "#ffffff"
   },
   {
@@ -1250,14 +1250,14 @@
     "slug": "guinea-bissau",
     "name": "Guinea-Bissau",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#009e49"
   },
   {
     "id": 374,
@@ -1265,14 +1265,14 @@
     "slug": "guyana",
     "name": "Guyana",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e49",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 375,
@@ -1280,14 +1280,14 @@
     "slug": "haiti",
     "name": "Haiti",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00209f",
+    "foreground_color": "#d21034"
   },
   {
     "id": 376,
@@ -1295,14 +1295,14 @@
     "slug": "honduras",
     "name": "Honduras",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 3800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#0073cf"
   },
   {
     "id": 111,
@@ -1310,13 +1310,13 @@
     "slug": "hong kong",
     "name": "Hong Kong",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#de2910",
     "foreground_color": "#ffffff"
   },
   {
@@ -1325,13 +1325,13 @@
     "slug": "hungary",
     "name": "Hungary",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce2939",
     "foreground_color": "#ffffff"
   },
   {
@@ -1340,14 +1340,14 @@
     "slug": "iceland",
     "name": "Iceland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003897",
+    "foreground_color": "#d72828"
   },
   {
     "id": 112,
@@ -1355,14 +1355,14 @@
     "slug": "india",
     "name": "India",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0077b6",
+    "foreground_color": "#ff9933"
   },
   {
     "id": 113,
@@ -1370,13 +1370,13 @@
     "slug": "indonesia",
     "name": "Indonesia",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -1385,14 +1385,14 @@
     "slug": "iran",
     "name": "Iran",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#239f40"
   },
   {
     "id": 115,
@@ -1400,14 +1400,14 @@
     "slug": "iraq",
     "name": "Iraq",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#007a3d"
   },
   {
     "id": 775,
@@ -1415,13 +1415,13 @@
     "slug": "israel",
     "name": "Israel",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 4800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#0038b8",
     "foreground_color": "#ffffff"
   },
   {
@@ -1430,7 +1430,7 @@
     "slug": "italy",
     "name": "Italy",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 8800,
     "settings": {
       "pricing": {
         "price_level": 1.1
@@ -1445,14 +1445,14 @@
     "slug": "jamaica",
     "name": "Jamaica",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009b3a",
+    "foreground_color": "#fed100"
   },
   {
     "id": 116,
@@ -1460,13 +1460,13 @@
     "slug": "japan",
     "name": "Japan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 6500,
     "settings": {
       "pricing": {
         "price_level": 0.55
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#002395",
     "foreground_color": "#ffffff"
   },
   {
@@ -1475,13 +1475,13 @@
     "slug": "jordan",
     "name": "Jordan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#007a3d",
     "foreground_color": "#ffffff"
   },
   {
@@ -1490,14 +1490,14 @@
     "slug": "kazakhstan",
     "name": "Kazakhstan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00abc9",
+    "foreground_color": "#fec50c"
   },
   {
     "id": 25,
@@ -1505,14 +1505,14 @@
     "slug": "kenya",
     "name": "Kenya",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006600",
+    "foreground_color": "#bb0000"
   },
   {
     "id": 209002,
@@ -1520,14 +1520,14 @@
     "slug": "kiribati",
     "name": "Kiribati",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 129,
@@ -1535,13 +1535,13 @@
     "slug": "north korea",
     "name": "North Korea",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ed1c27",
     "foreground_color": "#ffffff"
   },
   {
@@ -1550,14 +1550,14 @@
     "slug": "south korea",
     "name": "South Korea",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 6300,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#cd2e3a",
+    "foreground_color": "#0047a0"
   },
   {
     "id": 120,
@@ -1565,13 +1565,13 @@
     "slug": "kuwait",
     "name": "Kuwait",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#007a3d",
     "foreground_color": "#ffffff"
   },
   {
@@ -1580,14 +1580,14 @@
     "slug": "kyrgyzstan",
     "name": "Kyrgyzstan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#e8112d",
+    "foreground_color": "#ffd100"
   },
   {
     "id": 122,
@@ -1595,14 +1595,14 @@
     "slug": "laos",
     "name": "Laos",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002868",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 777,
@@ -1610,13 +1610,13 @@
     "slug": "latvia",
     "name": "Latvia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#9e3039",
     "foreground_color": "#ffffff"
   },
   {
@@ -1625,13 +1625,13 @@
     "slug": "lebanon",
     "name": "Lebanon",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ed1c24",
     "foreground_color": "#ffffff"
   },
   {
@@ -1640,14 +1640,14 @@
     "slug": "lesotho",
     "name": "Lesotho",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00209f",
+    "foreground_color": "#009543"
   },
   {
     "id": 27,
@@ -1655,14 +1655,14 @@
     "slug": "liberia",
     "name": "Liberia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#bf0a30",
+    "foreground_color": "#002868"
   },
   {
     "id": 28,
@@ -1670,14 +1670,14 @@
     "slug": "libya",
     "name": "Libya",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#239e46",
+    "foreground_color": "#000000"
   },
   {
     "id": 778,
@@ -1685,14 +1685,14 @@
     "slug": "liechtenstein",
     "name": "Liechtenstein",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002b7f",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 779,
@@ -1700,14 +1700,14 @@
     "slug": "lithuania",
     "name": "Lithuania",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006a44",
+    "foreground_color": "#fdb913"
   },
   {
     "id": 780,
@@ -1715,14 +1715,14 @@
     "slug": "luxembourg",
     "name": "Luxembourg",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00a1de",
+    "foreground_color": "#ed2939"
   },
   {
     "id": 124,
@@ -1730,13 +1730,13 @@
     "slug": "macau",
     "name": "Macau",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#009e49",
     "foreground_color": "#ffffff"
   },
   {
@@ -1745,14 +1745,14 @@
     "slug": "madagascar",
     "name": "Madagascar",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#fc3d32",
+    "foreground_color": "#007e3a"
   },
   {
     "id": 30,
@@ -1760,14 +1760,14 @@
     "slug": "malawi",
     "name": "Malawi",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#000000",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 125,
@@ -1775,14 +1775,14 @@
     "slug": "malaysia",
     "name": "Malaysia",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#010066",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 126,
@@ -1790,14 +1790,14 @@
     "slug": "maldives",
     "name": "Maldives",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007e3a",
+    "foreground_color": "#d21034"
   },
   {
     "id": 31,
@@ -1805,14 +1805,14 @@
     "slug": "mali",
     "name": "Mali",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#14b53a",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 782,
@@ -1820,13 +1820,13 @@
     "slug": "malta",
     "name": "Malta",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#cf142b",
     "foreground_color": "#ffffff"
   },
   {
@@ -1835,13 +1835,13 @@
     "slug": "martinique",
     "name": "Martinique",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#009e49",
     "foreground_color": "#ffffff"
   },
   {
@@ -1850,14 +1850,14 @@
     "slug": "mauritania",
     "name": "Mauritania",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006233",
+    "foreground_color": "#ffc61e"
   },
   {
     "id": 33,
@@ -1865,14 +1865,14 @@
     "slug": "mauritius",
     "name": "Mauritius",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00539b",
+    "foreground_color": "#ea2839"
   },
   {
     "id": 918740,
@@ -1880,14 +1880,14 @@
     "slug": "mayotte",
     "name": "Mayotte",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#000000"
   },
   {
     "id": 379,
@@ -1895,13 +1895,13 @@
     "slug": "mexico",
     "name": "Mexico",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 7300,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#006847",
     "foreground_color": "#ffffff"
   },
   {
@@ -1910,13 +1910,13 @@
     "slug": "micronesia",
     "name": "Micronesia",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#75b2dd",
     "foreground_color": "#ffffff"
   },
   {
@@ -1925,14 +1925,14 @@
     "slug": "moldova",
     "name": "Moldova",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003da5",
+    "foreground_color": "#cc092f"
   },
   {
     "id": 8162661,
@@ -1940,13 +1940,13 @@
     "slug": "monaco",
     "name": "Monaco",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -1955,14 +1955,14 @@
     "slug": "mongolia",
     "name": "Mongolia",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003f87",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 62002127,
@@ -1970,14 +1970,14 @@
     "slug": "montenegro",
     "name": "Montenegro",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#d4213d",
+    "foreground_color": "#d4af37"
   },
   {
     "id": 129520,
@@ -1985,13 +1985,13 @@
     "slug": "montserrat",
     "name": "Montserrat",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00247d",
     "foreground_color": "#ffffff"
   },
   {
@@ -2000,14 +2000,14 @@
     "slug": "morocco",
     "name": "Morocco",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5400,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#c1272d",
+    "foreground_color": "#006233"
   },
   {
     "id": 35,
@@ -2015,14 +2015,14 @@
     "slug": "mozambique",
     "name": "Mozambique",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007168",
+    "foreground_color": "#fce300"
   },
   {
     "id": 127,
@@ -2030,14 +2030,14 @@
     "slug": "myanmar",
     "name": "Myanmar",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#fecb00",
+    "foreground_color": "#34b233"
   },
   {
     "id": 36,
@@ -2045,14 +2045,14 @@
     "slug": "namibia",
     "name": "Namibia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003580",
+    "foreground_color": "#009543"
   },
   {
     "id": 128,
@@ -2060,14 +2060,14 @@
     "slug": "nepal",
     "name": "Nepal",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#dc143c",
+    "foreground_color": "#003893"
   },
   {
     "id": 784,
@@ -2075,13 +2075,13 @@
     "slug": "netherlands",
     "name": "Netherlands",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 8200,
     "settings": {
       "pricing": {
         "price_level": 0.85
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ff6600",
     "foreground_color": "#ffffff"
   },
   {
@@ -2090,13 +2090,13 @@
     "slug": "new caledonia",
     "name": "New Caledonia",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#009ddc",
     "foreground_color": "#ffffff"
   },
   {
@@ -2105,14 +2105,14 @@
     "slug": "new zealand",
     "name": "New Zealand",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#000000"
   },
   {
     "id": 381,
@@ -2120,13 +2120,13 @@
     "slug": "nicaragua",
     "name": "Nicaragua",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#0067c6",
     "foreground_color": "#ffffff"
   },
   {
@@ -2135,14 +2135,14 @@
     "slug": "niger",
     "name": "Niger",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0db02b",
+    "foreground_color": "#e05206"
   },
   {
     "id": 38,
@@ -2150,13 +2150,13 @@
     "slug": "nigeria",
     "name": "Nigeria",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#008751",
     "foreground_color": "#ffffff"
   },
   {
@@ -2165,13 +2165,13 @@
     "slug": "northern ireland",
     "name": "Northern Ireland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#006233",
     "foreground_color": "#ffffff"
   },
   {
@@ -2180,13 +2180,13 @@
     "slug": "northern mariana islands",
     "name": "Northern Mariana Islands",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#0071bc",
     "foreground_color": "#ffffff"
   },
   {
@@ -2195,14 +2195,14 @@
     "slug": "norway",
     "name": "Norway",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5500,
     "settings": {
       "pricing": {
         "price_level": 0.55
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ef2b2d",
+    "foreground_color": "#002868"
   },
   {
     "id": 130,
@@ -2210,13 +2210,13 @@
     "slug": "oman",
     "name": "Oman",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#db161b",
     "foreground_color": "#ffffff"
   },
   {
@@ -2225,13 +2225,13 @@
     "slug": "pakistan",
     "name": "Pakistan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#01411c",
     "foreground_color": "#ffffff"
   },
   {
@@ -2240,14 +2240,14 @@
     "slug": "palestine",
     "name": "Palestine",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007a3d",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 382,
@@ -2255,14 +2255,14 @@
     "slug": "panama",
     "name": "Panama",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 4000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#da121a",
+    "foreground_color": "#005293"
   },
   {
     "id": 1439,
@@ -2270,14 +2270,14 @@
     "slug": "papua new guinea",
     "name": "Papua New Guinea",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#000000"
   },
   {
     "id": 1655,
@@ -2285,13 +2285,13 @@
     "slug": "paraguay",
     "name": "Paraguay",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 6200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#da121a",
     "foreground_color": "#ffffff"
   },
   {
@@ -2300,13 +2300,13 @@
     "slug": "peru",
     "name": "Peru",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 5400,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#d91023",
     "foreground_color": "#ffffff"
   },
   {
@@ -2315,14 +2315,14 @@
     "slug": "philippines",
     "name": "Philippines",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0038a8",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 787,
@@ -2330,13 +2330,13 @@
     "slug": "poland",
     "name": "Poland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6400,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#dc143c",
     "foreground_color": "#ffffff"
   },
   {
@@ -2345,14 +2345,14 @@
     "slug": "portugal",
     "name": "Portugal",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 8100,
     "settings": {
       "pricing": {
         "price_level": 0.9
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ff0000",
+    "foreground_color": "#006600"
   },
   {
     "id": 383,
@@ -2360,14 +2360,14 @@
     "slug": "puerto rico",
     "name": "Puerto Rico",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003f87",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 132,
@@ -2375,13 +2375,13 @@
     "slug": "qatar",
     "name": "Qatar",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 0.8
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#8d1b3d",
     "foreground_color": "#ffffff"
   },
   {
@@ -2390,13 +2390,13 @@
     "slug": "réunion",
     "name": "Réunion",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#002395",
     "foreground_color": "#ffffff"
   },
   {
@@ -2405,14 +2405,14 @@
     "slug": "romania",
     "name": "Romania",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6200,
     "settings": {
       "pricing": {
         "price_level": 0.4
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002b7f",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 791,
@@ -2420,13 +2420,13 @@
     "slug": "russia",
     "name": "Russia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 7000,
     "settings": {
       "pricing": {
         "price_level": 0.7
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#d52b1e",
     "foreground_color": "#ffffff"
   },
   {
@@ -2435,14 +2435,14 @@
     "slug": "rwanda",
     "name": "Rwanda",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00a1de",
+    "foreground_color": "#fad201"
   },
   {
     "id": 917508,
@@ -2450,13 +2450,13 @@
     "slug": "saint martin",
     "name": "Saint Martin",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#003f87",
     "foreground_color": "#ffffff"
   },
   {
@@ -2465,14 +2465,14 @@
     "slug": "samoa",
     "name": "Samoa",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002868",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 792,
@@ -2480,13 +2480,13 @@
     "slug": "san marino",
     "name": "San Marino",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#5eb6e4",
     "foreground_color": "#ffffff"
   },
   {
@@ -2495,14 +2495,14 @@
     "slug": "sao tome e principe",
     "name": "Sao Tome e Principe",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#12ad2b",
+    "foreground_color": "#ffd100"
   },
   {
     "id": 133,
@@ -2510,13 +2510,13 @@
     "slug": "saudi arabia",
     "name": "Saudi Arabia",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 5200,
     "settings": {
       "pricing": {
         "price_level": 1.3
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#006c35",
     "foreground_color": "#ffffff"
   },
   {
@@ -2525,13 +2525,13 @@
     "slug": "scotland",
     "name": "Scotland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6200,
     "settings": {
       "pricing": {
         "price_level": 0.6
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#003399",
     "foreground_color": "#ffffff"
   },
   {
@@ -2540,14 +2540,14 @@
     "slug": "senegal",
     "name": "Senegal",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#00853f",
+    "foreground_color": "#fdef42"
   },
   {
     "id": 802,
@@ -2555,13 +2555,13 @@
     "slug": "serbia",
     "name": "Serbia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6300,
     "settings": {
       "pricing": {
         "price_level": 0.45
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#c6363c",
     "foreground_color": "#ffffff"
   },
   {
@@ -2570,14 +2570,14 @@
     "slug": "seychelles",
     "name": "Seychelles",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#003f87",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 43,
@@ -2585,14 +2585,14 @@
     "slug": "sierra leone",
     "name": "Sierra Leone",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#1eb53a",
+    "foreground_color": "#0072c6"
   },
   {
     "id": 134,
@@ -2600,13 +2600,13 @@
     "slug": "singapore",
     "name": "Singapore",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ed2939",
     "foreground_color": "#ffffff"
   },
   {
@@ -2615,13 +2615,13 @@
     "slug": "slovakia",
     "name": "Slovakia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 5000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#0b4ea2",
     "foreground_color": "#ffffff"
   },
   {
@@ -2630,13 +2630,13 @@
     "slug": "slovenia",
     "name": "Slovenia",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 4800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#005da7",
     "foreground_color": "#ffffff"
   },
   {
@@ -2645,14 +2645,14 @@
     "slug": "solomon islands",
     "name": "Solomon Islands",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#0051a5",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 44,
@@ -2660,13 +2660,13 @@
     "slug": "somalia",
     "name": "Somalia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#4189dd",
     "foreground_color": "#ffffff"
   },
   {
@@ -2675,14 +2675,14 @@
     "slug": "south africa",
     "name": "South Africa",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5300,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#007a4d",
+    "foreground_color": "#ffb612"
   },
   {
     "id": 13113220,
@@ -2690,13 +2690,13 @@
     "slug": "south sudan",
     "name": "South Sudan",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#000000",
     "foreground_color": "#ffffff"
   },
   {
@@ -2705,14 +2705,14 @@
     "slug": "spain",
     "name": "Spain",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 9000,
     "settings": {
       "pricing": {
         "price_level": 1.2
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#c60b1e",
+    "foreground_color": "#ffc400"
   },
   {
     "id": 136,
@@ -2720,14 +2720,14 @@
     "slug": "sri lanka",
     "name": "Sri Lanka",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1800,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#8d153a",
+    "foreground_color": "#ffb700"
   },
   {
     "id": 385,
@@ -2735,14 +2735,14 @@
     "slug": "st. kitts and nevis",
     "name": "St. Kitts and Nevis",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e49",
+    "foreground_color": "#ce1126"
   },
   {
     "id": 384,
@@ -2750,14 +2750,14 @@
     "slug": "st. lucia",
     "name": "St. Lucia",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#65cfff",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 386,
@@ -2765,14 +2765,14 @@
     "slug": "st. vincent / grenadines",
     "name": "St. Vincent / Grenadines",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#009e60",
+    "foreground_color": "#fcd116"
   },
   {
     "id": 46,
@@ -2780,13 +2780,13 @@
     "slug": "sudan",
     "name": "Sudan",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#d21034",
     "foreground_color": "#ffffff"
   },
   {
@@ -2795,14 +2795,14 @@
     "slug": "suriname",
     "name": "Suriname",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#377e3f",
+    "foreground_color": "#b40a2d"
   },
   {
     "id": 47,
@@ -2810,14 +2810,14 @@
     "slug": "swaziland",
     "name": "Swaziland",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#3e5eb9",
+    "foreground_color": "#ffd900"
   },
   {
     "id": 797,
@@ -2825,14 +2825,14 @@
     "slug": "sweden",
     "name": "Sweden",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6500,
     "settings": {
       "pricing": {
         "price_level": 0.55
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006aa7",
+    "foreground_color": "#fecc00"
   },
   {
     "id": 798,
@@ -2840,13 +2840,13 @@
     "slug": "switzerland",
     "name": "Switzerland",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6800,
     "settings": {
       "pricing": {
         "price_level": 0.75
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ff0000",
     "foreground_color": "#ffffff"
   },
   {
@@ -2855,13 +2855,13 @@
     "slug": "tahiti",
     "name": "Tahiti",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -2870,13 +2870,13 @@
     "slug": "tajikistan",
     "name": "Tajikistan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#cc0000",
     "foreground_color": "#ffffff"
   },
   {
@@ -2885,14 +2885,14 @@
     "slug": "tanzania",
     "name": "Tanzania",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#1eb53a",
+    "foreground_color": "#00a3dd"
   },
   {
     "id": 140,
@@ -2900,13 +2900,13 @@
     "slug": "thailand",
     "name": "Thailand",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#002d62",
     "foreground_color": "#ffffff"
   },
   {
@@ -2915,14 +2915,14 @@
     "slug": "east timor",
     "name": "East Timor",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#dc143c",
+    "foreground_color": "#000000"
   },
   {
     "id": 50,
@@ -2930,14 +2930,14 @@
     "slug": "togo",
     "name": "Togo",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006a4e",
+    "foreground_color": "#ffd100"
   },
   {
     "id": 1442,
@@ -2945,13 +2945,13 @@
     "slug": "tonga",
     "name": "Tonga",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#c10000",
     "foreground_color": "#ffffff"
   },
   {
@@ -2960,14 +2960,14 @@
     "slug": "trinidad and tobago",
     "name": "Trinidad and Tobago",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ce1126",
+    "foreground_color": "#000000"
   },
   {
     "id": 51,
@@ -2975,13 +2975,13 @@
     "slug": "tunisia",
     "name": "Tunisia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 5200,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#e70013",
     "foreground_color": "#ffffff"
   },
   {
@@ -2990,13 +2990,13 @@
     "slug": "turkey",
     "name": "Turkey",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6700,
     "settings": {
       "pricing": {
         "price_level": 0.75
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#e30a17",
     "foreground_color": "#ffffff"
   },
   {
@@ -3005,13 +3005,13 @@
     "slug": "turkmenistan",
     "name": "Turkmenistan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 2000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#28ae66",
     "foreground_color": "#ffffff"
   },
   {
@@ -3020,13 +3020,13 @@
     "slug": "turks and caicos islands",
     "name": "Turks and Caicos Islands",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00247d",
     "foreground_color": "#ffffff"
   },
   {
@@ -3035,13 +3035,13 @@
     "slug": "tuvalu",
     "name": "Tuvalu",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#00aeef",
     "foreground_color": "#ffffff"
   },
   {
@@ -3050,14 +3050,14 @@
     "slug": "uganda",
     "name": "Uganda",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#000000",
+    "foreground_color": "#fcdc04"
   },
   {
     "id": 800,
@@ -3065,14 +3065,14 @@
     "slug": "ukraine",
     "name": "Ukraine",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 6600,
     "settings": {
       "pricing": {
         "price_level": 0.5
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#005bbb",
+    "foreground_color": "#ffd500"
   },
   {
     "id": 143,
@@ -3080,14 +3080,14 @@
     "slug": "united arab emirates",
     "name": "United Arab Emirates",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 4500,
     "settings": {
       "pricing": {
         "price_level": 0.7
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#00732f"
   },
   {
     "id": 1657,
@@ -3095,13 +3095,13 @@
     "slug": "uruguay",
     "name": "Uruguay",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 8000,
     "settings": {
       "pricing": {
         "price_level": 0.35
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#5cbfeb",
     "foreground_color": "#ffffff"
   },
   {
@@ -3110,14 +3110,14 @@
     "slug": "us virgin islands",
     "name": "US Virgin Islands",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#ffffff",
+    "foreground_color": "#003f87"
   },
   {
     "id": 390,
@@ -3125,14 +3125,14 @@
     "slug": "usa",
     "name": "USA",
     "continent_id": 2,
-    "reputation": 0,
+    "reputation": 6500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#002868",
+    "foreground_color": "#bf0a30"
   },
   {
     "id": 144,
@@ -3140,13 +3140,13 @@
     "slug": "uzbekistan",
     "name": "Uzbekistan",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#1eb53a",
     "foreground_color": "#ffffff"
   },
   {
@@ -3155,14 +3155,14 @@
     "slug": "vanuatu",
     "name": "Vanuatu",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#000000",
+    "foreground_color": "#fdce12"
   },
   {
     "id": 1658,
@@ -3170,13 +3170,13 @@
     "slug": "venezuela",
     "name": "Venezuela",
     "continent_id": 3,
-    "reputation": 0,
+    "reputation": 5000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#8b2332",
     "foreground_color": "#ffffff"
   },
   {
@@ -3185,14 +3185,14 @@
     "slug": "vietnam",
     "name": "Vietnam",
     "continent_id": 1,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#da251d",
+    "foreground_color": "#ffff00"
   },
   {
     "id": 918745,
@@ -3200,13 +3200,13 @@
     "slug": "wallis and futuna islands",
     "name": "Wallis and Futuna Islands",
     "continent_id": 5,
-    "reputation": 0,
+    "reputation": 1000,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -3215,13 +3215,13 @@
     "slug": "yemen",
     "name": "Yemen",
     "continent_id": 4,
-    "reputation": 0,
+    "reputation": 1500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
+    "background_color": "#ce1126",
     "foreground_color": "#ffffff"
   },
   {
@@ -3230,14 +3230,14 @@
     "slug": "zambia",
     "name": "Zambia",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 3500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#198a00",
+    "foreground_color": "#ef7d00"
   },
   {
     "id": 13100103,
@@ -3245,14 +3245,14 @@
     "slug": "tanzania",
     "name": "Tanzania",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#1eb53a",
+    "foreground_color": "#00a3dd"
   },
   {
     "id": 55,
@@ -3260,13 +3260,13 @@
     "slug": "zimbabwe",
     "name": "Zimbabwe",
     "continent_id": 0,
-    "reputation": 0,
+    "reputation": 2500,
     "settings": {
       "pricing": {
         "price_level": 1
       }
     },
-    "background_color": "#1e272d",
-    "foreground_color": "#ffffff"
+    "background_color": "#006400",
+    "foreground_color": "#ffd200"
   }
 ]

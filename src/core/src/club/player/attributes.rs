@@ -36,6 +36,12 @@ pub struct PlayerAttributes {
     pub injury_days_remaining: u16,
     pub injury_type: Option<InjuryType>,
 
+    // injury proneness & recovery
+    pub injury_proneness: u8,
+    pub recovery_days_remaining: u16,
+    pub last_injury_body_part: u8,
+    pub injury_count: u8,
+
     // match load tracking
     pub days_since_last_match: u16,
 }
@@ -57,17 +63,43 @@ impl PlayerAttributes {
         self.is_injured = true;
         self.injury_type = Some(injury_type);
         self.injury_days_remaining = injury_type.random_duration();
+        self.last_injury_body_part = injury_type.body_part().to_u8();
+        self.recovery_days_remaining = injury_type.recovery_days();
+        self.injury_count = self.injury_count.saturating_add(1);
     }
 
-    /// Decrement injury days by one. Returns true when fully recovered.
+    /// Decrement injury days by one. Returns true when the injury countdown reaches 0
+    /// (transitioning to recovery phase).
     pub fn recover_injury_day(&mut self) -> bool {
         if self.injury_days_remaining > 0 {
             self.injury_days_remaining -= 1;
         }
 
         if self.injury_days_remaining == 0 && self.is_injured {
+            // Transition to recovery phase — don't fully clear yet
             self.is_injured = false;
             self.injury_type = None;
+            // recovery_days_remaining was already set in set_injury()
+            return true;
+        }
+
+        false
+    }
+
+    /// Check if this player is in the post-injury recovery phase
+    pub fn is_in_recovery(&self) -> bool {
+        !self.is_injured && self.recovery_days_remaining > 0
+    }
+
+    /// Decrement recovery days. Returns true when fully fit.
+    pub fn recover_recovery_day(&mut self) -> bool {
+        if self.recovery_days_remaining > 0 {
+            self.recovery_days_remaining -= 1;
+        }
+
+        if self.recovery_days_remaining == 0 {
+            // Fully fit — clear last injury body part after full recovery
+            // (we keep last_injury_body_part for a while to track recurring risk)
             return true;
         }
 
@@ -106,6 +138,10 @@ mod tests {
             under_21_international_goals: 7,
             injury_days_remaining: 0,
             injury_type: None,
+            injury_proneness: 10,
+            recovery_days_remaining: 0,
+            last_injury_body_part: 0,
+            injury_count: 0,
             days_since_last_match: 0,
         }
     }
@@ -148,20 +184,64 @@ mod tests {
         assert!(attrs.is_injured);
         assert_eq!(attrs.injury_type, Some(InjuryType::Bruise));
         assert!(attrs.injury_days_remaining >= 3 && attrs.injury_days_remaining <= 7);
+        assert!(attrs.recovery_days_remaining >= 3 && attrs.recovery_days_remaining <= 5);
+        assert_eq!(attrs.injury_count, 1);
+        assert!(attrs.last_injury_body_part > 0);
     }
 
     #[test]
-    fn test_recover_injury_day() {
+    fn test_set_injury_increments_count() {
         let mut attrs = default_attrs();
-        attrs.is_injured = true;
-        attrs.injury_type = Some(InjuryType::Cramp);
-        attrs.injury_days_remaining = 2;
+        attrs.set_injury(InjuryType::Bruise);
+        assert_eq!(attrs.injury_count, 1);
+        attrs.is_injured = false;
+        attrs.injury_days_remaining = 0;
+        attrs.recovery_days_remaining = 0;
+        attrs.set_injury(InjuryType::Cramp);
+        assert_eq!(attrs.injury_count, 2);
+    }
 
-        assert!(!attrs.recover_injury_day()); // 2 -> 1, not recovered yet
-        assert!(attrs.is_injured);
-        assert!(attrs.recover_injury_day()); // 1 -> 0, recovered!
+    #[test]
+    fn test_recover_injury_day_transitions_to_recovery() {
+        let mut attrs = default_attrs();
+        attrs.set_injury(InjuryType::Cramp);
+        let saved_recovery = attrs.recovery_days_remaining;
+
+        // Burn through injury days
+        while attrs.injury_days_remaining > 1 {
+            assert!(!attrs.recover_injury_day());
+            assert!(attrs.is_injured);
+        }
+
+        // Last day — transitions to recovery
+        assert!(attrs.recover_injury_day());
         assert!(!attrs.is_injured);
         assert!(attrs.injury_type.is_none());
+        assert_eq!(attrs.recovery_days_remaining, saved_recovery);
+    }
+
+    #[test]
+    fn test_is_in_recovery() {
+        let mut attrs = default_attrs();
+        assert!(!attrs.is_in_recovery());
+
+        attrs.recovery_days_remaining = 5;
+        assert!(attrs.is_in_recovery());
+
+        attrs.is_injured = true;
+        assert!(!attrs.is_in_recovery());
+    }
+
+    #[test]
+    fn test_recover_recovery_day() {
+        let mut attrs = default_attrs();
+        attrs.recovery_days_remaining = 2;
+
+        assert!(!attrs.recover_recovery_day());
+        assert_eq!(attrs.recovery_days_remaining, 1);
+
+        assert!(attrs.recover_recovery_day());
+        assert_eq!(attrs.recovery_days_remaining, 0);
     }
 
     #[test]

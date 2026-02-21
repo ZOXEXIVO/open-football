@@ -67,12 +67,14 @@ impl PlayerTrainingResult {
             player.player_attributes.condition = new_condition.clamp(0.0, 10000.0) as i16;
 
             // Apply injury risk — use proper injury system
-            if rand::random::<f32>() < self.effects.injury_risk {
-                let age = 25u8; // Approximate; exact age unavailable without birth_date context
+            let injury_proneness = player.player_attributes.injury_proneness;
+            let proneness_modifier = injury_proneness as f32 / 10.0;
+            if rand::random::<f32>() < self.effects.injury_risk * proneness_modifier {
+                let age = crate::utils::DateUtils::age(player.birth_date, current_date);
                 let condition_pct = player.player_attributes.condition_percentage();
                 let natural_fitness = player.skills.physical.natural_fitness;
 
-                let injury = InjuryType::random_training_injury(age, condition_pct, natural_fitness);
+                let injury = InjuryType::random_training_injury(age, condition_pct, natural_fitness, injury_proneness);
                 player.player_attributes.set_injury(injury);
                 player.statuses.add(
                     current_date,

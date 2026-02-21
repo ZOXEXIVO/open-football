@@ -17,8 +17,9 @@ pub enum TeamType {
     B = 1,
     U18 = 2,
     U19 = 3,
-    U21 = 4,
-    U23 = 5,
+    U20 = 4,
+    U21 = 5,
+    U23 = 6
 }
 
 impl TeamType {
@@ -28,8 +29,9 @@ impl TeamType {
             TeamType::B => "reserve_team",
             TeamType::U18 => "under_18s",
             TeamType::U19 => "under_19s",
+            TeamType::U20 => "under_20s",
             TeamType::U21 => "under_21s",
-            TeamType::U23 => "under_23s",
+            TeamType::U23 => "under_23s"
         }
     }
 
@@ -38,6 +40,7 @@ impl TeamType {
         match self {
             TeamType::U18 => Some(18),
             TeamType::U19 => Some(19),
+            TeamType::U20 => Some(20),
             TeamType::U21 => Some(21),
             TeamType::U23 => Some(23),
             TeamType::B | TeamType::Main => None,
@@ -52,6 +55,7 @@ impl fmt::Display for TeamType {
             TeamType::B => write!(f, "Reserve"),
             TeamType::U18 => write!(f, "Under 18s"),
             TeamType::U19 => write!(f, "Under 19s"),
+            TeamType::U20 => write!(f, "Under 20s"),
             TeamType::U21 => write!(f, "Under 21s"),
             TeamType::U23 => write!(f, "Under 23s"),
         }
@@ -424,6 +428,7 @@ impl FromStr for TeamType {
             "B" => Ok(TeamType::B),
             "U18" => Ok(TeamType::U18),
             "U19" => Ok(TeamType::U19),
+            "U20" => Ok(TeamType::U20),
             "U21" => Ok(TeamType::U21),
             "U23" => Ok(TeamType::U23),
             _ => Err(format!("'{}' is not a valid value for WSType", s)),

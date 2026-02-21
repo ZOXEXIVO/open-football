@@ -139,7 +139,7 @@
     function setCollapsed(badges) {
         var len = badges.length;
         badges.forEach(function(b, i) {
-            b.style.transform = i === 0 ? '' : 'translateY(' + (i * 6) + 'px)';
+            b.style.transform = i === 0 ? '' : 'translateY(' + (i * 5) + 'px)';
             b.style.zIndex = String(len - i);
         });
     }

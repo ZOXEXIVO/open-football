@@ -407,7 +407,7 @@ impl CoachDecisionState {
     fn compute_visibility(&self, player: &Player, team_type: &TeamType) -> f32 {
         let base = match team_type {
             TeamType::Main => 0.85,
-            TeamType::B | TeamType::U23 | TeamType::U21 => {
+            TeamType::B | TeamType::U23 | TeamType::U20 | TeamType::U21 => {
                 0.5 + self.profile.youth_preference * 0.15
             }
             TeamType::U18 | TeamType::U19 => {

@@ -24,7 +24,7 @@ pub struct DatabaseGenerator;
 impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
         let current_date = NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(2024, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
             NaiveTime::default(),
         );
 
@@ -197,6 +197,7 @@ impl DatabaseGenerator {
         let (min_age, max_age) = match team_type {
             TeamType::U18 => (15, 18),
             TeamType::U19 => (15, 19),
+            TeamType::U20 => (16, 20),
             TeamType::U21 => (16, 21),
             TeamType::U23 => (17, 23),
             TeamType::B => (17, 28),

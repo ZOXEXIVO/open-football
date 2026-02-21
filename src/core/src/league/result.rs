@@ -1,3 +1,4 @@
+use crate::club::player::injury::InjuryType;
 use crate::league::{LeagueTableResult, ScheduleItem};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, GoalDetail, MatchResult, MatchResultRaw, Score, TeamScore};
@@ -282,6 +283,56 @@ impl LeagueResult {
 
             // 5. Match selection morale boost
             player.happiness.add_event(HappinessEventType::MatchSelection, 2.0);
+
+            // 6. Match injury generation (~2.5% per 90 minutes base rate)
+            if !player.player_attributes.is_injured {
+                let injury_proneness = player.player_attributes.injury_proneness;
+                let proneness_modifier = injury_proneness as f32 / 10.0;
+                let condition_pct = player.player_attributes.condition_percentage();
+
+                // Base injury chance: 0.5% per 90 minutes, scaled by minutes played
+                let mut injury_chance: f32 = 0.005 * (minutes / 90.0);
+
+                // Age >30: +0.1% per year over 30
+                if age > 30 {
+                    injury_chance += (age as f32 - 30.0) * 0.001;
+                }
+
+                // Low condition (<40%): +0.2-0.4%
+                if condition_pct < 40 {
+                    injury_chance += (40.0 - condition_pct as f32) * 0.0001;
+                }
+
+                // High jadedness (>7000): +0.2%
+                if player.player_attributes.jadedness > 7000 {
+                    injury_chance += 0.002;
+                }
+
+                // Low natural fitness (<8): +0.1%
+                if natural_fitness < 8.0 {
+                    injury_chance += 0.001;
+                }
+
+                // Injury proneness multiplier
+                injury_chance *= proneness_modifier;
+
+                // Recently recovered: +0.2% recurring injury risk
+                if player.player_attributes.last_injury_body_part != 0 {
+                    injury_chance += 0.002;
+                }
+
+                if rand::random::<f32>() < injury_chance {
+                    let injury = InjuryType::random_match_injury(
+                        minutes,
+                        age,
+                        condition_pct,
+                        natural_fitness,
+                        injury_proneness,
+                    );
+                    player.player_attributes.set_injury(injury);
+                    player.statuses.add(now, PlayerStatusType::Inj);
+                }
+            }
         }
     }
 }

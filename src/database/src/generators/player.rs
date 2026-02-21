@@ -320,6 +320,10 @@ impl PlayerGenerator {
             under_21_international_goals: u21_goals,
             injury_days_remaining: 0,
             injury_type: None,
+            injury_proneness: (IntegerUtils::random(1, 10) + IntegerUtils::random(1, 10)) as u8,
+            recovery_days_remaining: 0,
+            last_injury_body_part: 0,
+            injury_count: 0,
             days_since_last_match: 0,
         }
     }
