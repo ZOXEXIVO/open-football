@@ -58,8 +58,6 @@ impl TeamCollection {
 
     // ─── Coach state management ──────────────────────────────────────
 
-    /// Lazily builds CoachDecisionState from main team's head coach.
-    /// Rebuilds if coach changed (different coach_id).
     fn ensure_coach_state(&mut self, date: NaiveDate) {
         let main_team = match self.teams.iter().find(|t| t.team_type == TeamType::Main) {
             Some(t) => t,
@@ -83,8 +81,7 @@ impl TeamCollection {
         }
     }
 
-    /// Iterates all players in all teams, updates impressions via the coach state.
-    /// Uses Option::take() to avoid borrow conflicts.
+    /// Updates impressions via Option::take(). Decays emotional heat once per cycle.
     fn update_all_impressions(&mut self, date: NaiveDate) {
         let mut state = match self.coach_state.take() {
             Some(s) => s,
@@ -97,10 +94,12 @@ impl TeamCollection {
             }
         }
 
+        // Decay emotional heat once per update cycle (not per player)
+        state.emotional_heat *= 0.80;
+
         self.coach_state = Some(state);
     }
 
-    /// Record moves in the coach state for inertia tracking
     fn record_moves(&mut self, ids: &[u32], move_type: RecentMoveType, date: NaiveDate) {
         if let Some(ref mut state) = self.coach_state {
             for &id in ids {
@@ -109,9 +108,8 @@ impl TeamCollection {
         }
     }
 
-    // ─── Weekly squad composition (fuzzy) ────────────────────────────
+    // ─── Weekly squad composition (trigger-based) ────────────────────
 
-    /// Weekly squad composition management: demotions, recalls, and youth promotions
     pub fn manage_squad_composition(&mut self, date: NaiveDate) {
         if self.teams.len() < 2 {
             return;
@@ -125,31 +123,91 @@ impl TeamCollection {
         let reserve_idx = self.find_reserve_team_index();
         let youth_idx = self.find_youth_team_index();
 
-        // Build coach state and update impressions
         self.ensure_coach_state(date);
         self.update_all_impressions(date);
 
-        // Squad satisfaction gating
-        if let Some(ref mut state) = self.coach_state {
-            let satisfaction = compute_squad_satisfaction(&self.teams[main_idx], state);
+        // --- Trigger detection & pressure-based gating ---
+        let should_act = if let Some(ref mut state) = self.coach_state {
+            let main_team = &self.teams[main_idx];
+            let satisfaction = compute_squad_satisfaction(main_team, state);
             state.squad_satisfaction = satisfaction;
             state.weeks_since_last_change += 1;
 
-            let conservatism = state.profile.conservatism;
-            let weeks_since = state.weeks_since_last_change;
-            let inaction_bonus = if weeks_since < 3 { 0.3 } else { 0.0 };
-            let inaction_prob = (satisfaction * conservatism + inaction_bonus).clamp(0.0, 0.8);
+            // Decay trigger pressure each cycle
+            state.trigger_pressure *= 0.85;
+
+            // Accumulate triggers from observable events
+            let injured_count = main_team.players.players.iter()
+                .filter(|p| p.player_attributes.is_injured)
+                .count();
+            if injured_count >= 4 {
+                state.trigger_pressure += 0.3;
+            }
+
+            let played_players: Vec<_> = main_team.players.players.iter()
+                .filter(|p| p.statistics.played + p.statistics.played_subs > 3)
+                .collect();
+            if !played_players.is_empty() {
+                let avg_form: f32 = played_players.iter()
+                    .map(|p| p.statistics.average_rating)
+                    .sum::<f32>() / played_players.len() as f32;
+                if avg_form < 6.0 {
+                    state.trigger_pressure += 0.2;
+                    state.emotional_heat = (state.emotional_heat + 0.15).clamp(0.0, 1.0);
+                }
+            }
+
+            // Position emergency: any group with 0 available
+            let available: Vec<_> = main_team.players.players.iter()
+                .filter(|p| !p.player_attributes.is_injured)
+                .collect();
+            let has_gk = available.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper);
+            let has_def = available.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Defender);
+            let has_mid = available.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Midfielder);
+            let has_fwd = available.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Forward);
+            if !has_gk || !has_def || !has_mid || !has_fwd {
+                state.trigger_pressure += 0.4;
+            }
+
+            // Time pressure: not looking at squad for too long builds restlessness
+            if state.weeks_since_last_change > 6 {
+                state.trigger_pressure += (state.weeks_since_last_change - 6) as f32 * 0.05;
+            }
+            state.trigger_pressure = state.trigger_pressure.clamp(0.0, 1.0);
+
+            // Compute action drive vs inertia pull
+            let action_drive = state.trigger_pressure * (1.0 - state.profile.conservatism * 0.3)
+                + (1.0 - satisfaction) * 0.3
+                + state.emotional_heat * 0.2;
+            let inertia_pull = state.profile.conservatism * 0.3
+                + satisfaction * 0.2
+                + if state.weeks_since_last_change < 3 { 0.3 } else { 0.0 };
+
+            let action_prob = (action_drive - inertia_pull + 0.15).clamp(0.05, 0.95);
+            let squad_size = main_team.players.players.len();
+
             let seed = state.profile.coach_seed
                 .wrapping_mul(state.current_week)
                 .wrapping_add(0xFA57);
 
-            if seeded_decision(inaction_prob, seed) {
+            // Emergency override: always act if squad too small
+            if squad_size < 16 {
+                true
+            } else if seeded_decision(action_prob, seed) {
+                true
+            } else {
                 debug!(
-                    "Squad management: coach satisfied ({:.2}), skipping changes",
-                    satisfaction
+                    "Squad management: coach not triggered (pressure={:.2}, satisfaction={:.2}, heat={:.2})",
+                    state.trigger_pressure, satisfaction, state.emotional_heat
                 );
-                return;
+                false
             }
+        } else {
+            true // no coach state → use legacy
+        };
+
+        if !should_act {
+            return;
         }
 
         let mut any_move = false;
@@ -184,7 +242,7 @@ impl TeamCollection {
             }
         }
 
-        // Phase 3: Youth promotions (youth -> main, only if still short)
+        // Phase 3: Youth promotions
         if let Some(y_idx) = youth_idx {
             let promotions = self.identify_youth_promotions_fuzzy(main_idx, y_idx, date);
             if !promotions.is_empty() {
@@ -198,7 +256,6 @@ impl TeamCollection {
             }
         }
 
-        // Reset weeks_since_last_change if any move happened
         if any_move {
             if let Some(ref mut state) = self.coach_state {
                 state.weeks_since_last_change = 0;
@@ -220,7 +277,7 @@ impl TeamCollection {
             None => return,
         };
 
-        // Phase 1: Immediate demotions (Lst, Loa, NotNeeded) - stay deterministic
+        // Phase 1: Immediate demotions (Lst, Loa, NotNeeded) - deterministic
         let demotions = Self::identify_immediate_demotions(&self.teams[main_idx]);
         let max_age = self.teams[reserve_idx].team_type.max_age();
         let demotions = Self::filter_by_age(demotions, &self.teams[main_idx], max_age, date);
@@ -233,7 +290,7 @@ impl TeamCollection {
             self.record_moves(&demotions, RecentMoveType::DemotedToReserves, date);
         }
 
-        // Phase 2: Ability-based swaps (fuzzy)
+        // Phase 2: Ability-based swaps (fuzzy, emotional urgency lowers threshold)
         self.ensure_coach_state(date);
         let swaps = self.identify_ability_swaps_fuzzy(main_idx, reserve_idx, date);
         if !swaps.is_empty() {
@@ -247,7 +304,7 @@ impl TeamCollection {
 
     // ─── Fuzzy identification functions ──────────────────────────────
 
-    /// Fuzzy demotion identification using coach perception
+    /// Fuzzy demotion with patience snap and staleness blindspot
     fn identify_demotions_fuzzy(&self, main_idx: usize, date: NaiveDate) -> Vec<u32> {
         let main_team = &self.teams[main_idx];
         let players = &main_team.players.players;
@@ -264,8 +321,8 @@ impl TeamCollection {
         };
 
         let profile = &state.profile;
+        let emotional_heat = state.emotional_heat;
 
-        // Average perceived quality
         let avg_quality: f32 = players
             .iter()
             .map(|p| {
@@ -297,7 +354,7 @@ impl TeamCollection {
                 }
             }
 
-            // Inertia protection: recently promoted/recalled/youth-promoted players are protected
+            // Inertia protection
             if state.is_protected(
                 player.id,
                 &[
@@ -322,34 +379,65 @@ impl TeamCollection {
                 .map(|imp| imp.coach_trust)
                 .unwrap_or(5.0);
 
-            // Get sunk cost and disappointments for bias integration
             let (sunk_cost, disappointments) = state
                 .impressions
                 .get(&player.id)
                 .map(|imp| (imp.bias.sunk_cost, imp.bias.disappointments))
                 .unwrap_or((0.0, 0));
 
+            // Staleness blindspot: coach hasn't observed this player recently
+            let observation_staleness = state.impressions.get(&player.id)
+                .map(|imp| state.current_week.saturating_sub(imp.bias.last_observation_week))
+                .unwrap_or(0);
+            let staleness_blindness = if observation_staleness > 4 {
+                // Coach not paying attention → less likely to notice player is bad
+                1.0 - (observation_staleness.min(12) as f32 / 24.0)
+            } else {
+                1.0
+            };
+
             let age = DateUtils::age(player.birth_date, date);
 
-            // Hot prospects / youngsters below average → develop in reserves
+            // --- Patience snap: emotional coach turns on disappointing player ---
+            if emotional_heat > 0.4 && disappointments >= 2 && squad_size > 18 {
+                let snap_intensity = (emotional_heat - 0.3) * (disappointments as f32 / 4.0);
+                let snap_prob = (snap_intensity * 0.4).clamp(0.0, 0.5);
+                let snap_seed = profile.coach_seed
+                    .wrapping_mul(player.id)
+                    .wrapping_add(state.current_week.wrapping_mul(0xBAAD));
+                if seeded_decision(snap_prob, snap_seed) {
+                    let player_group = player.position().position_group();
+                    let others = players.iter()
+                        .filter(|p| {
+                            p.id != player.id
+                                && p.position().position_group() == player_group
+                                && !p.player_attributes.is_injured
+                                && !demotions.contains(&p.id)
+                        })
+                        .count();
+                    if others >= 2 {
+                        demotions.push(player.id);
+                        continue;
+                    }
+                }
+            }
+
+            // Hot prospects / youngsters below average
             if let Some(ref contract) = player.contract {
                 if matches!(
                     contract.squad_status,
                     PlayerSquadStatus::HotProspectForTheFuture
                         | PlayerSquadStatus::DecentYoungster
                 ) {
-                    // Youth preference raises the bar for demoting young players
                     let youth_protection = profile.youth_preference * 1.5;
                     let gap = avg_quality - perceived - youth_protection;
                     let steepness = 1.5 - profile.conservatism * 0.5;
                     let prob = sigmoid_probability(gap - 1.0, steepness);
-                    // Trust reduces demotion probability
                     let trust_factor = 1.0 - (coach_trust / 10.0) * 0.3;
-                    // Sunk cost factor: invested players harder to demote
                     let sunk_cost_factor = 1.0 - (sunk_cost / 10.0) * 0.4;
-                    // Disappointment acceleration: scapegoats easier to demote
                     let disappointment_factor = if disappointments >= 3 { 1.3 } else { 1.0 };
-                    let final_prob = prob * trust_factor * sunk_cost_factor * disappointment_factor;
+                    let final_prob = prob * trust_factor * sunk_cost_factor
+                        * disappointment_factor * staleness_blindness;
 
                     if squad_size > 20 {
                         let seed = profile.coach_seed
@@ -365,11 +453,9 @@ impl TeamCollection {
 
             // Players significantly below squad average
             if squad_size > 20 {
-                // Conservatism raises the gap required
                 let gap_required = 3.0 + profile.conservatism * 1.5;
                 let gap = avg_quality - perceived;
 
-                // Youth protection: young players need a bigger gap
                 let youth_modifier = if age <= 22 {
                     profile.youth_preference * 1.0
                 } else {
@@ -379,17 +465,15 @@ impl TeamCollection {
                 let steepness = 1.0 - profile.conservatism * 0.3;
                 let prob = sigmoid_probability(gap - gap_required - youth_modifier, steepness);
                 let trust_factor = 1.0 - (coach_trust / 10.0) * 0.3;
-                // Sunk cost factor
                 let sunk_cost_factor = 1.0 - (sunk_cost / 10.0) * 0.4;
-                // Disappointment acceleration
                 let disappointment_factor = if disappointments >= 3 { 1.3 } else { 1.0 };
-                let final_prob = prob * trust_factor * sunk_cost_factor * disappointment_factor;
+                let final_prob = prob * trust_factor * sunk_cost_factor
+                    * disappointment_factor * staleness_blindness;
 
                 let seed = profile.coach_seed
                     .wrapping_mul(player.id)
                     .wrapping_add(state.current_week.wrapping_mul(3));
                 if seeded_decision(final_prob, seed) {
-                    // Position safety: need 2+ others in same group
                     let player_group = player.position().position_group();
                     let others_in_position = players
                         .iter()
@@ -408,7 +492,7 @@ impl TeamCollection {
             }
         }
 
-        // If squad > 25 after existing demotions, demote lowest-perceived surplus
+        // Force demote if squad > 25
         let remaining = squad_size - demotions.len();
         if remaining > 25 {
             let excess = remaining - 25;
@@ -435,7 +519,7 @@ impl TeamCollection {
         demotions
     }
 
-    /// Fuzzy recall identification using coach perception
+    /// Fuzzy recall with visibility-based forgetting
     fn identify_recalls_fuzzy(
         &self,
         main_idx: usize,
@@ -463,28 +547,40 @@ impl TeamCollection {
 
         let recall_budget = MAX_SQUAD_SIZE.saturating_sub(main_players.len());
 
-        // Build candidates: skip Lst/Loa, injured, on loan
-        // Inertia: skip players with recent DemotedToReserves move (replaces excluded_ids)
+        // Candidates with visibility-based remember filter
         let mut candidates: Vec<&Player> = reserve_players
             .iter()
             .filter(|p| {
                 let statuses = p.statuses.get();
-                !statuses.contains(&PlayerStatusType::Lst)
-                    && !statuses.contains(&PlayerStatusType::Loa)
-                    && !p.player_attributes.is_injured
-                    && !matches!(
+                if statuses.contains(&PlayerStatusType::Lst)
+                    || statuses.contains(&PlayerStatusType::Loa)
+                    || p.player_attributes.is_injured
+                    || matches!(
                         p.contract.as_ref().map(|c| &c.contract_type),
                         Some(ContractType::Loan)
                     )
-                    && p.player_attributes.condition_percentage() > 40
-                    && !state.is_protected(
+                    || p.player_attributes.condition_percentage() <= 40
+                    || state.is_protected(
                         p.id,
                         &[RecentMoveType::DemotedToReserves, RecentMoveType::SwappedOut],
                     )
+                {
+                    return false;
+                }
+
+                // Visibility filter: coach only recalls players they remember
+                let vis = state.impressions.get(&p.id)
+                    .map(|imp| imp.bias.visibility)
+                    .unwrap_or(0.3);
+                let remember_prob = (vis * 0.5 + 0.5).clamp(0.5, 1.0);
+                let rem_seed = profile.coach_seed
+                    .wrapping_mul(p.id)
+                    .wrapping_add(state.current_week.wrapping_mul(17));
+                seeded_decision(remember_prob, rem_seed)
             })
             .collect();
 
-        // Fuzzy recall priority score with visibility factor
+        // Recall score with visibility factor
         let recall_score = |p: &Player| -> f32 {
             let perceived = state
                 .impressions
@@ -501,8 +597,6 @@ impl TeamCollection {
                 .get(&p.id)
                 .map(|imp| imp.coach_trust)
                 .unwrap_or(5.0);
-
-            // Visibility factor: coach forgets about invisible reserves
             let visibility = state
                 .impressions
                 .get(&p.id)
@@ -534,7 +628,7 @@ impl TeamCollection {
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        // Count available (non-injured) main team players by position group
+        // Position needs
         let available_main: Vec<&Player> = main_players
             .iter()
             .filter(|p| !p.player_attributes.is_injured)
@@ -552,7 +646,6 @@ impl TeamCollection {
         let mid_count = count_by_group(PlayerFieldPositionGroup::Midfielder);
         let fwd_count = count_by_group(PlayerFieldPositionGroup::Forward);
 
-        // Formation-aware position needs (mostly deterministic)
         let tactics = main_team.tactics();
         let positions = tactics.positions();
         let def_need = positions.iter().filter(|p| p.is_defender()).count() + 1;
@@ -587,7 +680,7 @@ impl TeamCollection {
             }
         }
 
-        // Squad below 18 -> recall best available (within budget)
+        // Squad below 18
         let current_main_size = main_players.len() + recalls.len();
         if current_main_size < 18 {
             let needed = (18 - current_main_size).min(recall_budget.saturating_sub(recalls.len()));
@@ -603,7 +696,7 @@ impl TeamCollection {
             }
         }
 
-        // Emergency recalls (<14 available) - mostly deterministic
+        // Emergency recalls (<14 available) — bypasses visibility filter
         let total_available = available_main.len() + recalls.len();
         if total_available < 14 {
             let needed = 14 - total_available;
@@ -634,7 +727,7 @@ impl TeamCollection {
         recalls
     }
 
-    /// Fuzzy youth promotion identification using coach perception
+    /// Fuzzy youth promotion with spotlight moments and philosophy bonus
     fn identify_youth_promotions_fuzzy(
         &self,
         main_idx: usize,
@@ -653,7 +746,6 @@ impl TeamCollection {
 
         let profile = &state.profile;
 
-        // Promotion ceiling: youth-loving coaches promote even with larger squads
         let promotion_ceiling = (18.0 + profile.youth_preference * 4.0) as usize;
         if main_size >= promotion_ceiling {
             return promotions;
@@ -661,7 +753,6 @@ impl TeamCollection {
 
         let needed = promotion_ceiling - main_size;
 
-        // Average perceived quality of main team
         let avg_perceived: f32 = if main_team.players.players.is_empty() {
             10.0
         } else {
@@ -680,10 +771,16 @@ impl TeamCollection {
                 / main_team.players.players.len() as f32
         };
 
-        // Threshold: risky coaches accept lower scores
-        let threshold = avg_perceived - 2.0 - profile.risk_tolerance * 2.0;
+        // Philosophy bonus: youth-loving coaches with thin squads lower the bar
+        let philosophy_bonus = if profile.youth_preference > 0.6 && main_size < 20 {
+            (profile.youth_preference - 0.5) * 3.0
+        } else {
+            0.0
+        };
 
-        // Build promotion candidates (uses reworked potential_impression with physical bias)
+        let threshold = avg_perceived - 2.0 - profile.risk_tolerance * 2.0 - philosophy_bonus;
+
+        // Promotion candidates (spotlight is already in potential_impression)
         let mut candidates: Vec<(&Player, f32)> = youth_team
             .players
             .players
@@ -714,10 +811,8 @@ impl TeamCollection {
                     .map(|imp| imp.training_impression)
                     .unwrap_or_else(|| state.training_impression(p));
 
-                // Promotion score: potential * 0.4 + quality * 0.3 + training * 0.3
                 let score = potential * 0.4 + quality * 0.3 + training * 0.3;
 
-                // Sigmoid probability for promotion
                 let steepness = 1.0 + profile.risk_tolerance * 0.5;
                 let prob = sigmoid_probability(score - threshold, steepness);
 
@@ -733,7 +828,6 @@ impl TeamCollection {
             })
             .collect();
 
-        // Sort by promotion score descending
         candidates.sort_by(|a, b| {
             b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
         });
@@ -745,7 +839,7 @@ impl TeamCollection {
         promotions
     }
 
-    /// Fuzzy ability swap identification using coach perception
+    /// Fuzzy ability swap with emotional urgency
     fn identify_ability_swaps_fuzzy(
         &self,
         main_idx: usize,
@@ -762,17 +856,16 @@ impl TeamCollection {
 
         let profile = &state.profile;
 
-        // Max swaps per cycle: conservative coaches do fewer
         let max_swaps = (2.0 * (1.0 - profile.conservatism * 0.5)).ceil() as usize;
 
-        // Soft threshold: conservative coaches need bigger gap
-        let swap_threshold = 1.5 + profile.conservatism * 1.5;
+        // Emotional urgency lowers swap threshold (panic changes)
+        let emotional_urgency = state.emotional_heat * 0.5;
+        let swap_threshold = (1.5 + profile.conservatism * 1.5 - emotional_urgency).max(0.5);
 
         let mut swaps = Vec::new();
         let mut used_main = Vec::new();
         let mut used_reserve = Vec::new();
 
-        // Reserve candidates: healthy, not listed, not on loan, condition > 50%
         let reserve_candidates: Vec<&Player> = reserve_team
             .players
             .players
@@ -791,7 +884,6 @@ impl TeamCollection {
             })
             .collect();
 
-        // Swap score: perceived_quality * 0.7 + match_readiness * 0.3
         let swap_score = |p: &Player| -> f32 {
             let perceived = state
                 .impressions
@@ -816,7 +908,6 @@ impl TeamCollection {
                 break;
             }
 
-            // Main team in group, sorted by swap score ascending (weakest first)
             let mut main_group: Vec<&Player> = main_team
                 .players
                 .players
@@ -825,7 +916,6 @@ impl TeamCollection {
                     p.position().position_group() == *group
                         && !used_main.contains(&p.id)
                         && !p.statuses.get().contains(&PlayerStatusType::Lst)
-                        // Inertia: recently swapped-in players are protected
                         && !state.is_protected(
                             p.id,
                             &[
@@ -842,7 +932,6 @@ impl TeamCollection {
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
-            // Reserve candidates in group, sorted by swap score descending (best first)
             let mut res_group: Vec<&&Player> = reserve_candidates
                 .iter()
                 .filter(|p| {
@@ -864,7 +953,6 @@ impl TeamCollection {
                 let res_score = swap_score(best_res);
                 let gap = res_score - main_score;
 
-                // Sigmoid probability for swap decision
                 let steepness = 1.0 + (1.0 - profile.conservatism) * 0.5;
                 let prob = sigmoid_probability(gap - swap_threshold, steepness);
 
@@ -889,46 +977,19 @@ impl TeamCollection {
 
     // ─── Helper functions ────────────────────────────────────────────
 
-    /// Find the best reserve team: B > U23 > U21 > U19 > U18
     fn find_reserve_team_index(&self) -> Option<usize> {
-        self.teams
-            .iter()
-            .position(|t| t.team_type == TeamType::B)
-            .or_else(|| {
-                self.teams
-                    .iter()
-                    .position(|t| t.team_type == TeamType::U23)
-            })
-            .or_else(|| {
-                self.teams
-                    .iter()
-                    .position(|t| t.team_type == TeamType::U21)
-            })
-            .or_else(|| {
-                self.teams
-                    .iter()
-                    .position(|t| t.team_type == TeamType::U19)
-            })
-            .or_else(|| {
-                self.teams
-                    .iter()
-                    .position(|t| t.team_type == TeamType::U18)
-            })
+        self.teams.iter().position(|t| t.team_type == TeamType::B)
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U23))
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U21))
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U19))
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U18))
     }
 
-    /// Find the best youth team: U18 > U19
     fn find_youth_team_index(&self) -> Option<usize> {
-        self.teams
-            .iter()
-            .position(|t| t.team_type == TeamType::U18)
-            .or_else(|| {
-                self.teams
-                    .iter()
-                    .position(|t| t.team_type == TeamType::U19)
-            })
+        self.teams.iter().position(|t| t.team_type == TeamType::U18)
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U19))
     }
 
-    /// Identify players that need immediate demotion (transfer-listed, loan-available, not-needed)
     fn identify_immediate_demotions(main_team: &Team) -> Vec<u32> {
         main_team
             .players
@@ -951,7 +1012,6 @@ impl TeamCollection {
             .collect()
     }
 
-    /// Filter player IDs by age limit of the target team
     fn filter_by_age(
         ids: Vec<u32>,
         team: &Team,
@@ -974,7 +1034,6 @@ impl TeamCollection {
         }
     }
 
-    /// Move players between teams
     fn execute_moves(teams: &mut [Team], from_idx: usize, to_idx: usize, player_ids: &[u32]) {
         for &player_id in player_ids {
             if let Some(player) = teams[from_idx].players.take_player(&player_id) {
@@ -984,21 +1043,15 @@ impl TeamCollection {
         }
     }
 
-    // ─── Legacy functions (kept for reference/testing) ───────────────
+    // ─── Legacy functions ────────────────────────────────────────────
 
-    /// Legacy: Coach's estimation of player quality (deterministic, no coach personality)
     fn legacy_estimate_player_quality(player: &Player) -> f32 {
         let tech = player.skills.technical.average();
         let mental = player.skills.mental.average();
         let physical = player.skills.physical.average();
         let skill_composite = tech * 0.40 + mental * 0.35 + physical * 0.25;
-        let position_level = player
-            .positions
-            .positions
-            .iter()
-            .map(|p| p.level)
-            .max()
-            .unwrap_or(0) as f32;
+        let position_level = player.positions.positions.iter()
+            .map(|p| p.level).max().unwrap_or(0) as f32;
         let base = skill_composite * 0.75 + position_level * 0.25;
         let form_bonus = if player.statistics.played + player.statistics.played_subs > 3 {
             (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
@@ -1009,25 +1062,17 @@ impl TeamCollection {
         base + form_bonus + noise
     }
 
-    /// Legacy: Coach's estimation of youth potential (deterministic)
     fn legacy_estimate_youth_potential(player: &Player, date: NaiveDate) -> f32 {
         let quality = Self::legacy_estimate_player_quality(player);
         let age = DateUtils::age(player.birth_date, date);
         let age_bonus = match age {
-            0..=15 => 1.5,
-            16..=17 => 2.5,
-            18 => 3.0,
-            19..=20 => 2.0,
-            21..=22 => 1.0,
-            _ => 0.0,
+            0..=15 => 1.5, 16..=17 => 2.5, 18 => 3.0, 19..=20 => 2.0, 21..=22 => 1.0, _ => 0.0,
         };
-        let attitude =
-            (player.attributes.professionalism + player.skills.mental.determination) / 2.0;
+        let attitude = (player.attributes.professionalism + player.skills.mental.determination) / 2.0;
         let attitude_bonus = (attitude - 10.0).clamp(-1.0, 2.0) * 0.5;
         quality + age_bonus + attitude_bonus
     }
 
-    /// Legacy: Recall priority score (deterministic)
     fn legacy_recall_priority_score(player: &Player) -> f32 {
         let quality = Self::legacy_estimate_player_quality(player);
         let status_bonus = match player.contract.as_ref().map(|c| &c.squad_status) {
@@ -1040,53 +1085,36 @@ impl TeamCollection {
             Some(PlayerSquadStatus::NotNeeded) => -5.0,
             _ => 0.0,
         };
-        let condition =
-            (player.player_attributes.condition_percentage() as f32 / 100.0).clamp(0.3, 1.0);
+        let condition = (player.player_attributes.condition_percentage() as f32 / 100.0).clamp(0.3, 1.0);
         (quality + status_bonus) * condition
     }
 
-    /// Legacy: Identify demotions (fallback if no coach state)
     fn legacy_identify_demotions(main_team: &Team, _date: NaiveDate) -> Vec<u32> {
         let players = &main_team.players.players;
         let squad_size = players.len();
         let mut demotions = Vec::new();
+        if players.is_empty() { return demotions; }
 
-        if players.is_empty() {
-            return demotions;
-        }
-
-        let avg_quality: f32 = players
-            .iter()
+        let avg_quality: f32 = players.iter()
             .map(|p| Self::legacy_estimate_player_quality(p))
-            .sum::<f32>()
-            / squad_size as f32;
+            .sum::<f32>() / squad_size as f32;
 
         for player in players {
             let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Lst) {
-                demotions.push(player.id);
-                continue;
-            }
-            if statuses.contains(&PlayerStatusType::Loa) {
-                demotions.push(player.id);
-                continue;
-            }
+            if statuses.contains(&PlayerStatusType::Lst) { demotions.push(player.id); continue; }
+            if statuses.contains(&PlayerStatusType::Loa) { demotions.push(player.id); continue; }
             if let Some(ref contract) = player.contract {
                 if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-                    demotions.push(player.id);
-                    continue;
+                    demotions.push(player.id); continue;
                 }
             }
             if let Some(ref contract) = player.contract {
-                if matches!(
-                    contract.squad_status,
-                    PlayerSquadStatus::HotProspectForTheFuture
-                        | PlayerSquadStatus::DecentYoungster
+                if matches!(contract.squad_status,
+                    PlayerSquadStatus::HotProspectForTheFuture | PlayerSquadStatus::DecentYoungster
                 ) {
                     let quality = Self::legacy_estimate_player_quality(player);
                     if quality < avg_quality - 1.0 && squad_size > 20 {
-                        demotions.push(player.id);
-                        continue;
+                        demotions.push(player.id); continue;
                     }
                 }
             }
@@ -1094,18 +1122,12 @@ impl TeamCollection {
                 let quality = Self::legacy_estimate_player_quality(player);
                 if quality < avg_quality - 3.0 {
                     let player_group = player.position().position_group();
-                    let others_in_position = players
-                        .iter()
-                        .filter(|p| {
-                            p.id != player.id
-                                && p.position().position_group() == player_group
-                                && !p.player_attributes.is_injured
-                        })
+                    let others = players.iter()
+                        .filter(|p| p.id != player.id
+                            && p.position().position_group() == player_group
+                            && !p.player_attributes.is_injured)
                         .count();
-                    if others_in_position >= 2 {
-                        demotions.push(player.id);
-                        continue;
-                    }
+                    if others >= 2 { demotions.push(player.id); continue; }
                 }
             }
         }
@@ -1113,69 +1135,45 @@ impl TeamCollection {
         let remaining = squad_size - demotions.len();
         if remaining > 25 {
             let excess = remaining - 25;
-            let mut candidates: Vec<_> = players
-                .iter()
+            let mut candidates: Vec<_> = players.iter()
                 .filter(|p| !demotions.contains(&p.id))
                 .map(|p| (p.id, Self::legacy_estimate_player_quality(p)))
                 .collect();
-            candidates.sort_by(|a, b| {
-                a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal)
-            });
-            for (id, _) in candidates.into_iter().take(excess) {
-                demotions.push(id);
-            }
+            candidates.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+            for (id, _) in candidates.into_iter().take(excess) { demotions.push(id); }
         }
-
         demotions
     }
 
-    /// Legacy: Identify recalls (fallback if no coach state)
     fn legacy_identify_recalls(
-        main_team: &Team,
-        reserve_team: &Team,
-        _date: NaiveDate,
-        excluded_ids: &[u32],
+        main_team: &Team, reserve_team: &Team, _date: NaiveDate, excluded_ids: &[u32],
     ) -> Vec<u32> {
         const MAX_SQUAD_SIZE: usize = 25;
         let main_players = &main_team.players.players;
         let reserve_players = &reserve_team.players.players;
         let mut recalls = Vec::new();
-
-        if reserve_players.is_empty() {
-            return recalls;
-        }
+        if reserve_players.is_empty() { return recalls; }
 
         let recall_budget = MAX_SQUAD_SIZE.saturating_sub(main_players.len());
-        let mut candidates: Vec<&Player> = reserve_players
-            .iter()
+        let mut candidates: Vec<&Player> = reserve_players.iter()
             .filter(|p| {
                 let statuses = p.statuses.get();
                 !statuses.contains(&PlayerStatusType::Lst)
                     && !statuses.contains(&PlayerStatusType::Loa)
                     && !p.player_attributes.is_injured
-                    && !matches!(
-                        p.contract.as_ref().map(|c| &c.contract_type),
-                        Some(ContractType::Loan)
-                    )
+                    && !matches!(p.contract.as_ref().map(|c| &c.contract_type), Some(ContractType::Loan))
                     && p.player_attributes.condition_percentage() > 40
                     && !excluded_ids.contains(&p.id)
-            })
-            .collect();
+            }).collect();
         candidates.sort_by(|a, b| {
-            Self::legacy_recall_priority_score(b)
-                .partial_cmp(&Self::legacy_recall_priority_score(a))
+            Self::legacy_recall_priority_score(b).partial_cmp(&Self::legacy_recall_priority_score(a))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
 
-        let available_main: Vec<&Player> = main_players
-            .iter()
-            .filter(|p| !p.player_attributes.is_injured)
-            .collect();
+        let available_main: Vec<&Player> = main_players.iter()
+            .filter(|p| !p.player_attributes.is_injured).collect();
         let count_by_group = |group: PlayerFieldPositionGroup| -> usize {
-            available_main
-                .iter()
-                .filter(|p| p.position().position_group() == group)
-                .count()
+            available_main.iter().filter(|p| p.position().position_group() == group).count()
         };
         let gk_count = count_by_group(PlayerFieldPositionGroup::Goalkeeper);
         let def_count = count_by_group(PlayerFieldPositionGroup::Defender);
@@ -1195,21 +1193,14 @@ impl TeamCollection {
         ];
 
         for (group, count, min) in &position_needs {
-            if recalls.len() >= recall_budget {
-                break;
-            }
+            if recalls.len() >= recall_budget { break; }
             if *count < *min {
                 let needed = min - count;
                 let mut recalled = 0;
                 for candidate in &candidates {
-                    if recalled >= needed || recalls.len() >= recall_budget {
-                        break;
-                    }
-                    if candidate.position().position_group() == *group
-                        && !recalls.contains(&candidate.id)
-                    {
-                        recalls.push(candidate.id);
-                        recalled += 1;
+                    if recalled >= needed || recalls.len() >= recall_budget { break; }
+                    if candidate.position().position_group() == *group && !recalls.contains(&candidate.id) {
+                        recalls.push(candidate.id); recalled += 1;
                     }
                 }
             }
@@ -1220,246 +1211,147 @@ impl TeamCollection {
             let needed = (18 - current_main_size).min(recall_budget.saturating_sub(recalls.len()));
             let mut recalled = 0;
             for candidate in &candidates {
-                if recalled >= needed {
-                    break;
-                }
-                if !recalls.contains(&candidate.id) {
-                    recalls.push(candidate.id);
-                    recalled += 1;
-                }
+                if recalled >= needed { break; }
+                if !recalls.contains(&candidate.id) { recalls.push(candidate.id); recalled += 1; }
             }
         }
 
         let total_available = available_main.len() + recalls.len();
         if total_available < 14 {
             let needed = 14 - total_available;
-            let mut emergency_candidates: Vec<&Player> = reserve_players
-                .iter()
+            let mut emergency: Vec<&Player> = reserve_players.iter()
                 .filter(|p| {
-                    let statuses = p.statuses.get();
-                    !statuses.contains(&PlayerStatusType::Lst)
-                        && !statuses.contains(&PlayerStatusType::Loa)
-                        && !p.player_attributes.is_injured
-                        && !recalls.contains(&p.id)
+                    let st = p.statuses.get();
+                    !st.contains(&PlayerStatusType::Lst) && !st.contains(&PlayerStatusType::Loa)
+                        && !p.player_attributes.is_injured && !recalls.contains(&p.id)
                         && !excluded_ids.contains(&p.id)
-                        && !matches!(
-                            p.contract.as_ref().map(|c| &c.contract_type),
-                            Some(ContractType::Loan)
-                        )
-                })
-                .collect();
-            emergency_candidates.sort_by(|a, b| {
-                Self::legacy_estimate_player_quality(b)
-                    .partial_cmp(&Self::legacy_estimate_player_quality(a))
+                        && !matches!(p.contract.as_ref().map(|c| &c.contract_type), Some(ContractType::Loan))
+                }).collect();
+            emergency.sort_by(|a, b| {
+                Self::legacy_estimate_player_quality(b).partial_cmp(&Self::legacy_estimate_player_quality(a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-            for candidate in emergency_candidates.into_iter().take(needed) {
-                recalls.push(candidate.id);
-            }
+            for candidate in emergency.into_iter().take(needed) { recalls.push(candidate.id); }
         }
-
         recalls
     }
 
-    /// Legacy: Identify youth promotions (fallback if no coach state)
-    fn legacy_identify_youth_promotions(
-        main_team: &Team,
-        youth_team: &Team,
-        date: NaiveDate,
-    ) -> Vec<u32> {
+    fn legacy_identify_youth_promotions(main_team: &Team, youth_team: &Team, date: NaiveDate) -> Vec<u32> {
         let main_size = main_team.players.players.len();
         let mut promotions = Vec::new();
-
-        if main_size >= 18 {
-            return promotions;
-        }
+        if main_size >= 18 { return promotions; }
         let needed = 18 - main_size;
 
-        let avg_quality: f32 = if main_team.players.players.is_empty() {
-            10.0
-        } else {
-            main_team
-                .players
-                .players
-                .iter()
-                .map(|p| Self::legacy_estimate_player_quality(p))
-                .sum::<f32>()
+        let avg_quality: f32 = if main_team.players.players.is_empty() { 10.0 } else {
+            main_team.players.players.iter()
+                .map(|p| Self::legacy_estimate_player_quality(p)).sum::<f32>()
                 / main_team.players.players.len() as f32
         };
 
-        let mut candidates: Vec<&Player> = youth_team
-            .players
-            .players
-            .iter()
+        let mut candidates: Vec<&Player> = youth_team.players.players.iter()
             .filter(|p| {
                 let age = DateUtils::age(p.birth_date, date);
                 let quality = Self::legacy_estimate_player_quality(p);
                 let youth_potential = Self::legacy_estimate_youth_potential(p, date);
-                age >= 16
-                    && !p.player_attributes.is_injured
+                age >= 16 && !p.player_attributes.is_injured
                     && p.player_attributes.condition_percentage() > 40
                     && (quality >= avg_quality - 2.0 || youth_potential > avg_quality + 2.0)
-            })
-            .collect();
+            }).collect();
         candidates.sort_by(|a, b| {
             Self::legacy_estimate_youth_potential(b, date)
                 .partial_cmp(&Self::legacy_estimate_youth_potential(a, date))
                 .unwrap_or(std::cmp::Ordering::Equal)
         });
-        for candidate in candidates.into_iter().take(needed) {
-            promotions.push(candidate.id);
-        }
+        for candidate in candidates.into_iter().take(needed) { promotions.push(candidate.id); }
         promotions
     }
 
-    /// Legacy: Identify ability swaps (fallback if no coach state)
-    fn legacy_identify_ability_swaps(
-        main_team: &Team,
-        reserve_team: &Team,
-        _date: NaiveDate,
-    ) -> Vec<(u32, u32)> {
+    fn legacy_identify_ability_swaps(main_team: &Team, reserve_team: &Team, _date: NaiveDate) -> Vec<(u32, u32)> {
         const SWAP_THRESHOLD: f32 = 2.0;
         let mut swaps = Vec::new();
         let mut used_main = Vec::new();
         let mut used_reserve = Vec::new();
 
-        let reserve_candidates: Vec<&Player> = reserve_team
-            .players
-            .players
-            .iter()
+        let reserve_candidates: Vec<&Player> = reserve_team.players.players.iter()
             .filter(|p| {
                 let st = p.statuses.get();
-                !p.player_attributes.is_injured
-                    && !p.player_attributes.is_banned
-                    && !st.contains(&PlayerStatusType::Lst)
-                    && !st.contains(&PlayerStatusType::Loa)
-                    && !matches!(
-                        p.contract.as_ref().map(|c| &c.contract_type),
-                        Some(ContractType::Loan)
-                    )
+                !p.player_attributes.is_injured && !p.player_attributes.is_banned
+                    && !st.contains(&PlayerStatusType::Lst) && !st.contains(&PlayerStatusType::Loa)
+                    && !matches!(p.contract.as_ref().map(|c| &c.contract_type), Some(ContractType::Loan))
                     && p.player_attributes.condition_percentage() > 50
-            })
-            .collect();
+            }).collect();
 
         for group in &[
-            PlayerFieldPositionGroup::Goalkeeper,
-            PlayerFieldPositionGroup::Defender,
-            PlayerFieldPositionGroup::Midfielder,
-            PlayerFieldPositionGroup::Forward,
+            PlayerFieldPositionGroup::Goalkeeper, PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Forward,
         ] {
-            let mut main_group: Vec<&Player> = main_team
-                .players
-                .players
-                .iter()
-                .filter(|p| {
-                    p.position().position_group() == *group
-                        && !used_main.contains(&p.id)
-                        && !p.statuses.get().contains(&PlayerStatusType::Lst)
-                })
+            let mut main_group: Vec<&Player> = main_team.players.players.iter()
+                .filter(|p| p.position().position_group() == *group
+                    && !used_main.contains(&p.id)
+                    && !p.statuses.get().contains(&PlayerStatusType::Lst))
                 .collect();
             main_group.sort_by(|a, b| {
-                Self::legacy_estimate_player_quality(a)
-                    .partial_cmp(&Self::legacy_estimate_player_quality(b))
+                Self::legacy_estimate_player_quality(a).partial_cmp(&Self::legacy_estimate_player_quality(b))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
-
-            let mut res_group: Vec<&&Player> = reserve_candidates
-                .iter()
-                .filter(|p| {
-                    p.position().position_group() == *group && !used_reserve.contains(&p.id)
-                })
+            let mut res_group: Vec<&&Player> = reserve_candidates.iter()
+                .filter(|p| p.position().position_group() == *group && !used_reserve.contains(&p.id))
                 .collect();
             res_group.sort_by(|a, b| {
-                Self::legacy_estimate_player_quality(b)
-                    .partial_cmp(&Self::legacy_estimate_player_quality(a))
+                Self::legacy_estimate_player_quality(b).partial_cmp(&Self::legacy_estimate_player_quality(a))
                     .unwrap_or(std::cmp::Ordering::Equal)
             });
 
             for main_p in &main_group {
-                if res_group.is_empty() {
-                    break;
-                }
+                if res_group.is_empty() { break; }
                 let best_res = res_group[0];
                 if Self::legacy_estimate_player_quality(best_res)
                     > Self::legacy_estimate_player_quality(main_p) + SWAP_THRESHOLD
                 {
                     swaps.push((main_p.id, best_res.id));
-                    used_main.push(main_p.id);
-                    used_reserve.push(best_res.id);
+                    used_main.push(main_p.id); used_reserve.push(best_res.id);
                     res_group.remove(0);
-                } else {
-                    break;
-                }
+                } else { break; }
             }
         }
-
         swaps
     }
 }
 
 // ─── Free functions ──────────────────────────────────────────────────
 
-/// Compute squad satisfaction: how happy the coach is with the current squad
 fn compute_squad_satisfaction(main_team: &Team, state: &CoachDecisionState) -> f32 {
     let players = &main_team.players.players;
     let squad_size = players.len();
 
-    // Squad size satisfaction: 20-23 is ideal
-    let size_satisfaction = if (20..=23).contains(&squad_size) {
-        1.0
-    } else if squad_size >= 18 && squad_size <= 25 {
-        0.7
-    } else if squad_size >= 14 {
-        0.4
-    } else {
-        0.1
-    };
+    let size_satisfaction = if (20..=23).contains(&squad_size) { 1.0 }
+        else if squad_size >= 18 && squad_size <= 25 { 0.7 }
+        else if squad_size >= 14 { 0.4 }
+        else { 0.1 };
 
-    // Performance satisfaction: average match rating of played players
-    let played_players: Vec<&Player> = players
-        .iter()
-        .filter(|p| p.statistics.played + p.statistics.played_subs > 3)
-        .collect();
-
-    let perf_satisfaction = if played_players.is_empty() {
-        0.5
-    } else {
-        let avg_rating: f32 = played_players
-            .iter()
-            .map(|p| p.statistics.average_rating)
-            .sum::<f32>()
-            / played_players.len() as f32;
+    let played_players: Vec<&Player> = players.iter()
+        .filter(|p| p.statistics.played + p.statistics.played_subs > 3).collect();
+    let perf_satisfaction = if played_players.is_empty() { 0.5 } else {
+        let avg_rating: f32 = played_players.iter()
+            .map(|p| p.statistics.average_rating).sum::<f32>() / played_players.len() as f32;
         ((avg_rating - 5.5) / 2.0).clamp(0.0, 1.0)
     };
 
-    // Quality spread satisfaction: no huge perceived quality gaps
-    let qualities: Vec<f32> = players
-        .iter()
-        .filter_map(|p| {
-            state.impressions.get(&p.id).map(|imp| imp.perceived_quality)
-        })
+    let qualities: Vec<f32> = players.iter()
+        .filter_map(|p| state.impressions.get(&p.id).map(|imp| imp.perceived_quality))
         .collect();
-
     let spread_satisfaction = if qualities.len() >= 2 {
         let max_q = qualities.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
         let min_q = qualities.iter().cloned().fold(f32::INFINITY, f32::min);
-        let spread = max_q - min_q;
-        (1.0 - spread / 10.0).clamp(0.0, 1.0)
-    } else {
-        0.5
-    };
+        (1.0 - (max_q - min_q) / 10.0).clamp(0.0, 1.0)
+    } else { 0.5 };
 
-    // Position coverage: check we have players in each group
-    let has_gk = players.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper && !p.player_attributes.is_injured);
-    let has_def = players.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Defender && !p.player_attributes.is_injured).count() >= 3;
-    let has_mid = players.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Midfielder && !p.player_attributes.is_injured).count() >= 2;
-    let has_fwd = players.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Forward && !p.player_attributes.is_injured).count() >= 1;
-
-    let coverage_satisfaction = if has_gk && has_def && has_mid && has_fwd {
-        1.0
-    } else {
-        0.2
-    };
+    let available: Vec<_> = players.iter().filter(|p| !p.player_attributes.is_injured).collect();
+    let has_gk = available.iter().any(|p| p.position().position_group() == PlayerFieldPositionGroup::Goalkeeper);
+    let has_def = available.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Defender).count() >= 3;
+    let has_mid = available.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Midfielder).count() >= 2;
+    let has_fwd = available.iter().filter(|p| p.position().position_group() == PlayerFieldPositionGroup::Forward).count() >= 1;
+    let coverage_satisfaction = if has_gk && has_def && has_mid && has_fwd { 1.0 } else { 0.2 };
 
     size_satisfaction * 0.25 + perf_satisfaction * 0.35
         + spread_satisfaction * 0.15 + coverage_satisfaction * 0.25
