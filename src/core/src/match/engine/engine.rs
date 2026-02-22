@@ -23,12 +23,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         FootballEngine {}
     }
 
-    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad) -> MatchResultRaw {
+    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad, write_positions: bool) -> MatchResultRaw {
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
 
-        let mut match_position_data = if crate::is_match_events_mode() {
+        let mut match_position_data = if !write_positions {
+            ResultMatchPositionData::empty()
+        } else if crate::is_match_events_mode() {
             ResultMatchPositionData::new_with_tracking()
         } else {
             ResultMatchPositionData::new()

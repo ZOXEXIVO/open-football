@@ -64,7 +64,7 @@ impl Country {
         CountryBuilder::default()
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
+    pub fn simulate(&mut self, ctx: GlobalContext<'_>, country_ids: &[u32]) -> CountryResult {
         let country_name = self.name.clone();
         let _date = ctx.simulation.date.date();
 
@@ -79,7 +79,7 @@ impl Country {
         // Pass country context to national team
         self.national_team.country_name = self.name.clone();
         self.national_team.reputation = self.reputation;
-        self.national_team.simulate(&mut self.clubs, date, country_id);
+        self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids);
 
         // Phase 2: Club Operations
         let clubs_results = self.simulate_clubs(&ctx);

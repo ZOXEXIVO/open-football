@@ -55,6 +55,8 @@ pub struct ResultMatchPositionData {
     events: Vec<MatchEventData>,
     #[serde(skip)]
     track_events: bool,
+    #[serde(skip)]
+    track_positions: bool,
 }
 
 impl ResultMatchPositionData {
@@ -65,6 +67,7 @@ impl ResultMatchPositionData {
             passes: Vec::new(),
             events: Vec::new(),
             track_events: false,
+            track_positions: true,
         }
     }
 
@@ -75,6 +78,18 @@ impl ResultMatchPositionData {
             passes: Vec::new(),
             events: Vec::new(),
             track_events: true,
+            track_positions: true,
+        }
+    }
+
+    pub fn empty() -> Self {
+        ResultMatchPositionData {
+            ball: Vec::new(),
+            players: HashMap::new(),
+            passes: Vec::new(),
+            events: Vec::new(),
+            track_events: false,
+            track_positions: false,
         }
     }
 
@@ -101,6 +116,7 @@ impl ResultMatchPositionData {
                 passes: Vec::new(),
                 events: Vec::new(),
                 track_events: self.track_events,
+                track_positions: self.track_positions,
             };
 
             // Filter ball positions for this time window
@@ -147,6 +163,10 @@ impl ResultMatchPositionData {
     }
 
     pub fn add_player_positions(&mut self, player_id: u32, timestamp: u64, position: Vector3<f32>) {
+        if !self.track_positions {
+            return;
+        }
+
         if let Some(player_data) = self.players.get_mut(&player_id) {
             let last_data = player_data.last().unwrap();
             if last_data.position.x != position.x
@@ -163,6 +183,10 @@ impl ResultMatchPositionData {
     }
 
     pub fn add_ball_positions(&mut self, timestamp: u64, position: Vector3<f32>) {
+        if !self.track_positions {
+            return;
+        }
+
         let position = ResultPositionDataItem::new(timestamp, position);
 
         if let Some(last_position) = self.ball.last() {

@@ -2392,6 +2392,17 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   margin-bottom: 10px;
 }
 
+.fm-match-not-ready {
+  color: #8a9bb5;
+  font-size: 14px;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.fm-match-not-ready i {
+  margin-right: 6px;
+}
+
 /* ============================================
    TEAM TACTICS PAGE
    ============================================ */

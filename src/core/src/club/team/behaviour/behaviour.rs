@@ -38,7 +38,7 @@ impl TeamBehaviour {
         let should_run_minor = self.should_run_minor_update(current_time);
 
         if should_run_full {
-            info!("Running FULL team behaviour update at {}", current_time);
+            debug!("Running FULL team behaviour update at {}", current_time);
             self.last_full_update = Some(current_time);
             self.run_full_behaviour_simulation(players, staffs, ctx)
         } else if should_run_minor {

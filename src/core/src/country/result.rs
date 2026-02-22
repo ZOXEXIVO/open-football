@@ -73,7 +73,7 @@ impl CountryResult {
     }
 
     fn simulate_preseason_activities(&self, data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
-        info!("Running preseason activities...");
+        debug!("Running preseason activities...");
 
         if let Some(country) = data.country_mut(country_id) {
             Self::schedule_friendly_matches(country, date);
@@ -100,7 +100,7 @@ impl CountryResult {
             return summary;
         }
 
-        info!("Transfer window is OPEN - simulating pipeline-driven market activity");
+        debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
 
         if let Some(country) = data.country_mut(country_id) {
             // Step 1: Resolve pending negotiations from previous days [EXISTING - kept]

@@ -103,31 +103,66 @@
     var addItem = document.getElementById('fm-ctx-add');
     var removeItem = document.getElementById('fm-ctx-remove');
     var currentRow = null;
+    var longPressTimer = null;
+    var LONG_PRESS_MS = 500;
 
-    document.querySelector('.fm-squad tbody').addEventListener('contextmenu', function(e) {
-        var row = e.target.closest('tr[data-player-id]');
-        if (!row) return;
-        e.preventDefault();
+    function showMenu(row, pageX, pageY) {
         currentRow = row;
         var inWatchlist = row.dataset.inWatchlist === 'true';
         addItem.style.display = inWatchlist ? 'none' : '';
         removeItem.style.display = inWatchlist ? '' : 'none';
-        menu.style.left = e.pageX + 'px';
-        menu.style.top = e.pageY + 'px';
+        menu.style.left = pageX + 'px';
+        menu.style.top = pageY + 'px';
         menu.style.display = 'block';
-    });
+    }
 
-    document.addEventListener('click', function() {
+    function hideMenu() {
         menu.style.display = 'none';
+    }
+
+    // Desktop: right-click
+    document.querySelector('.fm-squad tbody').addEventListener('contextmenu', function(e) {
+        var row = e.target.closest('tr[data-player-id]');
+        if (!row) return;
+        e.preventDefault();
+        showMenu(row, e.pageX, e.pageY);
     });
 
-    addItem.addEventListener('click', function() {
+    // Touch: long-press
+    document.querySelector('.fm-squad tbody').addEventListener('touchstart', function(e) {
+        var row = e.target.closest('tr[data-player-id]');
+        if (!row) return;
+        var touch = e.touches[0];
+        var px = touch.pageX, py = touch.pageY;
+        longPressTimer = setTimeout(function() {
+            longPressTimer = null;
+            e.preventDefault();
+            showMenu(row, px, py);
+        }, LONG_PRESS_MS);
+    }, { passive: false });
+
+    document.querySelector('.fm-squad tbody').addEventListener('touchmove', function() {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    });
+
+    document.querySelector('.fm-squad tbody').addEventListener('touchend', function() {
+        if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+    });
+
+    document.addEventListener('click', hideMenu);
+    document.addEventListener('touchstart', function(e) {
+        if (!menu.contains(e.target)) hideMenu();
+    });
+
+    addItem.addEventListener('click', function(e) {
+        e.stopPropagation();
         if (!currentRow) return;
         fetch('/api/watchlist/add/' + currentRow.dataset.playerId, { method: 'POST' })
             .then(function() { location.reload(); });
     });
 
-    removeItem.addEventListener('click', function() {
+    removeItem.addEventListener('click', function(e) {
+        e.stopPropagation();
         if (!currentRow) return;
         fetch('/api/watchlist/remove/' + currentRow.dataset.playerId, { method: 'POST' })
             .then(function() { location.reload(); });

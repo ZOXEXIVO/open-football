@@ -480,7 +480,7 @@
             metadata = await metaRes.json();
         } catch(e) {
             console.error('Failed to load metadata:', e);
-            document.getElementById('loading-spinner').innerHTML = '<p>Failed to load match data</p>';
+            document.getElementById('loading-spinner').innerHTML = '<div class="fm-match-not-ready"><i class="fa fa-clock-o"></i> Match data not ready</div>';
             return;
         }
 
