@@ -175,6 +175,11 @@ impl DefenderRunningState {
             return true;
         }
 
+        // If teammates are tired, prefer short passes to relieve pressure
+        if self.are_teammates_tired(ctx) {
+            return true;
+        }
+
         let game_vision_skill = ctx.player.skills.mental.vision;
         let game_vision_threshold = 14.0; // Adjust this value based on your game balance
 
@@ -185,6 +190,26 @@ impl DefenderRunningState {
         }
 
         false
+    }
+
+    /// Check if nearby teammates are tired (average condition below threshold)
+    fn are_teammates_tired(&self, ctx: &StateProcessingContext) -> bool {
+        let mut total_condition = 0u32;
+        let mut count = 0u32;
+
+        for teammate in ctx.players().teammates().nearby(150.0) {
+            if let Some(player) = ctx.context.players.by_id(teammate.id) {
+                total_condition += player.player_attributes.condition_percentage();
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return false;
+        }
+
+        let avg_condition = total_condition / count;
+        avg_condition < 40
     }
 
     fn find_open_teammate_on_opposite_side(

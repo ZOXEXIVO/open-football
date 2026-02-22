@@ -42,6 +42,22 @@ impl StateProcessingHandler for DefenderPassingState {
             };
         }
 
+        // If teammates are tired, prefer short pass to nearest teammate
+        if self.are_teammates_tired(ctx) {
+            if let Some(nearest) = ctx.player().passing().find_any_teammate_with_distance(100.0) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(nearest.id)
+                            .with_reason("DEF_PASSING_TIRED_SHORT")
+                            .build(ctx),
+                    )),
+                ));
+            }
+        }
+
         // Normal passing situation - evaluate options more carefully
         if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option() {
             // Execute the pass
@@ -162,5 +178,25 @@ impl DefenderPassingState {
 
         // Adjust position if not under immediate pressure and no clear options
         !under_immediate_pressure && !has_clear_option
+    }
+
+    /// Check if nearby teammates are tired (average condition below threshold)
+    fn are_teammates_tired(&self, ctx: &StateProcessingContext) -> bool {
+        let mut total_condition = 0u32;
+        let mut count = 0u32;
+
+        for teammate in ctx.players().teammates().nearby(150.0) {
+            if let Some(player) = ctx.context.players.by_id(teammate.id) {
+                total_condition += player.player_attributes.condition_percentage();
+                count += 1;
+            }
+        }
+
+        if count == 0 {
+            return false;
+        }
+
+        let avg_condition = total_condition / count;
+        avg_condition < 40
     }
 }
