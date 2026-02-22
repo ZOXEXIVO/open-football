@@ -76,6 +76,9 @@ impl Country {
         // Phase 1.5: National Team (international breaks)
         let date = ctx.simulation.date.date();
         let country_id = self.id;
+        // Pass country context to national team
+        self.national_team.country_name = self.name.clone();
+        self.national_team.reputation = self.reputation;
         self.national_team.simulate(&mut self.clubs, date, country_id);
 
         // Phase 2: Club Operations

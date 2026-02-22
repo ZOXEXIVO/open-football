@@ -1,8 +1,10 @@
 use crate::context::GlobalContext;
+use crate::continent::national_competitions::NationalTeamCompetitions;
 use crate::continent::ContinentResult;
 use crate::country::CountryResult;
+use crate::r#match::MatchSquad;
 use crate::utils::Logging;
-use crate::{Club, Country};
+use crate::{Club, Country, NationalTeam};
 use chrono::NaiveDate;
 use log::{debug, info};
 use std::collections::HashMap;
@@ -16,6 +18,7 @@ pub struct Continent {
     pub continental_rankings: ContinentalRankings,
     pub regulations: ContinentalRegulations,
     pub economic_zone: EconomicZone,
+    pub national_team_competitions: NationalTeamCompetitions,
 }
 
 impl Continent {
@@ -28,11 +31,13 @@ impl Continent {
             continental_rankings: ContinentalRankings::new(),
             regulations: ContinentalRegulations::new(),
             economic_zone: EconomicZone::new(),
+            national_team_competitions: NationalTeamCompetitions::new(),
         }
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ContinentResult {
         let continent_name = self.name.clone();
+        let date = ctx.simulation.date.date();
 
         info!(
             "🌏 Simulating continent: {} ({} countries)",
@@ -40,12 +45,173 @@ impl Continent {
             self.countries.len()
         );
 
+        // Phase 0: National team competition management (before country sim)
+        self.simulate_national_competitions(date);
+
         // Simulate all child entities and accumulate results
         let country_results = self.simulate_countries(&ctx);
 
         info!("✅ Continent {} simulation complete", continent_name);
 
         ContinentResult::new(country_results)
+    }
+
+    /// Simulate national team competitions: check cycles, play matches, progress phases
+    fn simulate_national_competitions(&mut self, date: NaiveDate) {
+        let is_europe = self.id == 1; // continent_id 1 = Europe
+
+        // Check if we need to start new competition cycles
+        let mut country_ids_by_rep: Vec<(u32, u16)> = self
+            .countries
+            .iter()
+            .map(|c| (c.id, c.reputation))
+            .collect();
+        country_ids_by_rep.sort_by(|a, b| b.1.cmp(&a.1));
+        let sorted_ids: Vec<u32> = country_ids_by_rep.iter().map(|(id, _)| *id).collect();
+
+        self.national_team_competitions
+            .check_new_cycles(date, &sorted_ids, is_europe);
+
+        // Get today's matches from competitions
+        let todays_matches = self.national_team_competitions.get_todays_matches(date);
+
+        if todays_matches.is_empty() {
+            return;
+        }
+
+        // Play each match
+        for fixture in &todays_matches {
+            let home_country_id = fixture.home_country_id;
+            let away_country_id = fixture.away_country_id;
+
+            // Build squads for both teams
+            let home_squad = self.build_country_match_squad(home_country_id, date);
+            let away_squad = self.build_country_match_squad(away_country_id, date);
+
+            if let (Some(home_squad), Some(away_squad)) = (home_squad, away_squad) {
+                // Play the match through the engine
+                let (home_score, away_score, player_goals) =
+                    NationalTeam::play_competition_match(home_squad, away_squad);
+
+                // Determine penalty winner for knockout matches (if draw)
+                let penalty_winner = if fixture.competition.is_knockout() && home_score == away_score {
+                    // Simple tiebreaker: higher-reputation country wins on penalties
+                    let home_rep = self.get_country_reputation(home_country_id);
+                    let away_rep = self.get_country_reputation(away_country_id);
+                    if home_rep >= away_rep {
+                        Some(home_country_id)
+                    } else {
+                        Some(away_country_id)
+                    }
+                } else {
+                    None
+                };
+
+                // Record result in the competition
+                self.national_team_competitions.record_result(
+                    fixture,
+                    home_score,
+                    away_score,
+                    penalty_winner,
+                );
+
+                // Update player stats in clubs
+                self.update_player_international_stats(&player_goals);
+
+                // Update Elo ratings for both national teams
+                let away_elo = self.get_country_elo(away_country_id);
+                let home_elo = self.get_country_elo(home_country_id);
+
+                if let Some(home_country) = self.countries.iter_mut().find(|c| c.id == home_country_id) {
+                    home_country.national_team.update_elo(home_score, away_score, away_elo);
+                }
+                if let Some(away_country) = self.countries.iter_mut().find(|c| c.id == away_country_id) {
+                    away_country.national_team.update_elo(away_score, home_score, home_elo);
+                }
+
+                let home_name = self.get_country_name(home_country_id);
+                let away_name = self.get_country_name(away_country_id);
+
+                info!(
+                    "International match ({}): {} vs {} - {}:{}",
+                    fixture.competition.label(),
+                    home_name,
+                    away_name,
+                    home_score,
+                    away_score
+                );
+            }
+        }
+
+        // Check phase transitions after all matches
+        self.national_team_competitions.check_phase_transitions();
+    }
+
+    /// Build a MatchSquad for a country, ensuring national team has called up players
+    fn build_country_match_squad(&mut self, country_id: u32, date: NaiveDate) -> Option<MatchSquad> {
+        // Find the country and ensure it has a squad
+        let country_idx = self.countries.iter().position(|c| c.id == country_id)?;
+
+        let country = &mut self.countries[country_idx];
+
+        // Ensure the national team has a squad called up
+        if country.national_team.squad.is_empty() && country.national_team.generated_squad.is_empty() {
+            // Set up national team context
+            country.national_team.country_name = country.name.clone();
+            country.national_team.reputation = country.reputation;
+
+            // Call up squad
+            let cid = country.id;
+            country.national_team.call_up_squad(&mut country.clubs, date, cid);
+        }
+
+        // Build the match squad
+        let squad = country.national_team.build_match_squad(&country.clubs);
+        Some(squad)
+    }
+
+    /// Update player international stats after a competition match
+    fn update_player_international_stats(&mut self, player_goals: &HashMap<u32, u16>) {
+        for country in &mut self.countries {
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    for player in &mut team.players.players {
+                        // Check if player was in any national squad
+                        if country.national_team.squad.iter().any(|s| s.player_id == player.id) {
+                            player.player_attributes.international_apps += 1;
+
+                            if let Some(&goals) = player_goals.get(&player.id) {
+                                player.player_attributes.international_goals += goals;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn get_country_reputation(&self, country_id: u32) -> u16 {
+        self.countries
+            .iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.reputation)
+            .unwrap_or(0)
+    }
+
+    fn get_country_elo(&self, country_id: u32) -> u16 {
+        self.countries
+            .iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.national_team.elo_rating)
+            .unwrap_or(1500)
+    }
+
+    fn get_country_name(&self, country_id: u32) -> String {
+        self.countries
+            .iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_else(|| format!("Country {}", country_id))
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {

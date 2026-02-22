@@ -111,6 +111,14 @@ pub use country::{
     MediaStory, StoryType, CountryRegulations, CountryGeneratorData,
     PeopleNameGeneratorData, CountrySettings, CountryPricing,
     NationalTeam, NationalTeamStaffMember, NationalTeamStaffRole,
+    NationalSquadPlayer, NationalTeamFixture, NationalTeamMatchResult,
+};
+
+pub use continent::national_competitions::{
+    NationalTeamCompetitions, NationalCompetitionFixture, NationalCompetitionType,
+    WorldCupCompetition, EuropeanChampionship,
+    CompetitionPhase, QualifyingGroup, GroupStanding, GroupFixture, FixtureResult,
+    KnockoutBracket, KnockoutRound, KnockoutFixture, KnockoutResult,
 };
 
 // Namespace conflicting CompetitionType enums
