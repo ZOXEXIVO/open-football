@@ -242,10 +242,19 @@ impl StateProcessingHandler for MidfielderRunningState {
         // Simplified movement calculation
         if ctx.player.has_ball(ctx) {
             Some(self.calculate_simple_ball_movement(ctx))
-        } else if ctx.team().is_control_ball() {
-            Some(self.calculate_simple_support_movement(ctx))
         } else {
-            Some(self.calculate_simple_defensive_movement(ctx))
+            // Blend support and defensive movement to avoid twitching
+            // when possession flickers
+            let support = self.calculate_simple_support_movement(ctx);
+            let defensive = self.calculate_simple_defensive_movement(ctx);
+
+            if ctx.team().is_control_ball() {
+                // Mostly support, slight defensive blend for stability
+                Some(support * 0.85 + defensive * 0.15)
+            } else {
+                // Mostly defensive, slight support blend for stability
+                Some(defensive * 0.85 + support * 0.15)
+            }
         }
     }
 
@@ -272,12 +281,10 @@ impl MidfielderRunningState {
         // Simple decision: move toward goal with slight variation
         let to_goal = (goal_pos - player_pos).normalize();
 
-        // Add small lateral movement based on time for variation
-        let lateral = if ctx.in_state_time % 60 < 30 {
-            Vector3::new(-to_goal.y * 0.2, to_goal.x * 0.2, 0.0)
-        } else {
-            Vector3::new(to_goal.y * 0.2, -to_goal.x * 0.2, 0.0)
-        };
+        // Smooth sinusoidal lateral sway instead of binary flip
+        let phase = (ctx.in_state_time as f32) * std::f32::consts::TAU / 60.0;
+        let sway = phase.sin() * 0.2;
+        let lateral = Vector3::new(-to_goal.y * sway, to_goal.x * sway, 0.0);
 
         let target = player_pos + (to_goal + lateral).normalize() * 40.0;
 
@@ -328,7 +335,7 @@ impl MidfielderRunningState {
             )
         } else {
             // Central midfielder - support play but avoid clustering
-            // Check if other midfielders are nearby
+            // Count other midfielders near ball for crowding factor
             let other_midfielders_near_ball = ctx.players().teammates().all()
                 .filter(|t| {
                     t.tactical_positions.is_midfielder() &&
@@ -337,36 +344,38 @@ impl MidfielderRunningState {
                 })
                 .count();
 
-            if other_midfielders_near_ball >= 2 {
-                // Too many midfielders near ball - spread out
-                let spread_y = if player_pos.y < field_height / 2.0 {
-                    field_height * 0.25
-                } else {
-                    field_height * 0.75
-                };
+            // Smooth crowding factor instead of hard threshold
+            // 0 nearby = 0.0, 1 nearby = 0.3, 2 nearby = 0.7, 3+ = 1.0
+            let crowd_factor = (other_midfielders_near_ball as f32 * 0.35).min(1.0);
 
-                Vector3::new(
-                    ball_pos.x + attacking_direction * 30.0,
-                    spread_y,
-                    0.0,
-                )
+            // Spread position (when crowded)
+            let spread_y = if player_pos.y < field_height / 2.0 {
+                field_height * 0.25
             } else {
-                // Support position - create triangle but not too close
-                let offset_angle = if player_pos.y < field_height / 2.0 {
-                    -40.0_f32.to_radians()
-                } else {
-                    40.0_f32.to_radians()
-                };
+                field_height * 0.75
+            };
+            let spread_target = Vector3::new(
+                ball_pos.x + attacking_direction * 30.0,
+                spread_y,
+                0.0,
+            );
 
-                let support_distance = 45.0; // Increased from 30 to spread more
-                let support_offset = Vector3::new(
-                    support_distance * offset_angle.cos() * attacking_direction,
-                    support_distance * offset_angle.sin(),
-                    0.0,
-                );
+            // Support triangle position (when not crowded)
+            let offset_angle = if player_pos.y < field_height / 2.0 {
+                -40.0_f32.to_radians()
+            } else {
+                40.0_f32.to_radians()
+            };
+            let support_distance = 45.0;
+            let support_offset = Vector3::new(
+                support_distance * offset_angle.cos() * attacking_direction,
+                support_distance * offset_angle.sin(),
+                0.0,
+            );
+            let support_target = ball_pos + support_offset;
 
-                ball_pos + support_offset
-            }
+            // Blend between support and spread based on crowding
+            support_target * (1.0 - crowd_factor) + spread_target * crowd_factor
         };
 
         // Clamp to field
@@ -381,7 +390,7 @@ impl MidfielderRunningState {
             slowing_distance: 15.0,
         }
             .calculate(ctx.player)
-            .velocity + ctx.player().separation_velocity() * 1.5
+            .velocity + ctx.player().separation_velocity()
     }
 
     /// Defensive movement that returns to tactical position
@@ -392,31 +401,20 @@ impl MidfielderRunningState {
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
 
-        // Calculate how far ball is into our half
+        // Calculate how far ball is into our half (0 = at our goal, 1 = at opponent goal)
         let our_goal = ctx.ball().direction_to_own_goal();
-        let ball_threat = (ball_pos - our_goal).magnitude() / field_width;
+        let ball_threat = ((ball_pos - our_goal).magnitude() / field_width).clamp(0.0, 1.0);
 
-        // Determine target based on ball threat level
-        let target = if ball_threat < 0.3 {
-            // Ball is in our defensive third - get back to position quickly
-            start_pos
-        } else if ball_threat < 0.5 {
-            // Ball is in middle - position between ball and start position
-            // But maintain tactical width (Y position from start)
-            Vector3::new(
-                (ball_pos.x + start_pos.x) * 0.5,
-                start_pos.y, // Keep tactical Y position
-                0.0,
-            )
-        } else {
-            // Ball is far - move slightly toward ball but maintain shape
-            let blend_factor = 0.3; // 30% toward ball, 70% start position
-            Vector3::new(
-                start_pos.x + (ball_pos.x - start_pos.x) * blend_factor,
-                start_pos.y, // Keep tactical Y position
-                0.0,
-            )
-        };
+        // Smooth interpolation: as ball_threat increases (ball further away),
+        // player blends from start_pos toward a position slightly shifted toward ball
+        // ball_threat 0.0 → fully at start_pos
+        // ball_threat 0.5+ → 30% toward ball x, keep tactical y
+        let toward_ball_factor = (ball_threat * 0.6).min(0.3);
+        let target = Vector3::new(
+            start_pos.x + (ball_pos.x - start_pos.x) * toward_ball_factor,
+            start_pos.y, // Keep tactical Y position
+            0.0,
+        );
 
         // Ensure we stay in reasonable bounds
         let clamped_target = Vector3::new(

@@ -777,7 +777,12 @@ impl Ball {
         }
 
         // Ownership stability constants — give the ball holder time to act
-        const MIN_OWNERSHIP_DURATION: u32 = 25; // ~0.4s minimum before ownership can change
+        // Escalate minimum duration when contested to break ping-pong
+        let min_ownership_duration: u32 = if self.contested_claim_count > 3 {
+            60 // ~1s - much harder to flip during active contest
+        } else {
+            25 // ~0.4s minimum before ownership can change
+        };
         const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25; // Challenger must be 25% better to steal
 
         // Determine the best tackler from nearby players
@@ -807,7 +812,7 @@ impl Ball {
 
             if is_ownership_change {
                 // Prevent rapid ownership changes by requiring significant advantage
-                if self.ownership_duration < MIN_OWNERSHIP_DURATION {
+                if self.ownership_duration < min_ownership_duration {
                     if let Some(current_owner_id) = self.current_owner {
                         // Find current owner in nearby players
                         if let Some(_current_owner) = nearby_players.iter()
@@ -852,9 +857,10 @@ impl Ball {
             } else {
                 // Same owner - just increment duration
                 self.ownership_duration += 1;
-                // Decay contested counter when ownership is stable
-                if self.ownership_duration > 30 && self.contested_claim_count > 0 {
-                    self.contested_claim_count = 0;
+                // Gradually decay contested counter when ownership is truly stable
+                // Require long stability AND no opponents nearby to consider it resolved
+                if self.ownership_duration > 100 && self.contested_claim_count > 0 {
+                    self.contested_claim_count = self.contested_claim_count.saturating_sub(1);
                 }
             }
         }

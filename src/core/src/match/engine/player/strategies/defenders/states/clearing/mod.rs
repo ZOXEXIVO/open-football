@@ -70,16 +70,14 @@ impl StateProcessingHandler for DefenderClearingState {
         // Calculate the direction vector to the target position
         let direction_to_target = (target_position - ball_position).normalize();
 
-        // Use higher clearing speed - especially critical when stuck at boundary
-        // Clearance should be comparable to a strong pass/weak shot (not 50-80 units/tick!)
-        let clear_speed = if at_boundary { 12.0 } else { 8.0 };
+        // Clearance must travel far enough to escape pressure/congestion
+        let clear_speed = if at_boundary { 12.0 } else { 10.0 };
 
         // Calculate horizontal velocity
         let horizontal_velocity = direction_to_target * clear_speed;
 
-        // Add upward velocity for aerial clearance
-        // Higher lift when at boundary to ensure ball escapes
-        let z_velocity = if at_boundary { 15.0 } else { 8.0 };
+        // Moderate lift for a driven clearance (not a lob)
+        let z_velocity = if at_boundary { 5.0 } else { 3.0 };
 
         // Combine horizontal and vertical components
         let ball_velocity = Vector3::new(

@@ -771,13 +771,27 @@ impl PlayerEventDispatcher {
             }
 
             // Different player trying to claim - this is a tackle/interception
-            // Allow it but set cooldown to prevent immediate re-claim
+            // Reject if current owner hasn't held ball long enough (prevents ping-pong)
+            let min_duration = if field.ball.contested_claim_count > 3 { 60 } else { 25 };
+            if field.ball.ownership_duration < min_duration {
+                return;
+            }
+
+            // Allow claim with escalated cooldown
             field.ball.previous_owner = Some(current_owner);
             field.ball.current_owner = Some(player_id);
             field.ball.pass_target_player_id = None;
             field.ball.ownership_duration = 0;
-            field.ball.claim_cooldown = CLAIM_COOLDOWN_TICKS;
-            field.ball.flags.in_flight_state = 30;
+            field.ball.contested_claim_count += 1;
+            let cooldown = if field.ball.contested_claim_count > 6 {
+                90
+            } else if field.ball.contested_claim_count > 3 {
+                45
+            } else {
+                CLAIM_COOLDOWN_TICKS
+            };
+            field.ball.claim_cooldown = cooldown;
+            field.ball.flags.in_flight_state = cooldown as usize;
             return;
         }
 
@@ -1062,7 +1076,8 @@ impl PlayerEventDispatcher {
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
         // Cap clearance velocity to prevent unrealistic ball speed
-        const MAX_CLEAR_VELOCITY: f32 = 8.0;
+        // Clearances are powerful kicks - higher cap than passes (7.2)
+        const MAX_CLEAR_VELOCITY: f32 = 14.0;
         let speed = velocity.norm();
         let capped_velocity = if speed > MAX_CLEAR_VELOCITY {
             velocity * (MAX_CLEAR_VELOCITY / speed)
@@ -1079,7 +1094,7 @@ impl PlayerEventDispatcher {
         field.ball.pass_target_player_id = None;
         field.ball.clear_pass_history();
 
-        // Set in-flight state to prevent immediate tackling
-        field.ball.flags.in_flight_state = 10;
+        // Set in-flight state to prevent immediate reclaim after clearance
+        field.ball.flags.in_flight_state = 40;
     }
 }
