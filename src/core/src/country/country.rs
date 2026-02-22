@@ -1,6 +1,6 @@
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
-use crate::country::national_team::NationalTeam;
+use crate::country::national_team::{NationalTeam, CallUpCandidate};
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::utils::Logging;
@@ -64,7 +64,12 @@ impl Country {
         CountryBuilder::default()
     }
 
-    pub fn simulate(&mut self, ctx: GlobalContext<'_>, country_ids: &[u32]) -> CountryResult {
+    pub(crate) fn simulate(
+        &mut self,
+        ctx: GlobalContext<'_>,
+        country_ids: &[u32],
+        candidates: Option<Vec<CallUpCandidate>>,
+    ) -> CountryResult {
         let country_name = self.name.clone();
         let _date = ctx.simulation.date.date();
 
@@ -79,7 +84,7 @@ impl Country {
         // Pass country context to national team
         self.national_team.country_name = self.name.clone();
         self.national_team.reputation = self.reputation;
-        self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids);
+        self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids, candidates);
 
         // Phase 2: Club Operations
         let clubs_results = self.simulate_clubs(&ctx);

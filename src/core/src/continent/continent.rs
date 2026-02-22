@@ -220,20 +220,24 @@ impl Continent {
         // Find the country and ensure it has a squad
         let country_idx = self.countries.iter().position(|c| c.id == country_id)?;
 
-        let country = &mut self.countries[country_idx];
-
         // Ensure the national team has a squad called up
-        if country.national_team.squad.is_empty() && country.national_team.generated_squad.is_empty() {
-            // Set up national team context
+        if self.countries[country_idx].national_team.squad.is_empty()
+            && self.countries[country_idx].national_team.generated_squad.is_empty()
+        {
+            // Collect candidates from ALL clubs across ALL countries
+            let mut all_candidates = NationalTeam::collect_all_candidates_by_country(&self.countries, date);
+            let candidates = all_candidates.remove(&country_id).unwrap_or_default();
+
+            let country = &mut self.countries[country_idx];
             country.national_team.country_name = country.name.clone();
             country.national_team.reputation = country.reputation;
 
-            // Call up squad
             let cid = country.id;
-            country.national_team.call_up_squad(&mut country.clubs, date, cid, &country_ids);
+            country.national_team.call_up_squad(&mut country.clubs, candidates, date, cid, &country_ids);
         }
 
         // Build the match squad
+        let country = &self.countries[country_idx];
         let squad = country.national_team.build_match_squad(&country.clubs);
         Some(squad)
     }
@@ -284,13 +288,24 @@ impl Continent {
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
         let country_ids: Vec<u32> = self.countries.iter().map(|c| c.id).collect();
+        let date = ctx.simulation.date.date();
+
+        // Pre-collect national team candidates from ALL clubs across ALL countries
+        let need_callups = NationalTeam::is_break_start(date) || NationalTeam::is_tournament_start(date);
+
+        let mut candidates_by_country = if need_callups {
+            NationalTeam::collect_all_candidates_by_country(&self.countries, date)
+        } else {
+            HashMap::new()
+        };
 
         self.countries
             .iter_mut()
             .map(|country| {
+                let candidates = candidates_by_country.remove(&country.id);
                 let message = &format!("simulate country: {} (Continental)", &country.name);
                 Logging::estimate_result(
-                    || country.simulate(ctx.with_country(country.id), &country_ids),
+                    || country.simulate(ctx.with_country(country.id), &country_ids, candidates),
                     message,
                 )
             })

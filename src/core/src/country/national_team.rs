@@ -10,8 +10,10 @@ use crate::{
     PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerStatusType, PlayerTraining,
     PlayerTrainingHistory, Relations, Tactics, TeamType, Technical,
 };
+use crate::Country;
 use chrono::{Datelike, NaiveDate};
 use log::info;
+use std::collections::HashMap;
 
 pub struct NationalTeam {
     pub country_id: u32,
@@ -132,7 +134,7 @@ const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
 ];
 
 /// Data collected from a candidate player for call-up scoring
-struct CallUpCandidate {
+pub(crate) struct CallUpCandidate {
     player_id: u32,
     club_id: u32,
     team_id: u32,
@@ -207,19 +209,28 @@ impl NationalTeam {
 
     /// Daily state management — call-ups, releases, scheduling.
     /// Match execution is handled separately at the continent level for parallelism.
-    pub fn simulate_state(&mut self, clubs: &mut [Club], date: NaiveDate, country_id: u32, country_ids: &[u32]) {
+    pub(crate) fn simulate_state(
+        &mut self,
+        clubs: &mut [Club],
+        date: NaiveDate,
+        country_id: u32,
+        country_ids: &[u32],
+        candidates: Option<Vec<CallUpCandidate>>,
+    ) {
         if self.reputation < MIN_REPUTATION_FOR_FRIENDLIES {
             return;
         }
 
         // Handle international break call-ups
         if Self::is_break_start(date) {
-            self.call_up_squad(clubs, date, country_id, country_ids);
-        }
-
-        // Handle tournament period call-ups (June-July)
-        if Self::is_tournament_start(date) && self.squad.is_empty() {
-            self.call_up_squad(clubs, date, country_id, country_ids);
+            let candidates = candidates
+                .unwrap_or_else(|| Self::collect_candidates(clubs, country_id, date));
+            self.call_up_squad(clubs, candidates, date, country_id, country_ids);
+        } else if Self::is_tournament_start(date) && self.squad.is_empty() {
+            // Handle tournament period call-ups (June-July)
+            let candidates = candidates
+                .unwrap_or_else(|| Self::collect_candidates(clubs, country_id, date));
+            self.call_up_squad(clubs, candidates, date, country_id, country_ids);
         }
 
         // Release squad at break end
@@ -300,17 +311,14 @@ impl NationalTeam {
         );
     }
 
-    /// Call up squad using weighted scoring — considers ability, tactical fit,
-    /// form, experience, mentality, and age. Friendly breaks allow more
-    /// experimentation; tournament periods favour proven performers.
-    pub fn call_up_squad(&mut self, clubs: &mut [Club], date: NaiveDate, country_id: u32, country_ids: &[u32]) {
-        self.squad.clear();
-        self.schedule.clear();
-
-        let is_tournament = Self::is_in_tournament_period(date);
-
-        // 1. Collect eligible candidates with full scoring data
-        let mut candidates: Vec<CallUpCandidate> = Vec::new();
+    /// Collect eligible national team candidates from clubs.
+    /// Scans all provided clubs for players matching the given country_id.
+    pub(crate) fn collect_candidates(
+        clubs: &[Club],
+        country_id: u32,
+        date: NaiveDate,
+    ) -> Vec<CallUpCandidate> {
+        let mut candidates = Vec::new();
 
         for club in clubs.iter() {
             for team in club.teams.teams.iter() {
@@ -373,7 +381,97 @@ impl NationalTeam {
             }
         }
 
-        // 2. Score each candidate and select a balanced squad
+        candidates
+    }
+
+    /// Collect eligible candidates from all clubs, grouped by player nationality.
+    /// Used at the continent level to search across ALL countries' clubs.
+    pub(crate) fn collect_all_candidates_by_country(
+        countries: &[Country],
+        date: NaiveDate,
+    ) -> HashMap<u32, Vec<CallUpCandidate>> {
+        let mut map: HashMap<u32, Vec<CallUpCandidate>> = HashMap::new();
+
+        for country in countries {
+            for club in &country.clubs {
+                for team in &club.teams.teams {
+                    if team.team_type != TeamType::Main {
+                        continue;
+                    }
+                    for player in &team.players.players {
+                        if player.player_attributes.is_injured
+                            || player.player_attributes.is_banned
+                            || player.statuses.get().contains(&PlayerStatusType::Loa)
+                        {
+                            continue;
+                        }
+
+                        let age = date.year() - player.birth_date.year();
+                        let condition_pct =
+                            (player.player_attributes.condition as f32 / 10000.0) * 100.0;
+
+                        let position_levels: Vec<(PlayerPositionType, u8)> = player
+                            .positions
+                            .positions
+                            .iter()
+                            .map(|pp| (pp.position, pp.level))
+                            .collect();
+
+                        let position_group = player
+                            .positions
+                            .positions
+                            .iter()
+                            .max_by_key(|p| p.level)
+                            .map(|p| p.position.position_group())
+                            .unwrap_or(PlayerFieldPositionGroup::Midfielder);
+
+                        map.entry(player.country_id).or_default().push(CallUpCandidate {
+                            player_id: player.id,
+                            club_id: club.id,
+                            team_id: team.id,
+                            current_ability: player.player_attributes.current_ability,
+                            potential_ability: player.player_attributes.potential_ability,
+                            age,
+                            condition_pct,
+                            match_readiness: player.skills.physical.match_readiness,
+                            average_rating: player.statistics.average_rating,
+                            played: player.statistics.played + player.statistics.played_subs,
+                            international_apps: player.player_attributes.international_apps,
+                            international_goals: player.player_attributes.international_goals,
+                            leadership: player.skills.mental.leadership,
+                            composure: player.skills.mental.composure,
+                            teamwork: player.skills.mental.teamwork,
+                            determination: player.skills.mental.determination,
+                            pressure_handling: player.attributes.pressure,
+                            world_reputation: player.player_attributes.world_reputation,
+                            position_levels,
+                            position_group,
+                        });
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
+    /// Call up squad using weighted scoring — considers ability, tactical fit,
+    /// form, experience, mentality, and age. Friendly breaks allow more
+    /// experimentation; tournament periods favour proven performers.
+    pub(crate) fn call_up_squad(
+        &mut self,
+        own_clubs: &mut [Club],
+        candidates: Vec<CallUpCandidate>,
+        date: NaiveDate,
+        country_id: u32,
+        country_ids: &[u32],
+    ) {
+        self.squad.clear();
+        self.schedule.clear();
+
+        let is_tournament = Self::is_in_tournament_period(date);
+
+        // Score each candidate and select a balanced squad
         let selected_indices =
             Self::select_balanced_squad(&candidates, &self.tactics, is_tournament, country_id);
 
@@ -391,8 +489,8 @@ impl NationalTeam {
             self.generate_synthetic_squad(date);
         }
 
-        // Set Int status on called-up players in clubs
-        for club in clubs.iter_mut() {
+        // Set Int status on called-up players in own clubs
+        for club in own_clubs.iter_mut() {
             for team in club.teams.teams.iter_mut() {
                 for player in team.players.players.iter_mut() {
                     if self.squad.iter().any(|s| s.player_id == player.id) {
@@ -1168,7 +1266,7 @@ impl NationalTeam {
             .any(|(m, start, end)| month == *m && day >= *start && day <= *end)
     }
 
-    fn is_tournament_start(date: NaiveDate) -> bool {
+    pub fn is_tournament_start(date: NaiveDate) -> bool {
         date.month() == TOURNAMENT_WINDOW.0 && date.day() == TOURNAMENT_WINDOW.1
     }
 
