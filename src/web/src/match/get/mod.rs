@@ -5,6 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::r#match::player::statistics::MatchStatisticType;
 use core::SimulatorData;
 use serde::{Deserialize, Serialize};
 
@@ -138,6 +139,7 @@ pub async fn match_get_action(
     let goals_json: Vec<GoalEventJson> = score
         .detail()
         .iter()
+        .filter(|goal| goal.stat_type == MatchStatisticType::Goal)
         .map(|goal| GoalEventJson {
             player_id: goal.player_id,
             time: goal.time,
@@ -214,6 +216,7 @@ pub async fn match_get_action(
     let home_goal_events: Vec<GoalEventDisplay> = score
         .detail()
         .iter()
+        .filter(|g| g.stat_type == MatchStatisticType::Goal)
         .filter(|g| {
             let is_home_player = result_details.left_team_players.main.contains(&g.player_id)
                 || result_details.left_team_players.substitutes.contains(&g.player_id);
@@ -239,6 +242,7 @@ pub async fn match_get_action(
     let away_goal_events: Vec<GoalEventDisplay> = score
         .detail()
         .iter()
+        .filter(|g| g.stat_type == MatchStatisticType::Goal)
         .filter(|g| {
             let is_away_player = result_details.right_team_players.main.contains(&g.player_id)
                 || result_details.right_team_players.substitutes.contains(&g.player_id);
