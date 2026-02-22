@@ -134,7 +134,7 @@ pub async fn team_get_action(
 
             Some(TeamPlayer {
                 id: p.id,
-                first_name: p.full_name.first_name.clone(),
+                first_name: p.full_name.display_first_name().to_string(),
                 position_sort: p.position(),
                 position,
                 behaviour: p.behaviour.as_str().to_string(),
@@ -147,7 +147,7 @@ pub async fn team_get_action(
                 country_slug: country.slug.clone(),
                 country_code: country.code.clone(),
                 country_name: country.name.clone(),
-                last_name: p.full_name.last_name.clone(),
+                last_name: p.full_name.display_last_name().to_string(),
                 conditions: get_conditions(p),
                 value: FormattingUtils::format_money(p.value(now)),
                 current_ability: get_current_ability_stars(p),
@@ -197,7 +197,7 @@ pub async fn team_get_action(
 
                 players.push(TeamPlayer {
                     id: player.id,
-                    first_name: player.full_name.first_name.clone(),
+                    first_name: player.full_name.display_first_name().to_string(),
                     position_sort: player.position(),
                     position,
                     behaviour: player.behaviour.as_str().to_string(),
@@ -210,7 +210,7 @@ pub async fn team_get_action(
                     country_slug: player_country.map(|c| c.slug.clone()).unwrap_or_default(),
                     country_code: player_country.map(|c| c.code.clone()).unwrap_or_default(),
                     country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),
-                    last_name: player.full_name.last_name.clone(),
+                    last_name: player.full_name.display_last_name().to_string(),
                     conditions: get_conditions(player),
                     value: FormattingUtils::format_money(player.value(now)),
                     current_ability: get_current_ability_stars(player),

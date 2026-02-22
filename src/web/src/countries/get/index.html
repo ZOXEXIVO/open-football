@@ -1,5 +1,13 @@
 {% extends "layout.html" %}
 
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/countries/{{ country_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/countries/{{ country_slug }}/staff">{{ i18n.t("staff") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/countries/{{ country_slug }}/leagues">{{ i18n.t("leagues") }}</a>
+</div>
+{% endblock %}
+
 {% block content %}
 <div class="fm-page">
     <section class="fm-panel">

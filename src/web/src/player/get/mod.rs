@@ -227,14 +227,14 @@ pub async fn player_get_action(
         squad_status: format_squad_status(&c.squad_status),
     });
 
-    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
+    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
     let loan_status = get_loan_status(player, team, simulator_data);
 
     let player_vm = PlayerViewModel {
         id: player.id,
-        first_name: player.full_name.first_name.clone(),
-        last_name: player.full_name.last_name.clone(),
+        first_name: player.full_name.display_first_name().to_string(),
+        last_name: player.full_name.display_last_name().to_string(),
         position: player.position().get_short_name().to_string(),
         contract,
         birth_date: player.birth_date.format("%d.%m.%Y").to_string(),

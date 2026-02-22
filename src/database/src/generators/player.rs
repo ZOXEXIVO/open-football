@@ -21,6 +21,7 @@ impl PlayerGenerator {
             people_names_data: PeopleNameGeneratorData {
                 first_names: people_names.first_names.clone(),
                 last_names: people_names.last_names.clone(),
+                nicknames: people_names.nicknames.clone(),
             },
         }
     }
@@ -61,12 +62,16 @@ impl PlayerGenerator {
             PlayerClubContract::new(salary, expiration)
         };
 
+        let first_name = self.generate_first_name();
+        let last_name = self.generate_last_name();
+        let full_name = match self.generate_nickname() {
+            Some(nickname) => FullName::with_nickname(first_name, last_name, nickname),
+            None => FullName::new(first_name, last_name),
+        };
+
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
-            .full_name(FullName::new(
-                self.generate_first_name(),
-                self.generate_last_name(),
-            ))
+            .full_name(full_name)
             .birth_date(NaiveDate::from_ymd_opt(year as i32, month, day).unwrap())
             .country_id(country_id)
             .skills(Self::generate_skills(rep_factor))
@@ -326,6 +331,18 @@ impl PlayerGenerator {
             injury_count: 0,
             days_since_last_match: 0,
         }
+    }
+
+    fn generate_nickname(&self) -> Option<String> {
+        if self.people_names_data.nicknames.is_empty() {
+            return None;
+        }
+        // ~1 in 10 chance
+        if IntegerUtils::random(0, 9) != 0 {
+            return None;
+        }
+        let idx = IntegerUtils::random(0, self.people_names_data.nicknames.len() as i32) as usize;
+        Some(self.people_names_data.nicknames[idx].to_owned())
     }
 
     fn generate_first_name(&self) -> String {

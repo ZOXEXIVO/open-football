@@ -95,7 +95,7 @@ pub async fn team_tactics_get_action(
             used_player_ids.push(player.id);
             formation_players.push(FormationPlayer {
                 id: player.id,
-                last_name: player.full_name.last_name.clone(),
+                last_name: player.full_name.display_last_name().to_string(),
                 position_short: required_pos.get_short_name().to_string(),
                 css_class: position_to_css_class(required_pos),
             });

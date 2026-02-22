@@ -156,7 +156,7 @@ pub async fn match_get_action(
             players_json.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
-                last_name: p.full_name.last_name.clone(),
+                last_name: p.full_name.display_last_name().to_string(),
                 position: p.position().get_short_name().to_string(),
                 is_home: true,
             });
@@ -170,7 +170,7 @@ pub async fn match_get_action(
             players_json.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
-                last_name: p.full_name.last_name.clone(),
+                last_name: p.full_name.display_last_name().to_string(),
                 position: p.position().get_short_name().to_string(),
                 is_home: true,
             });
@@ -186,7 +186,7 @@ pub async fn match_get_action(
             players_json.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
-                last_name: p.full_name.last_name.clone(),
+                last_name: p.full_name.display_last_name().to_string(),
                 position: p.position().get_short_name().to_string(),
                 is_home: false,
             });
@@ -200,7 +200,7 @@ pub async fn match_get_action(
             players_json.push(PlayerJson {
                 id: p.id,
                 shirt_number: number,
-                last_name: p.full_name.last_name.clone(),
+                last_name: p.full_name.display_last_name().to_string(),
                 position: p.position().get_short_name().to_string(),
                 is_home: false,
             });
@@ -222,7 +222,7 @@ pub async fn match_get_action(
         .map(|g| {
             let player_name = simulator_data
                 .player(g.player_id)
-                .map(|p| format!("{} {}", p.full_name.first_name, p.full_name.last_name))
+                .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
                 .unwrap_or_else(|| "Unknown".to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
@@ -247,7 +247,7 @@ pub async fn match_get_action(
         .map(|g| {
             let player_name = simulator_data
                 .player(g.player_id)
-                .map(|p| format!("{} {}", p.full_name.first_name, p.full_name.last_name))
+                .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
                 .unwrap_or_else(|| "Unknown".to_string());
             let minute = if result_details.match_time_ms > 0 {
                 (g.time * 90 / result_details.match_time_ms) as u32
@@ -373,7 +373,7 @@ fn to_match_player(player_id: u32, simulator_data: &SimulatorData) -> Option<Mat
     let player = simulator_data.player(player_id)?;
     Some(MatchPlayer {
         id: player.id,
-        last_name: player.full_name.last_name.clone(),
+        last_name: player.full_name.display_last_name().to_string(),
         position: player.position().get_short_name().to_string(),
         sub_minute: None,
         subbed_off_minute: None,

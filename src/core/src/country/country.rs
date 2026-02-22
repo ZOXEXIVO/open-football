@@ -1,5 +1,6 @@
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
+use crate::country::national_team::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::utils::Logging;
@@ -22,6 +23,8 @@ pub struct Country {
     pub reputation: u16,
     pub settings: CountrySettings,
     pub generator_data: CountryGeneratorData,
+
+    pub national_team: NationalTeam,
 
     pub transfer_market: TransferMarket,
     pub economic_factors: CountryEconomicFactors,
@@ -69,6 +72,11 @@ impl Country {
 
         // Phase 1: League Competitions
         let league_results = self.simulate_leagues(&ctx);
+
+        // Phase 1.5: National Team (international breaks)
+        let date = ctx.simulation.date.date();
+        let country_id = self.id;
+        self.national_team.simulate(&mut self.clubs, date, country_id);
 
         // Phase 2: Club Operations
         let clubs_results = self.simulate_clubs(&ctx);
@@ -259,11 +267,12 @@ pub struct CountryGeneratorData {
 }
 
 impl CountryGeneratorData {
-    pub fn new(first_names: Vec<String>, last_names: Vec<String>) -> Self {
+    pub fn new(first_names: Vec<String>, last_names: Vec<String>, nicknames: Vec<String>) -> Self {
         CountryGeneratorData {
             people_names: PeopleNameGeneratorData {
                 first_names,
                 last_names,
+                nicknames,
             },
         }
     }
@@ -273,6 +282,7 @@ impl CountryGeneratorData {
             people_names: PeopleNameGeneratorData {
                 first_names: Vec::new(),
                 last_names: Vec::new(),
+                nicknames: Vec::new(),
             },
         }
     }
@@ -281,4 +291,5 @@ impl CountryGeneratorData {
 pub struct PeopleNameGeneratorData {
     pub first_names: Vec<String>,
     pub last_names: Vec<String>,
+    pub nicknames: Vec<String>,
 }

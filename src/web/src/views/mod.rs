@@ -240,6 +240,50 @@ pub fn staff_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team
     team_menu(i18n, lang, neighbor_teams, team_slug, current_path, leagues)
 }
 
+pub fn country_menu(i18n: &I18n, lang: &str, _country_slug: &str, current_path: &str, country_leagues: &[(&str, &str)]) -> Vec<MenuSection> {
+    let mut sections = vec![
+        MenuSection {
+            items: vec![MenuItem {
+                title: i18n.t("home").to_string(),
+                url: format!("/{}", lang),
+                icon: "fa-home".to_string(),
+                active: false,
+            }],
+        },
+    ];
+
+    if !country_leagues.is_empty() {
+        sections.push(MenuSection {
+            items: country_leagues
+                .iter()
+                .map(|(name, slug)| {
+                    let url = format!("/{}/leagues/{}", lang, slug);
+                    let is_active = current_path == url || current_path.starts_with(&format!("{}/", url));
+                    MenuItem {
+                        active: is_active,
+                        title: name.to_string(),
+                        url,
+                        icon: "fa-trophy".to_string(),
+                    }
+                })
+                .collect(),
+        });
+
+        let first_league_slug = country_leagues[0].1;
+        let transfers_url = format!("/{}/leagues/{}/transfers", lang, first_league_slug);
+        sections.push(MenuSection {
+            items: vec![MenuItem {
+                active: current_path == transfers_url,
+                title: i18n.t("transfers").to_string(),
+                url: transfers_url,
+                icon: "fa-exchange".to_string(),
+            }],
+        });
+    }
+
+    sections
+}
+
 #[allow(dead_code)]
 pub fn match_menu(i18n: &I18n, lang: &str) -> Vec<MenuSection> {
     vec![MenuSection {

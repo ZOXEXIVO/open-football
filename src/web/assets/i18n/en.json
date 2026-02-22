@@ -289,5 +289,8 @@
     "wage": "Wage",
     "work_rate": "Work rate",
     "yc": "YC",
-    "years_old": "years old"
+    "years_old": "years old",
+    "int_apps": "Int Apps",
+    "int_goals": "Int Goals",
+    "no_squad": "No players called up"
 }

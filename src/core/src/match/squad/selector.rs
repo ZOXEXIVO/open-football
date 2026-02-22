@@ -37,6 +37,7 @@ impl SquadSelector {
                     && !p.player_attributes.is_banned
                     && !p.statuses.get().contains(&PlayerStatusType::Lst)
                     && !p.statuses.get().contains(&PlayerStatusType::Loa)
+                    && !p.statuses.get().contains(&PlayerStatusType::Int)
             })
             .copied()
             .collect();
@@ -46,6 +47,7 @@ impl SquadSelector {
                 && !rp.player_attributes.is_banned
                 && !rp.statuses.get().contains(&PlayerStatusType::Lst)
                 && !rp.statuses.get().contains(&PlayerStatusType::Loa)
+                && !rp.statuses.get().contains(&PlayerStatusType::Int)
                 && !available.iter().any(|p| p.id == rp.id)
             {
                 available.push(rp);

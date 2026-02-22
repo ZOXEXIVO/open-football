@@ -296,7 +296,7 @@ pub async fn player_transfers_action(
 
     let title = format!(
         "{} {}",
-        player.full_name.first_name, player.full_name.last_name
+        player.full_name.display_first_name(), player.full_name.display_last_name()
     );
 
     Ok(PlayerTransfersTemplate {

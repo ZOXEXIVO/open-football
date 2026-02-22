@@ -96,8 +96,8 @@ pub async fn team_stats_action(
         .iter()
         .map(|(p, _)| TeamPlayerStats {
             id: p.id,
-            last_name: p.full_name.last_name.clone(),
-            first_name: p.full_name.first_name.clone(),
+            last_name: p.full_name.display_last_name().to_string(),
+            first_name: p.full_name.display_first_name().to_string(),
             position: p.position().get_short_name().to_string(),
             played: p.statistics.played,
             played_subs: p.statistics.played_subs,

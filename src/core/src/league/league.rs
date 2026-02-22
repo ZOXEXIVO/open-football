@@ -259,6 +259,7 @@ impl League {
                     && !p.player_attributes.is_banned
                     && !statuses.contains(&PlayerStatusType::Lst)
                     && !statuses.contains(&PlayerStatusType::Loa)
+                    && !statuses.contains(&PlayerStatusType::Int)
             })
             .collect()
     }

@@ -5,18 +5,19 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use chrono::Datelike;
 use core::Country;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
-pub struct CountryGetRequest {
+pub struct CountryStaffRequest {
     lang: String,
     country_slug: String,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
-#[template(path = "countries/get/index.html")]
-pub struct CountryGetTemplate {
+#[template(path = "countries/staff/index.html")]
+pub struct CountryStaffTemplate {
     pub css_version: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
@@ -30,17 +31,22 @@ pub struct CountryGetTemplate {
     pub i18n: crate::I18n,
     pub lang: String,
     pub country_slug: String,
-    pub leagues: Vec<LeagueDto>,
+    pub staff: Vec<NationalStaffDto>,
 }
 
-pub struct LeagueDto {
-    pub slug: String,
-    pub name: String,
+pub struct NationalStaffDto {
+    pub first_name: String,
+    pub last_name: String,
+    pub role_key: String,
+    pub country_slug: String,
+    pub country_code: String,
+    pub country_name: String,
+    pub age: u8,
 }
 
-pub async fn country_get_action(
+pub async fn country_staff_action(
     State(state): State<GameAppData>,
-    Path(route_params): Path<CountryGetRequest>,
+    Path(route_params): Path<CountryStaffRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -70,20 +76,32 @@ pub async fn country_get_action(
         .continent(country.continent_id)
         .ok_or_else(|| ApiError::NotFound(format!("Continent with ID {} not found", country.continent_id)))?;
 
-    let leagues: Vec<LeagueDto> = country
-        .leagues
-        .leagues
+    let now = simulator_data.date.date();
+
+    let staff: Vec<NationalStaffDto> = country
+        .national_team
+        .staff
         .iter()
-        .map(|l| LeagueDto {
-            slug: l.slug.clone(),
-            name: l.name.clone(),
+        .map(|s| {
+            let staff_country = simulator_data.country(s.country_id);
+            let age = (now.year() - s.birth_year) as u8;
+
+            NationalStaffDto {
+                first_name: s.first_name.clone(),
+                last_name: s.last_name.clone(),
+                role_key: s.role.as_i18n_key().to_string(),
+                country_slug: staff_country.map(|c| c.slug.clone()).unwrap_or_default(),
+                country_code: staff_country.map(|c| c.code.clone()).unwrap_or_default(),
+                country_name: staff_country.map(|c| c.name.clone()).unwrap_or_default(),
+                age,
+            }
         })
         .collect();
 
-    let current_path = format!("/{}/countries/{}/leagues", route_params.lang, route_params.country_slug);
+    let current_path = format!("/{}/countries/{}/staff", route_params.lang, route_params.country_slug);
     let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().map(|l| (l.name.as_str(), l.slug.as_str())).collect();
 
-    Ok(CountryGetTemplate {
+    Ok(CountryStaffTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: country.name.clone(),
         sub_title_prefix: String::new(),
@@ -97,6 +115,6 @@ pub async fn country_get_action(
         lang: route_params.lang,
         i18n,
         country_slug: route_params.country_slug,
-        leagues,
+        staff,
     })
 }

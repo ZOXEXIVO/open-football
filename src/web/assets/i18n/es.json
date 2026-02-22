@@ -289,5 +289,8 @@
     "wage": "Salario",
     "work_rate": "Capacidad de trabajo",
     "yc": "TA",
-    "years_old": "años"
+    "years_old": "años",
+    "int_apps": "Int Apps",
+    "int_goals": "Int Goles",
+    "no_squad": "No hay jugadores convocados"
 }

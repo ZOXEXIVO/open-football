@@ -1,3 +1,4 @@
+use crate::country::national_team::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings, InternationalCompetition, MediaCoverage};
@@ -18,6 +19,7 @@ pub struct CountryBuilder {
     generator_data: Option<CountryGeneratorData>,
     transfer_market: Option<TransferMarket>,
     economic_factors: Option<CountryEconomicFactors>,
+    national_team: Option<NationalTeam>,
     international_competitions: Option<Vec<InternationalCompetition>>,
     media_coverage: Option<MediaCoverage>,
     regulations: Option<CountryRegulations>,
@@ -108,14 +110,23 @@ impl CountryBuilder {
         self
     }
 
+    pub fn national_team(mut self, national_team: NationalTeam) -> Self {
+        self.national_team = Some(national_team);
+        self
+    }
+
     pub fn regulations(mut self, regulations: CountryRegulations) -> Self {
         self.regulations = Some(regulations);
         self
     }
 
     pub fn build(self) -> Result<Country, String> {
+        let id = self.id.ok_or("id is required")?;
+        let generator_data = self.generator_data.unwrap_or_else(CountryGeneratorData::empty);
+        let national_team = self.national_team
+            .unwrap_or_else(|| NationalTeam::new(id, &generator_data.people_names));
         Ok(Country {
-            id: self.id.ok_or("id is required")?,
+            id,
             code: self.code.ok_or("code is required")?,
             slug: self.slug.ok_or("slug is required")?,
             name: self.name.ok_or("name is required")?,
@@ -126,7 +137,8 @@ impl CountryBuilder {
             clubs: self.clubs.ok_or("clubs is required")?,
             reputation: self.reputation.unwrap_or(500), // Default reputation
             settings: self.settings.unwrap_or_default(),
-            generator_data: self.generator_data.unwrap_or_else(CountryGeneratorData::empty),
+            generator_data,
+            national_team,
             transfer_market: self.transfer_market.unwrap_or_else(TransferMarket::new),
             economic_factors: self.economic_factors.unwrap_or_else(CountryEconomicFactors::new),
             international_competitions: self.international_competitions.unwrap_or_default(),

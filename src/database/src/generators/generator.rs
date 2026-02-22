@@ -1,6 +1,7 @@
 use crate::generators::{PlayerGenerator, PositionType, StaffGenerator};
 use crate::loaders::ContinentEntity;
-use crate::DatabaseEntity;
+use crate::{DatabaseEntity, ForeignPlayerEntry};
+use core::PeopleNameGeneratorData;
 use chrono::{NaiveDate, NaiveDateTime};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
@@ -54,6 +55,7 @@ impl DatabaseGenerator {
                     Some(names) => CountryGeneratorData::new(
                         names.first_names.clone(),
                         names.last_names.clone(),
+                        names.nicknames.clone(),
                     ),
                     None => CountryGeneratorData::empty(),
                 };
@@ -177,6 +179,8 @@ impl DatabaseGenerator {
                                     country_id,
                                     team_rep,
                                     &TeamType::from_str(&t.team_type).unwrap(),
+                                    t.league_id,
+                                    data,
                                 )))
                                 .staffs(StaffCollection::new(
                                     Self::generate_staffs(staff_generator, country_id, team_rep, &TeamType::from_str(&t.team_type).unwrap())
@@ -190,7 +194,14 @@ impl DatabaseGenerator {
             .collect()
     }
 
-    fn generate_players(player_generator: &mut PlayerGenerator, country_id: u32, team_reputation: u16, team_type: &TeamType) -> Vec<Player> {
+    fn generate_players(
+        player_generator: &mut PlayerGenerator,
+        country_id: u32,
+        team_reputation: u16,
+        team_type: &TeamType,
+        league_id: Option<u32>,
+        data: &DatabaseEntity,
+    ) -> Vec<Player> {
         let mut players = Vec::with_capacity(100);
 
         // Age range based on team type
@@ -206,26 +217,56 @@ impl DatabaseGenerator {
 
         let is_youth = matches!(team_type, TeamType::U18 | TeamType::U19);
 
-        let mut goalkeepers: Vec<Player> = (0..IntegerUtils::random(3, 5))
-            .map(|_| player_generator.generate(country_id, PositionType::Goalkeeper, team_reputation, min_age, max_age, is_youth))
-            .collect();
+        let foreign_players: &[ForeignPlayerEntry] = league_id
+            .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+            .map(|l| l.foreign_players.as_slice())
+            .unwrap_or(&[]);
 
-        let mut defenders: Vec<Player> = (0..IntegerUtils::random(4, 8))
-            .map(|_| player_generator.generate(country_id, PositionType::Defender, team_reputation, min_age, max_age, is_youth))
-            .collect();
+        let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
 
-        let mut midfielders: Vec<Player> = (0..IntegerUtils::random(7, 11))
-            .map(|_| player_generator.generate(country_id, PositionType::Midfielder, team_reputation, min_age, max_age, is_youth))
-            .collect();
+        let mut generate_one = |pos: PositionType| -> Player {
+            if total_foreign_weight > 0 {
+                let roll = IntegerUtils::random(0, 100);
+                if roll < total_foreign_weight {
+                    // Pick a foreign country via weighted random walk
+                    let mut acc = 0i32;
+                    for fp in foreign_players {
+                        acc += fp.weight as i32;
+                        if roll < acc {
+                            let names = data.names_by_country.iter().find(|n| n.country_id == fp.country_id);
+                            let people_names = match names {
+                                Some(n) => PeopleNameGeneratorData {
+                                    first_names: n.first_names.clone(),
+                                    last_names: n.last_names.clone(),
+                                    nicknames: n.nicknames.clone(),
+                                },
+                                None => PeopleNameGeneratorData {
+                                    first_names: Vec::new(),
+                                    last_names: Vec::new(),
+                                    nicknames: Vec::new(),
+                                },
+                            };
+                            let mut foreign_gen = PlayerGenerator::with_people_names(&people_names);
+                            return foreign_gen.generate(fp.country_id, pos, team_reputation, min_age, max_age, is_youth);
+                        }
+                    }
+                }
+            }
+            player_generator.generate(country_id, pos, team_reputation, min_age, max_age, is_youth)
+        };
 
-        let mut strikers: Vec<Player> = (0..IntegerUtils::random(2, 5))
-            .map(|_| player_generator.generate(country_id, PositionType::Striker, team_reputation, min_age, max_age, is_youth))
-            .collect();
-
-        players.append(&mut goalkeepers);
-        players.append(&mut defenders);
-        players.append(&mut midfielders);
-        players.append(&mut strikers);
+        for _ in 0..IntegerUtils::random(3, 5) {
+            players.push(generate_one(PositionType::Goalkeeper));
+        }
+        for _ in 0..IntegerUtils::random(4, 8) {
+            players.push(generate_one(PositionType::Defender));
+        }
+        for _ in 0..IntegerUtils::random(7, 11) {
+            players.push(generate_one(PositionType::Midfielder));
+        }
+        for _ in 0..IntegerUtils::random(2, 5) {
+            players.push(generate_one(PositionType::Striker));
+        }
 
         players
     }

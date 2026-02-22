@@ -24,6 +24,7 @@ impl StaffGenerator {
             people_names_data: PeopleNameGeneratorData {
                 first_names: people_names.first_names.clone(),
                 last_names: people_names.last_names.clone(),
+                nicknames: people_names.nicknames.clone(),
             },
         }
     }

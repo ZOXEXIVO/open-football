@@ -7,6 +7,8 @@ pub struct NamesByCountryEntity {
     pub country_id: u32,
     pub first_names: Vec<String>,
     pub last_names: Vec<String>,
+    #[serde(default)]
+    pub nicknames: Vec<String>,
 }
 
 pub struct NamesByCountryLoader;

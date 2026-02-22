@@ -18,7 +18,16 @@
         "to_day": 28,
         "to_month": 5
       }
-    }
+    },
+    "foreign_players": [
+      {"country_id": 1649, "weight": 8},
+      {"country_id": 1651, "weight": 6},
+      {"country_id": 769, "weight": 2},
+      {"country_id": 771, "weight": 1},
+      {"country_id": 765, "weight": 1},
+      {"country_id": 791, "weight": 1},
+      {"country_id": 796, "weight": 1}
+    ]
   },
   {
     "id": 33,
@@ -39,6 +48,14 @@
         "to_day": 11,
         "to_month": 6
       }
-    }
+    },
+    "foreign_players": [
+      {"country_id": 1649, "weight": 4},
+      {"country_id": 1651, "weight": 3},
+      {"country_id": 769, "weight": 3},
+      {"country_id": 771, "weight": 1},
+      {"country_id": 765, "weight": 1},
+      {"country_id": 791, "weight": 1}
+    ]
   }
 ]

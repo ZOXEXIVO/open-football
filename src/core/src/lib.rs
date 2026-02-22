@@ -110,6 +110,7 @@ pub use country::{
     CountryEconomicFactors, InternationalCompetition, MediaCoverage,
     MediaStory, StoryType, CountryRegulations, CountryGeneratorData,
     PeopleNameGeneratorData, CountrySettings, CountryPricing,
+    NationalTeam, NationalTeamStaffMember, NationalTeamStaffRole,
 };
 
 // Namespace conflicting CompetitionType enums

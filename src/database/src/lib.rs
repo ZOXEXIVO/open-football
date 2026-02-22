@@ -3,7 +3,7 @@ mod loaders;
 
 pub use loaders::{
     ClubEntity, ClubLoader, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
-    LeagueEntity, LeagueLoader, NamesByCountryEntity, NamesByCountryLoader,
+    ForeignPlayerEntry, LeagueEntity, LeagueLoader, NamesByCountryEntity, NamesByCountryLoader,
 };
 
 pub use generators::DatabaseGenerator;

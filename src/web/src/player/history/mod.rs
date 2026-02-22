@@ -248,7 +248,7 @@ pub async fn player_history_action(
         average_rating: format!("{:.2}", player.statistics.average_rating),
     };
 
-    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
+    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
     let sim_date = simulator_data.date.date();
     let year = sim_date.year();

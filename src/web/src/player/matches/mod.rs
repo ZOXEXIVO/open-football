@@ -121,7 +121,7 @@ pub async fn player_matches_action(
         })
         .collect();
 
-    let title = format!("{} {}", player.full_name.first_name, player.full_name.last_name);
+    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
     Ok(PlayerMatchesTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
