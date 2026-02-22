@@ -54,7 +54,7 @@ impl Continent {
         // Phase 1+: Simulate all child entities and accumulate results
         let country_results = self.simulate_countries(&ctx);
 
-        info!("✅ Continent {} simulation complete", continent_name);
+        debug!("✅ Continent {} simulation complete", continent_name);
 
         ContinentResult::new(country_results)
     }
@@ -96,7 +96,7 @@ impl Continent {
             .collect();
 
         // Step 2: Run all match engines in parallel
-        let engine_results: Vec<(usize, u8, u8, HashMap<u32, u16>)> = prepared
+        let engine_results: Vec<(usize, u8, u8, HashMap<u32, u16>)> =  prepared
             .into_par_iter()
             .map(|(idx, home_squad, away_squad)| {
                 let (home_score, away_score, player_goals) =
@@ -133,7 +133,7 @@ impl Continent {
             );
 
             // Update player stats in clubs
-            self.update_player_international_stats(&player_goals);
+            self.update_player_international_stats(home_country_id, away_country_id, &player_goals);
 
             // Update Elo ratings for both national teams
             let away_elo = self.get_country_elo(away_country_id);
@@ -192,14 +192,20 @@ impl Continent {
             return;
         }
 
-        // Step 2: Run all match engines in parallel
-        let engine_results: Vec<(usize, usize, crate::r#match::MatchResultRaw)> = prepared
-            .into_par_iter()
-            .map(|(country_idx, fixture_idx, home_squad, away_squad)| {
-                let result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode());
-                (country_idx, fixture_idx, result)
-            })
-            .collect();
+        // Step 2: Run all match engines in parallel (limited to 4 threads)
+        let pool = rayon::ThreadPoolBuilder::new()
+            .num_threads(4)
+            .build()
+            .unwrap();
+        let engine_results: Vec<(usize, usize, crate::r#match::MatchResultRaw)> = pool.install(|| {
+            prepared
+                .into_par_iter()
+                .map(|(country_idx, fixture_idx, home_squad, away_squad)| {
+                    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode());
+                    (country_idx, fixture_idx, result)
+                })
+                .collect()
+        });
 
         // Step 3: Apply results sequentially
         for (country_idx, fixture_idx, match_result) in &engine_results {
@@ -243,12 +249,15 @@ impl Continent {
     }
 
     /// Update player international stats after a competition match
-    fn update_player_international_stats(&mut self, player_goals: &HashMap<u32, u16>) {
+    fn update_player_international_stats(&mut self, home_country_id: u32, away_country_id: u32, player_goals: &HashMap<u32, u16>) {
         for country in &mut self.countries {
+            if country.id != home_country_id && country.id != away_country_id {
+                continue;
+            }
+
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     for player in &mut team.players.players {
-                        // Check if player was in any national squad
                         if country.national_team.squad.iter().any(|s| s.player_id == player.id) {
                             player.player_attributes.international_apps += 1;
 

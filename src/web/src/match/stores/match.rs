@@ -118,7 +118,7 @@ impl MatchStore {
         let chunks = data.split_into_chunks(CHUNK_DURATION_MS);
         let chunk_count = chunks.len();
 
-        info!("Storing {} chunks for match {}", chunk_count, match_id);
+        debug!("Storing {} chunks for match {}", chunk_count, match_id);
 
         // Store each chunk
         for (idx, chunk) in chunks.iter().enumerate() {

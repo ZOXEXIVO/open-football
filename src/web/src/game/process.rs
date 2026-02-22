@@ -31,9 +31,11 @@ pub async fn game_process_action(
         for _ in 0..days {
             let result = FootballSimulator::simulate(simulator_data);
             if result.has_match_results() {
-                tokio::task::spawn(async {
-                    write_match_results(result).await
-                });
+                if core::is_match_recordings_mode() {
+                    tokio::task::spawn(async {
+                        write_match_results(result).await
+                    });
+                }
 
                 simulator_data.match_played = true;
             }

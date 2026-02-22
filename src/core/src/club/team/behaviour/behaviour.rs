@@ -113,7 +113,7 @@ impl TeamBehaviour {
         // Playing time complaints (player-initiated requests)
         Self::process_playing_time_complaints(players, staffs, &mut result, &ctx);
 
-        info!(
+        debug!(
             "Full team behaviour update complete - {} relationship changes, {} manager talks",
             result.players.relationship_result.len(),
             result.manager_talks.len()
@@ -157,7 +157,7 @@ impl TeamBehaviour {
             }
         }
 
-        info!(
+        debug!(
             "Happy: {} | Neutral: {} | Unhappy: {}",
             happy_players, neutral_players, unhappy_players
         );
@@ -1014,7 +1014,7 @@ impl TeamBehaviour {
             (ManagerTalkType::LoanRequest, false) => (-3.0, -0.1),
         };
 
-        info!(
+        debug!(
             "Manager talk: {} with player {} - type {:?}, success: {}",
             manager.full_name, player.full_name, talk_type, actual_success
         );
