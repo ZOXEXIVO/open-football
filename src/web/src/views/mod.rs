@@ -11,9 +11,35 @@ pub struct MenuItem {
     pub active: bool,
 }
 
+pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    vec![
+        MenuSection {
+            items: vec![MenuItem {
+                title: i18n.t("home").to_string(),
+                url: format!("/{}", lang),
+                icon: "fa-home".to_string(),
+                active: false,
+            }],
+        },
+        watchlist_section(i18n, lang, current_path),
+    ]
+}
+
+fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
+    let watchlist_url = format!("/{}/watchlist", lang);
+    MenuSection {
+        items: vec![MenuItem {
+            active: current_path == watchlist_url,
+            title: i18n.t("watchlist").to_string(),
+            url: watchlist_url,
+            icon: "fa-eye".to_string(),
+        }],
+    }
+}
+
 pub fn league_menu(i18n: &I18n, lang: &str, country_name: &str, country_slug: &str, league_slug: &str, current_path: &str, country_leagues: &[(&str, &str)]) -> Vec<MenuSection> {
     let transfers_url = format!("/{}/leagues/{}/transfers", lang, league_slug);
-    vec![
+    let mut sections = vec![
         MenuSection {
             items: vec![MenuItem {
                 title: i18n.t("home").to_string(),
@@ -53,7 +79,9 @@ pub fn league_menu(i18n: &I18n, lang: &str, country_name: &str, country_slug: &s
                 icon: "fa-exchange".to_string(),
             }],
         },
-    ]
+    ];
+    sections.push(watchlist_section(i18n, lang, current_path));
+    sections
 }
 
 pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)]) -> Vec<MenuSection> {
@@ -142,6 +170,8 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
             },
         ],
     });
+
+    sections.push(watchlist_section(i18n, lang, current_path));
 
     sections
 }
@@ -233,6 +263,8 @@ pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], tea
         ],
     });
 
+    sections.push(watchlist_section(i18n, lang, current_path));
+
     sections
 }
 
@@ -281,17 +313,21 @@ pub fn country_menu(i18n: &I18n, lang: &str, _country_slug: &str, current_path: 
         });
     }
 
+    sections.push(watchlist_section(i18n, lang, current_path));
+
     sections
 }
 
 #[allow(dead_code)]
-pub fn match_menu(i18n: &I18n, lang: &str) -> Vec<MenuSection> {
-    vec![MenuSection {
+pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    let mut sections = vec![MenuSection {
         items: vec![MenuItem {
             title: i18n.t("home").to_string(),
             url: format!("/{}", lang),
             icon: "fa-home".to_string(),
             active: false,
         }],
-    }]
+    }];
+    sections.push(watchlist_section(i18n, lang, current_path));
+    sections
 }

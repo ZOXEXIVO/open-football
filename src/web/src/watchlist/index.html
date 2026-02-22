@@ -1,0 +1,114 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("watchlist") }}</h3>
+        </div>
+        {% if players.is_empty() %}
+        <div style="padding: 20px 14px; color: #546a78; font-size: 13px;">
+            {{ i18n.t("no_watchlist_players") }}
+        </div>
+        {% else %}
+        <table class="fm-squad fm-watchlist-table">
+            <thead>
+                <tr>
+                    <th class="wl-pos">{{ i18n.t("position") }}</th>
+                    <th class="wl-status">{{ i18n.t("status") }}</th>
+                    <th class="wl-name">{{ i18n.t("name") }}</th>
+                    <th class="wl-nat">{{ i18n.t("nat") }}</th>
+                    <th class="wl-age">{{ i18n.t("age") }}</th>
+                    <th class="wl-team">{{ i18n.t("team") }}</th>
+                    <th class="wl-league">{{ i18n.t("league") }}</th>
+                    <th class="wl-ability">{{ i18n.t("ability") }}</th>
+                    <th class="wl-potential">{{ i18n.t("potential") }}</th>
+                    <th class="wl-cond">{{ i18n.t("condition") }}</th>
+                    <th class="wl-apps">{{ i18n.t("apps") }}</th>
+                    <th class="wl-value">{{ i18n.t("value") }}</th>
+                    <th class="wl-actions"></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for player in players %}
+                <tr>
+                    <td class="wl-pos">{{ player.position }}</td>
+                    <td class="wl-status">
+                        <div class="fm-badge-deck">
+                            {% if player.injured %}
+                            <span class="fm-badge fm-badge-inj">{{ i18n.t("inj") }}</span>
+                            {% endif %}
+                            {% if player.unhappy %}
+                            <span class="fm-badge fm-badge-unh">{{ i18n.t("unh") }}</span>
+                            {% endif %}
+                            {% if player.transfer_listed %}
+                            <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
+                            {% endif %}
+                        </div>
+                    </td>
+                    <td class="wl-name">
+                        <a href="/{{ lang }}/players/{{ player.id }}">
+                            {{ player.last_name }}&nbsp;{{ player.first_name }}
+                        </a>
+                    </td>
+                    <td class="wl-nat">
+                        <a href="/{{ lang }}/countries/{{ player.country_slug }}">
+                            <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
+                        </a>
+                    </td>
+                    <td class="wl-age">{{ player.age }}</td>
+                    <td class="wl-team">
+                        <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a>
+                    </td>
+                    <td class="wl-league">
+                        {% if !player.league_slug.is_empty() %}
+                        <a href="/{{ lang }}/leagues/{{ player.league_slug }}">{{ player.league_name }}</a>
+                        {% endif %}
+                    </td>
+                    <td class="wl-ability">
+                        <div class="fm-stars">
+                            {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}
+                        </div>
+                    </td>
+                    <td class="wl-potential">
+                        <div class="fm-stars">
+                            {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
+                        </div>
+                    </td>
+                    <td class="wl-cond">
+                        <div class="fm-cond">
+                            <div class="fm-cond-bar"><div class="fm-cond-fill" style="width:{{ player.conditions }}%"></div></div>
+                            <span class="fm-cond-val">{{ player.conditions }}%</span>
+                        </div>
+                    </td>
+                    <td class="wl-apps">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
+                    <td class="wl-value">{{ player.value }}</td>
+                    <td class="wl-actions">
+                        <button class="fm-watchlist-remove" data-player-id="{{ player.id }}" title="{{ i18n.t("remove_from_watchlist") }}">
+                            <i class="fa fa-times"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    document.querySelectorAll('.fm-watchlist-remove').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var playerId = this.dataset.playerId;
+            fetch('/api/watchlist/remove/' + playerId, { method: 'POST' })
+                .then(function() { location.reload(); });
+        });
+    });
+
+})();
+</script>
+<script src="/js/badge-deck.js"></script>
+{% endblock %}

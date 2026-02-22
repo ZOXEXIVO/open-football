@@ -11,6 +11,7 @@ mod routes;
 mod staff;
 mod teams;
 mod views;
+mod watchlist;
 mod common;
 
 pub use error::{ApiError, ApiResult};

@@ -292,5 +292,9 @@
     "years_old": "years old",
     "int_apps": "Int Apps",
     "int_goals": "Int Goals",
-    "no_squad": "No players called up"
+    "no_squad": "No players called up",
+    "watchlist": "Watch List",
+    "add_to_watchlist": "Add to Watch List",
+    "remove_from_watchlist": "Remove from Watch List",
+    "no_watchlist_players": "No players in watch list"
 }

@@ -292,5 +292,9 @@
     "years_old": "лет",
     "int_apps": "Матчи сб.",
     "int_goals": "Голы сб.",
-    "no_squad": "Нет вызванных игроков"
+    "no_squad": "Нет вызванных игроков",
+    "watchlist": "Список наблюдения",
+    "add_to_watchlist": "Добавить в список",
+    "remove_from_watchlist": "Убрать из списка",
+    "no_watchlist_players": "Нет игроков в списке наблюдения"
 }

@@ -8,6 +8,7 @@ use crate::player::player_routes;
 use crate::r#match::routes::match_routes;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
+use crate::watchlist::watchlist_routes;
 use crate::GameAppData;
 use axum::http::header::ACCEPT_LANGUAGE;
 use axum::http::HeaderMap;
@@ -40,6 +41,7 @@ impl ServerRoutes {
             .merge(match_routes())
             .merge(current_date_routes())
             .merge(face_routes())
+            .merge(watchlist_routes())
             .fallback(default_handler)
     }
 }

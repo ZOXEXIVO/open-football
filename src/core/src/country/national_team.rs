@@ -102,6 +102,9 @@ const MIN_REAL_PLAYERS: usize = 16;
 /// Default squad call-up size
 const SQUAD_SIZE: usize = 23;
 
+/// Minimum country reputation to simulate friendlies (skips ~147 small nations)
+const MIN_REPUTATION_FOR_FRIENDLIES: u16 = 4000;
+
 /// Positions template for generating a balanced synthetic squad
 const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
     PlayerPositionType::Goalkeeper,
@@ -182,6 +185,10 @@ impl NationalTeam {
 
     /// Main simulation entry point — called each day from Country::simulate
     pub fn simulate(&mut self, clubs: &mut [Club], date: NaiveDate, country_id: u32) {
+        if self.reputation < MIN_REPUTATION_FOR_FRIENDLIES {
+            return;
+        }
+
         // Handle international break call-ups
         if Self::is_break_start(date) {
             self.call_up_squad(clubs, date, country_id);

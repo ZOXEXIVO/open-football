@@ -38,6 +38,7 @@ pub struct TeamGetTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
     pub players: Vec<TeamPlayer>,
+    pub watchlist_ids: Vec<u32>,
 }
 
 pub struct TeamPlayer {
@@ -240,6 +241,8 @@ pub async fn team_get_action(
     let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs);
     let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };
 
+    let watchlist_ids = simulator_data.watchlist.clone();
+
     Ok(TeamGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         i18n,
@@ -255,6 +258,7 @@ pub async fn team_get_action(
         menu_sections,
         team_slug: team.slug.clone(),
         players,
+        watchlist_ids,
     })
 }
 

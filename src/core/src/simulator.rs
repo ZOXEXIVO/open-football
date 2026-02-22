@@ -48,7 +48,9 @@ pub struct SimulatorData {
 
     pub indexes: Option<SimulatorDataIndexes>,
 
-    pub match_played: bool
+    pub match_played: bool,
+
+    pub watchlist: Vec<u32>,
 }
 
 impl SimulatorData {
@@ -58,7 +60,8 @@ impl SimulatorData {
             date,
             transfer_pool: TransferPool::new(),
             indexes: None,
-            match_played: false
+            match_played: false,
+            watchlist: Vec::new(),
         };
 
         let mut indexes = SimulatorDataIndexes::new();

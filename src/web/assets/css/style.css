@@ -3148,3 +3148,96 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     line-height: 12px;
   }
 }
+
+/* ============================================
+   CONTEXT MENU & WATCHLIST
+   ============================================ */
+
+.fm-ctx-menu {
+  position: absolute;
+  z-index: 9999;
+  background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+  border: 1px solid #263340;
+  border-radius: 4px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+  min-width: 180px;
+  padding: 4px 0;
+}
+
+.fm-ctx-item {
+  padding: 8px 14px;
+  font-size: 12px;
+  color: #b0bac2;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+}
+
+.fm-ctx-item:hover {
+  background: rgba(74, 157, 91, 0.15);
+  color: #fff;
+}
+
+.fm-ctx-item i {
+  margin-right: 8px;
+  width: 14px;
+  text-align: center;
+  color: #4a9d5b;
+}
+
+.fm-watchlist-remove {
+  background: none;
+  border: none;
+  color: #4e5a63;
+  cursor: pointer;
+  padding: 4px 8px;
+  font-size: 12px;
+  border-radius: 3px;
+  transition: color 0.1s, background 0.1s;
+}
+
+.fm-watchlist-remove:hover {
+  color: #e74c3c;
+  background: rgba(231, 76, 60, 0.12);
+}
+
+.fm-watchlist-table { width: 100%; }
+
+/* fixed-size columns */
+.fm-watchlist-table .wl-pos { width: 3em; color: #7a868e; font-size: 12px; white-space: nowrap; text-align: center; }
+.fm-watchlist-table .wl-status { width: 5em; text-align: center; }
+.fm-watchlist-table .wl-nat { width: 6em; }
+.fm-watchlist-table .wl-age { width: 6em; text-align: center; }
+.fm-watchlist-table .wl-ability { width: 5.5em; }
+.fm-watchlist-table .wl-potential { width: 5.5em; }
+.fm-watchlist-table .wl-cond { width: 8em; }
+.fm-watchlist-table .wl-apps { width: 4em; text-align: center; }
+.fm-watchlist-table .wl-value { width: 5em; text-align: center; }
+.fm-watchlist-table .wl-actions { width: 2em; text-align: center; }
+
+/* stretch columns */
+.fm-watchlist-table .wl-name { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fm-watchlist-table .wl-name a { font-weight: 500; }
+.fm-watchlist-table .wl-league { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.fm-watchlist-table .wl-league a { color: #7a868e; font-size: 12px; }
+.fm-watchlist-table .wl-league a:hover { color: #fff; }
+.fm-watchlist-table .wl-team { max-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; }
+.fm-watchlist-table .wl-team a { font-weight: 500; }
+
+@media (max-width: 1199.98px) {
+  .fm-watchlist-table .wl-cond,
+  .fm-watchlist-table thead .wl-cond,
+  .fm-watchlist-table .wl-value,
+  .fm-watchlist-table thead .wl-value { display: none; }
+}
+
+@media (max-width: 767.98px) {
+  .fm-watchlist-table .wl-ability,
+  .fm-watchlist-table .wl-potential,
+  .fm-watchlist-table .wl-league,
+  .fm-watchlist-table .wl-apps,
+  .fm-watchlist-table thead .wl-ability,
+  .fm-watchlist-table thead .wl-potential,
+  .fm-watchlist-table thead .wl-league,
+  .fm-watchlist-table thead .wl-apps { display: none; }
+}

@@ -147,11 +147,22 @@ const REQUIRED_POSITION_LEVEL: u8 = 15;
 
 impl PlayerPositions {
     pub fn positions(&self) -> Vec<PlayerPositionType> {
-        self.positions
+        let filtered: Vec<PlayerPositionType> = self
+            .positions
             .iter()
             .filter(|p| p.level >= REQUIRED_POSITION_LEVEL)
             .map(|p| p.position)
-            .collect()
+            .collect();
+
+        if filtered.is_empty() {
+            self.positions
+                .iter()
+                .max_by_key(|p| p.level)
+                .map(|p| vec![p.position])
+                .unwrap_or_default()
+        } else {
+            filtered
+        }
     }
 
     pub fn display_positions(&self) -> Vec<&str> {
