@@ -122,7 +122,7 @@ impl DatabaseGenerator {
                     },
                 };
                 
-                League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, 0, settings)                 
+                League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings)
             })
             .collect()
     }
