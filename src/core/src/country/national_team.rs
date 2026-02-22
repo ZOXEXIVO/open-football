@@ -1097,8 +1097,8 @@ impl NationalTeam {
     pub fn play_competition_match(
         home_squad: MatchSquad,
         away_squad: MatchSquad,
-    ) -> (u8, u8, std::collections::HashMap<u32, u16>) {
-        let match_result = FootballEngine::<840, 545>::play(home_squad, away_squad, false);
+    ) -> (u8, u8, HashMap<u32, u16>) {
+        let match_result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode());
 
         let score = match_result
             .score
@@ -1108,7 +1108,7 @@ impl NationalTeam {
         let away_score = score.away_team.get();
 
         // Collect player goals
-        let player_goals: std::collections::HashMap<u32, u16> = match_result
+        let player_goals: HashMap<u32, u16> = match_result
             .player_stats
             .iter()
             .filter(|(_, stats)| stats.goals > 0)

@@ -29,10 +29,6 @@ pub async fn game_process_action(
         let simulator_data = simulator_data_guard.as_mut().unwrap();
 
         for _ in 0..days {
-            if state.is_one_shot_game && simulator_data.match_played {
-                return;
-            }
-
             let result = FootballSimulator::simulate(simulator_data);
             if result.has_match_results() {
                 tokio::task::spawn(async {

@@ -21,23 +21,22 @@ async fn main() {
         info!("Debug mode enabled - match events will be recorded");
     }
 
-    let is_one_shot_game = env::var("MODE") == Ok(String::from("ONESHOT"));
+    let is_match_recordings_disabled = env::var("MATCH_RECORDINGS") == Ok(String::from("false"));
+    if is_match_recordings_disabled {
+        core::set_match_recordings_mode(false);
+        info!("Match recordings mode disabled");
+    }
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
 
     info!("database loaded: {} ms", estimated);
-
-    if is_one_shot_game {
-        info!("one shot game started");
-    }
 
     let game_data = DatabaseGenerator::generate(&database);
 
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(game_data))),
-        i18n: Arc::new(I18nManager::new()),
-        is_one_shot_game,
+        i18n: Arc::new(I18nManager::new())
     };
     
     FootballSimulatorServer::new(data).run().await;

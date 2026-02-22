@@ -35,7 +35,7 @@ impl Match {
         let away_team_id = self.away_squad.team_id;
         let away_team_name = String::from(&self.away_squad.team_name);
 
-        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, true);
+        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, crate::is_match_recordings_mode());
 
         let score = match_result.score.as_ref().expect("no score");
 

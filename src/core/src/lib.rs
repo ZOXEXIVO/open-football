@@ -1,6 +1,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
+static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(true);
 
 pub fn set_match_events_mode(enabled: bool) {
     STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);
@@ -8,6 +9,14 @@ pub fn set_match_events_mode(enabled: bool) {
 
 pub fn is_match_events_mode() -> bool {
     STORE_MATCH_EVENTS_MODE.load(Ordering::SeqCst)
+}
+
+pub fn set_match_recordings_mode(enabled: bool) {
+    MATCH_RECORDINGS_MODE.store(enabled, Ordering::SeqCst);
+}
+
+pub fn is_match_recordings_mode() -> bool {
+    MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
 }
 
 pub mod simulator;

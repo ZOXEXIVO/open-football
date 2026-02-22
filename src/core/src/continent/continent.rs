@@ -196,7 +196,7 @@ impl Continent {
         let engine_results: Vec<(usize, usize, crate::r#match::MatchResultRaw)> = prepared
             .into_par_iter()
             .map(|(country_idx, fixture_idx, home_squad, away_squad)| {
-                let result = FootballEngine::<840, 545>::play(home_squad, away_squad, false);
+                let result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode());
                 (country_idx, fixture_idx, result)
             })
             .collect();
