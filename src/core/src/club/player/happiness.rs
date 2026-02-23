@@ -38,6 +38,7 @@ pub enum HappinessEventType {
     SquadStatusChange,
     LackOfPlayingTime,
     LoanListingAccepted,
+    PlayerOfTheMatch,
 }
 
 impl PlayerHappiness {

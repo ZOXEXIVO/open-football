@@ -40,15 +40,15 @@ impl LeagueResult {
 
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         if let Some(match_results) = self.match_results {
-            for match_result in match_results {
-                Self::process_match_results(&match_result, data);
+            for mut match_result in match_results {
+                Self::process_match_results(&mut match_result, data);
 
                 result.match_results.push(match_result);
             }
         }
     }
 
-    fn process_match_results(result: &MatchResult, data: &mut SimulatorData) {
+    fn process_match_results(result: &mut MatchResult, data: &mut SimulatorData) {
         let now = data.date;
 
         let league = data.league_mut(result.league_id).unwrap();
@@ -81,7 +81,7 @@ impl LeagueResult {
         Self::process_match_events(result, data);
     }
 
-    fn process_match_events(result: &MatchResult, data: &mut SimulatorData) {
+    fn process_match_events(result: &mut MatchResult, data: &mut SimulatorData) {
         let details = match &result.details {
             Some(d) => d,
             None => return,
@@ -166,6 +166,7 @@ impl LeagueResult {
         if let Some(motm_id) = best_player_id {
             if let Some(player) = data.player_mut(motm_id) {
                 player.statistics.player_of_the_match += 1;
+                player.happiness.add_event(HappinessEventType::PlayerOfTheMatch, 4.0);
             }
         }
 
@@ -208,6 +209,11 @@ impl LeagueResult {
 
         // Apply physical effects from match participation
         Self::apply_post_match_physical_effects(details, data);
+
+        // Save PoM to match result
+        if let Some(details_mut) = &mut result.details {
+            details_mut.player_of_the_match_id = best_player_id;
+        }
     }
 
     fn apply_post_match_physical_effects(details: &MatchResultRaw, data: &mut SimulatorData) {

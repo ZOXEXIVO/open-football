@@ -53,6 +53,8 @@ pub struct MatchGetTemplate {
     pub home_color_foreground: String,
     pub away_color_background: String,
     pub away_color_foreground: String,
+    pub player_of_the_match_id: u32,
+    pub player_of_the_match_name: String,
 }
 
 pub struct GoalEventDisplay {
@@ -68,6 +70,7 @@ pub struct MatchPlayer {
     pub position: String,
     pub sub_minute: Option<u32>,
     pub subbed_off_minute: Option<u32>,
+    pub is_player_of_the_match: bool,
 }
 
 #[derive(Serialize)]
@@ -265,6 +268,12 @@ pub async fn match_get_action(
         })
         .collect();
 
+    let motm_id = result_details.player_of_the_match_id;
+    let motm_name = motm_id
+        .and_then(|id| simulator_data.player(id))
+        .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
+        .unwrap_or_default();
+
     let title = format!(
         "{} - {}",
         home_team.name,
@@ -296,7 +305,7 @@ pub async fn match_get_action(
             .main
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
                     p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -308,7 +317,7 @@ pub async fn match_get_action(
             .substitutes
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
                     p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -328,7 +337,7 @@ pub async fn match_get_action(
             .main
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
                     p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -340,7 +349,7 @@ pub async fn match_get_action(
             .substitutes
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
                     p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -370,10 +379,12 @@ pub async fn match_get_action(
             .club(away_team.club_id)
             .map(|c| c.colors.foreground.clone())
             .unwrap_or_else(|| "#ffffff".to_string()),
+        player_of_the_match_id: motm_id.unwrap_or(0),
+        player_of_the_match_name: motm_name,
     })
 }
 
-fn to_match_player(player_id: u32, simulator_data: &SimulatorData) -> Option<MatchPlayer> {
+fn to_match_player(player_id: u32, simulator_data: &SimulatorData, motm_id: Option<u32>) -> Option<MatchPlayer> {
     let player = simulator_data.player(player_id)?;
     Some(MatchPlayer {
         id: player.id,
@@ -381,6 +392,7 @@ fn to_match_player(player_id: u32, simulator_data: &SimulatorData) -> Option<Mat
         position: player.position().get_short_name().to_string(),
         sub_minute: None,
         subbed_off_minute: None,
+        is_player_of_the_match: motm_id == Some(player_id),
     })
 }
 

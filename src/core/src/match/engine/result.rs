@@ -39,6 +39,8 @@ pub struct MatchResultRaw {
     pub player_stats: HashMap<u32, PlayerMatchEndStats>,
 
     pub substitutions: Vec<SubstitutionInfo>,
+
+    pub player_of_the_match_id: Option<u32>,
 }
 
 impl Clone for MatchResultRaw {
@@ -52,6 +54,7 @@ impl Clone for MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            player_of_the_match_id: self.player_of_the_match_id,
         }
     }
 }
@@ -67,6 +70,7 @@ impl MatchResultRaw {
             additional_time_ms: 0,
             player_stats: HashMap::new(),
             substitutions: Vec::new(),
+            player_of_the_match_id: None,
         }
     }
 
@@ -80,6 +84,7 @@ impl MatchResultRaw {
             additional_time_ms: self.additional_time_ms,
             player_stats: self.player_stats.clone(),
             substitutions: self.substitutions.clone(),
+            player_of_the_match_id: self.player_of_the_match_id,
         }
     }
 
