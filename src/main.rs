@@ -21,7 +21,8 @@ async fn main() {
         info!("Debug mode enabled - match events will be recorded");
     }
 
-    let is_match_recordings_disabled = env::args().any(|arg| arg == "--skip-match-recording");
+    let is_match_recordings_disabled = env::args().any(|arg| arg == "--skip-match-recording")
+        || env::var("SKIP_MATCH_RECORDING").map(|v| v == "true").unwrap_or(false);
     if is_match_recordings_disabled {
         core::set_match_recordings_mode(false);
         info!("Match recordings mode disabled");
