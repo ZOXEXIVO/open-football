@@ -93,6 +93,15 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
     let ax = ((r.next() as i8 % 3) as f32) * 0.4;
     let ay = ((r.next() as i8 % 3) as f32) * 0.3;
 
+    // face width factor: younger = thinner, older = fatter
+    let fw: f32 = match age {
+        0..=19  => -2.0,
+        20..=24 => -1.0,
+        25..=29 => 0.0,
+        30..=34 => 2.0,
+        _       => 3.5,
+    };
+
     let sd  = dk(skin, 0.82);
     let sd2 = dk(skin, 0.72);
     let hi  = dk(skin, 1.06);
@@ -123,33 +132,49 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
     ));
 
     // === NECK ===
+    let neck_x = 31.5 - fw * 0.3;
+    let neck_w = 17.0 + fw * 0.6;
     s.push_str(&format!(
-        r#"<rect x="31.5" y="75" width="17" height="20" rx="3" fill="{}"/>"#, skin
+        r#"<rect x="{neck_x}" y="75" width="{neck_w}" height="20" rx="3" fill="{}"/>"#, skin
     ));
+    let neck_ix = 33.0 - fw * 0.2;
+    let neck_iw = 14.0 + fw * 0.4;
     s.push_str(&format!(
-        r#"<rect x="33" y="77" width="14" height="15" rx="2" fill="{}" opacity="0.18"/>"#, sd
+        r#"<rect x="{neck_ix}" y="77" width="{neck_iw}" height="15" rx="2" fill="{}" opacity="0.18"/>"#, sd
     ));
 
     // === EARS ===
     let ei = dk(skin, 0.78);
-    s.push_str(&format!(r#"<ellipse cx="13" cy="50" rx="4" ry="6.2" fill="{}"/>"#, skin));
-    s.push_str(&format!(r#"<ellipse cx="13.5" cy="50" rx="2" ry="4" fill="{}" opacity="0.6"/>"#, ei));
-    s.push_str(&format!(r#"<ellipse cx="67" cy="50" rx="4" ry="6.2" fill="{}"/>"#, skin));
-    s.push_str(&format!(r#"<ellipse cx="66.5" cy="50" rx="2" ry="4" fill="{}" opacity="0.6"/>"#, ei));
+    let ear_l = 13.0 - fw;
+    let ear_r = 67.0 + fw;
+    s.push_str(&format!(r#"<ellipse cx="{ear_l}" cy="50" rx="4" ry="6.2" fill="{}"/>"#, skin));
+    s.push_str(&format!(r#"<ellipse cx="{}" cy="50" rx="2" ry="4" fill="{}" opacity="0.6"/>"#, ear_l + 0.5, ei));
+    s.push_str(&format!(r#"<ellipse cx="{ear_r}" cy="50" rx="4" ry="6.2" fill="{}"/>"#, skin));
+    s.push_str(&format!(r#"<ellipse cx="{}" cy="50" rx="2" ry="4" fill="{}" opacity="0.6"/>"#, ear_r - 0.5, ei));
 
-    // === HEAD — path with asymmetric jaw ===
-    let jaw_l = 22.0 + ax * 0.6;
-    let jaw_r = 58.0 - ax * 0.4;
+    // === HEAD — path with asymmetric jaw, width varies by age ===
+    let head_l = 16.0 - fw;
+    let head_r = 64.0 + fw;
+    let ctl_l = 24.0 - fw * 0.5;
+    let ctl_r = 56.0 + fw * 0.5;
+    let jaw_l = (22.0 - fw * 0.7) + ax * 0.6;
+    let jaw_r = (58.0 + fw * 0.7) - ax * 0.4;
+    let jctl_l = 19.0 - fw * 0.5;
+    let jctl_r = 61.0 + fw * 0.5;
+    let chin_cl = 29.0 - fw * 0.3;
+    let chin_cr = 51.0 + fw * 0.3;
+    let chin_l = 34.0 - fw * 0.4;
+    let chin_r = 46.0 + fw * 0.4;
 
     s.push_str(&format!(
         r#"<path d="
-            M16 46
-            C16 28 24 16 40 16
-            C56 16 64 28 64 46
-            C64 58 61 68 {jaw_r} 74
-            C51 79 46 80 40 80
-            C34 80 29 79 {jaw_l} 74
-            C19 68 16 58 16 46Z
+            M{head_l} 46
+            C{head_l} 28 {ctl_l} 16 40 16
+            C{ctl_r} 16 {head_r} 28 {head_r} 46
+            C{head_r} 58 {jctl_r} 68 {jaw_r} 74
+            C{chin_cr} 79 {chin_r} 80 40 80
+            C{chin_l} 80 {chin_cl} 79 {jaw_l} 74
+            C{jctl_l} 68 {head_l} 58 {head_l} 46Z
         " fill="url(#sg)"/>"#
     ));
 
