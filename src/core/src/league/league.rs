@@ -594,7 +594,8 @@ impl League {
     }
 
     fn is_season_end(&self, date: NaiveDate) -> bool {
-        date.month() == 5 && date.day() == 25
+        let end = &self.settings.season_ending_half;
+        date.day() as u8 == end.to_day && date.month() as u8 == end.to_month
     }
 
     fn is_winter_break(&self, date: NaiveDate) -> bool {

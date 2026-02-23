@@ -3,8 +3,9 @@ pub mod routes;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
+use chrono::Datelike;
 use core::SimulatorData;
 use core::transfers::TransferType;
 use core::utils::FormattingUtils;
@@ -14,6 +15,17 @@ use serde::Deserialize;
 pub struct TeamTransfersRequest {
     lang: String,
     team_slug: String,
+}
+
+#[derive(Deserialize)]
+pub struct SeasonQuery {
+    pub season: Option<u16>,
+}
+
+pub struct SeasonOption {
+    pub year: u16,
+    pub display: String,
+    pub selected: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -37,6 +49,7 @@ pub struct TeamTransfersTemplate {
     pub outgoing_transfers: Vec<TransferHistoryItem>,
     pub incoming_loans: Vec<LoanHistoryItem>,
     pub outgoing_loans: Vec<LoanHistoryItem>,
+    pub seasons: Vec<SeasonOption>,
 }
 
 pub struct TransferListItem {
@@ -67,6 +80,7 @@ pub struct LoanHistoryItem {
 pub async fn team_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<TeamTransfersRequest>,
+    Query(query): Query<SeasonQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let guard = state.data.read().await;
 
@@ -107,6 +121,36 @@ pub async fn team_transfers_action(
 
     let club_id = team.club_id;
 
+    // Compute season options
+    let sim_date = simulator_data.date.date();
+    let current_season_year = if sim_date.month() >= 7 {
+        sim_date.year() as u16
+    } else {
+        (sim_date.year() - 1) as u16
+    };
+
+    let selected_season = query.season.unwrap_or(current_season_year);
+
+    let mut season_years: Vec<u16> = country
+        .transfer_market
+        .transfer_history
+        .iter()
+        .map(|t| t.season_year)
+        .collect();
+    season_years.push(current_season_year);
+    season_years.sort();
+    season_years.dedup();
+
+    let seasons: Vec<SeasonOption> = season_years
+        .iter()
+        .rev()
+        .map(|&y| SeasonOption {
+            year: y,
+            display: format!("{}/{}", y, (y + 1) % 100),
+            selected: y == selected_season,
+        })
+        .collect();
+
     // Current transfer list items
     let items: Vec<TransferListItem> = team
         .transfer_list
@@ -131,7 +175,7 @@ pub async fn team_transfers_action(
         .transfer_market
         .transfer_history
         .iter()
-        .filter(|t| t.to_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
+        .filter(|t| t.season_year == selected_season && t.to_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
         .map(|t| {
             let other_team_slug = get_first_team_slug(country, t.from_club_id);
             TransferHistoryItem {
@@ -150,7 +194,7 @@ pub async fn team_transfers_action(
         .transfer_market
         .transfer_history
         .iter()
-        .filter(|t| t.from_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
+        .filter(|t| t.season_year == selected_season && t.from_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
         .map(|t| {
             let other_team_slug = get_first_team_slug(country, t.to_club_id);
             TransferHistoryItem {
@@ -169,7 +213,7 @@ pub async fn team_transfers_action(
         .transfer_market
         .transfer_history
         .iter()
-        .filter(|t| t.to_club_id == club_id && matches!(t.transfer_type, TransferType::Loan(_)))
+        .filter(|t| t.season_year == selected_season && t.to_club_id == club_id && matches!(t.transfer_type, TransferType::Loan(_)))
         .map(|t| {
             let end_date = match &t.transfer_type {
                 TransferType::Loan(d) => d.format("%d.%m.%Y").to_string(),
@@ -191,7 +235,7 @@ pub async fn team_transfers_action(
         .transfer_market
         .transfer_history
         .iter()
-        .filter(|t| t.from_club_id == club_id && matches!(t.transfer_type, TransferType::Loan(_)))
+        .filter(|t| t.season_year == selected_season && t.from_club_id == club_id && matches!(t.transfer_type, TransferType::Loan(_)))
         .map(|t| {
             let end_date = match &t.transfer_type {
                 TransferType::Loan(d) => d.format("%d.%m.%Y").to_string(),
@@ -230,6 +274,7 @@ pub async fn team_transfers_action(
         outgoing_transfers,
         incoming_loans,
         outgoing_loans,
+        seasons,
     })
 }
 

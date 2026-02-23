@@ -609,7 +609,7 @@ impl CountryResult {
             }
         }
 
-        if date.month() == 6 && date.day() == 1 {
+        if date.month() == 7 && date.day() == 1 {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_promotion_relegation(country);
             }

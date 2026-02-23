@@ -3,8 +3,9 @@ pub mod routes;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
+use chrono::Datelike;
 use core::transfers::{
     NegotiationPhase, NegotiationStatus, TransferListingStatus, TransferListingType,
 };
@@ -16,6 +17,17 @@ use serde::Deserialize;
 pub struct PlayerTransfersRequest {
     pub lang: String,
     pub player_id: u32,
+}
+
+#[derive(Deserialize)]
+pub struct SeasonQuery {
+    pub season: Option<u16>,
+}
+
+pub struct SeasonOption {
+    pub year: u16,
+    pub display: String,
+    pub selected: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -38,6 +50,7 @@ pub struct PlayerTransfersTemplate {
     pub listing: Option<PlayerListingDto>,
     pub negotiations: Vec<PlayerNegotiationDto>,
     pub completed: Vec<PlayerCompletedTransferDto>,
+    pub seasons: Vec<SeasonOption>,
 }
 
 pub struct PlayerTransferStatusDto {
@@ -135,6 +148,7 @@ fn listing_status_to_key(status: &TransferListingStatus) -> &'static str {
 pub async fn player_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerTransfersRequest>,
+    Query(query): Query<SeasonQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -251,13 +265,47 @@ pub async fn player_transfers_action(
         })
         .unwrap_or_default();
 
+    // Compute season options
+    let sim_date = simulator_data.date.date();
+    let current_season_year = if sim_date.month() >= 7 {
+        sim_date.year() as u16
+    } else {
+        (sim_date.year() - 1) as u16
+    };
+
+    let selected_season = query.season.unwrap_or(current_season_year);
+
+    let mut season_years: Vec<u16> = country
+        .map(|c| {
+            c.transfer_market
+                .transfer_history
+                .iter()
+                .filter(|t| t.player_id == player.id)
+                .map(|t| t.season_year)
+                .collect()
+        })
+        .unwrap_or_default();
+    season_years.push(current_season_year);
+    season_years.sort();
+    season_years.dedup();
+
+    let seasons: Vec<SeasonOption> = season_years
+        .iter()
+        .rev()
+        .map(|&y| SeasonOption {
+            year: y,
+            display: format!("{}/{}", y, (y + 1) % 100),
+            selected: y == selected_season,
+        })
+        .collect();
+
     // Get completed transfers for this player
     let completed: Vec<PlayerCompletedTransferDto> = country
         .map(|c| {
             c.transfer_market
                 .transfer_history
                 .iter()
-                .filter(|t| t.player_id == player.id)
+                .filter(|t| t.player_id == player.id && t.season_year == selected_season)
                 .map(|t| {
                     let from_slug = simulator_data
                         .club(t.from_club_id)
@@ -334,6 +382,7 @@ pub async fn player_transfers_action(
         listing,
         negotiations,
         completed,
+        seasons,
     })
 }
 

@@ -42,6 +42,15 @@
         {% endif %}
     </section>
 
+    <div class="fm-panel-head fm-transfer-history-head">
+        <h3>{{ i18n.t("transfer_history") }}</h3>
+        <select class="fm-season-select" onchange="window.location.href='/' + '{{ lang }}' + '/teams/{{ team_slug }}/transfers?season=' + this.value">
+            {% for s in seasons %}
+            <option value="{{ s.year }}"{% if s.selected %} selected{% endif %}>{{ s.display }}</option>
+            {% endfor %}
+        </select>
+    </div>
+
     <div class="fm-transfers-row">
         <section class="fm-panel">
             <div class="fm-panel-head">
