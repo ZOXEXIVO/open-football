@@ -51,7 +51,7 @@ impl Schedule {
             match generator.generate(
                 league_ctx.id,
                 &league_ctx.slug,
-                Season::OneYear(ctx.simulation.date.year() as u16),
+                Season::new(ctx.simulation.date.year() as u16),
                 league_ctx.team_ids,
                 league_settings,
             ) {

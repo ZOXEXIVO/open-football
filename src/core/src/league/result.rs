@@ -12,6 +12,7 @@ pub struct LeagueResult {
     pub league_id: u32,
     pub table_result: LeagueTableResult,
     pub match_results: Option<Vec<MatchResult>>,
+    pub new_season_started: bool,
 }
 
 impl LeagueResult {
@@ -20,6 +21,7 @@ impl LeagueResult {
             league_id,
             table_result,
             match_results: None,
+            new_season_started: false,
         }
     }
 
@@ -32,6 +34,7 @@ impl LeagueResult {
             league_id,
             table_result,
             match_results: Some(match_results),
+            new_season_started: false,
         }
     }
 

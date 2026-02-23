@@ -17,6 +17,12 @@ pub struct LeagueEntity {
     pub settings: LeagueSettingsEntity,
     pub reputation: u16,
     #[serde(default)]
+    pub tier: u8,
+    #[serde(default)]
+    pub promotion_spots: u8,
+    #[serde(default)]
+    pub relegation_spots: u8,
+    #[serde(default)]
     pub foreign_players: Vec<ForeignPlayerEntry>,
 }
 

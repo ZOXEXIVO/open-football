@@ -137,7 +137,7 @@ impl LeagueTable {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueTableRow {
     pub team_id: u32,
     pub played: u8,

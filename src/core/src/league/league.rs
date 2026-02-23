@@ -1,5 +1,5 @@
 use crate::context::{GlobalContext, SimulationContext};
-use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, MatchStorage, Schedule, ScheduleItem};
+use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
 use crate::{Club, Player, PlayerStatusType, Team};
@@ -19,6 +19,7 @@ pub struct League {
     pub settings: LeagueSettings,
     pub matches: MatchStorage,
     pub reputation: u16,
+    pub final_table: Option<Vec<LeagueTableRow>>,
 
     // New fields for enhanced simulation
     pub dynamics: LeagueDynamics,
@@ -46,6 +47,7 @@ impl League {
             matches: MatchStorage::new(),
             settings,
             reputation,
+            final_table: None,
             dynamics: LeagueDynamics::new(),
             regulations: LeagueRegulations::new(),
             statistics: LeagueStatistics::new(),
@@ -76,6 +78,10 @@ impl League {
             ctx.with_league(self.id, String::from(&self.slug), &league_teams),
         );
 
+        // Detect new season: schedule regenerated over a season that had matches
+        let new_season_started = schedule_result.generated
+            && self.table.rows.iter().any(|r| r.played > 0);
+
         // Reset table when new schedule is generated (new season)
         if schedule_result.generated {
             self.table = LeagueTable::new(&league_teams);
@@ -93,13 +99,17 @@ impl League {
 
             self.process_match_day_results(&match_results, clubs, &ctx, current_date);
 
-            return LeagueResult::with_match_result(self.id, table_result, match_results);
+            let mut result = LeagueResult::with_match_result(self.id, table_result, match_results);
+            result.new_season_started = new_season_started;
+            return result;
         }
 
         // Phase 5: Off-season or mid-season processing
         self.process_non_matchday(clubs, &ctx);
 
-        LeagueResult::new(self.id, table_result)
+        let mut result = LeagueResult::new(self.id, table_result);
+        result.new_season_started = new_season_started;
+        result
     }
 
     // ========== MATCHDAY PREPARATION ==========
@@ -606,6 +616,9 @@ impl League {
             info!("🥇 Champions: Team {}", champion);
             self.milestones.record_champion(champion);
         }
+
+        // Save final table for promotion/relegation processing
+        self.final_table = Some(self.table.rows.clone());
 
         self.dynamics.reset_for_new_season();
         self.statistics.archive_season_stats();
@@ -1265,6 +1278,9 @@ impl DayMonthPeriod {
 pub struct LeagueSettings {
     pub season_starting_half: DayMonthPeriod,
     pub season_ending_half: DayMonthPeriod,
+    pub tier: u8,
+    pub promotion_spots: u8,
+    pub relegation_spots: u8,
 }
 
 impl LeagueSettings {

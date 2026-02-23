@@ -5,7 +5,6 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::league::Season;
 use core::utils::FormattingUtils;
 use chrono::Datelike;
 use core::{ContractType, SimulatorData};
@@ -165,25 +164,74 @@ pub async fn player_history_action(
     // Build team slug → location lookup cache
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> = std::collections::HashMap::new();
 
-    let mut items: Vec<PlayerHistorySeasonItem> = player
-        .statistics_history
-        .items
-        .iter()
-        .map(|item| {
-            let season_str = match &item.season {
-                Season::OneYear(y) => format!("{}", y),
-                Season::TwoYear(y1, y2) => format!("{}/{}", y1, y2 % 100),
-            };
+    // Group history items by (season, team_slug) — merge duplicates from
+    // mid-season transfer snapshots + end-of-season snapshots.
+    struct GroupKey {
+        season_display: String,
+        start_year: u16,
+        team_slug: String,
+        team_name: String,
+        is_loan: bool,
+    }
+    struct GroupAccum {
+        played: u16,
+        played_subs: u16,
+        goals: u16,
+        assists: u16,
+        player_of_the_match: u8,
+        rating_sum: f32,
+        rating_count: u16,
+    }
 
-            let season_start_year = match &item.season {
-                Season::OneYear(y) => *y,
-                Season::TwoYear(y1, _) => *y1,
-            };
+    let mut grouped: Vec<(GroupKey, GroupAccum)> = Vec::new();
 
+    for item in &player.statistics_history.items {
+        let key_match = grouped.iter().position(|(k, _)| {
+            k.start_year == item.season.start_year
+                && k.team_slug == item.team_slug
+                && k.is_loan == item.is_loan
+        });
+
+        let games = item.statistics.played + item.statistics.played_subs;
+
+        if let Some(idx) = key_match {
+            let accum = &mut grouped[idx].1;
+            accum.played += item.statistics.played;
+            accum.played_subs += item.statistics.played_subs;
+            accum.goals += item.statistics.goals;
+            accum.assists += item.statistics.assists;
+            accum.player_of_the_match += item.statistics.player_of_the_match;
+            accum.rating_sum += item.statistics.average_rating * games as f32;
+            accum.rating_count += games;
+        } else {
+            grouped.push((
+                GroupKey {
+                    season_display: item.season.display.clone(),
+                    start_year: item.season.start_year,
+                    team_slug: item.team_slug.clone(),
+                    team_name: item.team_name.clone(),
+                    is_loan: item.is_loan,
+                },
+                GroupAccum {
+                    played: item.statistics.played,
+                    played_subs: item.statistics.played_subs,
+                    goals: item.statistics.goals,
+                    assists: item.statistics.assists,
+                    player_of_the_match: item.statistics.player_of_the_match,
+                    rating_sum: item.statistics.average_rating * games as f32,
+                    rating_count: games,
+                },
+            ));
+        }
+    }
+
+    let mut items: Vec<PlayerHistorySeasonItem> = grouped
+        .into_iter()
+        .map(|(key, accum)| {
             let transfer_record = player_transfers.iter()
                 .find(|t| {
-                    t.to_team_name == item.team_name
-                        && (season_start_year == t.season_year || season_start_year == t.season_year + 1)
+                    t.to_team_name == key.team_name
+                        && (key.start_year == t.season_year || key.start_year == t.season_year + 1)
                 });
 
             let transfer_fee = transfer_record
@@ -196,36 +244,42 @@ pub async fn player_history_action(
                 })
                 .unwrap_or_default();
 
-            let is_free_transfer = !item.is_loan && transfer_record
+            let is_free_transfer = !key.is_loan && transfer_record
                 .map(|t| matches!(t.transfer_type, core::transfers::TransferType::Free) || (matches!(t.transfer_type, core::transfers::TransferType::Permanent) && t.fee.amount <= 0.0))
                 .unwrap_or(false);
 
             // Lookup country/league info
-            let location = if !item.team_slug.is_empty() {
-                if !location_cache.contains_key(&item.team_slug) {
-                    if let Some(info) = find_team_location(simulator_data, &item.team_slug) {
-                        location_cache.insert(item.team_slug.clone(), info);
+            let location = if !key.team_slug.is_empty() {
+                if !location_cache.contains_key(&key.team_slug) {
+                    if let Some(info) = find_team_location(simulator_data, &key.team_slug) {
+                        location_cache.insert(key.team_slug.clone(), info);
                     }
                 }
-                location_cache.get(&item.team_slug)
+                location_cache.get(&key.team_slug)
             } else {
                 None
             };
 
+            let avg_rating = if accum.rating_count > 0 {
+                accum.rating_sum / accum.rating_count as f32
+            } else {
+                0.0
+            };
+
             PlayerHistorySeasonItem {
-                season: season_str,
-                team_name: item.team_name.clone(),
-                team_slug: item.team_slug.clone(),
-                is_loan: item.is_loan,
+                season: key.season_display,
+                team_name: key.team_name,
+                team_slug: key.team_slug,
+                is_loan: key.is_loan,
                 is_free_transfer,
                 transfer_fee,
                 stats: PlayerHistoryStats {
-                    played: item.statistics.played,
-                    played_subs: item.statistics.played_subs,
-                    goals: item.statistics.goals,
-                    assists: item.statistics.assists,
-                    player_of_the_match: item.statistics.player_of_the_match,
-                    average_rating: format!("{:.2}", item.statistics.average_rating),
+                    played: accum.played,
+                    played_subs: accum.played_subs,
+                    goals: accum.goals,
+                    assists: accum.assists,
+                    player_of_the_match: accum.player_of_the_match,
+                    average_rating: format!("{:.2}", avg_rating),
                 },
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),

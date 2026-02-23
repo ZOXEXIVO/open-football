@@ -39,10 +39,7 @@ impl ScheduleGenerator for RoundSchedule {
             ScheduleError::from_str("team_len is empty");
         }
 
-        let (season_year_start, _season_year_end) = match season {
-            Season::OneYear(year) => (year, year),
-            Season::TwoYear(start_year, end_year) => (start_year, end_year),
-        };
+        let season_year_start = season.start_year;
 
         let current_date = DateUtils::next_saturday(
             NaiveDate::from_ymd_opt(
@@ -171,13 +168,16 @@ mod tests {
         let league_settings = LeagueSettings {
             season_starting_half: DayMonthPeriod::new(1, 1, 30, 6),
             season_ending_half: DayMonthPeriod::new(1, 7, 1, 12),
+            tier: 0,
+            promotion_spots: 0,
+            relegation_spots: 0,
         };
 
         let schedule_tours = schedule
             .generate(
                 LEAGUE_ID,
                 "slug",
-                Season::TwoYear(2020, 2021),
+                Season::new(2020),
                 &teams,
                 &league_settings,
             )

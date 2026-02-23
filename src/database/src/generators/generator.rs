@@ -120,6 +120,9 @@ impl DatabaseGenerator {
                         to_day: league.settings.season_ending_half.to_day,
                         to_month: league.settings.season_ending_half.to_month,
                     },
+                    tier: league.tier,
+                    promotion_spots: league.promotion_spots,
+                    relegation_spots: league.relegation_spots,
                 };
                 
                 League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings)

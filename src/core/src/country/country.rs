@@ -1,11 +1,11 @@
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
 use crate::country::national_team::{NationalTeam, CallUpCandidate};
-use crate::league::{LeagueCollection, Season};
+use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::utils::Logging;
 use crate::{Club, ClubResult};
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use log::{debug, info};
 use std::collections::HashMap;
 use crate::country::builder::CountryBuilder;
@@ -78,9 +78,6 @@ impl Country {
         // Phase 1: League Competitions
         let league_results = self.simulate_leagues(&ctx);
 
-        // Phase 1.1: Season-end player statistics snapshot
-        self.process_player_season_end(ctx.simulation.date.date());
-
         // Phase 1.5: National Team (international breaks)
         let date = ctx.simulation.date.date();
         let country_id = self.id;
@@ -102,35 +99,6 @@ impl Country {
 
     fn simulate_leagues(&mut self, ctx: &GlobalContext<'_>) -> Vec<crate::league::LeagueResult> {
         self.leagues.simulate(&self.clubs, ctx)
-    }
-
-    /// At season end, snapshot all player statistics into history and reset for new season
-    fn process_player_season_end(&mut self, date: NaiveDate) {
-        // Only trigger on May 25 (matches league's is_season_end but single day)
-        if date.month() != 5 || date.day() != 25 {
-            return;
-        }
-
-        // Determine season: if ending in May, season started previous year
-        let end_year = date.year() as u16;
-        let season = Season::OneYear(end_year - 1);
-
-        info!("📋 Snapshotting player statistics for season end {}", end_year);
-
-        for club in &mut self.clubs {
-            for team in &mut club.teams.teams {
-                let team_name = team.name.clone();
-                let team_slug = team.slug.clone();
-
-                for player in &mut team.players.players {
-                    player.snapshot_season_statistics(
-                        season.clone(),
-                        &team_name,
-                        &team_slug,
-                    );
-                }
-            }
-        }
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {

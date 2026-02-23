@@ -51,8 +51,15 @@ impl CountryResult {
         self.update_country_reputation(data, country_id, &self.leagues, &self.clubs);
 
         // Phase 1: Process league results
+        let any_new_season = self.leagues.iter().any(|l| l.new_season_started);
+
         for league_result in self.leagues {
             league_result.process(data, result);
+        }
+
+        // Snapshot player statistics when new season starts (all match stats are now up-to-date)
+        if any_new_season {
+            Self::snapshot_player_season_statistics(data, self.country_id);
         }
 
         // Phase 2: Process club results
@@ -602,6 +609,12 @@ impl CountryResult {
             }
         }
 
+        if date.month() == 6 && date.day() == 1 {
+            if let Some(country) = data.country_mut(country_id) {
+                Self::process_promotion_relegation(country);
+            }
+        }
+
         if date.month() == 12 && date.day() == 31 {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_year_end_finances(country);
@@ -873,7 +886,7 @@ impl CountryResult {
 
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
-                season: Season::OneYear(season_year),
+                season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
                 is_loan: false,
@@ -953,7 +966,7 @@ impl CountryResult {
 
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
-                season: Season::OneYear(season_year),
+                season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
                 is_loan: false,
@@ -970,7 +983,7 @@ impl CountryResult {
             }
 
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
-                season: Season::OneYear(season_year),
+                season: Season::new(season_year),
                 team_name: buying_club_name,
                 team_slug: buying_team_slug,
                 is_loan: true,
@@ -1048,6 +1061,115 @@ impl CountryResult {
 
     fn process_year_end_finances(_country: &mut Country) {
         debug!("Processing year-end finances");
+    }
+
+    fn process_promotion_relegation(country: &mut Country) {
+        // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
+        let league_info: Vec<(u32, u8, u8, u8)> = country
+            .leagues
+            .leagues
+            .iter()
+            .map(|l| (l.id, l.settings.tier, l.settings.relegation_spots, l.settings.promotion_spots))
+            .collect();
+
+        // For each league with relegation_spots > 0, find its paired league
+        for &(tier1_id, tier1_tier, relegation_spots, _) in &league_info {
+            if relegation_spots == 0 || tier1_tier == 0 {
+                continue;
+            }
+
+            // Find paired league: same country, next tier, with promotion_spots > 0
+            let paired = league_info.iter().find(|&&(id, tier, _, promo)| {
+                id != tier1_id && tier == tier1_tier + 1 && promo > 0
+            });
+
+            let &(tier2_id, _, _, promotion_spots) = match paired {
+                Some(p) => p,
+                None => continue,
+            };
+
+            let swap_count = relegation_spots.min(promotion_spots) as usize;
+
+            // Read final tables
+            let relegated_team_ids: Vec<u32> = country
+                .leagues
+                .leagues
+                .iter()
+                .find(|l| l.id == tier1_id)
+                .and_then(|l| l.final_table.as_ref())
+                .map(|table| {
+                    table.iter().rev().take(swap_count).map(|r| r.team_id).collect()
+                })
+                .unwrap_or_default();
+
+            let promoted_team_ids: Vec<u32> = country
+                .leagues
+                .leagues
+                .iter()
+                .find(|l| l.id == tier2_id)
+                .and_then(|l| l.final_table.as_ref())
+                .map(|table| {
+                    table.iter().take(swap_count).map(|r| r.team_id).collect()
+                })
+                .unwrap_or_default();
+
+            if relegated_team_ids.is_empty() || promoted_team_ids.is_empty() {
+                continue;
+            }
+
+            // Swap league_ids on the teams
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if relegated_team_ids.contains(&team.id) {
+                        info!("⬇️ Relegation: team {} ({}) moves to league {}",
+                              team.name, team.id, tier2_id);
+                        team.league_id = Some(tier2_id);
+                    } else if promoted_team_ids.contains(&team.id) {
+                        info!("⬆️ Promotion: team {} ({}) moves to league {}",
+                              team.name, team.id, tier1_id);
+                        team.league_id = Some(tier1_id);
+                    }
+                }
+            }
+        }
+
+        // Clear final tables after processing
+        for league in &mut country.leagues.leagues {
+            league.final_table = None;
+        }
+    }
+
+    /// Snapshot all player statistics into history when a new season starts.
+    /// Called from result processing AFTER match stats have been applied,
+    /// so all player statistics are up-to-date.
+    fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
+        let date = data.date.date();
+
+        // Season that just ended: if we're in Aug+, the season was the previous year
+        let season_year = date.year() as u16 - 1;
+        let season = Season::new(season_year);
+
+        info!("📋 New season snapshot: saving player statistics for season {} (country {})", season_year, country_id);
+
+        let country = match data.country_mut(country_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        for club in &mut country.clubs {
+            for team in &mut club.teams.teams {
+                let team_name = team.name.clone();
+                let team_slug = team.slug.clone();
+
+                for player in &mut team.players.players {
+                    player.snapshot_season_statistics(
+                        season.clone(),
+                        &team_name,
+                        &team_slug,
+                    );
+                }
+            }
+        }
     }
 }
 

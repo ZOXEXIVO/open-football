@@ -21,7 +21,7 @@ pub async fn game_process_action(
     Query(query): Query<ProcessQuery>,
 ) -> impl IntoResponse {
     let data = Arc::clone(&state.data);
-    let days = query.days.unwrap_or(1).clamp(1, 30);
+    let days = query.days.unwrap_or(1);
 
     let mut simulator_data_guard = data.write_owned().await;
 
