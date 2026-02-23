@@ -356,19 +356,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return Some(sub.id);
         }
 
-        // Fallback: best available outfield sub (avoid using GK as outfield replacement)
-        let fallback = team_subs
-            .iter()
-            .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-            .max_by_key(|p| p.player_attributes.current_ability);
-
-        if let Some(sub) = fallback {
-            return Some(sub.id);
-        }
-
-        // Last resort: any available sub
+        // Fallback: best available outfield sub (never use GK as outfield replacement)
         team_subs
             .iter()
+            .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
             .max_by_key(|p| p.player_attributes.current_ability)
             .map(|p| p.id)
     }

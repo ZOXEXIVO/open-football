@@ -45,6 +45,7 @@ pub struct PlayerHistoryTemplate {
     pub current_country_slug: String,
     pub current_league_name: String,
     pub current_league_slug: String,
+    pub is_goalkeeper: bool,
 }
 
 pub struct PlayerHistorySeasonItem {
@@ -69,6 +70,8 @@ pub struct PlayerHistoryStats {
     pub assists: u16,
     pub player_of_the_match: u8,
     pub average_rating: String,
+    pub conceded: u16,
+    pub clean_sheets: u16,
 }
 
 struct TeamLocationInfo {
@@ -181,6 +184,8 @@ pub async fn player_history_action(
         player_of_the_match: u8,
         rating_sum: f32,
         rating_count: u16,
+        conceded: u16,
+        clean_sheets: u16,
     }
 
     let mut grouped: Vec<(GroupKey, GroupAccum)> = Vec::new();
@@ -203,6 +208,8 @@ pub async fn player_history_action(
             accum.player_of_the_match += item.statistics.player_of_the_match;
             accum.rating_sum += item.statistics.average_rating * games as f32;
             accum.rating_count += games;
+            accum.conceded += item.statistics.conceded;
+            accum.clean_sheets += item.statistics.clean_sheets;
         } else {
             grouped.push((
                 GroupKey {
@@ -220,6 +227,8 @@ pub async fn player_history_action(
                     player_of_the_match: item.statistics.player_of_the_match,
                     rating_sum: item.statistics.average_rating * games as f32,
                     rating_count: games,
+                    conceded: item.statistics.conceded,
+                    clean_sheets: item.statistics.clean_sheets,
                 },
             ));
         }
@@ -280,6 +289,8 @@ pub async fn player_history_action(
                     assists: accum.assists,
                     player_of_the_match: accum.player_of_the_match,
                     average_rating: format!("{:.2}", avg_rating),
+                    conceded: accum.conceded,
+                    clean_sheets: accum.clean_sheets,
                 },
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
@@ -300,6 +311,8 @@ pub async fn player_history_action(
         assists: player.statistics.assists,
         player_of_the_match: player.statistics.player_of_the_match,
         average_rating: format!("{:.2}", player.statistics.average_rating),
+        conceded: player.statistics.conceded,
+        clean_sheets: player.statistics.clean_sheets,
     };
 
     let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
@@ -370,6 +383,7 @@ pub async fn player_history_action(
         current_country_slug: current_location.as_ref().map(|l| l.country_slug.clone()).unwrap_or_default(),
         current_league_name: current_location.as_ref().map(|l| l.league_name.clone()).unwrap_or_default(),
         current_league_slug: current_location.as_ref().map(|l| l.league_slug.clone()).unwrap_or_default(),
+        is_goalkeeper: player.position().is_goalkeeper(),
     })
 }
 

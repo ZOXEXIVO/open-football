@@ -169,6 +169,43 @@ impl LeagueResult {
             }
         }
 
+        // Goalkeeper stats: conceded goals and clean sheets
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+        let home_team_id = result.score.home_team.team_id;
+
+        // Find starting goalkeepers by checking main squad players' positions
+        for &gk_id in details.left_team_players.main.iter() {
+            if let Some(player) = data.player_mut(gk_id) {
+                if player.position().is_goalkeeper() {
+                    let goals_against = if details.left_team_players.team_id == home_team_id {
+                        away_goals
+                    } else {
+                        home_goals
+                    };
+                    player.statistics.conceded += goals_against as u16;
+                    if goals_against == 0 {
+                        player.statistics.clean_sheets += 1;
+                    }
+                }
+            }
+        }
+        for &gk_id in details.right_team_players.main.iter() {
+            if let Some(player) = data.player_mut(gk_id) {
+                if player.position().is_goalkeeper() {
+                    let goals_against = if details.right_team_players.team_id == home_team_id {
+                        away_goals
+                    } else {
+                        home_goals
+                    };
+                    player.statistics.conceded += goals_against as u16;
+                    if goals_against == 0 {
+                        player.statistics.clean_sheets += 1;
+                    }
+                }
+            }
+        }
+
         // Apply physical effects from match participation
         Self::apply_post_match_physical_effects(details, data);
     }

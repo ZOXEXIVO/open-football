@@ -17,6 +17,9 @@ pub struct PlayerStatistics {
     pub passes: u8,
 
     pub average_rating: f32,
+
+    pub conceded: u16,
+    pub clean_sheets: u16,
 }
 
 #[derive(Debug)]

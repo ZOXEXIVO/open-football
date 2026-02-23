@@ -26,8 +26,13 @@
                     <th class="sq-league">{{ i18n.t("league") }}</th>
                     <th class="sq-fee">{{ i18n.t("fee") }}</th>
                     <th class="sq-stat">{{ i18n.t("apps") }}</th>
+                    {% if is_goalkeeper %}
+                    <th class="sq-stat">{{ i18n.t("con") }}</th>
+                    <th class="sq-stat">{{ i18n.t("cln") }}</th>
+                    {% else %}
                     <th class="sq-stat">{{ i18n.t("gls") }}</th>
                     <th class="sq-stat">{{ i18n.t("ast") }}</th>
+                    {% endif %}
                     <th class="sq-stat">{{ i18n.t("pom") }}</th>
                     <th class="sq-stat">{{ i18n.t("av_rat") }}</th>
                 </tr>
@@ -40,8 +45,13 @@
                     <td class="sq-league">{% if !current_league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ current_league_slug }}">{{ current_league_name }}</a>{% endif %}</td>
                     <td class="sq-fee">{% if current_is_loan %}{{ i18n.t("loan") }}{% else if !current_transfer_fee.is_empty() %}{{ current_transfer_fee }}{% else if current_is_free_transfer %}{{ i18n.t("free") }}{% endif %}</td>
                     <td class="sq-stat">{{ current.played }}{% if current.played_subs > 0 %} ({{ current.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ current.conceded }}</td>
+                    <td class="sq-stat">{{ current.clean_sheets }}</td>
+                    {% else %}
                     <td class="sq-stat">{{ current.goals }}</td>
                     <td class="sq-stat">{{ current.assists }}</td>
+                    {% endif %}
                     <td class="sq-stat">{{ current.player_of_the_match }}</td>
                     <td class="sq-stat">{{ current.average_rating }}</td>
                 </tr>
@@ -53,8 +63,13 @@
                     <td class="sq-league">{% if !item.league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ item.league_slug }}">{{ item.league_name }}</a>{% endif %}</td>
                     <td class="sq-fee">{% if item.is_loan %}{{ i18n.t("loan") }}{% else if !item.transfer_fee.is_empty() %}{{ item.transfer_fee }}{% else if item.is_free_transfer %}{{ i18n.t("free") }}{% endif %}</td>
                     <td class="sq-stat">{{ item.stats.played }}{% if item.stats.played_subs > 0 %} ({{ item.stats.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ item.stats.conceded }}</td>
+                    <td class="sq-stat">{{ item.stats.clean_sheets }}</td>
+                    {% else %}
                     <td class="sq-stat">{{ item.stats.goals }}</td>
                     <td class="sq-stat">{{ item.stats.assists }}</td>
+                    {% endif %}
                     <td class="sq-stat">{{ item.stats.player_of_the_match }}</td>
                     <td class="sq-stat">{{ item.stats.average_rating }}</td>
                 </tr>
