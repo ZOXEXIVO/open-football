@@ -275,24 +275,20 @@ pub async fn player_transfers_action(
 
     let selected_season = query.season.unwrap_or(current_season_year);
 
-    let mut season_years: Vec<u16> = country
-        .map(|c| {
+    let min_season_year = country
+        .and_then(|c| {
             c.transfer_market
                 .transfer_history
                 .iter()
                 .filter(|t| t.player_id == player.id)
                 .map(|t| t.season_year)
-                .collect()
+                .min()
         })
-        .unwrap_or_default();
-    season_years.push(current_season_year);
-    season_years.sort();
-    season_years.dedup();
+        .unwrap_or(current_season_year);
 
-    let seasons: Vec<SeasonOption> = season_years
-        .iter()
+    let seasons: Vec<SeasonOption> = (min_season_year..=current_season_year)
         .rev()
-        .map(|&y| SeasonOption {
+        .map(|y| SeasonOption {
             year: y,
             display: format!("{}/{}", y, (y + 1) % 100),
             selected: y == selected_season,
