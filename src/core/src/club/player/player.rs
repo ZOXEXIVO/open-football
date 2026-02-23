@@ -5,12 +5,13 @@ use crate::club::{
     PlayerResult, PlayerSkills, PlayerStatusType, PlayerTraining, CONDITION_MAX_VALUE,
 };
 use crate::context::GlobalContext;
+use crate::league::Season;
 use crate::shared::fullname::FullName;
 use crate::utils::{DateUtils, Logging};
 use crate::{
-    HappinessEventType, Person, PersonAttributes, PlayerHappiness, PlayerPositionType,
-    PlayerPositions, PlayerSquadStatus, PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatus, PlayerTrainingHistory,
+    ContractType, HappinessEventType, Person, PersonAttributes, PlayerHappiness,
+    PlayerPositionType, PlayerPositions, PlayerSquadStatus, PlayerStatistics,
+    PlayerStatisticsHistory, PlayerStatisticsHistoryItem, PlayerStatus, PlayerTrainingHistory,
     PlayerValueCalculator, Relations,
 };
 use chrono::{NaiveDate, NaiveDateTime};
@@ -473,6 +474,27 @@ impl Player {
             result.wants_to_leave = true;
             result.request_transfer(self.id);
         }
+    }
+
+    /// Snapshot current season statistics into history and reset for new season
+    pub fn snapshot_season_statistics(&mut self, season: Season, team_name: &str, team_slug: &str) {
+        // Only snapshot if player actually participated
+        if self.statistics.played == 0 && self.statistics.played_subs == 0 {
+            return;
+        }
+
+        let is_loan = self.contract.as_ref()
+            .map(|c| c.contract_type == ContractType::Loan)
+            .unwrap_or(false);
+
+        let old_stats = std::mem::take(&mut self.statistics);
+        self.statistics_history.items.push(PlayerStatisticsHistoryItem {
+            season,
+            team_name: team_name.to_string(),
+            team_slug: team_slug.to_string(),
+            is_loan,
+            statistics: old_stats,
+        });
     }
 
     pub fn shirt_number(&self) -> u8 {

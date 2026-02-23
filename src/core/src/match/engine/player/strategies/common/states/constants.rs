@@ -2,7 +2,7 @@
 pub const MAX_CONDITION: i16 = 10000;
 
 /// Global fatigue rate multiplier (lower = slower condition decrease)
-pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.200;
+pub const FATIGUE_RATE_MULTIPLIER: f32 = 0.013;
 
 /// Recovery rate multiplier (lower = slower condition recovery)
 /// Set to 0.333 (0.5 / 1.5) to make condition recovery 3x slower

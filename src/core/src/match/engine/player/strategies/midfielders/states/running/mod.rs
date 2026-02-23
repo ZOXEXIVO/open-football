@@ -231,7 +231,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0, // Fixed offset instead of random
+                        path_offset: 5.0,
                     }
                         .calculate(ctx.player)
                         .velocity + ctx.player().separation_velocity(),
@@ -239,22 +239,28 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
         }
 
-        // Simplified movement calculation
         if ctx.player.has_ball(ctx) {
             Some(self.calculate_simple_ball_movement(ctx))
         } else {
-            // Blend support and defensive movement to avoid twitching
-            // when possession flickers
-            let support = self.calculate_simple_support_movement(ctx);
-            let defensive = self.calculate_simple_defensive_movement(ctx);
-
-            if ctx.team().is_control_ball() {
-                // Mostly support, slight defensive blend for stability
-                Some(support * 0.85 + defensive * 0.15)
+            // Use ball distance as a smooth blend factor instead of binary is_control_ball()
+            // which flickers and causes twitching.
+            // Close ball = more support, far ball = more defensive
+            let ball_distance = ctx.ball().distance();
+            let support_weight = if ctx.team().is_control_ball() {
+                // Team has ball: support unless ball is very far
+                (1.0 - (ball_distance / 400.0)).clamp(0.3, 0.85)
             } else {
-                // Mostly defensive, slight support blend for stability
-                Some(defensive * 0.85 + support * 0.15)
-            }
+                // Opponent has ball: mostly defensive, more support only if ball is close
+                (1.0 - (ball_distance / 150.0)).clamp(0.1, 0.4)
+            };
+
+            let support = self.calculate_simple_support_movement_raw(ctx);
+            let defensive = self.calculate_simple_defensive_movement_raw(ctx);
+
+            let blended = support * support_weight + defensive * (1.0 - support_weight);
+
+            // Apply separation once (not inside each movement method)
+            Some(blended + ctx.player().separation_velocity())
         }
     }
 
@@ -296,8 +302,8 @@ impl MidfielderRunningState {
             .velocity + ctx.player().separation_velocity()
     }
 
-    /// Support movement that respects tactical positions and spreads wide
-    fn calculate_simple_support_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+    /// Support movement that respects tactical positions and spreads wide (no separation)
+    fn calculate_simple_support_movement_raw(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let player_pos = ctx.player.position;
         let start_pos = ctx.player.start_position;
@@ -390,11 +396,11 @@ impl MidfielderRunningState {
             slowing_distance: 15.0,
         }
             .calculate(ctx.player)
-            .velocity + ctx.player().separation_velocity()
+            .velocity
     }
 
-    /// Defensive movement that returns to tactical position
-    fn calculate_simple_defensive_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+    /// Defensive movement that returns to tactical position (no separation)
+    fn calculate_simple_defensive_movement_raw(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let start_pos = ctx.player.start_position;
         let player_pos = ctx.player.position;
@@ -432,7 +438,7 @@ impl MidfielderRunningState {
             slowing_distance: urgency,
         }
             .calculate(ctx.player)
-            .velocity + ctx.player().separation_velocity()
+            .velocity
     }
 
     /// Enhanced passing decision that considers player skills and pressing intensity

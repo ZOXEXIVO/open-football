@@ -39,6 +39,9 @@ pub struct MatchPlayer {
     pub waypoint_manager: WaypointManager,
 
     pub memory: PlayerMemory,
+
+    /// Accumulates fractional condition changes across ticks
+    pub fatigue_accumulator: f32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -71,6 +74,7 @@ impl MatchPlayer {
             waypoint_manager: WaypointManager::new(),
             use_extended_state_logging,
             memory: PlayerMemory::new(),
+            fatigue_accumulator: 0.0,
         }
     }
 

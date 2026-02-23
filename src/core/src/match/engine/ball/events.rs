@@ -44,9 +44,26 @@ impl BallEventDispatcher {
 
         match event {
             BallEvent::Goal(metadata) => {
-                match metadata.side {
-                    GoalSide::Home => context.score.increment_away_goals(),
-                    GoalSide::Away => context.score.increment_home_goals(),
+                // Determine which team scored based on the goalscorer's team, not goal position.
+                // Goal position (GoalSide) is unreliable after halftime side swap.
+                if let Some(scorer) = field.players.iter().find(|p| p.id == metadata.goalscorer_player_id) {
+                    let is_home_scorer = scorer.team_id == context.score.home_team.team_id;
+
+                    if metadata.auto_goal {
+                        // Own goal — credit the opposing team
+                        if is_home_scorer {
+                            context.score.increment_away_goals();
+                        } else {
+                            context.score.increment_home_goals();
+                        }
+                    } else {
+                        // Normal goal — credit the scorer's team
+                        if is_home_scorer {
+                            context.score.increment_home_goals();
+                        } else {
+                            context.score.increment_away_goals();
+                        }
+                    }
                 }
 
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::Goal(

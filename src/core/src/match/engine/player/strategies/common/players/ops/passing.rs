@@ -138,18 +138,16 @@ impl<'p> PassingOperationsImpl<'p> {
         current_distance_to_goal: f32,
     ) -> bool {
         let player_pos = self.ctx.player.position;
+        let opponent_goal_pos = self.ctx.player().opponent_goal_position();
 
         teammates.iter().any(|teammate| {
-            // Must be a forward pass direction
             let is_forward = self.is_forward_pass(&player_pos, &teammate.position);
 
             if !is_forward {
                 return false;
             }
 
-            // Teammate must be much closer to goal
-            let teammate_distance =
-                (teammate.position - self.ctx.player().opponent_goal_position()).magnitude();
+            let teammate_distance = (teammate.position - opponent_goal_pos).magnitude();
             let is_much_closer = teammate_distance < current_distance_to_goal * 0.6;
             let not_heavily_marked = !self.is_teammate_heavily_marked(teammate);
             let has_clear_lane = self.ctx.player().has_clear_pass(teammate.id);
@@ -188,14 +186,13 @@ impl<'p> PassingOperationsImpl<'p> {
         teammates: &[MatchPlayerLite],
         current_distance_to_goal: f32,
     ) -> bool {
-        teammates.iter().any(|teammate| {
-            let teammate_distance =
-                (teammate.position - self.ctx.player().opponent_goal_position()).magnitude();
+        let opponent_goal_pos = self.ctx.player().opponent_goal_position();
 
-            // Check if teammate is in a good attacking position
+        teammates.iter().any(|teammate| {
+            let teammate_distance = (teammate.position - opponent_goal_pos).magnitude();
+
             let in_attacking_position = teammate_distance < current_distance_to_goal * 1.1;
 
-            // Check if teammate is in free space
             let in_free_space = self
                 .ctx
                 .players()
@@ -205,7 +202,6 @@ impl<'p> PassingOperationsImpl<'p> {
                 .count()
                 < 2;
 
-            // Check if teammate is making a forward run
             let teammate_velocity = self
                 .ctx
                 .tick_context
@@ -213,7 +209,7 @@ impl<'p> PassingOperationsImpl<'p> {
                 .players
                 .velocity(teammate.id);
             let making_run = teammate_velocity.magnitude() > 2.0 && {
-                let to_goal = self.ctx.player().opponent_goal_position() - teammate.position;
+                let to_goal = opponent_goal_pos - teammate.position;
                 teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
             };
 

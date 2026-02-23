@@ -55,91 +55,87 @@ impl<'p> PlayerOperationsImpl<'p> {
         let goal_position = self.opponent_goal_position();
         let distance_to_goal = self.goal_distance();
 
-        // Get player skills
-        let finishing = self.skills(self.ctx.player.id).technical.finishing;
-        let technique = self.skills(self.ctx.player.id).technical.technique;
-        let composure = self.skills(self.ctx.player.id).mental.composure;
-        let long_shots = self.skills(self.ctx.player.id).technical.long_shots;
+        let skills = &self.ctx.player.skills;
 
         // Normalize skills (0.0 to 1.0)
-        let finishing_factor = (finishing - 1.0) / 19.0;
-        let technique_factor = (technique - 1.0) / 19.0;
-        let composure_factor = (composure - 1.0) / 19.0;
-        let long_shots_factor = (long_shots - 1.0) / 19.0;
+        let finishing_f = (skills.technical.finishing - 1.0) / 19.0;
+        let technique_f = (skills.technical.technique - 1.0) / 19.0;
+        let first_touch_f = (skills.technical.first_touch - 1.0) / 19.0;
+        let long_shots_f = (skills.technical.long_shots - 1.0) / 19.0;
+        let composure_f = (skills.mental.composure - 1.0) / 19.0;
 
-        // Check pressure from defenders
-        let nearby_defenders = self.ctx.players().opponents().nearby(10.0).count();
-        let pressure_factor = 1.0 - (nearby_defenders as f32 * 0.15).min(0.5);
+        // Core shot accuracy: finishing and technique are dominant
+        // Blend finishing vs long_shots based on distance
+        let max_field_distance = self.ctx.context.field_size.width as f32;
+        let distance_blend = (distance_to_goal / (max_field_distance * 0.3)).clamp(0.0, 1.0);
+        let shot_skill = finishing_f * (1.0 - distance_blend) + long_shots_f * distance_blend;
 
-        // Distance factor (closer = more accurate)
-        let distance_factor = if distance_to_goal < 150.0 {
-            1.0 - (distance_to_goal / 300.0)
+        let base_accuracy = shot_skill * 0.45
+            + technique_f * 0.25
+            + first_touch_f * 0.15
+            + composure_f * 0.15;
+
+        // Distance modifier: closer = more accurate (multiplicative, not part of accuracy blend)
+        let distance_modifier = if distance_to_goal < 100.0 {
+            1.0
+        } else if distance_to_goal < 200.0 {
+            1.0 - (distance_to_goal - 100.0) / 400.0 // 1.0 → 0.75
         } else {
-            // For long shots, use long_shots skill
-            0.5 * long_shots_factor
+            0.6 + long_shots_f * 0.2 // Long shots: 0.6-0.8 based on skill
         };
 
-        // Overall accuracy (0.0 to 1.0, higher = more accurate)
-        let accuracy = (finishing_factor * 0.4
-                      + technique_factor * 0.25
-                      + composure_factor * 0.2
-                      + distance_factor * 0.15)
-                      * pressure_factor;
+        // Pressure modifier
+        let nearby_defenders = self.ctx.players().opponents().nearby(10.0).count();
+        let pressure_modifier = 1.0 - (nearby_defenders as f32 * 0.12).min(0.4);
 
-        // Goal dimensions (using goal post standard size)
-        let goal_width = 73.0; // Standard goal width in decimeters
+        // Condition modifier: slight accuracy loss when exhausted
+        let condition = self.ctx.player.player_attributes.condition as f32 / 10000.0;
+        let condition_modifier = 0.93 + condition * 0.07;
 
+        // Final accuracy (0.0 to ~1.0)
+        let accuracy = (base_accuracy * distance_modifier * pressure_modifier * condition_modifier)
+            .clamp(0.0, 1.0);
+
+        // Inaccuracy factor: squared so high-skill players are much tighter
+        let inaccuracy = (1.0 - accuracy) * (1.0 - accuracy);
+
+        let goal_width = 73.0;
         let mut rng = rand::rng();
 
-        // Determine shot type based on distance and skills
-        let is_placement_shot = distance_to_goal < 150.0 && finishing > 12.0;
+        // Placement shot: skilled finishers pick corners from close range
+        let is_placement_shot = distance_to_goal < 150.0 && finishing_f > 0.55;
 
         let mut target = goal_position;
 
         if is_placement_shot {
-            // Close range: Aim for corners (like real strikers)
-            // Choose a corner based on angle and randomness
-            let aim_preference = rng.random_range(0.0..1.0);
-
-            // Determine horizontal target (Y-axis - width)
-            let y_target = if aim_preference < 0.5 {
-                // Aim for left post area
+            // Close range: aim for a corner
+            let y_target = if rng.random_range(0.0..1.0) < 0.5 {
                 -goal_width * 0.35
             } else {
-                // Aim for right post area
                 goal_width * 0.35
             };
 
-            // Determine vertical target (Z-axis - height, if supported)
-            // For now, shots are 2D so we focus on Y placement
-
-            // Add accuracy-based deviation from intended corner
-            let y_deviation = rng.random_range(-goal_width * 0.2..goal_width * 0.2) * (1.0 - accuracy);
+            // Better finishing = tighter grouping around intended corner
+            let y_deviation = rng.random_range(-goal_width * 0.2..goal_width * 0.2) * inaccuracy;
             target.y += y_target + y_deviation;
-
         } else {
-            // Long range: More central but with larger deviation
-            // Players try to keep it on target rather than picking corners
-            let y_base = rng.random_range(-goal_width * 0.15..goal_width * 0.15);
-
-            // Larger deviation for long shots based on accuracy
-            let y_deviation = rng.random_range(-goal_width * 0.35..goal_width * 0.35) * (1.0 - accuracy);
+            // Long range / low skill: aim more central with wider spread
+            let y_base = rng.random_range(-goal_width * 0.1..goal_width * 0.1);
+            let y_deviation = rng.random_range(-goal_width * 0.4..goal_width * 0.4) * inaccuracy;
             target.y += y_base + y_deviation;
         }
 
-        // Add slight depth deviation (X-axis) based on technique
-        // Poor technique can cause shots to go over or fall short
-        let x_deviation = rng.random_range(-5.0..5.0) * (1.0 - technique_factor);
+        // Technique affects clean contact — poor technique sprays the ball
+        let x_deviation = rng.random_range(-5.0..5.0) * inaccuracy;
         target.x += x_deviation;
 
-        // Mental composure affects shot under pressure
+        // Composure under pressure: defenders nearby cause panic deviation
         if nearby_defenders > 0 {
-            let panic_factor = 1.0 - composure_factor;
-            let panic_deviation_y = rng.random_range(-goal_width * 0.15..goal_width * 0.15) * panic_factor;
-            let panic_deviation_x = rng.random_range(-8.0..8.0) * panic_factor;
-
-            target.y += panic_deviation_y;
-            target.x += panic_deviation_x;
+            let panic = (1.0 - composure_f) * (1.0 - composure_f);
+            let panic_y = rng.random_range(-goal_width * 0.12..goal_width * 0.12) * panic;
+            let panic_x = rng.random_range(-6.0..6.0) * panic;
+            target.y += panic_y;
+            target.x += panic_x;
         }
 
         target
@@ -171,39 +167,38 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
         let distance = self.ctx.tick_context.distances.get(self.ctx.player.id, teammate_id);
 
-        // Use multiple skills to determine pass power
-        let pass_skill = self.ctx.player.skills.technical.passing / 20.0;
-        let technique_skill = self.ctx.player.skills.technical.technique / 20.0;
-        let strength_skill = self.ctx.player.skills.physical.strength / 20.0;
+        let skills = &self.ctx.player.skills;
 
-        // Calculate skill-weighted factor
-        let skill_factor = (pass_skill * 0.6) + (technique_skill * 0.2) + (strength_skill * 0.2);
+        // Technical: passing for weight, technique for clean contact
+        let passing = skills.technical.passing / 20.0;
+        let technique = skills.technical.technique / 20.0;
+        // Physical: strength for raw power capability
+        let strength = skills.physical.strength / 20.0;
+        // Mental: vision for pass weight judgement, composure for consistency
+        let vision = skills.mental.vision / 20.0;
+        let composure = skills.mental.composure / 20.0;
 
-        // More skilled players can hit passes at more appropriate power levels
+        let skill_factor = passing * 0.35 + technique * 0.2 + strength * 0.15
+            + vision * 0.15 + composure * 0.15;
+
+        // Condition: slight power loss when exhausted (0-10000 scale)
+        // Ranges from 0.92 (exhausted) to 1.0 (fresh)
+        let condition = self.ctx.player.player_attributes.condition as f32 / 10000.0;
+        let condition_factor = 0.92 + condition * 0.08;
+
+        // Distance scaling: pass power proportional to distance needed
         let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.8;
-
-        // Use distance-scaled power with proper minimum for very short passes
-        // Very short passes (< 10m) should use proportionally less power
         let distance_factor = if distance < 10.0 {
-            // For very short passes, scale linearly from 0.05 to 0.125
             (0.05 + (distance / 10.0) * 0.075).clamp(0.05, 0.125)
         } else {
-            // For longer passes, use the normal scaling with lower minimum
             (distance / max_pass_distance).clamp(0.125, 1.0)
         };
 
-        // Calculate base power with adjusted ranges for better control
         let min_power = 0.3;
-        let max_power = 2.5;
+        let max_power = 2.0;
         let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
-        // Add slight randomization
-        let random_factor = rand::rng().random_range(0.9..1.1);
-
-        // Players with better skills have less randomization
-        let final_random_factor = 1.0 + (random_factor - 1.0) * (1.0 - skill_factor * 0.5);
-
-        base_power * final_random_factor
+        base_power * condition_factor
     }
 
     pub fn kick_teammate_power(&self, teammate_id: u32) -> f32 {
@@ -245,38 +240,39 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn shoot_goal_power(&self) -> f64 {
         let goal_distance = self.goal_distance();
 
-        // Calculate the base shooting power based on the player's relevant skills
-        let shooting_technique = self.ctx.player.skills.technical.technique;
-        let shooting_power = self.ctx.player.skills.technical.long_shots;
-        let finishing_skill = self.ctx.player.skills.technical.finishing;
-        let player_strength = self.ctx.player.skills.physical.strength;
+        let skills = &self.ctx.player.skills;
 
-        // Normalize the skill values — low-skill players generate weaker shots
-        let technique_factor = 0.2 + (shooting_technique / 20.0) * 0.8;
-        let power_factor = 0.2 + (shooting_power / 20.0) * 0.8;
-        let finishing_factor = 0.2 + (finishing_skill / 20.0) * 0.8;
-        let strength_factor = 0.2 + (player_strength / 20.0) * 0.8;
+        // Technical skills
+        let technique = skills.technical.technique / 20.0;
+        let long_shots = skills.technical.long_shots / 20.0;
+        let finishing = skills.technical.finishing / 20.0;
+        // Physical
+        let strength = skills.physical.strength / 20.0;
+        // Mental: composure under pressure
+        let composure = skills.mental.composure / 20.0;
 
-        // Calculate distance factor that increases power for longer distances
-        // Close shots: ~1.0, Long shots: ~1.6
+        // Blend finishing (close) vs long_shots (far) based on distance
         let max_field_distance = self.ctx.context.field_size.width as f32;
+        let distance_blend = (goal_distance / (max_field_distance * 0.3)).clamp(0.0, 1.0);
+        let shot_skill = finishing * (1.0 - distance_blend) + long_shots * distance_blend;
+
+        // Skill multiplier with floor so even low-skill players generate some power
+        let skill_multiplier = 0.2 + 0.8 * (
+            shot_skill * 0.3 + technique * 0.25 + strength * 0.25 + composure * 0.2
+        );
+
+        // Distance factor: longer shots need more power (1.0 close, up to 1.6 far)
         let distance_ratio = (goal_distance / max_field_distance).clamp(0.0, 1.0);
         let distance_factor = 1.0 + distance_ratio * 0.6;
 
-        // Calculate the shooting power - moderate increase from original
+        // Condition: slight power loss when exhausted (0.90 exhausted to 1.0 fresh)
+        let condition = self.ctx.player.player_attributes.condition as f32 / 10000.0;
+        let condition_factor = 0.90 + condition * 0.10;
+
         let base_power = 3.5;
-        let skill_multiplier = (technique_factor * 0.3)
-            + (power_factor * 0.35)
-            + (finishing_factor * 0.2)
-            + (strength_factor * 0.15);
+        let shooting_power = base_power * skill_multiplier * distance_factor * condition_factor;
 
-        let shooting_power = base_power * skill_multiplier * distance_factor;
-
-        // Ensure the shooting power is within a reasonable range
-        let min_power = 2.0;
-        let max_power = 5.5;
-
-        shooting_power.clamp(min_power, max_power) as f64
+        shooting_power.clamp(2.0, 5.5) as f64
     }
 
     pub fn distance_to_player(&self, player_id: u32) -> f32 {
@@ -315,10 +311,8 @@ impl<'p> PlayerOperationsImpl<'p> {
         let target_player_position = self.ctx.tick_context.positions.players.position(player_id);
         let direction_to_player = (target_player_position - player_position).normalize();
 
-        // Check if the distance to the target player is within a reasonable pass range
-        let distance_to_player = self.ctx.player().distance_to_player(player_id);
+        let distance_to_player = self.distance_to_player(player_id);
 
-        // Check if there are any opponents obstructing the pass
         let ray_cast_result = self.ctx.tick_context.space.cast_ray(
             player_position,
             direction_to_player,
@@ -331,13 +325,11 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     pub fn has_clear_shot(&self) -> bool {
         let player_position = self.ctx.player.position;
-        let goal_position = self.ctx.player().opponent_goal_position();
+        let goal_position = self.opponent_goal_position();
         let direction_to_goal = (goal_position - player_position).normalize();
 
-        // Check if the distance to the goal is within the player's shooting range
-        let distance_to_goal = self.ctx.player().goal_distance();
+        let distance_to_goal = self.goal_distance();
 
-        // Check if there are any opponents obstructing the shot
         let ray_cast_result = self.ctx.tick_context.space.cast_ray(
             player_position,
             direction_to_goal,

@@ -29,8 +29,9 @@ impl<'p> ShootingOperationsImpl<'p> {
     /// Check if player is in shooting range (skill-aware)
     pub fn in_shooting_range(&self) -> bool {
         let distance_to_goal = self.ctx.ball().distance_to_opponent_goal();
-        let shooting_skill = self.ctx.player.skills.technical.finishing / 20.0;
-        let long_shot_skill = self.ctx.player.skills.technical.long_shots / 20.0;
+        let skills = &self.ctx.player.skills;
+        let shooting_skill = skills.technical.finishing / 20.0;
+        let long_shot_skill = skills.technical.long_shots / 20.0;
 
         // Very close range - even poor finishers should shoot!
         if distance_to_goal <= VERY_CLOSE_RANGE_DISTANCE {
@@ -99,9 +100,10 @@ impl<'p> ShootingOperationsImpl<'p> {
     pub fn should_shoot_over_pass(&self) -> bool {
         let distance = self.ctx.ball().distance_to_opponent_goal();
         let has_clear_shot = self.ctx.player().has_clear_shot();
-        let confidence = self.ctx.player.skills.mental.composure / 20.0;
-        let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-        let long_shots = self.ctx.player.skills.technical.long_shots / 20.0;
+        let skills = &self.ctx.player.skills;
+        let confidence = skills.mental.composure / 20.0;
+        let finishing = skills.technical.finishing / 20.0;
+        let long_shots = skills.technical.long_shots / 20.0;
 
         // Close range - almost always shoot if clear
         if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && has_clear_shot {
@@ -132,13 +134,14 @@ impl<'p> ShootingOperationsImpl<'p> {
         }
 
         // Check if teammates are in MUCH better positions
+        let opponent_goal_pos = self.ctx.player().opponent_goal_position();
         let better_positioned_teammate = self
             .ctx
             .players()
             .teammates()
             .nearby(100.0)
             .any(|t| {
-                let t_dist = (t.position - self.ctx.player().opponent_goal_position()).magnitude();
+                let t_dist = (t.position - opponent_goal_pos).magnitude();
                 t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
             });
 
@@ -160,9 +163,10 @@ impl<'p> ShootingOperationsImpl<'p> {
 
     /// Get shooting confidence factor (0.0 - 1.0)
     pub fn shooting_confidence(&self) -> f32 {
-        let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-        let composure = self.ctx.player.skills.mental.composure / 20.0;
-        let technique = self.ctx.player.skills.technical.technique / 20.0;
+        let skills = &self.ctx.player.skills;
+        let finishing = skills.technical.finishing / 20.0;
+        let composure = skills.mental.composure / 20.0;
+        let technique = skills.technical.technique / 20.0;
 
         let distance_factor = self.distance_factor();
         let pressure_factor = self.pressure_factor();

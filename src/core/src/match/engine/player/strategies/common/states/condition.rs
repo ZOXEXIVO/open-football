@@ -1,4 +1,5 @@
 use crate::r#match::ConditionContext;
+use log::trace;
 use super::activity_intensity::{ActivityIntensity, ActivityIntensityConfig};
 use super::constants::{MAX_CONDITION, MAX_JADEDNESS, FATIGUE_RATE_MULTIPLIER, RECOVERY_RATE_MULTIPLIER};
 
@@ -42,32 +43,31 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             ctx.player.player_attributes.condition,
         );
 
-        let velocity_fatigue = if velocity_magnitude < 0.3 {
-            // Resting - recovery
-            -4.0 * 1.5 // Negative = recovery, boosted for visibility
+        // Use ratio of current speed to max speed for fatigue classification
+        // This ensures slow players still get tired when running at their max
+        let intensity_ratio = if max_speed > 0.0 {
+            (velocity_magnitude / max_speed).clamp(0.0, 1.0)
         } else {
-            let intensity_ratio = if max_speed > 0.0 {
-                (velocity_magnitude / max_speed).clamp(0.0, 1.0)
-            } else {
-                0.5
-            };
+            0.0
+        };
 
-            // Velocity-based fatigue: scales from 0 (walking) to 10 (sprinting)
-            if intensity_ratio < 0.3 {
-                1.0 // Walking slowly
-            } else if intensity_ratio < 0.6 {
-                3.0 // Jogging
-            } else if intensity_ratio < 0.85 {
-                6.0 // Running
+        let velocity_fatigue = if intensity_ratio < 0.05 {
+            // Nearly stationary - recovery
+            -4.0 * 1.5 // Negative = recovery, boosted for visibility
+        } else if intensity_ratio < 0.3 {
+            -2.0 // Walking slowly - light recovery
+        } else if intensity_ratio < 0.6 {
+            3.0 // Jogging
+        } else if intensity_ratio < 0.85 {
+            6.0 // Running
+        } else {
+            // Sprinting - varies by role
+            if T::sprint_multiplier() > 1.55 {
+                10.0 // Forwards (highest)
+            } else if T::sprint_multiplier() > 1.4 {
+                9.0 // Defenders/Midfielders
             } else {
-                // Sprinting - varies by role
-                if T::sprint_multiplier() > 1.55 {
-                    10.0 // Forwards (highest)
-                } else if T::sprint_multiplier() > 1.4 {
-                    9.0 // Defenders/Midfielders
-                } else {
-                    7.0 // Goalkeepers (lowest)
-                }
+                7.0 // Goalkeepers (lowest)
             }
         };
 
@@ -87,11 +87,32 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
             FATIGUE_RATE_MULTIPLIER
         };
 
-        let condition_change = (combined_fatigue * stamina_factor * fitness_factor * rate_multiplier) as i16;
+        let condition_change_f = combined_fatigue * stamina_factor * fitness_factor * rate_multiplier;
 
-        // Apply condition change (clamped to 0..MAX_CONDITION)
-        ctx.player.player_attributes.condition =
-            (ctx.player.player_attributes.condition - condition_change).clamp(0, MAX_CONDITION);
+        // Accumulate fractional fatigue to avoid float-to-int truncation losing small per-tick values
+        ctx.player.fatigue_accumulator += condition_change_f;
+
+        // Only apply when accumulator reaches a full integer point
+        let condition_change = ctx.player.fatigue_accumulator as i16;
+        if condition_change != 0 {
+            ctx.player.fatigue_accumulator -= condition_change as f32;
+
+            let old_condition = ctx.player.player_attributes.condition;
+
+            // Apply condition change (clamped to 0..MAX_CONDITION)
+            ctx.player.player_attributes.condition =
+                (ctx.player.player_attributes.condition - condition_change).clamp(0, MAX_CONDITION);
+
+            trace!(
+                "Condition: player={}, vel={:.3}, change={}, acc={:.3}, condition: {} -> {}",
+                ctx.player.id,
+                velocity_magnitude,
+                condition_change,
+                ctx.player.fatigue_accumulator,
+                old_condition,
+                ctx.player.player_attributes.condition
+            );
+        }
 
         // If condition drops very low, slightly increase jadedness (long-term tiredness)
         if ctx.player.player_attributes.condition < T::low_condition_threshold()

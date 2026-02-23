@@ -286,17 +286,17 @@ impl PlayerEventDispatcher {
 
         // Distance-based error: longer passes have more positional error
         let distance_error_factor = (horizontal_distance / 200.0).min(1.5);
-        let max_position_error = 12.0 * (1.0 - accuracy_factor) * distance_error_factor;
+        let max_position_error = 5.0 * (1.0 - accuracy_factor) * distance_error_factor;
 
         // Add random targeting error
         let mut target_error_x = rng.random_range(-max_position_error..max_position_error);
         let mut target_error_y = rng.random_range(-max_position_error..max_position_error);
 
-        // Miskick chance for low-technique players — ball goes significantly off target
-        let miskick_chance = (1.0 - skills.technique).powi(2) * 0.3;
+        // Miskick chance for very low-technique players — ball goes off target
+        let miskick_chance = (1.0 - skills.technique).powi(3) * 0.15;
         if rng.random_range(0.0f32..1.0) < miskick_chance {
-            target_error_x += rng.random_range(-15.0f32..15.0);
-            target_error_y += rng.random_range(-15.0f32..15.0);
+            target_error_x += rng.random_range(-5.0f32..5.0);
+            target_error_y += rng.random_range(-5.0f32..5.0);
         }
 
         // Calculate actual target with error
@@ -381,7 +381,7 @@ impl PlayerEventDispatcher {
         );
 
         // CRITICAL: Validate velocity to prevent cosmic-speed passes
-        const MAX_PASS_VELOCITY: f32 = 7.2; // Maximum realistic pass velocity per tick (reduced 20%)
+        const MAX_PASS_VELOCITY: f32 = 5.0; // Cap for longest passes (~60m)
 
         // Check for NaN or infinity
         if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
@@ -390,9 +390,9 @@ impl PlayerEventDispatcher {
             // Fallback to a safe default velocity
             let safe_direction = actual_pass_vector.normalize();
             final_velocity = Vector3::new(
-                safe_direction.x * 3.0,
-                safe_direction.y * 3.0,
-                0.5
+                safe_direction.x * 1.5,
+                safe_direction.y * 1.5,
+                0.3
             );
         }
 
@@ -434,9 +434,21 @@ impl PlayerEventDispatcher {
         ball_pass_vector: &Vector3<f32>,
         pass_force: f32,
     ) -> Vector3<f32> {
-        const PASS_FORCE_MULTIPLIER: f32 = 4.0;
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
-        horizontal_direction * (pass_force * PASS_FORCE_MULTIPLIER)
+        let distance = (ball_pass_vector.x * ball_pass_vector.x + ball_pass_vector.y * ball_pass_vector.y).sqrt();
+
+        // Calculate velocity needed to reach target accounting for ground friction
+        // With friction factor 0.985/tick, total roll distance = v0 / 0.015
+        // So v0 = distance * 0.015
+        // Overshoot slightly (1.15x) so ball arrives with some remaining speed
+        const GROUND_FRICTION: f32 = 0.015;
+        let needed_velocity = distance * GROUND_FRICTION * 1.15;
+
+        // pass_force (0.3-2.0) modulates: skilled players weight the pass better
+        // Normalize to 0.85-1.1 range so it fine-tunes rather than drives the physics
+        let skill_modifier = 0.85 + (pass_force.clamp(0.3, 2.0) - 0.3) * 0.15;
+
+        horizontal_direction * (needed_velocity * skill_modifier)
     }
 
     /// Select trajectory type based on obstacles in the passing lane
@@ -940,17 +952,17 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let max_y_error = base_position_error.clamp(2.0, 150.0);
+        let base_position_error = 15.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let max_y_error = base_position_error.clamp(2.0, 60.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
-        // Miskick chance for low-technique players — shot goes wildly off target
-        let miskick_chance = (1.0 - technique_skill).powi(2) * 0.4;
+        // Miskick chance for very low-technique players — shot goes off target
+        let miskick_chance = (1.0 - technique_skill).powi(3) * 0.2;
         if rng.random_range(0.0f32..1.0) < miskick_chance {
-            actual_y_target += rng.random_range(-GOAL_WIDTH * 2.0..GOAL_WIDTH * 2.0);
+            actual_y_target += rng.random_range(-GOAL_WIDTH * 0.8..GOAL_WIDTH * 0.8);
         }
 
         // Clamp to reasonable bounds (can miss goal, but not by too much)

@@ -76,6 +76,13 @@ impl League {
             ctx.with_league(self.id, String::from(&self.slug), &league_teams),
         );
 
+        // Reset table when new schedule is generated (new season)
+        if schedule_result.generated {
+            self.table = LeagueTable::new(&league_teams);
+            self.matches = MatchStorage::new();
+            info!("📊 League table reset for new season: {}", self.name);
+        }
+
         // Phase 4: Match execution with enhanced dynamics
         if schedule_result.is_match_scheduled() {
             let match_results = self.play_scheduled_matches(
@@ -577,7 +584,7 @@ impl League {
     }
 
     fn is_season_end(&self, date: NaiveDate) -> bool {
-        date.month() == 5 && date.day() >= 25
+        date.month() == 5 && date.day() == 25
     }
 
     fn is_winter_break(&self, date: NaiveDate) -> bool {
@@ -602,6 +609,11 @@ impl League {
 
         self.dynamics.reset_for_new_season();
         self.statistics.archive_season_stats();
+
+        // Reset disciplinary records for new season
+        self.regulations.suspended_players.clear();
+        self.regulations.yellow_card_accumulation.clear();
+        self.regulations.pending_cases.clear();
     }
 
     fn process_winter_break(&mut self, _clubs: &[Club]) {
