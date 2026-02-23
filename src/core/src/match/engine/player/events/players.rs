@@ -289,8 +289,16 @@ impl PlayerEventDispatcher {
         let max_position_error = 5.0 * (1.0 - accuracy_factor) * distance_error_factor;
 
         // Add random targeting error
-        let mut target_error_x = rng.random_range(-max_position_error..max_position_error);
-        let mut target_error_y = rng.random_range(-max_position_error..max_position_error);
+        let mut target_error_x = if max_position_error > f32::EPSILON {
+            rng.random_range(-max_position_error..max_position_error)
+        } else {
+            0.0
+        };
+        let mut target_error_y = if max_position_error > f32::EPSILON {
+            rng.random_range(-max_position_error..max_position_error)
+        } else {
+            0.0
+        };
 
         // Miskick chance for very low-technique players — ball goes off target
         let miskick_chance = (1.0 - skills.technique).powi(3) * 0.15;
