@@ -22,9 +22,8 @@ const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
 const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
 
 // Passing decision thresholds for forwards
-const PASSING_DISABLED_DISTANCE: f32 = 100.0; // Within this distance, very restrictive passing
-const SHOOTING_ZONE_DISTANCE: f32 = 300.0; // Enhanced shooting priority zone
-const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.4; // Teammate must be 40% of distance closer
+const SHOOTING_ZONE_DISTANCE: f32 = 200.0; // Enhanced shooting priority zone
+const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.7; // Teammate must be 30% closer to override
 
 // Performance thresholds
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
@@ -71,6 +70,14 @@ impl StateProcessingHandler for ForwardRunningState {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
+                }
+            }
+
+            // Priority 0.5: Before general shooting, check if a teammate is in a MUCH better scoring position
+            // This distributes goals across the team instead of one forward shooting every time
+            if distance_to_goal > POINT_BLANK_DISTANCE {
+                if self.has_teammate_with_much_better_shot(ctx, distance_to_goal) {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 }
             }
 
@@ -857,10 +864,9 @@ impl ForwardRunningState {
             return self.has_safe_passing_option(ctx, &teammates);
         }
 
-        // 2. PREFER TO RUN/SHOOT: Close to goal - very restrictive passing
-        if distance_to_goal < PASSING_DISABLED_DISTANCE && !under_pressure {
-            // Within shooting zone - only pass to teammates in much better positions
-            return false;
+        // 2. PREFER TO RUN/SHOOT: Very close to goal - only pass if teammate is much better positioned
+        if distance_to_goal < CLOSE_RANGE_DISTANCE && !under_pressure {
+            return self.has_better_positioned_teammate(ctx, &teammates, distance_to_goal);
         }
 
         if distance_to_goal < SHOOTING_ZONE_DISTANCE && !under_pressure {
@@ -899,8 +905,48 @@ impl ForwardRunningState {
         })
     }
 
+    /// Check if a teammate has a MUCH better shot opportunity (vision/teamwork-aware)
+    /// Used in try_fast() to distribute goals across team
+    fn has_teammate_with_much_better_shot(
+        &self,
+        ctx: &StateProcessingContext,
+        own_distance: f32,
+    ) -> bool {
+        // Don't pass at point-blank range
+        if own_distance < POINT_BLANK_DISTANCE {
+            return false;
+        }
+
+        let vision = ctx.player.skills.mental.vision / 20.0;
+        let teamwork = ctx.player.skills.mental.teamwork / 20.0;
+
+        // Selfish players with low vision/teamwork don't look for teammates
+        if vision < 0.4 && teamwork < 0.4 {
+            return false;
+        }
+
+        ctx.players()
+            .teammates()
+            .nearby(200.0)
+            .any(|teammate| {
+                let teammate_distance =
+                    (teammate.position - ctx.player().opponent_goal_position()).magnitude();
+                // Teammate must be significantly closer (at least 40% closer)
+                let is_much_closer = teammate_distance < own_distance * 0.6;
+                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+                let not_heavily_marked = ctx
+                    .players()
+                    .opponents()
+                    .all()
+                    .filter(|opp| (opp.position - teammate.position).magnitude() < 8.0)
+                    .count()
+                    < 2;
+
+                is_much_closer && has_clear_pass && not_heavily_marked
+            })
+    }
+
     /// Check if any teammate is in a significantly better scoring position
-    #[allow(dead_code)]
     fn has_better_positioned_teammate(
         &self,
         ctx: &StateProcessingContext,

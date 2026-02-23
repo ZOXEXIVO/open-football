@@ -282,9 +282,9 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   display: inline-block;
   padding: 12px 18px;
   font-size: 10px;
-  font-weight: 400;
+  font-weight: 800;
   text-transform: uppercase;
-  letter-spacing: 0.7px;
+  letter-spacing: 0.6px;
   color: var(--tab-fg, #8a939b);
   border-bottom: 2px solid transparent;
   cursor: pointer;

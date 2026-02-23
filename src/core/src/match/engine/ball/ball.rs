@@ -886,7 +886,9 @@ impl Ball {
 
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
-            if let Some(goalscorer) = self.previous_owner.or(self.current_owner) {
+            // Prefer current_owner (e.g. player carrying ball into goal)
+            // Fall back to previous_owner (e.g. shooter or passer whose ball went in)
+            if let Some(goalscorer) = self.current_owner.or(self.previous_owner) {
                 let player = context.players.by_id(goalscorer).unwrap();
                 let is_auto_goal = match player.side {
                     Some(PlayerSide::Left) => goal_side == GoalSide::Home,

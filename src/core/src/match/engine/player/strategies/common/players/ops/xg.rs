@@ -1,6 +1,6 @@
 use crate::r#match::StateProcessingContext;
 
-pub const MIN_XG_THRESHOLD: f32 = 0.04;
+pub const MIN_XG_THRESHOLD: f32 = 0.08;
 pub const GOOD_XG_THRESHOLD: f32 = 0.12;
 pub const EXCELLENT_XG_THRESHOLD: f32 = 0.25;
 

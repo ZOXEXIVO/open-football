@@ -25,15 +25,8 @@ impl StateProcessingHandler for ForwardPassingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Close to goal — always prefer shooting over passing
-        if distance_to_goal < 120.0 {
-            if ctx.player().has_clear_shot() || distance_to_goal < 60.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
-        }
-
-        // In shooting range — redirect to shooting
-        if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
+        // Very close to goal with clear shot — shoot instead of passing
+        if distance_to_goal < 40.0 && ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 

@@ -265,6 +265,7 @@ impl PlayerEventDispatcher {
         // Extract player skills and condition
         let player = field.get_player(event_model.from_player_id).unwrap();
         let passer_position = player.position;
+        let passer_side = player.side;
         let skills = PassSkills::from_player(player);
 
         // Calculate overall quality for accuracy - affected by condition
@@ -299,11 +300,34 @@ impl PlayerEventDispatcher {
         }
 
         // Calculate actual target with error
-        let actual_target = Vector3::new(
+        let mut actual_target = Vector3::new(
             ideal_target.x + target_error_x,
             ideal_target.y + target_error_y,
             0.0,
         );
+
+        // SAFETY: Prevent miskicked passes from going into passer's own goal
+        // Even the worst passer wouldn't kick the ball directly into their own net
+        {
+            use crate::r#match::PlayerSide;
+            let field_width = field.size.width as f32;
+            let goal_safety_margin = 20.0;
+            match passer_side {
+                Some(PlayerSide::Left) => {
+                    // Own goal at x ≈ 0 — keep target away from goal line
+                    if actual_target.x < goal_safety_margin {
+                        actual_target.x = passer_position.x.max(goal_safety_margin);
+                    }
+                }
+                Some(PlayerSide::Right) => {
+                    // Own goal at x ≈ field_width — keep target away from goal line
+                    if actual_target.x > field_width - goal_safety_margin {
+                        actual_target.x = passer_position.x.min(field_width - goal_safety_margin);
+                    }
+                }
+                _ => {}
+            }
+        }
 
         let actual_pass_vector = actual_target - ball_position;
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
@@ -1093,11 +1117,36 @@ impl PlayerEventDispatcher {
         // Clearances are powerful kicks - higher cap than passes (7.2)
         const MAX_CLEAR_VELOCITY: f32 = 14.0;
         let speed = velocity.norm();
-        let capped_velocity = if speed > MAX_CLEAR_VELOCITY {
+        let mut capped_velocity = if speed > MAX_CLEAR_VELOCITY {
             velocity * (MAX_CLEAR_VELOCITY / speed)
         } else {
             velocity
         };
+
+        // SAFETY: Prevent clearances from going toward own goal
+        // A clearance should always go AWAY from own goal, never toward it
+        {
+            use crate::r#match::PlayerSide;
+            if let Some(clearer_id) = field.ball.current_owner {
+                if let Some(clearer) = field.get_player(clearer_id) {
+                    match clearer.side {
+                        Some(PlayerSide::Left) => {
+                            // Own goal at x ≈ 0 — clearance must go forward (positive x)
+                            if capped_velocity.x < 0.0 {
+                                capped_velocity.x = capped_velocity.x.abs();
+                            }
+                        }
+                        Some(PlayerSide::Right) => {
+                            // Own goal at x ≈ field_width — clearance must go backward (negative x)
+                            if capped_velocity.x > 0.0 {
+                                capped_velocity.x = -capped_velocity.x.abs();
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
 
         // Apply the clearing velocity to the ball
         field.ball.velocity = capped_velocity;

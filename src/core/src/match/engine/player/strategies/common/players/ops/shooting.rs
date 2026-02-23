@@ -6,7 +6,7 @@ pub struct ShootingOperationsImpl<'p> {
 }
 
 // Realistic shooting distances (field is typically 840 units)
-const MAX_SHOOTING_DISTANCE: f32 = 250.0; // ~60m - absolute max for long shots
+const MAX_SHOOTING_DISTANCE: f32 = 150.0; // ~75m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 50.0; // ~20m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 70.0; // ~30m - close range shots
