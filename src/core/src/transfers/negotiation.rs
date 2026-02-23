@@ -4,13 +4,13 @@ use chrono::NaiveDate;
 
 #[derive(Debug, Clone)]
 pub enum NegotiationPhase {
-    /// Selling club decides whether to engage (3-7 days)
+    /// Selling club decides whether to engage (1-3 days)
     InitialApproach { started: NaiveDate },
-    /// Fee negotiation with counter-offers, up to 3 rounds (7-21 days per round)
+    /// Fee negotiation with counter-offers, up to 3 rounds (3-7 days per round)
     ClubNegotiation { started: NaiveDate, round: u8 },
-    /// Player evaluates the move (5-14 days)
+    /// Player evaluates the move (2-5 days)
     PersonalTerms { started: NaiveDate },
-    /// Medical exam and paperwork (3-5 days)
+    /// Medical exam and paperwork (1-3 days)
     MedicalAndFinalization { started: NaiveDate },
 }
 
@@ -75,13 +75,13 @@ impl TransferNegotiation {
         player_age: u8,
         player_ambition: f32,
     ) -> Self {
-        // Overall deadline: 60 days
+        // Overall deadline: 45 days
         let expiry_date = created_date
-            .checked_add_signed(chrono::Duration::days(60))
+            .checked_add_signed(chrono::Duration::days(45))
             .unwrap_or(created_date);
 
-        // Initial approach phase: 3-7 days
-        let phase_duration = IntegerUtils::random(3, 7) as i64;
+        // Initial approach phase: 1-3 days
+        let phase_duration = IntegerUtils::random(1, 3) as i64;
         let phase_expiry = created_date
             .checked_add_signed(chrono::Duration::days(phase_duration))
             .unwrap_or(created_date);
@@ -139,7 +139,7 @@ impl TransferNegotiation {
     }
 
     pub fn advance_to_club_negotiation(&mut self, current_date: NaiveDate) {
-        let duration = IntegerUtils::random(7, 21) as i64;
+        let duration = IntegerUtils::random(3, 7) as i64;
         self.phase = NegotiationPhase::ClubNegotiation {
             started: current_date,
             round: 1,
@@ -151,7 +151,7 @@ impl TransferNegotiation {
 
     pub fn advance_club_negotiation_round(&mut self, current_date: NaiveDate) {
         if let NegotiationPhase::ClubNegotiation { round, .. } = self.phase {
-            let duration = IntegerUtils::random(7, 14) as i64;
+            let duration = IntegerUtils::random(3, 7) as i64;
             self.phase = NegotiationPhase::ClubNegotiation {
                 started: current_date,
                 round: round + 1,
@@ -163,7 +163,7 @@ impl TransferNegotiation {
     }
 
     pub fn advance_to_personal_terms(&mut self, current_date: NaiveDate) {
-        let duration = IntegerUtils::random(5, 14) as i64;
+        let duration = IntegerUtils::random(2, 5) as i64;
         self.phase = NegotiationPhase::PersonalTerms {
             started: current_date,
         };
@@ -173,7 +173,7 @@ impl TransferNegotiation {
     }
 
     pub fn advance_to_medical(&mut self, current_date: NaiveDate) {
-        let duration = IntegerUtils::random(3, 5) as i64;
+        let duration = IntegerUtils::random(1, 3) as i64;
         self.phase = NegotiationPhase::MedicalAndFinalization {
             started: current_date,
         };

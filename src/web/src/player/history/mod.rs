@@ -174,6 +174,8 @@ pub async fn player_history_action(
         start_year: u16,
         team_slug: String,
         team_name: String,
+        league_name: String,
+        league_slug: String,
         is_loan: bool,
     }
     struct GroupAccum {
@@ -217,6 +219,8 @@ pub async fn player_history_action(
                     start_year: item.season.start_year,
                     team_slug: item.team_slug.clone(),
                     team_name: item.team_name.clone(),
+                    league_name: item.league_name.clone(),
+                    league_slug: item.league_slug.clone(),
                     is_loan: item.is_loan,
                 },
                 GroupAccum {
@@ -257,7 +261,7 @@ pub async fn player_history_action(
                 .map(|t| matches!(t.transfer_type, core::transfers::TransferType::Free) || (matches!(t.transfer_type, core::transfers::TransferType::Permanent) && t.fee.amount <= 0.0))
                 .unwrap_or(false);
 
-            // Lookup country/league info
+            // Lookup country info (country doesn't change with promotion/relegation)
             let location = if !key.team_slug.is_empty() {
                 if !location_cache.contains_key(&key.team_slug) {
                     if let Some(info) = find_team_location(simulator_data, &key.team_slug) {
@@ -295,8 +299,8 @@ pub async fn player_history_action(
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
-                league_name: location.map(|l| l.league_name.clone()).unwrap_or_default(),
-                league_slug: location.map(|l| l.league_slug.clone()).unwrap_or_default(),
+                league_name: key.league_name,
+                league_slug: key.league_slug,
             }
         })
         .collect();

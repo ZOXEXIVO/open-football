@@ -105,7 +105,8 @@ impl PipelineProcessor {
     // ============================================================
 
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
-        let should_evaluate = Self::should_evaluate(date);
+        let is_window_start = Self::is_window_start(date);
+        let should_evaluate = is_window_start || Self::should_evaluate(date);
 
         // Pass 1: Collect evaluations (immutable reads)
         let mut evaluations: Vec<SquadEvaluation> = Vec::new();
@@ -128,7 +129,8 @@ impl PipelineProcessor {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == eval.club_id) {
                 let plan = &mut club.transfer_plan;
 
-                if !plan.initialized || should_evaluate {
+                // Only fully reset plans at window start or first initialization
+                if !plan.initialized || is_window_start {
                     plan.transfer_requests.clear();
                     plan.scouting_assignments.clear();
                     plan.scouting_reports.clear();
@@ -145,13 +147,18 @@ impl PipelineProcessor {
         }
     }
 
-    fn should_evaluate(date: NaiveDate) -> bool {
+    /// Full reset only at transfer window opening dates
+    fn is_window_start(date: NaiveDate) -> bool {
         let month = date.month();
         let day = date.day();
+        (month == 5 && day == 31) || (month == 6 && day == 1) || (month == 1 && day == 1)
+    }
 
-        (month == 5 && day == 31)
-            || (month == 6 && day == 1)
-            || (month == 1 && day == 1)
+    /// Re-evaluate weekly during transfer windows to pick up new needs
+    fn should_evaluate(date: NaiveDate) -> bool {
+        let month = date.month();
+        ((month >= 6 && month <= 8) || month == 1)
+            && date.weekday() == chrono::Weekday::Mon
     }
 
     fn all_shortlists_exhausted(plan: &ClubTransferPlan) -> bool {
@@ -210,10 +217,11 @@ impl PipelineProcessor {
 
         // Determine max concurrent negotiations by reputation
         let max_concurrent = match rep_level {
-            ReputationLevel::Elite => 4,
-            ReputationLevel::Continental => 3,
-            ReputationLevel::National => 2,
-            _ => 1,
+            ReputationLevel::Elite => 6,
+            ReputationLevel::Continental => 5,
+            ReputationLevel::National => 3,
+            ReputationLevel::Regional => 2,
+            _ => 2,
         };
 
         // Build squad info for analysis
@@ -569,7 +577,7 @@ impl PipelineProcessor {
                 }
                 ReputationLevel::National => {
                     // National clubs loan out young players who aren't quite ready
-                    if age <= 20 && potential > ability + 10 && ability < avg_ability.saturating_sub(10) {
+                    if age <= 22 && potential > ability + 8 && ability < avg_ability {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
@@ -578,9 +586,18 @@ impl PipelineProcessor {
                         continue;
                     }
                 }
-                _ => {
-                    // Regional/Local/Amateur clubs rarely loan out
+                ReputationLevel::Regional => {
+                    // Regional clubs loan out young players who need development
+                    if age <= 21 && potential > ability + 10 && ability < avg_ability.saturating_sub(5) {
+                        loan_outs.push(LoanOutCandidate {
+                            player_id: player_info.player_id,
+                            reason: LoanOutReason::NeedsGameTime,
+                            status: LoanOutStatus::Identified,
+                        });
+                        continue;
+                    }
                 }
+                _ => {}
             }
 
             // All tiers: genuine surplus (too many in one position group)
@@ -592,9 +609,9 @@ impl PipelineProcessor {
 
             let surplus_threshold = match group {
                 PlayerFieldPositionGroup::Goalkeeper => 3,
-                PlayerFieldPositionGroup::Defender => 8,
-                PlayerFieldPositionGroup::Midfielder => 8,
-                PlayerFieldPositionGroup::Forward => 5,
+                PlayerFieldPositionGroup::Defender => 6,
+                PlayerFieldPositionGroup::Midfielder => 6,
+                PlayerFieldPositionGroup::Forward => 4,
             };
 
             if group_count > surplus_threshold && ability < avg_ability {
@@ -763,7 +780,7 @@ impl PipelineProcessor {
                     (8, 8)
                 };
 
-                let observe_chance = 40 + (judging_ability as i32 / 2);
+                let observe_chance = 60 + (judging_ability as i32 / 2);
                 if IntegerUtils::random(0, 100) > observe_chance {
                     continue;
                 }
@@ -779,7 +796,7 @@ impl PipelineProcessor {
                             && p.age >= assignment.preferred_age_min
                             && p.age <= assignment.preferred_age_max
                             && p.current_ability >= assignment.min_ability
-                            && p.estimated_value <= assignment.max_budget * 1.5
+                            && p.estimated_value <= assignment.max_budget * 3.0
                     })
                     .collect();
 
@@ -820,7 +837,7 @@ impl PipelineProcessor {
                 });
 
                 let final_obs_count = obs_count + 1;
-                if final_obs_count >= 3 {
+                if final_obs_count >= 2 {
                     let confidence = 1.0 - (1.0 / (final_obs_count as f32 + 1.0));
 
                     let recommendation = if assessed_ability as i16 >= assignment.min_ability as i16 + 10
@@ -952,7 +969,7 @@ impl PipelineProcessor {
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
-                    .filter(|r| r.estimated_value <= budget_alloc * 1.2)
+                    .filter(|r| r.estimated_value <= budget_alloc * 2.0)
                     .map(|r| {
                         let ability_score = r.assessed_ability as f32 / 100.0;
                         let potential_score = r.assessed_potential as f32 / 100.0;
@@ -1266,30 +1283,7 @@ impl PipelineProcessor {
                 }
             }
 
-            // Process loan-out candidates
-            for loan_candidate in &plan.loan_out_candidates {
-                if loan_candidate.status != LoanOutStatus::Identified {
-                    continue;
-                }
-
-                if let Some(player) = Self::find_player_in_club(club, loan_candidate.player_id) {
-                    let asking_price = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player,
-                        date,
-                        price_level,
-                    );
-
-                    let listing = TransferListing::new(
-                        loan_candidate.player_id,
-                        club.id,
-                        team.id,
-                        asking_price,
-                        date,
-                        TransferListingType::Loan,
-                    );
-                    let _ = listing;
-                }
-            }
+            // Loan-out candidates are handled by process_loan_out_listings()
         }
 
         // Pass 2: Start negotiations
@@ -1429,41 +1423,39 @@ impl PipelineProcessor {
 
         match rep_level {
             ReputationLevel::Elite => {
-                // Elite clubs buy unless player is extremely expensive relative to budget
-                if affordability >= 0.5 {
+                if affordability >= 0.3 {
                     TransferApproach::PermanentTransfer
                 } else {
                     TransferApproach::LoanWithOption
                 }
             }
             ReputationLevel::Continental => {
-                if affordability >= 0.7 {
+                if affordability >= 0.4 {
                     TransferApproach::PermanentTransfer
-                } else if affordability >= 0.3 {
+                } else if affordability >= 0.15 {
                     TransferApproach::LoanWithOption
                 } else {
                     TransferApproach::Loan
                 }
             }
             ReputationLevel::National => {
-                if affordability >= 1.0 {
+                if affordability >= 0.6 {
                     TransferApproach::PermanentTransfer
-                } else if affordability >= 0.5 {
+                } else if affordability >= 0.25 {
                     TransferApproach::LoanWithOption
                 } else {
                     TransferApproach::Loan
                 }
             }
             ReputationLevel::Regional => {
-                if affordability >= 2.0 {
+                if affordability >= 1.0 {
                     TransferApproach::PermanentTransfer
                 } else {
                     TransferApproach::Loan
                 }
             }
             _ => {
-                // Local/Amateur: almost always loan
-                if affordability >= 3.0 && estimated_fee < 100_000.0 {
+                if affordability >= 1.5 && estimated_fee < 100_000.0 {
                     TransferApproach::PermanentTransfer
                 } else {
                     TransferApproach::Loan

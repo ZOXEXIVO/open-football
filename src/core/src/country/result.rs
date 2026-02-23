@@ -279,11 +279,11 @@ impl CountryResult {
                 // === Phase 1: Initial Approach ===
                 NegotiationPhase::InitialApproach { .. } => {
                     let mut chance: f32 = if neg_data.is_listed {
-                        60.0
+                        70.0
                     } else if neg_data.is_unsolicited {
-                        20.0
+                        25.0
                     } else {
-                        35.0
+                        50.0
                     };
 
                     if neg_data.asking_price > 0.0 {
@@ -861,6 +861,7 @@ impl CountryResult {
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
+        let mut selling_league_id = None;
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
             selling_team_name = selling_club.name.clone();
@@ -869,6 +870,7 @@ impl CountryResult {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
                     selling_team_slug = team.slug.clone();
+                    selling_league_id = team.league_id;
                     team.transfer_list.remove(player_id);
                     break;
                 }
@@ -884,11 +886,18 @@ impl CountryResult {
                 (date.year() - 1) as u16
             };
 
+            let (selling_league_name, selling_league_slug) = selling_league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
+                league_name: selling_league_name,
+                league_slug: selling_league_slug,
                 is_loan: false,
                 statistics: old_stats,
             });
@@ -941,6 +950,7 @@ impl CountryResult {
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
+        let mut selling_league_id = None;
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
             selling_team_name = selling_club.name.clone();
@@ -949,6 +959,7 @@ impl CountryResult {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
                     selling_team_slug = team.slug.clone();
+                    selling_league_id = team.league_id;
                     team.transfer_list.remove(player_id);
                     break;
                 }
@@ -964,28 +975,44 @@ impl CountryResult {
                 (date.year() - 1) as u16
             };
 
+            let (selling_league_name, selling_league_slug) = selling_league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
+                league_name: selling_league_name,
+                league_slug: selling_league_slug,
                 is_loan: false,
                 statistics: old_stats,
             });
 
             let mut buying_club_name = String::new();
             let mut buying_team_slug = String::new();
+            let mut buying_league_id = None;
             if let Some(buying_club) = country.clubs.iter().find(|c| c.id == buying_club_id) {
                 buying_club_name = buying_club.name.clone();
                 if let Some(first_team) = buying_club.teams.teams.first() {
                     buying_team_slug = first_team.slug.clone();
+                    buying_league_id = first_team.league_id;
                 }
             }
+
+            let (buying_league_name, buying_league_slug) = buying_league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
 
             player.statistics_history.items.push(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: buying_club_name,
                 team_slug: buying_team_slug,
+                league_name: buying_league_name,
+                league_slug: buying_league_slug,
                 is_loan: true,
                 statistics: PlayerStatistics::default(),
             });
@@ -1156,16 +1183,28 @@ impl CountryResult {
             None => return,
         };
 
+        // Build league lookup so we can resolve team.league_id -> (name, slug)
+        let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
+            .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
+            .collect();
+
         for club in &mut country.clubs {
             for team in &mut club.teams.teams {
                 let team_name = team.name.clone();
                 let team_slug = team.slug.clone();
+
+                let (league_name, league_slug) = team.league_id
+                    .and_then(|lid| league_lookup.get(&lid))
+                    .cloned()
+                    .unwrap_or_default();
 
                 for player in &mut team.players.players {
                     player.snapshot_season_statistics(
                         season.clone(),
                         &team_name,
                         &team_slug,
+                        &league_name,
+                        &league_slug,
                     );
                 }
             }
