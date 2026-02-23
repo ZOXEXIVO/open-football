@@ -251,11 +251,11 @@ impl<'p> PlayerOperationsImpl<'p> {
         let finishing_skill = self.ctx.player.skills.technical.finishing;
         let player_strength = self.ctx.player.skills.physical.strength;
 
-        // Normalize the skill values to a range between 0.5 and 1.5
-        let technique_factor = 0.5 + (shooting_technique / 20.0);
-        let power_factor = 0.5 + (shooting_power / 20.0);
-        let finishing_factor = 0.5 + (finishing_skill / 20.0);
-        let strength_factor = 0.3 + (player_strength / 20.0) * 0.7;
+        // Normalize the skill values — low-skill players generate weaker shots
+        let technique_factor = 0.2 + (shooting_technique / 20.0) * 0.8;
+        let power_factor = 0.2 + (shooting_power / 20.0) * 0.8;
+        let finishing_factor = 0.2 + (finishing_skill / 20.0) * 0.8;
+        let strength_factor = 0.2 + (player_strength / 20.0) * 0.8;
 
         // Calculate distance factor that increases power for longer distances
         // Close shots: ~1.0, Long shots: ~1.6

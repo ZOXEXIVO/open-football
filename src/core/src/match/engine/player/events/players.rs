@@ -25,17 +25,18 @@ struct PassSkills {
 impl PassSkills {
     fn from_player(player: &MatchPlayer) -> Self {
         // Normalize skills to 0.0-1.0 range
-        let passing = (player.skills.technical.passing / 20.0).clamp(0.4, 1.0);
-        let technique = (player.skills.technical.technique / 20.0).clamp(0.4, 1.0);
-        let vision = (player.skills.mental.vision / 20.0).clamp(0.3, 1.0);
-        let composure = (player.skills.mental.composure / 20.0).clamp(0.3, 1.0);
-        let decisions = (player.skills.mental.decisions / 20.0).clamp(0.3, 1.0);
-        let concentration = (player.skills.mental.concentration / 20.0).clamp(0.3, 1.0);
+        // Low floors allow bad players (skill < 7) to be genuinely inaccurate
+        let passing = (player.skills.technical.passing / 20.0).clamp(0.1, 1.0);
+        let technique = (player.skills.technical.technique / 20.0).clamp(0.1, 1.0);
+        let vision = (player.skills.mental.vision / 20.0).clamp(0.1, 1.0);
+        let composure = (player.skills.mental.composure / 20.0).clamp(0.1, 1.0);
+        let decisions = (player.skills.mental.decisions / 20.0).clamp(0.1, 1.0);
+        let concentration = (player.skills.mental.concentration / 20.0).clamp(0.1, 1.0);
         let flair = (player.skills.mental.flair / 20.0).clamp(0.0, 1.0);
-        let long_shots = (player.skills.technical.long_shots / 20.0).clamp(0.3, 1.0);
-        let crossing = (player.skills.technical.crossing / 20.0).clamp(0.3, 1.0);
-        let stamina = (player.skills.physical.stamina / 20.0).clamp(0.3, 1.0);
-        let match_readiness = (player.skills.physical.match_readiness / 20.0).clamp(0.3, 1.0);
+        let long_shots = (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0);
+        let crossing = (player.skills.technical.crossing / 20.0).clamp(0.1, 1.0);
+        let stamina = (player.skills.physical.stamina / 20.0).clamp(0.15, 1.0);
+        let match_readiness = (player.skills.physical.match_readiness / 20.0).clamp(0.15, 1.0);
 
         // Calculate condition factor (0.5 to 1.0 based on player condition)
         let condition_percentage = player.player_attributes.condition as f32 / 10000.0;
@@ -283,13 +284,19 @@ impl PlayerEventDispatcher {
         let accuracy_factor = overall_quality * skills.concentration;
 
         // Distance-based error: longer passes have more positional error
-        // Realistic values: professional players accurate to ~0.5-2m depending on distance
         let distance_error_factor = (horizontal_distance / 200.0).min(1.5);
-        let max_position_error = 1.2 * (1.0 - accuracy_factor) * distance_error_factor;
+        let max_position_error = 12.0 * (1.0 - accuracy_factor) * distance_error_factor;
 
         // Add random targeting error
-        let target_error_x = rng.random_range(-max_position_error..max_position_error);
-        let target_error_y = rng.random_range(-max_position_error..max_position_error);
+        let mut target_error_x = rng.random_range(-max_position_error..max_position_error);
+        let mut target_error_y = rng.random_range(-max_position_error..max_position_error);
+
+        // Miskick chance for low-technique players — ball goes significantly off target
+        let miskick_chance = (1.0 - skills.technique).powi(2) * 0.3;
+        if rng.random_range(0.0f32..1.0) < miskick_chance {
+            target_error_x += rng.random_range(-15.0f32..15.0);
+            target_error_y += rng.random_range(-15.0f32..15.0);
+        }
 
         // Calculate actual target with error
         let actual_target = Vector3::new(
@@ -302,9 +309,9 @@ impl PlayerEventDispatcher {
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
 
         // Calculate pass force with power variation
-        // Reduced variation to make passes more consistent
+        // Bad players hit passes with inconsistent power
         let power_consistency = 1.0 + (skills.technique * skills.stamina * 0.1);
-        let power_variation_range = (1.0 - overall_quality) * 0.11;
+        let power_variation_range = (1.0 - overall_quality) * 0.35;
         let power_variation = rng.random_range(
             power_consistency - power_variation_range..power_consistency + power_variation_range
         );
@@ -832,11 +839,12 @@ impl PlayerEventDispatcher {
         // Get player skills for power and accuracy calculations
         let player = field.get_player(shoot_event_model.from_player_id).unwrap();
 
-        let finishing_skill = (player.skills.technical.finishing / 20.0).clamp(0.5, 1.0);
-        let technique_skill = (player.skills.technical.technique / 20.0).clamp(0.5, 1.0);
-        let long_shot_skill = (player.skills.technical.long_shots / 20.0).clamp(0.5, 1.0);
-        let composure_skill = (player.skills.mental.composure / 20.0).clamp(0.4, 1.0);
-        let decisions_skill = (player.skills.mental.decisions / 20.0).clamp(0.4, 1.0);
+        // Low floors let bad players (skill < 7) be genuinely inaccurate
+        let finishing_skill = (player.skills.technical.finishing / 20.0).clamp(0.1, 1.0);
+        let technique_skill = (player.skills.technical.technique / 20.0).clamp(0.1, 1.0);
+        let long_shot_skill = (player.skills.technical.long_shots / 20.0).clamp(0.1, 1.0);
+        let composure_skill = (player.skills.mental.composure / 20.0).clamp(0.1, 1.0);
+        let decisions_skill = (player.skills.mental.decisions / 20.0).clamp(0.1, 1.0);
 
         // Determine which goal we're shooting at
         let goal_center = shoot_event_model.target;
@@ -908,12 +916,18 @@ impl PlayerEventDispatcher {
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        let base_position_error = 8.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let max_y_error = base_position_error.clamp(5.0, 60.0);
+        let base_position_error = 30.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let max_y_error = base_position_error.clamp(2.0, 150.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
-        let actual_y_target = ideal_y_target + y_error;
+        let mut actual_y_target = ideal_y_target + y_error;
+
+        // Miskick chance for low-technique players — shot goes wildly off target
+        let miskick_chance = (1.0 - technique_skill).powi(2) * 0.4;
+        if rng.random_range(0.0f32..1.0) < miskick_chance {
+            actual_y_target += rng.random_range(-GOAL_WIDTH * 2.0..GOAL_WIDTH * 2.0);
+        }
 
         // Clamp to reasonable bounds (can miss goal, but not by too much)
         // Allow shots to miss by up to 150% of goal width on each side
