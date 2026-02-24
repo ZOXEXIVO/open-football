@@ -65,7 +65,7 @@ impl CountryResult {
             let transfer_reputation = Self::calculate_transfer_market_reputation(country);
             reputation_change += transfer_reputation as i16;
 
-            let new_reputation = (country.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
+            let new_reputation = (country.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
 
             if new_reputation != country.reputation {
                 debug!(
