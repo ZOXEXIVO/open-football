@@ -45,15 +45,6 @@ impl Continent {
             continent_name,
             self.countries.len()
         );
-
-        if ctx.ai_enabled() {
-            let result: Option<u32> = ctx.ai(
-                String::from("Which digit your select 0 or 1?"),
-                String::from("Use JSON format: {selected_digit}")
-            );
-
-            println!("### {:?}", result);
-        }
         
         // Phase 0: National team competition matches (parallel engine runs)
         self.simulate_national_competitions(date);

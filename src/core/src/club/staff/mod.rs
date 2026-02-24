@@ -1,6 +1,7 @@
 pub mod attributes;
 pub mod context;
 pub mod contract;
+pub mod display;
 pub mod focus;
 pub mod responsibility;
 pub mod result;

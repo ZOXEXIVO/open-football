@@ -1,3 +1,4 @@
+use log::debug;
 use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
 use core::AIRequest;
@@ -33,7 +34,10 @@ impl AIRequest for OllamaRequest {
         });
 
         match response {
-            Ok(ollama_response) => Ok(ollama_response.response),
+            Ok(ollama_response) => {
+                debug!("Ollama raw response: {}", ollama_response.response);
+                Ok(ollama_response.response)
+            },
             Err(e) => Err(format!("Ollama request error: {}", e))
         }
     }

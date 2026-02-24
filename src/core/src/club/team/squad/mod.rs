@@ -13,10 +13,12 @@ pub use satisfaction::compute_squad_satisfaction;
 pub use swap::AbilitySwapEvaluator;
 
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
+use crate::context::GlobalContext;
 use crate::utils::DateUtils;
-use crate::{PlayerFieldPositionGroup, Team};
+use crate::{Player, PlayerFieldPositionGroup, Staff, StaffPosition, Team};
 use chrono::NaiveDate;
 use log::debug;
+use serde::Deserialize;
 
 use crate::club::team::coach_perception::seeded_decision;
 
@@ -25,6 +27,133 @@ pub struct SquadManager;
 impl SquadManager {
     /// Weekly: full squad review (demotions -> recalls -> youth promotions)
     pub fn manage_composition(
+        ctx: &GlobalContext<'_>,
+        teams: &mut [Team],
+        coach_state: &mut Option<CoachDecisionState>,
+        main_idx: usize,
+        reserve_idx: Option<usize>,
+        youth_idx: Option<usize>,
+        date: NaiveDate,
+    ) {
+        if ctx.ai_enabled() {
+            Self::manage_composition_ai(ctx, teams, coach_state, main_idx, reserve_idx, youth_idx, date);
+        } else {
+            Self::manage_composition_legacy(teams, coach_state, main_idx, reserve_idx, youth_idx, date);
+        }
+    }
+
+    fn manage_composition_ai(
+        ctx: &GlobalContext<'_>,
+        teams: &mut [Team],
+        coach_state: &mut Option<CoachDecisionState>,
+        main_idx: usize,
+        reserve_idx: Option<usize>,
+        youth_idx: Option<usize>,
+        date: NaiveDate,
+    ) {
+        let mut query = String::from("You are a football manager assistant. Review the squad and recommend player moves between teams.\n\n");
+
+        // Include legends for compact format
+        query.push_str(Player::as_llm_legend());
+        query.push('\n');
+        query.push_str(Staff::as_llm_legend());
+        query.push_str("\n\n");
+
+        let team_indices: Vec<(usize, &str)> = {
+            let mut v = vec![(main_idx, "Main Team")];
+            if let Some(idx) = reserve_idx { v.push((idx, "Reserve Team")); }
+            if let Some(idx) = youth_idx { v.push((idx, "Youth Team")); }
+            v
+        };
+
+        for &(idx, label) in &team_indices {
+            let team = &teams[idx];
+            query.push_str(&format!("--- {} (team_index:{}) ---\n", label, idx));
+
+            // Staff responsible for squad decisions
+            let squad_staff: Vec<&Staff> = team.staffs.staffs.iter()
+                .filter(|s| s.contract.as_ref().map_or(false, |c| matches!(
+                    c.position,
+                    StaffPosition::Manager
+                    | StaffPosition::AssistantManager
+                    | StaffPosition::FirstTeamCoach
+                    | StaffPosition::Coach
+                    | StaffPosition::DirectorOfFootball
+                )))
+                .collect();
+            if !squad_staff.is_empty() {
+                query.push_str("Staff:\n");
+                for staff in &squad_staff {
+                    query.push_str(&staff.as_llm());
+                    query.push('\n');
+                }
+            }
+
+            query.push_str("Players:\n");
+            for player in &team.players.players {
+                query.push_str(&player.as_llm());
+                query.push('\n');
+            }
+            query.push('\n');
+        }
+
+        query.push_str("Recommend which players should be moved between teams to strengthen the Main Team. \
+            Consider: injured/banned players should go to reserves, high-potential youth ready for first team, \
+            underperforming main team players to reserves, strong reserve players to recall. \
+            Consider staff judging abilities (jpa, jpp) when evaluating player potential.\n");
+
+        let format = String::from(r#"Respond ONLY with JSON: {"moves":[{"player_id":123,"from_team_index":0,"to_team_index":1}]}"#);
+
+        let advice: AiSquadAdvice = match ctx.ai(query, format) {
+            Some(a) => a,
+            None => {
+                debug!("AI squad advice unavailable, falling back to legacy");
+                Self::manage_composition_legacy(teams, coach_state, main_idx, reserve_idx, youth_idx, date);
+                return;
+            }
+        };
+
+        println!("### {:?}", advice);
+
+        let valid_indices: Vec<usize> = team_indices.iter().map(|(idx, _)| *idx).collect();
+        let mut any_move = false;
+
+        for m in &advice.moves {
+            if !valid_indices.contains(&m.from_team_index) || !valid_indices.contains(&m.to_team_index) {
+                continue;
+            }
+            if m.from_team_index == m.to_team_index {
+                continue;
+            }
+            // Verify player exists in source team
+            let exists = teams[m.from_team_index].players.players.iter().any(|p| p.id == m.player_id);
+            if !exists {
+                continue;
+            }
+
+            debug!(
+                "AI squad move: player {} from team_index:{} to team_index:{}",
+                m.player_id, m.from_team_index, m.to_team_index
+            );
+            execute_moves(teams, m.from_team_index, m.to_team_index, &[m.player_id]);
+
+            let move_type = if m.to_team_index == main_idx {
+                RecentMoveType::RecalledFromReserves
+            } else {
+                RecentMoveType::DemotedToReserves
+            };
+            record_moves(coach_state, &[m.player_id], move_type, date);
+            any_move = true;
+        }
+
+        if any_move {
+            if let Some(state) = coach_state {
+                state.weeks_since_last_change = 0;
+            }
+        }
+    }
+
+    fn manage_composition_legacy(
         teams: &mut [Team],
         coach_state: &mut Option<CoachDecisionState>,
         main_idx: usize,
@@ -244,4 +373,18 @@ fn record_moves(
             state.record_move(id, move_type, date);
         }
     }
+}
+
+// ─── AI response types ─────────────────────────────────────────────
+
+#[derive(Deserialize, Debug)]
+struct AiSquadAdvice {
+    moves: Vec<AiSquadMove>,
+}
+
+#[derive(Deserialize, Debug)]
+struct AiSquadMove {
+    player_id: u32,
+    from_team_index: usize,
+    to_team_index: usize,
 }

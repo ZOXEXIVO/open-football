@@ -82,8 +82,8 @@ impl Club {
         if ctx.simulation.is_week_beginning() {
             // Weekly: comprehensive review (demotions, recalls, youth promotions, salaries)
             // Subsumes daily critical moves to avoid double-processing
+            self.teams.manage_squad_composition(&ctx, date);
             self.process_salaries(ctx);
-            self.teams.manage_squad_composition(date);
         } else {
             // Daily: only immediate demotions + ability swaps
             self.teams.manage_critical_squad_moves(date);

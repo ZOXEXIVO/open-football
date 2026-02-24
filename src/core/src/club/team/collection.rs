@@ -97,7 +97,7 @@ impl TeamCollection {
 
     // ─── Squad management (delegates to SquadManager) ────────────────
 
-    pub fn manage_squad_composition(&mut self, date: NaiveDate) {
+    pub fn manage_squad_composition(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
         if self.teams.len() < 2 {
             return;
         }
@@ -114,6 +114,7 @@ impl TeamCollection {
         self.update_all_impressions(date);
 
         SquadManager::manage_composition(
+            ctx,
             &mut self.teams,
             &mut self.coach_state,
             main_idx,
