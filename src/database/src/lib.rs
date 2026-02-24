@@ -4,6 +4,7 @@ mod loaders;
 pub use loaders::{
     ClubEntity, ClubLoader, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
     ForeignPlayerEntry, LeagueEntity, LeagueLoader, NamesByCountryEntity, NamesByCountryLoader,
+    NationalCompetitionEntity, NationalCompetitionLoader,
 };
 
 pub use generators::DatabaseGenerator;
@@ -13,6 +14,7 @@ pub struct DatabaseEntity {
     pub countries: Vec<CountryEntity>,
     pub leagues: Vec<LeagueEntity>,
     pub clubs: Vec<ClubEntity>,
+    pub national_competitions: Vec<NationalCompetitionEntity>,
 
     pub names_by_country: Vec<NamesByCountryEntity>,
 }
@@ -26,6 +28,7 @@ impl DatabaseLoader {
             countries: CountryLoader::load(),
             leagues: LeagueLoader::load(),
             clubs: ClubLoader::load(),
+            national_competitions: NationalCompetitionLoader::load(),
             names_by_country: NamesByCountryLoader::load(),
         }
     }

@@ -1,99 +1,77 @@
-use chrono::Datelike;
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
-use crate::league::{LeagueResult, Season};
+use super::CountryResult;
+use crate::league::Season;
 use crate::simulator::SimulatorData;
-use crate::{Club, ClubResult, Country, Person, PlayerClubContract,
-            PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus, PlayerStatistics,
-            PlayerStatisticsHistoryItem, PlayerStatusType, SimulationResult};
+use crate::{
+    Club, Country, Person, PlayerClubContract,
+    PlayerFieldPositionGroup, PlayerPositionType, PlayerSquadStatus,
+    PlayerStatistics, PlayerStatisticsHistoryItem, PlayerStatusType,
+};
 use crate::shared::CurrencyValue;
 use crate::transfers::{TransferListing, TransferListingType, TransferListingStatus, TransferWindowManager};
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::pipeline_processor::PipelineProcessor;
 
-pub struct CountryResult {
-    pub country_id: u32,
-    pub leagues: Vec<LeagueResult>,
-    pub clubs: Vec<ClubResult>,
+#[allow(dead_code)]
+#[derive(Debug)]
+pub(super) struct TransferActivitySummary {
+    pub(super) total_listings: u32,
+    pub(super) active_negotiations: u32,
+    pub(super) completed_transfers: u32,
+    pub(super) total_fees_exchanged: f64,
+}
+
+impl TransferActivitySummary {
+    pub(super) fn new() -> Self {
+        TransferActivitySummary {
+            total_listings: 0,
+            active_negotiations: 0,
+            completed_transfers: 0,
+            total_fees_exchanged: 0.0,
+        }
+    }
+
+    #[allow(dead_code)]
+    fn get_market_heat_index(&self) -> f32 {
+        let activity = (self.active_negotiations as f32 + self.completed_transfers as f32) / 100.0;
+        activity.min(1.0)
+    }
+}
+
+#[allow(dead_code)]
+#[derive(Debug)]
+struct SquadAnalysis {
+    surplus_positions: Vec<PlayerPositionType>,
+    needed_positions: Vec<PlayerPositionType>,
+    average_age: f32,
+    quality_level: u8,
+}
+
+/// Internal data extracted from a negotiation for phase resolution
+struct NegotiationData {
+    player_id: u32,
+    selling_club_id: u32,
+    buying_club_id: u32,
+    offer_amount: f64,
+    is_loan: bool,
+    is_unsolicited: bool,
+    phase: NegotiationPhase,
+    selling_rep: f32,
+    buying_rep: f32,
+    player_age: u8,
+    player_ambition: f32,
+    asking_price: f64,
+    is_listed: bool,
 }
 
 impl CountryResult {
-    pub fn new(country_id: u32, leagues: Vec<LeagueResult>, clubs: Vec<ClubResult>) -> Self {
-        CountryResult { country_id, leagues, clubs }
-    }
-
-    pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
-        let current_date = data.date.date();
-        let country_id = self.get_country_id(data);
-
-        // Phase 3: Pre-season activities (if applicable)
-        if Self::is_preseason(current_date) {
-            self.simulate_preseason_activities(data, country_id, current_date);
-        }
-
-        // Phase 4: Transfer Market Activities
-        let _transfer_activities = self.simulate_transfer_market(data, country_id, current_date);
-
-        // Phase 5: International Competitions
-        self.simulate_international_competitions(data, country_id, current_date);
-
-        // Phase 6: Economic Updates
-        self.update_economic_factors(data, country_id, current_date);
-
-        // Phase 7: Media and Public Interest
-        self.simulate_media_coverage(data, country_id, &self.leagues);
-
-        // Phase 8: End of Period Processing
-        self.process_end_of_period(data, country_id, current_date, &self.clubs);
-
-        // Phase 9: Country Reputation Update
-        self.update_country_reputation(data, country_id, &self.leagues, &self.clubs);
-
-        // Phase 1: Process league results
-        let any_new_season = self.leagues.iter().any(|l| l.new_season_started);
-
-        for league_result in self.leagues {
-            league_result.process(data, result);
-        }
-
-        // Snapshot player statistics when new season starts (all match stats are now up-to-date)
-        if any_new_season {
-            Self::snapshot_player_season_statistics(data, self.country_id);
-        }
-
-        // Phase 2: Process club results
-        for club_result in self.clubs {
-            club_result.process(data, result);
-        }
-    }
-
-    // Helper methods
-
-    fn get_country_id(&self, _data: &SimulatorData) -> u32 {
-        self.country_id
-    }
-
-    fn is_preseason(date: NaiveDate) -> bool {
-        let month = date.month();
-        month == 6 || month == 7
-    }
-
-    fn simulate_preseason_activities(&self, data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
-        debug!("Running preseason activities...");
-
-        if let Some(country) = data.country_mut(country_id) {
-            Self::schedule_friendly_matches(country, date);
-            Self::organize_training_camps(country);
-            Self::organize_preseason_tournaments(country);
-        }
-    }
-
     // ============================================================
-    // NEW: Pipeline-driven transfer market simulation
+    // Pipeline-driven transfer market simulation
     // ============================================================
 
-    fn simulate_transfer_market(
+    pub(super) fn simulate_transfer_market(
         &self,
         data: &mut SimulatorData,
         country_id: u32,
@@ -116,6 +94,12 @@ impl CountryResult {
             // Step 2: Evaluate squads (periodic - not daily)
             PipelineProcessor::evaluate_squads(country, current_date);
 
+            // Step 2.5: Staff proactively recommend players (weekly)
+            PipelineProcessor::generate_staff_recommendations(country, current_date);
+
+            // Step 2.75: Process staff recommendations into pipeline actions (weekly)
+            PipelineProcessor::process_staff_recommendations(country, current_date);
+
             // Step 3: Assign scouts to pending requests
             PipelineProcessor::assign_scouts(country, current_date);
 
@@ -127,6 +111,9 @@ impl CountryResult {
 
             // Step 6: Initiate negotiations from shortlists (replaces bulk negotiate_transfers)
             PipelineProcessor::initiate_negotiations(country, current_date);
+
+            // Step 6.5: Small clubs proactively scan the loan market
+            PipelineProcessor::scan_loan_market(country, current_date);
 
             // Step 7: List players from pipeline decisions (loan-outs, surplus)
             Self::list_players_from_pipeline(country, current_date, &mut summary);
@@ -147,7 +134,6 @@ impl CountryResult {
     }
 
     /// List players for transfer based on pipeline decisions and staff evaluations.
-    /// Replaces the old list_players_for_transfer() which did bulk analysis.
     fn list_players_from_pipeline(
         country: &mut Country,
         date: NaiveDate,
@@ -165,7 +151,6 @@ impl CountryResult {
 
             for player in &club.teams.teams[0].players.players {
                 // Use existing should_list_player logic for non-pipeline listings
-                // (e.g., unhappy players, transfer-requested, NotNeeded)
                 if Self::should_list_player(player, &squad_analysis, club) {
                     let age = player.age(date);
 
@@ -226,7 +211,7 @@ impl CountryResult {
     }
 
     // ============================================================
-    // Resolve Pending Negotiations [KEPT - with pipeline callback]
+    // Resolve Pending Negotiations
     // ============================================================
 
     fn resolve_pending_negotiations(
@@ -316,7 +301,6 @@ impl CountryResult {
                             negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
-                        // Pipeline callback: negotiation failed
                         PipelineProcessor::on_negotiation_resolved(
                             country,
                             neg_data.buying_club_id,
@@ -374,7 +358,6 @@ impl CountryResult {
                             negotiation.reject_with_reason(NegotiationRejectionReason::AskingPriceTooHigh);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
-                        // Pipeline callback: negotiation failed
                         PipelineProcessor::on_negotiation_resolved(
                             country,
                             neg_data.buying_club_id,
@@ -459,7 +442,6 @@ impl CountryResult {
                             negotiation.reject_with_reason(NegotiationRejectionReason::PlayerRejectedPersonalTerms);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
-                        // Pipeline callback: negotiation failed
                         PipelineProcessor::on_negotiation_resolved(
                             country,
                             neg_data.buying_club_id,
@@ -524,7 +506,6 @@ impl CountryResult {
                                 );
                             }
 
-                            // Pipeline callback: negotiation succeeded
                             PipelineProcessor::on_negotiation_resolved(
                                 country,
                                 neg_data.buying_club_id,
@@ -537,7 +518,6 @@ impl CountryResult {
                             negotiation.reject_with_reason(NegotiationRejectionReason::MedicalFailed);
                         }
                         Self::reopen_listing_for_player(country, neg_data.player_id);
-                        // Pipeline callback: negotiation failed
                         PipelineProcessor::on_negotiation_resolved(
                             country,
                             neg_data.buying_club_id,
@@ -551,118 +531,8 @@ impl CountryResult {
     }
 
     // ============================================================
-    // Remaining methods (kept as-is)
+    // Transfer helpers
     // ============================================================
-
-    fn simulate_international_competitions(
-        &self,
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            for competition in &mut country.international_competitions {
-                competition.simulate_round(date);
-            }
-        }
-    }
-
-    fn update_economic_factors(
-        &self,
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-    ) {
-        if date.day() == 1 {
-            if let Some(country) = data.country_mut(country_id) {
-                country.economic_factors.monthly_update();
-            }
-        }
-    }
-
-    fn simulate_media_coverage(
-        &self,
-        data: &mut SimulatorData,
-        country_id: u32,
-        league_results: &[LeagueResult],
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            country.media_coverage.update_from_results(league_results);
-            country.media_coverage.generate_weekly_stories(&country.clubs);
-        }
-    }
-
-    fn process_end_of_period(
-        &self,
-        data: &mut SimulatorData,
-        country_id: u32,
-        date: NaiveDate,
-        club_results: &[ClubResult],
-    ) {
-        if date.month() == 5 && date.day() == 31 {
-            info!("End of season processing");
-
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_season_awards(country, club_results);
-                Self::process_contract_expirations(country);
-                Self::process_player_retirements(country, date);
-            }
-        }
-
-        if date.month() == 7 && date.day() == 1 {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_promotion_relegation(country);
-            }
-        }
-
-        if date.month() == 12 && date.day() == 31 {
-            if let Some(country) = data.country_mut(country_id) {
-                Self::process_year_end_finances(country);
-            }
-        }
-    }
-
-    fn update_country_reputation(
-        &self,
-        data: &mut SimulatorData,
-        country_id: u32,
-        _league_results: &[crate::league::LeagueResult],
-        _club_results: &[ClubResult],
-    ) {
-        if let Some(country) = data.country_mut(country_id) {
-            let mut reputation_change: i16 = 0;
-
-            for league in &country.leagues.leagues {
-                let competitiveness = Self::calculate_league_competitiveness(league);
-                reputation_change += (competitiveness * 5.0) as i16;
-            }
-
-            let international_success = Self::calculate_international_success(country);
-            reputation_change += international_success as i16;
-
-            let transfer_reputation = Self::calculate_transfer_market_reputation(country);
-            reputation_change += transfer_reputation as i16;
-
-            let new_reputation = (country.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
-
-            if new_reputation != country.reputation {
-                debug!(
-                    "Country {} reputation changed: {} -> {} ({})",
-                    country.name,
-                    country.reputation,
-                    new_reputation,
-                    if reputation_change > 0 {
-                        format!("+{}", reputation_change)
-                    } else {
-                        reputation_change.to_string()
-                    }
-                );
-                country.reputation = new_reputation;
-            }
-        }
-    }
-
-    // Helper methods
 
     fn analyze_squad_needs(club: &Club) -> SquadAnalysis {
         if club.teams.teams.is_empty() {
@@ -793,7 +663,7 @@ impl CountryResult {
         }
     }
 
-    fn find_player_in_country(country: &Country, player_id: u32) -> Option<&crate::Player> {
+    pub(super) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&crate::Player> {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
@@ -892,7 +762,7 @@ impl CountryResult {
                 .unwrap_or_default();
 
             let old_stats = std::mem::take(&mut player.statistics);
-            player.statistics_history.items.push(PlayerStatisticsHistoryItem {
+            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
@@ -900,6 +770,7 @@ impl CountryResult {
                 league_slug: selling_league_slug,
                 is_loan: false,
                 statistics: old_stats,
+                created_at: date,
             });
 
             player.statistics = PlayerStatistics::default();
@@ -981,7 +852,7 @@ impl CountryResult {
                 .unwrap_or_default();
 
             let old_stats = std::mem::take(&mut player.statistics);
-            player.statistics_history.items.push(PlayerStatisticsHistoryItem {
+            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
@@ -989,6 +860,7 @@ impl CountryResult {
                 league_slug: selling_league_slug,
                 is_loan: false,
                 statistics: old_stats,
+                created_at: date,
             });
 
             let mut buying_club_name = String::new();
@@ -1007,7 +879,7 @@ impl CountryResult {
                 .map(|l| (l.name.clone(), l.slug.clone()))
                 .unwrap_or_default();
 
-            player.statistics_history.items.push(PlayerStatisticsHistoryItem {
+            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
                 season: Season::new(season_year),
                 team_name: buying_club_name,
                 team_slug: buying_team_slug,
@@ -1015,6 +887,7 @@ impl CountryResult {
                 league_slug: buying_league_slug,
                 is_loan: true,
                 statistics: PlayerStatistics::default(),
+                created_at: date,
             });
 
             player.statistics = PlayerStatistics::default();
@@ -1046,222 +919,7 @@ impl CountryResult {
         }
     }
 
-    fn schedule_friendly_matches(_country: &mut Country, _date: NaiveDate) {
-        debug!("Scheduling preseason friendlies");
-    }
-
-    fn organize_training_camps(_country: &mut Country) {
-        debug!("Organizing training camps");
-    }
-
-    fn organize_preseason_tournaments(_country: &mut Country) {
-        debug!("Organizing preseason tournaments");
-    }
-
     fn handle_free_agents(_country: &mut Country, _date: NaiveDate, _summary: &mut TransferActivitySummary) {
         debug!("Handling free agents");
     }
-
-    fn calculate_league_competitiveness(_league: &crate::league::League) -> f32 {
-        0.5
-    }
-
-    fn calculate_international_success(_country: &Country) -> i16 {
-        0
-    }
-
-    fn calculate_transfer_market_reputation(_country: &Country) -> i16 {
-        0
-    }
-
-    fn process_season_awards(_country: &mut Country, _club_results: &[ClubResult]) {
-        debug!("Processing season awards");
-    }
-
-    fn process_contract_expirations(_country: &mut Country) {
-        debug!("Processing contract expirations");
-    }
-
-    fn process_player_retirements(_country: &mut Country, _date: NaiveDate) {
-        debug!("Processing player retirements");
-    }
-
-    fn process_year_end_finances(_country: &mut Country) {
-        debug!("Processing year-end finances");
-    }
-
-    fn process_promotion_relegation(country: &mut Country) {
-        // Collect league info: (league_id, tier, relegation_spots, promotion_spots)
-        let league_info: Vec<(u32, u8, u8, u8)> = country
-            .leagues
-            .leagues
-            .iter()
-            .map(|l| (l.id, l.settings.tier, l.settings.relegation_spots, l.settings.promotion_spots))
-            .collect();
-
-        // For each league with relegation_spots > 0, find its paired league
-        for &(tier1_id, tier1_tier, relegation_spots, _) in &league_info {
-            if relegation_spots == 0 || tier1_tier == 0 {
-                continue;
-            }
-
-            // Find paired league: same country, next tier, with promotion_spots > 0
-            let paired = league_info.iter().find(|&&(id, tier, _, promo)| {
-                id != tier1_id && tier == tier1_tier + 1 && promo > 0
-            });
-
-            let &(tier2_id, _, _, promotion_spots) = match paired {
-                Some(p) => p,
-                None => continue,
-            };
-
-            let swap_count = relegation_spots.min(promotion_spots) as usize;
-
-            // Read final tables
-            let relegated_team_ids: Vec<u32> = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier1_id)
-                .and_then(|l| l.final_table.as_ref())
-                .map(|table| {
-                    table.iter().rev().take(swap_count).map(|r| r.team_id).collect()
-                })
-                .unwrap_or_default();
-
-            let promoted_team_ids: Vec<u32> = country
-                .leagues
-                .leagues
-                .iter()
-                .find(|l| l.id == tier2_id)
-                .and_then(|l| l.final_table.as_ref())
-                .map(|table| {
-                    table.iter().take(swap_count).map(|r| r.team_id).collect()
-                })
-                .unwrap_or_default();
-
-            if relegated_team_ids.is_empty() || promoted_team_ids.is_empty() {
-                continue;
-            }
-
-            // Swap league_ids on the teams
-            for club in &mut country.clubs {
-                for team in &mut club.teams.teams {
-                    if relegated_team_ids.contains(&team.id) {
-                        info!("⬇️ Relegation: team {} ({}) moves to league {}",
-                              team.name, team.id, tier2_id);
-                        team.league_id = Some(tier2_id);
-                    } else if promoted_team_ids.contains(&team.id) {
-                        info!("⬆️ Promotion: team {} ({}) moves to league {}",
-                              team.name, team.id, tier1_id);
-                        team.league_id = Some(tier1_id);
-                    }
-                }
-            }
-        }
-
-        // Clear final tables after processing
-        for league in &mut country.leagues.leagues {
-            league.final_table = None;
-        }
-    }
-
-    /// Snapshot all player statistics into history when a new season starts.
-    /// Called from result processing AFTER match stats have been applied,
-    /// so all player statistics are up-to-date.
-    fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
-        let date = data.date.date();
-
-        // Season that just ended: if we're in Aug+, the season was the previous year
-        let season_year = date.year() as u16 - 1;
-        let season = Season::new(season_year);
-
-        info!("📋 New season snapshot: saving player statistics for season {} (country {})", season_year, country_id);
-
-        let country = match data.country_mut(country_id) {
-            Some(c) => c,
-            None => return,
-        };
-
-        // Build league lookup so we can resolve team.league_id -> (name, slug)
-        let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
-            .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
-            .collect();
-
-        for club in &mut country.clubs {
-            for team in &mut club.teams.teams {
-                let team_name = team.name.clone();
-                let team_slug = team.slug.clone();
-
-                let (league_name, league_slug) = team.league_id
-                    .and_then(|lid| league_lookup.get(&lid))
-                    .cloned()
-                    .unwrap_or_default();
-
-                for player in &mut team.players.players {
-                    player.snapshot_season_statistics(
-                        season.clone(),
-                        &team_name,
-                        &team_slug,
-                        &league_name,
-                        &league_slug,
-                    );
-                }
-            }
-        }
-    }
-}
-
-// Supporting structures
-
-#[allow(dead_code)]
-#[derive(Debug)]
-struct TransferActivitySummary {
-    total_listings: u32,
-    active_negotiations: u32,
-    completed_transfers: u32,
-    total_fees_exchanged: f64,
-}
-
-impl TransferActivitySummary {
-    fn new() -> Self {
-        TransferActivitySummary {
-            total_listings: 0,
-            active_negotiations: 0,
-            completed_transfers: 0,
-            total_fees_exchanged: 0.0,
-        }
-    }
-
-    #[allow(dead_code)]
-    fn get_market_heat_index(&self) -> f32 {
-        let activity = (self.active_negotiations as f32 + self.completed_transfers as f32) / 100.0;
-        activity.min(1.0)
-    }
-}
-
-#[allow(dead_code)]
-#[derive(Debug)]
-struct SquadAnalysis {
-    surplus_positions: Vec<crate::PlayerPositionType>,
-    needed_positions: Vec<crate::PlayerPositionType>,
-    average_age: f32,
-    quality_level: u8,
-}
-
-/// Internal data extracted from a negotiation for phase resolution
-struct NegotiationData {
-    player_id: u32,
-    selling_club_id: u32,
-    buying_club_id: u32,
-    offer_amount: f64,
-    is_loan: bool,
-    is_unsolicited: bool,
-    phase: NegotiationPhase,
-    selling_rep: f32,
-    buying_rep: f32,
-    player_age: u8,
-    player_ambition: f32,
-    asking_price: f64,
-    is_listed: bool,
 }

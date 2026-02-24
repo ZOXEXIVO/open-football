@@ -26,6 +26,7 @@ pub mod club;
 pub mod context;
 pub mod continent;
 pub mod country;
+pub mod global_competitions;
 pub mod league;
 pub mod r#match;
 pub mod transfers;
@@ -124,11 +125,15 @@ pub use country::{
 };
 
 pub use continent::national_competitions::{
-    NationalTeamCompetitions, NationalCompetitionFixture, NationalCompetitionType,
-    WorldCupCompetition, EuropeanChampionship,
+    NationalTeamCompetitions, NationalCompetitionFixture, NationalCompetitionPhase,
+    NationalTeamCompetition, NationalCompetitionConfig, CompetitionScope,
+    QualifyingPosition, QualifyingConfig, QualifyingZoneConfig,
+    TournamentConfig, ScheduleConfig, ScheduleDate,
     CompetitionPhase, QualifyingGroup, GroupStanding, GroupFixture, FixtureResult,
     KnockoutBracket, KnockoutRound, KnockoutFixture, KnockoutResult,
 };
+
+pub use global_competitions::*;
 
 // Namespace conflicting CompetitionType enums
 // Country's CompetitionType is for continental competitions (ChampionsLeague, etc.)

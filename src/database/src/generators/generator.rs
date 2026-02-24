@@ -6,16 +6,19 @@ use chrono::{NaiveDate, NaiveDateTime};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::continent::Continent;
+use core::global_competitions::GlobalCompetitions;
 use core::league::LeagueCollection;
 use core::league::{DayMonthPeriod, League, LeagueSettings};
 use core::shared::Location;
 use core::utils::IntegerUtils;
 use core::ClubStatus;
 use core::TeamCollection;
+use crate::generators::convert::convert_national_competition;
 use core::{
     Club, ClubBoard, ClubColors, ClubFinances, Country, CountryGeneratorData, CountryPricing, CountrySettings, Player,
     PlayerCollection, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
+    CompetitionScope, NationalCompetitionConfig,
 };
 use core::transfers::pipeline::ClubTransferPlan;
 use std::str::FromStr;
@@ -29,16 +32,53 @@ impl DatabaseGenerator {
             NaiveTime::default(),
         );
 
+        // Convert all national competition entities to runtime configs
+        let all_configs: Vec<NationalCompetitionConfig> = data
+            .national_competitions
+            .iter()
+            .map(|e| convert_national_competition(e))
+            .collect();
+
+        // Separate global configs for GlobalCompetitions
+        let global_configs: Vec<NationalCompetitionConfig> = all_configs
+            .iter()
+            .filter(|c| c.scope == CompetitionScope::Global)
+            .cloned()
+            .collect();
+
+        let global_competitions = GlobalCompetitions::new(global_configs);
+
         let continents = data
             .continents
             .iter()
-            .map(|continent| Continent::new(                
-                continent.id,
-                continent.name.clone(),
-                DatabaseGenerator::generate_countries(continent, data)
-            )).collect();
+            .map(|continent| {
+                // Filter configs relevant to this continent:
+                // - continental configs where continent_id matches
+                // - global configs that have a qualifying zone for this continent
+                let continent_configs: Vec<NationalCompetitionConfig> = all_configs
+                    .iter()
+                    .filter(|config| {
+                        match config.scope {
+                            CompetitionScope::Continental => {
+                                config.continent_id == Some(continent.id)
+                            }
+                            CompetitionScope::Global => {
+                                config.qualifying.zones.iter().any(|z| z.continent_id == continent.id)
+                            }
+                        }
+                    })
+                    .cloned()
+                    .collect();
 
-        SimulatorData::new(current_date, continents)
+                Continent::new(
+                    continent.id,
+                    continent.name.clone(),
+                    DatabaseGenerator::generate_countries(continent, data),
+                    continent_configs,
+                )
+            }).collect();
+
+        SimulatorData::new(current_date, continents, global_competitions)
     }
 
     fn generate_countries(continent: &ContinentEntity, data: &DatabaseEntity) -> Vec<Country> {
@@ -124,7 +164,7 @@ impl DatabaseGenerator {
                     promotion_spots: league.promotion_spots,
                     relegation_spots: league.relegation_spots,
                 };
-                
+
                 League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings)
             })
             .collect()

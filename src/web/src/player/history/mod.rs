@@ -6,7 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::FormattingUtils;
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use core::{ContractType, SimulatorData};
 use serde::Deserialize;
 
@@ -50,6 +50,7 @@ pub struct PlayerHistoryTemplate {
 
 pub struct PlayerHistorySeasonItem {
     pub season: String,
+    pub start_year: u16,
     pub team_name: String,
     pub team_slug: String,
     pub is_loan: bool,
@@ -61,6 +62,7 @@ pub struct PlayerHistorySeasonItem {
     pub country_slug: String,
     pub league_name: String,
     pub league_slug: String,
+    pub created_at: NaiveDate,
 }
 
 pub struct PlayerHistoryStats {
@@ -177,6 +179,7 @@ pub async fn player_history_action(
         league_name: String,
         league_slug: String,
         is_loan: bool,
+        created_at: NaiveDate,
     }
     struct GroupAccum {
         played: u16,
@@ -202,7 +205,7 @@ pub async fn player_history_action(
         let games = item.statistics.played + item.statistics.played_subs;
 
         if let Some(idx) = key_match {
-            let accum = &mut grouped[idx].1;
+            let (key, accum) = &mut grouped[idx];
             accum.played += item.statistics.played;
             accum.played_subs += item.statistics.played_subs;
             accum.goals += item.statistics.goals;
@@ -212,6 +215,15 @@ pub async fn player_history_action(
             accum.rating_count += games;
             accum.conceded += item.statistics.conceded;
             accum.clean_sheets += item.statistics.clean_sheets;
+            // Keep the most recent created_at and league info
+            // (handles league changes from promotion/relegation)
+            if item.created_at > key.created_at {
+                key.created_at = item.created_at;
+                if !item.league_name.is_empty() {
+                    key.league_name = item.league_name.clone();
+                    key.league_slug = item.league_slug.clone();
+                }
+            }
         } else {
             grouped.push((
                 GroupKey {
@@ -222,6 +234,7 @@ pub async fn player_history_action(
                     league_name: item.league_name.clone(),
                     league_slug: item.league_slug.clone(),
                     is_loan: item.is_loan,
+                    created_at: item.created_at,
                 },
                 GroupAccum {
                     played: item.statistics.played,
@@ -279,8 +292,19 @@ pub async fn player_history_action(
                 0.0
             };
 
+            // If league name is empty (e.g. youth teams without own league),
+            // fall back to the team's current league from location lookup
+            let (league_name, league_slug) = if !key.league_name.is_empty() {
+                (key.league_name, key.league_slug)
+            } else {
+                location
+                    .map(|l| (l.league_name.clone(), l.league_slug.clone()))
+                    .unwrap_or_default()
+            };
+
             PlayerHistorySeasonItem {
                 season: key.season_display,
+                start_year: key.start_year,
                 team_name: key.team_name,
                 team_slug: key.team_slug,
                 is_loan: key.is_loan,
@@ -299,14 +323,16 @@ pub async fn player_history_action(
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
-                league_name: key.league_name,
-                league_slug: key.league_slug,
+                league_name,
+                league_slug,
+                created_at: key.created_at,
             }
         })
         .collect();
 
-    // Most recent season first
-    items.reverse();
+    // Most recent first, sorted by creation date (preserves correct order
+    // when same season has multiple entries from transfers/league changes)
+    items.sort_by(|a, b| b.created_at.cmp(&a.created_at));
 
     let current = PlayerHistoryStats {
         played: player.statistics.played,

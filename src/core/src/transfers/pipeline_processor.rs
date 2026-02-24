@@ -6,9 +6,10 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-    ScoutingAssignment, ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus,
-    TransferApproach, TransferNeedPriority, TransferNeedReason, TransferRequest,
-    TransferRequestStatus, TransferShortlist,
+    RecommendationSource, RecommendationType, ScoutingAssignment, ScoutingRecommendation,
+    ShortlistCandidate, ShortlistCandidateStatus, StaffRecommendation, TransferApproach,
+    TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
+    TransferShortlist,
 };
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
@@ -97,6 +98,11 @@ struct SquadPlayerInfo {
     potential_ability: u8,
     age: u8,
     position_levels: HashMap<PlayerPositionType, u8>,
+    appearances: u16,
+    is_injured: bool,
+    recovery_days: u16,
+    #[allow(dead_code)]
+    injury_days: u16,
 }
 
 impl PipelineProcessor {
@@ -240,6 +246,10 @@ impl PipelineProcessor {
                     potential_ability: p.player_attributes.potential_ability,
                     age: p.age(date),
                     position_levels: levels,
+                    appearances: p.statistics.played + p.statistics.played_subs,
+                    is_injured: p.player_attributes.is_injured,
+                    recovery_days: p.player_attributes.recovery_days_remaining,
+                    injury_days: p.player_attributes.injury_days_remaining,
                 }
             })
             .collect();
@@ -493,6 +503,267 @@ impl PipelineProcessor {
             &mut loan_outs,
         );
 
+        // ──────────────────────────────────────────────────────────
+        // STEP 6: Small clubs proactively seek loan reinforcements
+        // Real football: Regional/Local/Amateur clubs survive on loans.
+        // Their staff actively look for loan deals to fill squads,
+        // get experienced heads, cover injuries, and pad numbers.
+        // ──────────────────────────────────────────────────────────
+
+        if matches!(
+            rep_level,
+            ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
+        ) {
+            let squad_size = squad.len();
+            let is_january = Self::is_january_window(date);
+
+            // Squad too small — need bodies (< 20 players)
+            if squad_size < 20 {
+                let positions_needed = 20 - squad_size;
+                let padding_count = positions_needed.min(3); // max 3 padding requests
+                for i in 0..padding_count {
+                    let alloc = 5_000.0; // minimal budget — expecting loans
+                    // Cycle through positions that are thinnest
+                    let weakest_group = [
+                        PlayerFieldPositionGroup::Defender,
+                        PlayerFieldPositionGroup::Midfielder,
+                        PlayerFieldPositionGroup::Forward,
+                    ];
+                    let group = weakest_group[i % 3];
+                    let pos = match group {
+                        PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
+                        PlayerFieldPositionGroup::Midfielder => PlayerPositionType::MidfielderCenter,
+                        PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
+                        _ => PlayerPositionType::MidfielderCenter,
+                    };
+
+                    if !requests.iter().any(|r| {
+                        r.position.position_group() == group
+                            && matches!(
+                                r.reason,
+                                TransferNeedReason::SquadPadding | TransferNeedReason::LoanToFillSquad
+                            )
+                    }) {
+                        requests.push(TransferRequest::new(
+                            next_id,
+                            pos,
+                            TransferNeedPriority::Important,
+                            TransferNeedReason::SquadPadding,
+                            avg_ability.saturating_sub(15),
+                            avg_ability.saturating_sub(5),
+                            alloc,
+                        ));
+                        next_id += 1;
+                    }
+                }
+            }
+
+            // Need experienced head (no players aged 28+ with decent ability)
+            let experienced_count = squad
+                .iter()
+                .filter(|p| p.age >= 28 && p.current_ability >= avg_ability.saturating_sub(5))
+                .count();
+            if experienced_count == 0 && squad_size >= 11 {
+                let weakest_pos = position_coverage
+                    .iter()
+                    .filter(|(_, pid, _)| pid.is_some())
+                    .min_by_key(|(_, _, quality)| *quality)
+                    .map(|(pos, _, _)| *pos)
+                    .unwrap_or(PlayerPositionType::MidfielderCenter);
+
+                if !requests
+                    .iter()
+                    .any(|r| r.reason == TransferNeedReason::ExperiencedHead)
+                {
+                    requests.push(TransferRequest::new(
+                        next_id,
+                        weakest_pos,
+                        TransferNeedPriority::Optional,
+                        TransferNeedReason::ExperiencedHead,
+                        avg_ability.saturating_sub(8),
+                        avg_ability,
+                        10_000.0,
+                    ));
+                    next_id += 1;
+                }
+            }
+
+            // Injury cover — any position group with injured starters and no backup
+            for &formation_pos in formation_positions {
+                let group = formation_pos.position_group();
+                let injured_in_group = squad
+                    .iter()
+                    .filter(|p| {
+                        p.primary_position.position_group() == group
+                            && p.is_injured
+                            && p.injury_days > 30
+                    })
+                    .count();
+                let healthy_in_group = squad
+                    .iter()
+                    .filter(|p| {
+                        p.primary_position.position_group() == group && !p.is_injured
+                    })
+                    .count();
+                let formation_needs = formation_positions
+                    .iter()
+                    .filter(|p| p.position_group() == group)
+                    .count();
+
+                if injured_in_group > 0 && healthy_in_group < formation_needs {
+                    if !requests.iter().any(|r| {
+                        r.position.position_group() == group
+                            && r.reason == TransferNeedReason::InjuryCoverLoan
+                    }) {
+                        requests.push(TransferRequest::new(
+                            next_id,
+                            formation_pos,
+                            TransferNeedPriority::Important,
+                            TransferNeedReason::InjuryCoverLoan,
+                            avg_ability.saturating_sub(12),
+                            avg_ability.saturating_sub(3),
+                            8_000.0,
+                        ));
+                        next_id += 1;
+                    }
+                }
+            }
+
+            // Cheap reinforcements — for each position group where quality is weak
+            // Small clubs always looking for bargains
+            for &(pos, _, quality) in &position_coverage {
+                if quality > 0 && (quality as i16) < avg_ability as i16 - 8 {
+                    let group = pos.position_group();
+                    if !requests.iter().any(|r| {
+                        r.position.position_group() == group
+                            && matches!(
+                                r.reason,
+                                TransferNeedReason::CheapReinforcement
+                                    | TransferNeedReason::QualityUpgrade
+                                    | TransferNeedReason::LoanToFillSquad
+                            )
+                    }) {
+                        requests.push(TransferRequest::new(
+                            next_id,
+                            pos,
+                            TransferNeedPriority::Optional,
+                            TransferNeedReason::CheapReinforcement,
+                            avg_ability.saturating_sub(10),
+                            avg_ability,
+                            6_000.0,
+                        ));
+                        next_id += 1;
+                    }
+                }
+            }
+
+            // January-specific: actively seek loan deals for every unfilled formation slot
+            if is_january {
+                for &(pos, player_id, _) in &position_coverage {
+                    if player_id.is_none() {
+                        if !requests.iter().any(|r| {
+                            r.position == pos
+                                && matches!(
+                                    r.reason,
+                                    TransferNeedReason::LoanToFillSquad
+                                        | TransferNeedReason::FormationGap
+                                )
+                        }) {
+                            requests.push(TransferRequest::new(
+                                next_id,
+                                pos,
+                                TransferNeedPriority::Critical,
+                                TransferNeedReason::LoanToFillSquad,
+                                avg_ability.saturating_sub(15),
+                                avg_ability.saturating_sub(5),
+                                5_000.0,
+                            ));
+                            next_id += 1;
+                        }
+                    }
+                }
+            }
+        }
+
+        // National clubs also seek some loan-based reinforcement (less aggressive)
+        if rep_level == ReputationLevel::National {
+            let squad_size = squad.len();
+            let is_january = Self::is_january_window(date);
+
+            // Thin squad
+            if squad_size < 22 && is_january {
+                let thinnest_group = [
+                    PlayerFieldPositionGroup::Defender,
+                    PlayerFieldPositionGroup::Midfielder,
+                    PlayerFieldPositionGroup::Forward,
+                ]
+                .iter()
+                .min_by_key(|&&group| {
+                    squad
+                        .iter()
+                        .filter(|p| p.primary_position.position_group() == group)
+                        .count()
+                })
+                .copied()
+                .unwrap_or(PlayerFieldPositionGroup::Midfielder);
+
+                let pos = match thinnest_group {
+                    PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
+                    PlayerFieldPositionGroup::Midfielder => PlayerPositionType::MidfielderCenter,
+                    PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
+                    _ => PlayerPositionType::MidfielderCenter,
+                };
+
+                if !requests
+                    .iter()
+                    .any(|r| r.reason == TransferNeedReason::LoanToFillSquad)
+                {
+                    requests.push(TransferRequest::new(
+                        next_id,
+                        pos,
+                        TransferNeedPriority::Optional,
+                        TransferNeedReason::LoanToFillSquad,
+                        avg_ability.saturating_sub(10),
+                        avg_ability.saturating_sub(3),
+                        15_000.0,
+                    ));
+                    next_id += 1;
+                }
+            }
+
+            // Injury cover for national clubs too
+            for &formation_pos in formation_positions {
+                let group = formation_pos.position_group();
+                let injured_starters = squad
+                    .iter()
+                    .filter(|p| {
+                        p.primary_position.position_group() == group
+                            && p.is_injured
+                            && p.injury_days > 45
+                            && p.current_ability >= avg_ability.saturating_sub(5)
+                    })
+                    .count();
+
+                if injured_starters > 0 && is_january {
+                    if !requests.iter().any(|r| {
+                        r.position.position_group() == group
+                            && r.reason == TransferNeedReason::InjuryCoverLoan
+                    }) {
+                        requests.push(TransferRequest::new(
+                            next_id,
+                            formation_pos,
+                            TransferNeedPriority::Important,
+                            TransferNeedReason::InjuryCoverLoan,
+                            avg_ability.saturating_sub(8),
+                            avg_ability,
+                            20_000.0,
+                        ));
+                        next_id += 1;
+                    }
+                }
+            }
+        }
+
         let _ = next_id;
 
         SquadEvaluation {
@@ -504,20 +775,34 @@ impl PipelineProcessor {
         }
     }
 
+    fn is_january_window(date: NaiveDate) -> bool {
+        date.month() == 1
+    }
+
     /// Identify loan-out candidates based on club reputation tier.
     /// Real-world patterns:
     /// - Elite clubs (Man City, Real Madrid): Loan out young players who need game time,
-    ///   players blocked by star signings
-    /// - Continental clubs: Loan out surplus players, young talent
-    /// - National/Regional: Rarely loan out, might loan surplus
+    ///   players blocked by star signings, players lacking minutes, post-injury fitness
+    /// - Continental clubs: Similar to elite but slightly less aggressive
+    /// - National/Regional: Loan out young players, rarely others
     fn identify_loan_outs(
         squad: &[SquadPlayerInfo],
         rep_level: &ReputationLevel,
         avg_ability: u8,
-        _date: NaiveDate,
+        date: NaiveDate,
         players: &[Player],
         loan_outs: &mut Vec<LoanOutCandidate>,
     ) {
+        let is_january = Self::is_january_window(date);
+
+        // Calculate expected appearances based on season progress
+        // Season runs Aug(1) through May(10), so Jan = month 6
+        let month = date.month();
+        let season_month = if month >= 8 { month - 7 } else { month + 5 };
+        let expected_appearances = (season_month * 4) as u16;
+        let barely_plays = (expected_appearances as f32 * 0.15) as u16;
+        let starter_threshold = (expected_appearances as f32 * 0.50) as u16;
+
         for player_info in squad {
             let player = match players.iter().find(|p| p.id == player_info.player_id) {
                 Some(p) => p,
@@ -531,15 +816,91 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Skip key players
+            let is_key_player = player
+                .contract
+                .as_ref()
+                .map(|c| matches!(c.squad_status, crate::PlayerSquadStatus::KeyPlayer))
+                .unwrap_or(false);
+
             let age = player_info.age;
             let ability = player_info.current_ability;
             let potential = player_info.potential_ability;
+            let apps = player_info.appearances;
 
+            // ── Pass A: Post-injury fitness loan (Elite/Continental/National) ──
+            if matches!(
+                rep_level,
+                ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National
+            ) && player_info.recovery_days > 0
+                && player_info.recovery_days <= 30
+                && !player_info.is_injured
+                && age <= 30
+                && !is_key_player
+            {
+                loan_outs.push(LoanOutCandidate {
+                    player_id: player_info.player_id,
+                    reason: LoanOutReason::PostInjuryFitness,
+                    status: LoanOutStatus::Identified,
+                });
+                continue;
+            }
+
+            // ── Pass B: Lack of playing time (January window only) ──
+            if is_january && expected_appearances > 0 {
+                match rep_level {
+                    ReputationLevel::Elite | ReputationLevel::Continental => {
+                        // Players barely playing who are good enough to deserve minutes
+                        if apps <= barely_plays
+                            && ability >= avg_ability.saturating_sub(15)
+                            && age <= 28
+                            && !is_key_player
+                        {
+                            loan_outs.push(LoanOutCandidate {
+                                player_id: player_info.player_id,
+                                reason: LoanOutReason::LackOfPlayingTime,
+                                status: LoanOutStatus::Identified,
+                            });
+                            continue;
+                        }
+                        // Players aged 23-25 not getting enough starts, below avg but decent
+                        if age >= 23
+                            && age <= 25
+                            && apps < starter_threshold
+                            && ability < avg_ability
+                            && ability >= avg_ability.saturating_sub(20)
+                        {
+                            loan_outs.push(LoanOutCandidate {
+                                player_id: player_info.player_id,
+                                reason: LoanOutReason::LackOfPlayingTime,
+                                status: LoanOutStatus::Identified,
+                            });
+                            continue;
+                        }
+                    }
+                    ReputationLevel::National => {
+                        if apps <= barely_plays
+                            && age <= 25
+                            && ability >= avg_ability.saturating_sub(12)
+                            && !is_key_player
+                        {
+                            loan_outs.push(LoanOutCandidate {
+                                player_id: player_info.player_id,
+                                reason: LoanOutReason::LackOfPlayingTime,
+                                status: LoanOutStatus::Identified,
+                            });
+                            continue;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+
+            // ── Existing logic (relaxed thresholds) ──
             match rep_level {
                 ReputationLevel::Elite | ReputationLevel::Continental => {
-                    // Young players with high potential but not ready for first team
-                    // This is the "Chelsea/Man City academy" pattern
-                    if age <= 22 && potential > ability + 8 && ability < avg_ability {
+                    // Young high-potential: age limit 22→23, potential gap 8→5
+                    if age <= 23 && potential > ability + 5 && ability < avg_ability {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
@@ -548,14 +909,12 @@ impl PipelineProcessor {
                         continue;
                     }
 
-                    // Good players blocked by better players in same position
-                    // E.g., a 75-rated CB when the club has two 85+ rated CBs
+                    // Blocked by better: threshold from 2 to 1 if player barely plays
                     if age >= 21
                         && age <= 28
                         && ability < avg_ability
                         && ability >= avg_ability.saturating_sub(15)
                     {
-                        // Check if there are better players in same position
                         let same_pos_better = squad
                             .iter()
                             .filter(|p| {
@@ -565,7 +924,10 @@ impl PipelineProcessor {
                             })
                             .count();
 
-                        if same_pos_better >= 2 {
+                        let block_threshold =
+                            if is_january && apps <= barely_plays { 1 } else { 2 };
+
+                        if same_pos_better >= block_threshold {
                             loan_outs.push(LoanOutCandidate {
                                 player_id: player_info.player_id,
                                 reason: LoanOutReason::BlockedByBetterPlayer,
@@ -576,7 +938,6 @@ impl PipelineProcessor {
                     }
                 }
                 ReputationLevel::National => {
-                    // National clubs loan out young players who aren't quite ready
                     if age <= 22 && potential > ability + 8 && ability < avg_ability {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
@@ -587,8 +948,10 @@ impl PipelineProcessor {
                     }
                 }
                 ReputationLevel::Regional => {
-                    // Regional clubs loan out young players who need development
-                    if age <= 21 && potential > ability + 10 && ability < avg_ability.saturating_sub(5) {
+                    if age <= 21
+                        && potential > ability + 10
+                        && ability < avg_ability.saturating_sub(5)
+                    {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
@@ -601,17 +964,27 @@ impl PipelineProcessor {
             }
 
             // All tiers: genuine surplus (too many in one position group)
+            // January surplus thresholds lowered: DEF/MID 6→5, FWD 4→3
             let group = player_info.primary_position.position_group();
             let group_count = squad
                 .iter()
                 .filter(|p| p.primary_position.position_group() == group)
                 .count();
 
-            let surplus_threshold = match group {
-                PlayerFieldPositionGroup::Goalkeeper => 3,
-                PlayerFieldPositionGroup::Defender => 6,
-                PlayerFieldPositionGroup::Midfielder => 6,
-                PlayerFieldPositionGroup::Forward => 4,
+            let surplus_threshold = if is_january {
+                match group {
+                    PlayerFieldPositionGroup::Goalkeeper => 3,
+                    PlayerFieldPositionGroup::Defender => 5,
+                    PlayerFieldPositionGroup::Midfielder => 5,
+                    PlayerFieldPositionGroup::Forward => 3,
+                }
+            } else {
+                match group {
+                    PlayerFieldPositionGroup::Goalkeeper => 3,
+                    PlayerFieldPositionGroup::Defender => 6,
+                    PlayerFieldPositionGroup::Midfielder => 6,
+                    PlayerFieldPositionGroup::Forward => 4,
+                }
             };
 
             if group_count > surplus_threshold && ability < avg_ability {
@@ -1225,6 +1598,7 @@ impl PipelineProcessor {
                     country,
                     player_id,
                     date,
+                    club.finance.balance.balance,
                 );
 
                 let is_loan = matches!(
@@ -1390,6 +1764,7 @@ impl PipelineProcessor {
     /// - Regional/Local: Loan most players, only buy cheap or free agents
     /// - If player is loan-listed by their club: always loan
     /// - Development signings: always loan
+    /// - January window and negative balance rules bias toward loans
     fn determine_transfer_approach(
         rep_level: &ReputationLevel,
         budget: f64,
@@ -1397,8 +1772,11 @@ impl PipelineProcessor {
         request: Option<&TransferRequest>,
         country: &Country,
         player_id: u32,
-        _date: NaiveDate,
+        date: NaiveDate,
+        buying_club_balance: i32,
     ) -> TransferApproach {
+        let is_january = Self::is_january_window(date);
+
         // If the player is already loan-listed, pursue a loan
         if let Some(player) = Self::find_player_in_country(country, player_id) {
             let statuses = player.statuses.get();
@@ -1407,11 +1785,48 @@ impl PipelineProcessor {
             }
         }
 
-        // Development signings are always loans
+        // Reasons that always result in loan approach
         if let Some(req) = request {
-            if req.reason == TransferNeedReason::DevelopmentSigning {
-                return TransferApproach::Loan;
+            match req.reason {
+                TransferNeedReason::DevelopmentSigning
+                | TransferNeedReason::LoanToFillSquad
+                | TransferNeedReason::InjuryCoverLoan
+                | TransferNeedReason::OpportunisticLoanUpgrade
+                | TransferNeedReason::SquadPadding => {
+                    return TransferApproach::Loan;
+                }
+                TransferNeedReason::ExperiencedHead | TransferNeedReason::CheapReinforcement => {
+                    // Prefer loan, but allow cheap buy if very affordable
+                    if estimated_fee > 50_000.0 || buying_club_balance < 0 {
+                        return TransferApproach::Loan;
+                    }
+                }
+                _ => {}
             }
+        }
+
+        let is_critical = request
+            .map(|r| r.priority == TransferNeedPriority::Critical)
+            .unwrap_or(false);
+
+        // January + Regional/Local/Amateur → always Loan
+        if is_january
+            && matches!(
+                rep_level,
+                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
+            )
+        {
+            return TransferApproach::Loan;
+        }
+
+        // January + National + non-Critical request → Loan
+        if is_january && *rep_level == ReputationLevel::National && !is_critical {
+            return TransferApproach::Loan;
+        }
+
+        // Negative balance + non-Elite → Loan
+        if buying_club_balance < 0 && *rep_level != ReputationLevel::Elite {
+            return TransferApproach::Loan;
         }
 
         // Can we even afford to buy?
@@ -1448,8 +1863,11 @@ impl PipelineProcessor {
                 }
             }
             ReputationLevel::Regional => {
-                if affordability >= 1.0 {
+                // Relaxed: threshold from 1.0→0.7 for buy, add LoanWithOption tier at 0.3
+                if affordability >= 0.7 {
                     TransferApproach::PermanentTransfer
+                } else if affordability >= 0.3 {
+                    TransferApproach::LoanWithOption
                 } else {
                     TransferApproach::Loan
                 }
@@ -1460,6 +1878,265 @@ impl PipelineProcessor {
                 } else {
                     TransferApproach::Loan
                 }
+            }
+        }
+    }
+
+    // ============================================================
+    // Step 6.5: Scan Loan Market — Small clubs proactively seek loans
+    // ============================================================
+
+    pub fn scan_loan_market(country: &mut Country, date: NaiveDate) {
+        let is_january = Self::is_january_window(date);
+
+        // Collect available loan listings (Pass 1 read)
+        struct LoanListing {
+            player_id: u32,
+            club_id: u32,
+            asking_price: f64,
+            ability: u8,
+            age: u8,
+            position_group: PlayerFieldPositionGroup,
+        }
+
+        let mut loan_listings: Vec<LoanListing> = Vec::new();
+
+        for listing in &country.transfer_market.listings {
+            if listing.listing_type != TransferListingType::Loan {
+                continue;
+            }
+            if listing.status != crate::transfers::market::TransferListingStatus::Available {
+                continue;
+            }
+            if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
+                loan_listings.push(LoanListing {
+                    player_id: listing.player_id,
+                    club_id: listing.club_id,
+                    asking_price: listing.asking_price.amount,
+                    ability: player.player_attributes.current_ability,
+                    age: player.age(date),
+                    position_group: player.position().position_group(),
+                });
+            }
+        }
+
+        if loan_listings.is_empty() {
+            return;
+        }
+
+        // Collect club scanning actions (Pass 1 read)
+        struct LoanScanAction {
+            club_id: u32,
+            player_id: u32,
+            selling_club_id: u32,
+            offer_amount: f64,
+        }
+
+        let mut actions: Vec<LoanScanAction> = Vec::new();
+
+        for club in &country.clubs {
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+
+            let team = &club.teams.teams[0];
+            let rep_level = team.reputation.level();
+
+            // Determine if club should scan
+            let should_scan = match rep_level {
+                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => {
+                    true
+                }
+                ReputationLevel::National => {
+                    is_january || club.finance.balance.balance < 0
+                }
+                ReputationLevel::Continental => {
+                    is_january && club.finance.balance.balance < 0
+                }
+                ReputationLevel::Elite => false,
+            };
+
+            if !should_scan {
+                continue;
+            }
+
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            let balance = club.finance.balance.balance;
+            let max_loan_fee = if balance < 0 {
+                50_000.0
+            } else {
+                balance as f64 * 0.20
+            };
+
+            let max_scans: usize = match rep_level {
+                ReputationLevel::Local | ReputationLevel::Amateur => 4,
+                ReputationLevel::Regional => 3,
+                ReputationLevel::National => 2,
+                _ => 1,
+            };
+            let mut scans_this_club = 0usize;
+
+            let avg_ability: u8 = if !team.players.players.is_empty() {
+                let total: u32 = team
+                    .players
+                    .players
+                    .iter()
+                    .map(|p| p.player_attributes.current_ability as u32)
+                    .sum();
+                (total / team.players.players.len() as u32) as u8
+            } else {
+                50
+            };
+
+            // Check unfulfilled transfer requests first
+            let unfulfilled: Vec<&TransferRequest> = plan
+                .transfer_requests
+                .iter()
+                .filter(|r| {
+                    r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                })
+                .collect();
+
+            for request in &unfulfilled {
+                if scans_this_club >= max_scans {
+                    break;
+                }
+
+                // Relaxed thresholds: min_ability - 5, age_max + 3
+                let relaxed_min = request.min_ability.saturating_sub(5);
+                let relaxed_age_max = request.preferred_age_max.saturating_add(3);
+
+                if let Some(best) = loan_listings
+                    .iter()
+                    .filter(|l| {
+                        l.club_id != club.id
+                            && l.position_group == request.position.position_group()
+                            && l.ability >= relaxed_min
+                            && l.age <= relaxed_age_max
+                            && l.age >= request.preferred_age_min
+                            && l.asking_price * 0.8 <= max_loan_fee
+                            && !country
+                                .transfer_market
+                                .has_active_negotiation_for(l.player_id, club.id)
+                    })
+                    .max_by_key(|l| l.ability)
+                {
+                    actions.push(LoanScanAction {
+                        club_id: club.id,
+                        player_id: best.player_id,
+                        selling_club_id: best.club_id,
+                        offer_amount: best.asking_price * 0.8,
+                    });
+                    scans_this_club += 1;
+                }
+            }
+
+            // Opportunistic scan: small clubs always look for deals, not just in January
+            let is_small_club = matches!(
+                rep_level,
+                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
+            );
+
+            // Small clubs scan for ANY decent player they can loan cheaply
+            if is_small_club && scans_this_club < max_scans {
+                // Look for players above squad average — a loan upgrade opportunity
+                let mut opps: Vec<&LoanListing> = loan_listings
+                    .iter()
+                    .filter(|l| {
+                        l.club_id != club.id
+                            && l.ability >= avg_ability.saturating_sub(5)
+                            && l.asking_price * 0.8 <= max_loan_fee
+                            && !country
+                                .transfer_market
+                                .has_active_negotiation_for(l.player_id, club.id)
+                            && !actions
+                                .iter()
+                                .any(|a| a.club_id == club.id && a.player_id == l.player_id)
+                    })
+                    .collect();
+                opps.sort_by(|a, b| b.ability.cmp(&a.ability));
+
+                for opp in opps.iter().take(max_scans - scans_this_club) {
+                    actions.push(LoanScanAction {
+                        club_id: club.id,
+                        player_id: opp.player_id,
+                        selling_club_id: opp.club_id,
+                        offer_amount: opp.asking_price * 0.8,
+                    });
+                    scans_this_club += 1;
+                }
+            }
+
+            // January extra: even National clubs look for opportunistic loans
+            if is_january && scans_this_club < max_scans && !is_small_club {
+                if let Some(opp) = loan_listings
+                    .iter()
+                    .filter(|l| {
+                        l.club_id != club.id
+                            && l.ability >= avg_ability.saturating_sub(8)
+                            && l.asking_price * 0.8 <= max_loan_fee
+                            && !country
+                                .transfer_market
+                                .has_active_negotiation_for(l.player_id, club.id)
+                            && !actions
+                                .iter()
+                                .any(|a| a.club_id == club.id && a.player_id == l.player_id)
+                    })
+                    .max_by_key(|l| l.ability)
+                {
+                    actions.push(LoanScanAction {
+                        club_id: club.id,
+                        player_id: opp.player_id,
+                        selling_club_id: opp.club_id,
+                        offer_amount: opp.asking_price * 0.8,
+                    });
+                }
+            }
+        }
+
+        // Pass 2: Start loan negotiations
+        for action in actions {
+            let selling_rep = Self::get_club_reputation(country, action.selling_club_id);
+            let buying_rep = Self::get_club_reputation(country, action.club_id);
+            let (p_age, p_ambition) =
+                Self::get_player_negotiation_data(country, action.player_id, date);
+
+            let offer = crate::transfers::offer::TransferOffer {
+                base_fee: CurrencyValue {
+                    amount: action.offer_amount,
+                    currency: Currency::Usd,
+                },
+                clauses: Vec::new(),
+                salary_contribution: None,
+                contract_length: Some(1),
+                offering_club_id: action.club_id,
+                offered_date: date,
+            };
+
+            if let Some(neg_id) = country.transfer_market.start_negotiation(
+                action.player_id,
+                action.club_id,
+                offer,
+                date,
+                selling_rep,
+                buying_rep,
+                p_age,
+                p_ambition,
+            ) {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.is_loan = true;
+                    negotiation.is_unsolicited = false;
+                }
+
+                debug!(
+                    "Loan scan: Club {} started loan negotiation for player {}",
+                    action.club_id, action.player_id
+                );
             }
         }
     }
@@ -1535,6 +2212,693 @@ impl PipelineProcessor {
                         if !player.statuses.get().contains(&PlayerStatusType::Loa) {
                             player.statuses.add(date, PlayerStatusType::Loa);
                         }
+                    }
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // Step 2.5: Generate Staff Recommendations
+    // ============================================================
+
+    pub fn generate_staff_recommendations(country: &mut Country, date: NaiveDate) {
+        // Only runs weekly (same schedule as should_evaluate)
+        if !Self::should_evaluate(date) {
+            return;
+        }
+
+        let is_january = Self::is_january_window(date);
+        let price_level = country.settings.pricing.price_level;
+
+        // Pass 1: Build player snapshots across all clubs
+        #[allow(dead_code)]
+        struct PlayerSnapshot {
+            id: u32,
+            club_id: u32,
+            position: PlayerPositionType,
+            position_group: PlayerFieldPositionGroup,
+            ability: u8,
+            potential: u8,
+            age: u8,
+            estimated_value: f64,
+            contract_months_remaining: u32,
+            club_in_debt: bool,
+            parent_club_reputation: ReputationLevel,
+            is_loan_listed: bool,
+        }
+
+        let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
+
+        for club in &country.clubs {
+            let club_in_debt = club.finance.balance.balance < 0;
+            let rep_level = club
+                .teams
+                .teams
+                .first()
+                .map(|t| t.reputation.level())
+                .unwrap_or(ReputationLevel::Amateur);
+
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    let value = PlayerValuationCalculator::calculate_value_with_price_level(
+                        player,
+                        date,
+                        price_level,
+                    );
+                    let contract_months = player
+                        .contract
+                        .as_ref()
+                        .map(|c| {
+                            let days = (c.expiration - date).num_days().max(0) as u32;
+                            days / 30
+                        })
+                        .unwrap_or(0);
+
+                    let statuses = player.statuses.get();
+
+                    all_snapshots.push(PlayerSnapshot {
+                        id: player.id,
+                        club_id: club.id,
+                        position: player.position(),
+                        position_group: player.position().position_group(),
+                        ability: player.player_attributes.current_ability,
+                        potential: player.player_attributes.potential_ability,
+                        age: player.age(date),
+                        estimated_value: value.amount,
+                        contract_months_remaining: contract_months,
+                        club_in_debt,
+                        parent_club_reputation: rep_level.clone(),
+                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                    });
+                }
+            }
+        }
+
+        // Collect recommendations per club
+        struct RecommendationAction {
+            club_id: u32,
+            recommendation: StaffRecommendation,
+        }
+
+        let mut actions: Vec<RecommendationAction> = Vec::new();
+
+        for club in &country.clubs {
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            // Cap: 6 recommendations per club per window
+            if plan.staff_recommendations.len() >= 6 {
+                continue;
+            }
+
+            let team = &club.teams.teams[0];
+            let resolved = StaffResolver::resolve(&team.staffs);
+
+            let avg_ability: u8 = if !team.players.players.is_empty() {
+                let total: u32 = team
+                    .players
+                    .players
+                    .iter()
+                    .map(|p| p.player_attributes.current_ability as u32)
+                    .sum();
+                (total / team.players.players.len() as u32) as u8
+            } else {
+                50
+            };
+
+            let club_rep = team.reputation.level();
+
+            let already_recommended: Vec<u32> = plan
+                .staff_recommendations
+                .iter()
+                .map(|r| r.player_id)
+                .collect();
+
+            // ── Scout network recommendations ──
+            for scout in &resolved.scouts {
+                let judging = scout.staff_attributes.knowledge.judging_player_ability;
+                let judging_pot = scout.staff_attributes.knowledge.judging_player_potential;
+
+                // Discovery chance: 10 + (judging_ability * 3) percent
+                let discovery_chance = 10 + (judging as i32 * 3);
+                if IntegerUtils::random(0, 100) > discovery_chance {
+                    continue;
+                }
+
+                // Filter candidates from other clubs
+                let candidates: Vec<&PlayerSnapshot> = all_snapshots
+                    .iter()
+                    .filter(|p| {
+                        p.club_id != club.id
+                            && p.ability >= avg_ability.saturating_sub(10)
+                            && p.ability <= avg_ability + (judging / 2)
+                            && !already_recommended.contains(&p.id)
+                            && !actions
+                                .iter()
+                                .any(|a| a.club_id == club.id && a.recommendation.player_id == p.id)
+                    })
+                    .collect();
+
+                if candidates.is_empty() {
+                    continue;
+                }
+
+                // Score candidates
+                let mut best_score = 0.0f32;
+                let mut best_candidate: Option<&PlayerSnapshot> = None;
+
+                for cand in &candidates {
+                    let mut score: f32 = 0.0;
+
+                    // Expiring contract
+                    if cand.contract_months_remaining <= 6 {
+                        score += 3.0;
+                    } else if cand.contract_months_remaining <= 12 {
+                        score += 1.5;
+                    }
+
+                    // Club in debt
+                    if cand.club_in_debt {
+                        score += 2.0;
+                    }
+
+                    // High potential gap
+                    if cand.potential > cand.ability + 15 {
+                        score += 2.5;
+                    } else if cand.potential > cand.ability + 8 {
+                        score += 1.5;
+                    }
+
+                    // Lower-rep club
+                    if Self::rep_level_value(&cand.parent_club_reputation)
+                        < Self::rep_level_value(&club_rep)
+                    {
+                        score += 1.0;
+                    }
+
+                    // Loan-listed
+                    if cand.is_loan_listed {
+                        score += if is_january { 2.0 } else { 1.0 };
+                    }
+
+                    // Ability fit
+                    if cand.ability >= avg_ability.saturating_sub(5) {
+                        score += 1.0;
+                    }
+
+                    if score > best_score {
+                        best_score = score;
+                        best_candidate = Some(cand);
+                    }
+                }
+
+                if let Some(cand) = best_candidate {
+                    // Assess with error based on judging skill
+                    let ability_error = (20i16 - judging as i16).max(1) as i32;
+                    let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
+
+                    let assessed_ability = (cand.ability as i32
+                        + IntegerUtils::random(-ability_error, ability_error))
+                    .clamp(1, 100) as u8;
+                    let assessed_potential = (cand.potential as i32
+                        + IntegerUtils::random(-potential_error, potential_error))
+                    .clamp(1, 100) as u8;
+
+                    let confidence = (0.3 + (judging as f32 * 0.035)).min(0.95);
+
+                    let rec_type = if cand.contract_months_remaining <= 6 {
+                        RecommendationType::ExpiringContract
+                    } else if cand.club_in_debt {
+                        RecommendationType::FinancialDistress
+                    } else if cand.potential > cand.ability + 15 && cand.age <= 22 {
+                        RecommendationType::HiddenGem
+                    } else if cand.is_loan_listed {
+                        RecommendationType::LoanOpportunity
+                    } else {
+                        RecommendationType::ReadyForStepUp
+                    };
+
+                    actions.push(RecommendationAction {
+                        club_id: club.id,
+                        recommendation: StaffRecommendation {
+                            player_id: cand.id,
+                            recommender_staff_id: scout.id,
+                            source: RecommendationSource::ScoutNetwork,
+                            recommendation_type: rec_type,
+                            assessed_ability,
+                            assessed_potential,
+                            confidence,
+                            estimated_fee: cand.estimated_value,
+                            date_recommended: date,
+                        },
+                    });
+                }
+            }
+
+            // ── DoF bargain identification ──
+            if let Some(dof) = resolved.director_of_football {
+                let judging = dof.staff_attributes.knowledge.judging_player_ability;
+                let judging_pot = dof.staff_attributes.knowledge.judging_player_potential;
+                let dof_chance = 40 + (judging as i32 * 3);
+
+                if IntegerUtils::random(0, 100) <= dof_chance {
+                    // Look for expiring contracts with ability >= avg-5
+                    let dof_candidates: Vec<&PlayerSnapshot> = all_snapshots
+                        .iter()
+                        .filter(|p| {
+                            p.club_id != club.id
+                                && p.contract_months_remaining <= 6
+                                && p.ability >= avg_ability.saturating_sub(5)
+                                && !already_recommended.contains(&p.id)
+                                && !actions.iter().any(|a| {
+                                    a.club_id == club.id && a.recommendation.player_id == p.id
+                                })
+                        })
+                        .collect();
+
+                    if let Some(best) = dof_candidates.iter().max_by_key(|p| p.ability) {
+                        let ability_error = (20i16 - judging as i16).max(1) as i32;
+                        let potential_error = (20i16 - judging_pot as i16).max(1) as i32;
+
+                        let assessed_ability = (best.ability as i32
+                            + IntegerUtils::random(-ability_error, ability_error))
+                        .clamp(1, 100) as u8;
+                        let assessed_potential = (best.potential as i32
+                            + IntegerUtils::random(-potential_error, potential_error))
+                        .clamp(1, 100) as u8;
+
+                        let confidence = (0.4 + (judging as f32 * 0.035)).min(0.95);
+
+                        actions.push(RecommendationAction {
+                            club_id: club.id,
+                            recommendation: StaffRecommendation {
+                                player_id: best.id,
+                                recommender_staff_id: dof.id,
+                                source: RecommendationSource::DirectorOfFootball,
+                                recommendation_type: RecommendationType::ExpiringContract,
+                                assessed_ability,
+                                assessed_potential,
+                                confidence,
+                                estimated_fee: best.estimated_value,
+                                date_recommended: date,
+                            },
+                        });
+                    }
+                }
+            }
+
+            // ── Small club staff: aggressive loan/bargain hunting ──
+            // Small clubs rely on their staff to find cheap deals, loans,
+            // free agents, and surplus players from bigger clubs.
+            // Even a head coach at a small club knows what the squad needs.
+            let is_small_club = matches!(
+                club_rep,
+                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
+            );
+            let is_mid_club = club_rep == ReputationLevel::National;
+
+            if is_small_club || is_mid_club {
+                let rec_cap = if is_small_club { 10 } else { 8 };
+                let current_recs = plan.staff_recommendations.len()
+                    + actions.iter().filter(|a| a.club_id == club.id).count();
+
+                if current_recs < rec_cap {
+                    let remaining = rec_cap - current_recs;
+
+                    // Coach recommends players available on loan
+                    let head_coach = team.staffs.head_coach();
+                    let coach_id = head_coach.id;
+                    let coach_judging =
+                        head_coach.staff_attributes.knowledge.judging_player_ability;
+                    let coach_judging_pot =
+                        head_coach.staff_attributes.knowledge.judging_player_potential;
+
+                    // ── Cheap loan targets (loan-listed players the club could afford) ──
+                    let mut loan_targets: Vec<&PlayerSnapshot> = all_snapshots
+                        .iter()
+                        .filter(|p| {
+                            p.club_id != club.id
+                                && p.is_loan_listed
+                                && p.ability >= avg_ability.saturating_sub(8)
+                                && !already_recommended.contains(&p.id)
+                                && !actions.iter().any(|a| {
+                                    a.club_id == club.id && a.recommendation.player_id == p.id
+                                })
+                        })
+                        .collect();
+                    loan_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+
+                    for target in loan_targets.iter().take(remaining.min(3)) {
+                        let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
+                        let potential_error = (20i16 - coach_judging_pot as i16).max(1) as i32;
+
+                        let assessed_ability = (target.ability as i32
+                            + IntegerUtils::random(-ability_error, ability_error))
+                        .clamp(1, 100) as u8;
+                        let assessed_potential = (target.potential as i32
+                            + IntegerUtils::random(-potential_error, potential_error))
+                        .clamp(1, 100) as u8;
+
+                        let rec_type = if target.ability > avg_ability + 5 {
+                            RecommendationType::BigClubSurplus
+                        } else if target.age >= 28 {
+                            RecommendationType::ExperiencedLoanMentor
+                        } else {
+                            RecommendationType::CheapLoanAvailable
+                        };
+
+                        let confidence = (0.4 + (coach_judging as f32 * 0.03)).min(0.9);
+
+                        actions.push(RecommendationAction {
+                            club_id: club.id,
+                            recommendation: StaffRecommendation {
+                                player_id: target.id,
+                                recommender_staff_id: coach_id,
+                                source: RecommendationSource::HeadCoach,
+                                recommendation_type: rec_type,
+                                assessed_ability,
+                                assessed_potential,
+                                confidence,
+                                estimated_fee: target.estimated_value * 0.1, // loan fee
+                                date_recommended: date,
+                            },
+                        });
+                    }
+
+                    let current_recs_after_loans = plan.staff_recommendations.len()
+                        + actions.iter().filter(|a| a.club_id == club.id).count();
+                    let remaining_after_loans = rec_cap.saturating_sub(current_recs_after_loans);
+
+                    // ── Free agent bargains (expiring contracts) ──
+                    if remaining_after_loans > 0 {
+                        let mut free_targets: Vec<&PlayerSnapshot> = all_snapshots
+                            .iter()
+                            .filter(|p| {
+                                p.club_id != club.id
+                                    && p.contract_months_remaining <= 6
+                                    && p.ability >= avg_ability.saturating_sub(10)
+                                    && !already_recommended.contains(&p.id)
+                                    && !actions.iter().any(|a| {
+                                        a.club_id == club.id
+                                            && a.recommendation.player_id == p.id
+                                    })
+                            })
+                            .collect();
+                        free_targets.sort_by(|a, b| b.ability.cmp(&a.ability));
+
+                        for target in free_targets.iter().take(remaining_after_loans.min(2)) {
+                            let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
+                            let potential_error =
+                                (20i16 - coach_judging_pot as i16).max(1) as i32;
+
+                            let assessed_ability = (target.ability as i32
+                                + IntegerUtils::random(-ability_error, ability_error))
+                            .clamp(1, 100) as u8;
+                            let assessed_potential = (target.potential as i32
+                                + IntegerUtils::random(-potential_error, potential_error))
+                            .clamp(1, 100) as u8;
+
+                            let confidence = (0.5 + (coach_judging as f32 * 0.03)).min(0.9);
+
+                            actions.push(RecommendationAction {
+                                club_id: club.id,
+                                recommendation: StaffRecommendation {
+                                    player_id: target.id,
+                                    recommender_staff_id: coach_id,
+                                    source: RecommendationSource::HeadCoach,
+                                    recommendation_type: RecommendationType::FreeAgentBargain,
+                                    assessed_ability,
+                                    assessed_potential,
+                                    confidence,
+                                    estimated_fee: 0.0, // free agent
+                                    date_recommended: date,
+                                },
+                            });
+                        }
+                    }
+
+                    let current_recs_after_free = plan.staff_recommendations.len()
+                        + actions.iter().filter(|a| a.club_id == club.id).count();
+                    let remaining_after_free = rec_cap.saturating_sub(current_recs_after_free);
+
+                    // ── Players wanting game time from bigger clubs ──
+                    // Young players at bigger clubs who aren't loan-listed yet but
+                    // are below their club's average — they'd benefit from a loan
+                    if remaining_after_free > 0 && is_small_club {
+                        let mut game_time_seekers: Vec<&PlayerSnapshot> = all_snapshots
+                            .iter()
+                            .filter(|p| {
+                                p.club_id != club.id
+                                    && p.age <= 23
+                                    && p.potential > p.ability + 5
+                                    && p.ability >= avg_ability.saturating_sub(5)
+                                    && Self::rep_level_value(&p.parent_club_reputation)
+                                        > Self::rep_level_value(&club_rep)
+                                    && !p.is_loan_listed
+                                    && !already_recommended.contains(&p.id)
+                                    && !actions.iter().any(|a| {
+                                        a.club_id == club.id
+                                            && a.recommendation.player_id == p.id
+                                    })
+                            })
+                            .collect();
+                        game_time_seekers.sort_by(|a, b| b.potential.cmp(&a.potential));
+
+                        for target in game_time_seekers.iter().take(remaining_after_free.min(2))
+                        {
+                            let ability_error = (20i16 - coach_judging as i16).max(1) as i32;
+                            let potential_error =
+                                (20i16 - coach_judging_pot as i16).max(1) as i32;
+
+                            let assessed_ability = (target.ability as i32
+                                + IntegerUtils::random(-ability_error, ability_error))
+                            .clamp(1, 100) as u8;
+                            let assessed_potential = (target.potential as i32
+                                + IntegerUtils::random(-potential_error, potential_error))
+                            .clamp(1, 100) as u8;
+
+                            let confidence = (0.3 + (coach_judging as f32 * 0.025)).min(0.8);
+
+                            actions.push(RecommendationAction {
+                                club_id: club.id,
+                                recommendation: StaffRecommendation {
+                                    player_id: target.id,
+                                    recommender_staff_id: coach_id,
+                                    source: RecommendationSource::HeadCoach,
+                                    recommendation_type: RecommendationType::GameTimeSeeker,
+                                    assessed_ability,
+                                    assessed_potential,
+                                    confidence,
+                                    estimated_fee: target.estimated_value * 0.05, // loan fee
+                                    date_recommended: date,
+                                },
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Push recommendations into club transfer plans
+        // Small clubs get higher cap
+        for action in actions {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
+                let rep = club
+                    .teams
+                    .teams
+                    .first()
+                    .map(|t| t.reputation.level())
+                    .unwrap_or(ReputationLevel::Amateur);
+                let cap = match rep {
+                    ReputationLevel::Regional
+                    | ReputationLevel::Local
+                    | ReputationLevel::Amateur => 10,
+                    ReputationLevel::National => 8,
+                    _ => 6,
+                };
+                if club.transfer_plan.staff_recommendations.len() < cap {
+                    club.transfer_plan
+                        .staff_recommendations
+                        .push(action.recommendation);
+                }
+            }
+        }
+    }
+
+    // ============================================================
+    // Step 2.75: Process Staff Recommendations
+    // ============================================================
+
+    pub fn process_staff_recommendations(country: &mut Country, date: NaiveDate) {
+        // Only runs weekly (same schedule as should_evaluate)
+        if !Self::should_evaluate(date) {
+            return;
+        }
+
+        struct RecommendationProcessAction {
+            club_id: u32,
+            kind: RecommendationProcessKind,
+        }
+
+        enum RecommendationProcessKind {
+            AddToShortlist {
+                shortlist_request_id: u32,
+                candidate: ShortlistCandidate,
+            },
+            CreateRequest {
+                request: TransferRequest,
+            },
+        }
+
+        let mut actions: Vec<RecommendationProcessAction> = Vec::new();
+        let seven_days_ago = date - chrono::Duration::days(7);
+
+        for club in &country.clubs {
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            let recent_recs: Vec<&StaffRecommendation> = plan
+                .staff_recommendations
+                .iter()
+                .filter(|r| r.date_recommended >= seven_days_ago)
+                .collect();
+
+            for rec in &recent_recs {
+                // Determine player's position group
+                let player_pos_group =
+                    if let Some(player) = Self::find_player_in_country(country, rec.player_id) {
+                        player.position().position_group()
+                    } else {
+                        continue;
+                    };
+
+                // Check if an existing unfulfilled request covers the same position group
+                let matching_request = plan.transfer_requests.iter().find(|r| {
+                    r.position.position_group() == player_pos_group
+                        && r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                });
+
+                if let Some(req) = matching_request {
+                    // Find the shortlist for this request
+                    let has_shortlist = plan
+                        .shortlists
+                        .iter()
+                        .any(|s| s.transfer_request_id == req.id);
+
+                    if has_shortlist {
+                        // Add as candidate to existing shortlist
+                        let already_in = plan.shortlists.iter().any(|s| {
+                            s.transfer_request_id == req.id
+                                && s.candidates.iter().any(|c| c.player_id == rec.player_id)
+                        });
+
+                        if !already_in {
+                            actions.push(RecommendationProcessAction {
+                                club_id: club.id,
+                                kind: RecommendationProcessKind::AddToShortlist {
+                                    shortlist_request_id: req.id,
+                                    candidate: ShortlistCandidate {
+                                        player_id: rec.player_id,
+                                        score: rec.assessed_ability as f32 / 100.0
+                                            + rec.confidence * 0.1,
+                                        estimated_fee: rec.estimated_fee,
+                                        status: ShortlistCandidateStatus::Available,
+                                    },
+                                },
+                            });
+                        }
+                    }
+                } else if rec.confidence >= 0.6 && rec.assessed_ability >= 50 {
+                    // No existing request — create a new one
+                    let player_position =
+                        if let Some(player) = Self::find_player_in_country(country, rec.player_id)
+                        {
+                            player.position()
+                        } else {
+                            continue;
+                        };
+
+                    // Check we don't already have too many requests
+                    let active_requests = plan
+                        .transfer_requests
+                        .iter()
+                        .filter(|r| {
+                            r.status != TransferRequestStatus::Fulfilled
+                                && r.status != TransferRequestStatus::Abandoned
+                        })
+                        .count();
+
+                    if active_requests >= 8 {
+                        continue;
+                    }
+
+                    // Allocate 15% of available budget
+                    let available_budget = plan.available_budget();
+                    let alloc = available_budget * 0.15;
+
+                    if alloc <= 0.0 {
+                        continue;
+                    }
+
+                    let next_id = plan.next_request_id + actions
+                        .iter()
+                        .filter(|a| {
+                            a.club_id == club.id
+                                && matches!(a.kind, RecommendationProcessKind::CreateRequest { .. })
+                        })
+                        .count() as u32;
+
+                    actions.push(RecommendationProcessAction {
+                        club_id: club.id,
+                        kind: RecommendationProcessKind::CreateRequest {
+                            request: TransferRequest::new(
+                                next_id,
+                                player_position,
+                                TransferNeedPriority::Optional,
+                                TransferNeedReason::StaffRecommendation,
+                                rec.assessed_ability.saturating_sub(5),
+                                rec.assessed_ability,
+                                alloc,
+                            ),
+                        },
+                    });
+                }
+            }
+        }
+
+        // Pass 2: Apply actions
+        for action in actions {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
+                let plan = &mut club.transfer_plan;
+
+                match action.kind {
+                    RecommendationProcessKind::AddToShortlist {
+                        shortlist_request_id,
+                        candidate,
+                    } => {
+                        if let Some(shortlist) = plan
+                            .shortlists
+                            .iter_mut()
+                            .find(|s| s.transfer_request_id == shortlist_request_id)
+                        {
+                            shortlist.candidates.push(candidate);
+                        }
+                    }
+                    RecommendationProcessKind::CreateRequest { request } => {
+                        let req_id = request.id;
+                        if req_id >= plan.next_request_id {
+                            plan.next_request_id = req_id + 1;
+                        }
+                        plan.transfer_requests.push(request);
                     }
                 }
             }
@@ -1706,5 +3070,16 @@ impl PipelineProcessor {
         Self::find_player_in_country(country, player_id)
             .map(|p| (p.age(date), p.attributes.ambition))
             .unwrap_or((25, 0.5))
+    }
+
+    fn rep_level_value(level: &ReputationLevel) -> u8 {
+        match level {
+            ReputationLevel::Elite => 5,
+            ReputationLevel::Continental => 4,
+            ReputationLevel::National => 3,
+            ReputationLevel::Regional => 2,
+            ReputationLevel::Local => 1,
+            ReputationLevel::Amateur => 0,
+        }
     }
 }

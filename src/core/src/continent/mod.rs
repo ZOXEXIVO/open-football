@@ -1,11 +1,21 @@
+pub mod competitions;
 pub mod context;
 mod continent;
+pub mod economics;
+mod friendlies;
+mod national_competition_sim;
 pub mod national_competitions;
+pub mod rankings;
+pub mod regulations;
 mod result;
 mod tournaments;
 
+pub use competitions::*;
 pub use context::*;
 pub use continent::*;
+pub use economics::*;
 pub use national_competitions::*;
+pub use rankings::*;
+pub use regulations::*;
 pub use result::*;
 pub use tournaments::*;

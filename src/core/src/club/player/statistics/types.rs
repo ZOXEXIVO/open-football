@@ -1,3 +1,4 @@
+use chrono::NaiveDate;
 use crate::league::Season;
 
 #[derive(Debug, Default)]
@@ -36,6 +37,8 @@ pub struct PlayerStatisticsHistoryItem {
     pub league_slug: String,
     pub is_loan: bool,
     pub statistics: PlayerStatistics,
+    /// When this history entry was created (for ordering)
+    pub created_at: NaiveDate,
 }
 
 impl Default for PlayerStatisticsHistory {
@@ -47,5 +50,23 @@ impl Default for PlayerStatisticsHistory {
 impl PlayerStatisticsHistory {
     pub fn new() -> Self {
         PlayerStatisticsHistory { items: Vec::new() }
+    }
+
+    /// Push a new history entry. If an entry already exists for the same season
+    /// and team with 0 games played, replace it instead of creating a duplicate
+    /// (avoids empty breaks in history when a player's club switches league
+    /// or when a player transfers without playing).
+    pub fn push_or_replace(&mut self, item: PlayerStatisticsHistoryItem) {
+        let zero_games_idx = self.items.iter().position(|existing| {
+            existing.season.start_year == item.season.start_year
+                && existing.team_slug == item.team_slug
+                && (existing.statistics.played + existing.statistics.played_subs) == 0
+        });
+
+        if let Some(idx) = zero_games_idx {
+            self.items[idx] = item;
+        } else {
+            self.items.push(item);
+        }
     }
 }

@@ -1679,13 +1679,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-history-table thead th.sq-nat { white-space: nowrap; }
 .fm-history-table thead th.sq-league { text-align: center; }
 .fm-history-table thead th.sq-fee { width: 20%; text-align: center; white-space: nowrap; }
-.fm-history-table thead th.sq-stat { width: 52px; }
+.fm-history-table thead th.sq-stat { width: 6em; }
 
 .fm-history-table td.sq-nat { white-space: nowrap; }
 .fm-history-table td.sq-nat .flag { vertical-align: middle; margin-right: 0.55em; }
 .fm-history-table td.sq-league { text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
 .fm-history-table td.sq-fee { font-size: 11px; text-align: center; white-space: nowrap; }
-.fm-history-table td.sq-stat { width: 52px; min-width: 52px; max-width: 52px; }
+.fm-history-table td.sq-stat { width: 6em; min-width: 52px; max-width: 52px; }
 
 /* --- Team Stats Table --- */
 

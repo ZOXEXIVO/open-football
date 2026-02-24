@@ -25,6 +25,20 @@ pub enum TransferNeedReason {
     SuccessionPlanning,
     /// Young prospect with high potential to develop
     DevelopmentSigning,
+    /// Staff (scout/DoF) proactively recommended this player
+    StaffRecommendation,
+    /// Small club needs a loan player to fill first-team spot they can't afford to buy for
+    LoanToFillSquad,
+    /// Need experienced player on loan to lead dressing room / mentor youth
+    ExperiencedHead,
+    /// Squad too small to compete — need bodies regardless of position specifics
+    SquadPadding,
+    /// Cheap short-term reinforcement (free agent, loan, minimal fee)
+    CheapReinforcement,
+    /// Loan-in to cover for long-term injury in the squad
+    InjuryCoverLoan,
+    /// Player available on loan who is clearly better than current options
+    OpportunisticLoanUpgrade,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -79,6 +93,13 @@ impl TransferRequest {
             TransferNeedReason::DepthCover => (20, 32),
             TransferNeedReason::SuccessionPlanning => (19, 24),
             TransferNeedReason::DevelopmentSigning => (16, 21),
+            TransferNeedReason::StaffRecommendation => (18, 32),
+            TransferNeedReason::LoanToFillSquad => (19, 33),
+            TransferNeedReason::ExperiencedHead => (27, 36),
+            TransferNeedReason::SquadPadding => (18, 35),
+            TransferNeedReason::CheapReinforcement => (19, 34),
+            TransferNeedReason::InjuryCoverLoan => (20, 33),
+            TransferNeedReason::OpportunisticLoanUpgrade => (19, 32),
         };
 
         TransferRequest {
@@ -303,6 +324,10 @@ pub enum LoanOutReason {
     Surplus,
     /// Club needs to reduce wage bill
     FinancialRelief,
+    /// Good player not getting minutes — data-driven (appearances vs expected)
+    LackOfPlayingTime,
+    /// Returning from long injury, needs match fitness via loan
+    PostInjuryFitness,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -321,6 +346,58 @@ pub struct LoanOutCandidate {
 }
 
 // ============================================================
+// Staff Recommendations - Proactive player identification
+// ============================================================
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecommendationSource {
+    ScoutNetwork,
+    ChiefScoutReport,
+    DirectorOfFootball,
+    /// Head coach identifies a player they want
+    HeadCoach,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RecommendationType {
+    /// Contract <= 6 months
+    ExpiringContract,
+    /// Club in debt
+    FinancialDistress,
+    /// Good player at lower-rep club
+    ReadyForStepUp,
+    /// Young + high potential gap
+    HiddenGem,
+    /// Loan-listed and fits squad
+    LoanOpportunity,
+    /// Cheap/free loan available — perfect for small clubs
+    CheapLoanAvailable,
+    /// Player completely out of contract, can sign for free
+    FreeAgentBargain,
+    /// Experienced player on loan who could mentor younger squad members
+    ExperiencedLoanMentor,
+    /// Player from bigger club's surplus — quality above what small club normally gets
+    BigClubSurplus,
+    /// Player who wants first-team football and would accept lower-level club for game time
+    GameTimeSeeker,
+    /// Affordable player who would improve the weakest position in the squad
+    WeakSpotFix,
+}
+
+#[derive(Debug, Clone)]
+pub struct StaffRecommendation {
+    pub player_id: u32,
+    pub recommender_staff_id: u32,
+    pub source: RecommendationSource,
+    pub recommendation_type: RecommendationType,
+    pub assessed_ability: u8,
+    pub assessed_potential: u8,
+    pub confidence: f32,
+    pub estimated_fee: f64,
+    pub date_recommended: NaiveDate,
+}
+
+// ============================================================
 // ClubTransferPlan - Top-level state per club
 // ============================================================
 
@@ -336,6 +413,8 @@ pub struct ClubTransferPlan {
     pub shortlists: Vec<TransferShortlist>,
 
     pub loan_out_candidates: Vec<LoanOutCandidate>,
+
+    pub staff_recommendations: Vec<StaffRecommendation>,
 
     pub max_concurrent_negotiations: u32,
     pub active_negotiation_count: u32,
@@ -358,6 +437,7 @@ impl ClubTransferPlan {
             scouting_reports: Vec::new(),
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
+            staff_recommendations: Vec::new(),
             max_concurrent_negotiations: 2,
             active_negotiation_count: 0,
             next_request_id: 1,
@@ -397,6 +477,7 @@ impl ClubTransferPlan {
         self.scouting_reports.clear();
         self.shortlists.clear();
         self.loan_out_candidates.clear();
+        self.staff_recommendations.clear();
         self.active_negotiation_count = 0;
         self.spent = 0.0;
         self.reserved = 0.0;

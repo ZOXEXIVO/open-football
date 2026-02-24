@@ -1,3 +1,4 @@
+pub mod convert;
 pub mod generator;
 pub mod player;
 pub mod staff;

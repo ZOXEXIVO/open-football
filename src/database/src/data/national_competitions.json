@@ -1,0 +1,229 @@
+[
+  {
+    "id": 1,
+    "name": "FIFA World Cup",
+    "short_name": "WC",
+    "scope": "global",
+    "cycle_years": 4,
+    "cycle_offset": 2,
+    "qualifying": {
+      "zones": [
+        {
+          "continent_id": 0,
+          "spots": 5,
+          "max_groups": 10,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 0,
+          "best_third_placed": 0
+        },
+        {
+          "continent_id": 1,
+          "spots": 13,
+          "max_groups": 10,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 3,
+          "best_third_placed": 0
+        },
+        {
+          "continent_id": 2,
+          "spots": 3,
+          "max_groups": 6,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 0,
+          "best_third_placed": 0
+        },
+        {
+          "continent_id": 3,
+          "spots": 4,
+          "max_groups": 6,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 0,
+          "best_third_placed": 0
+        },
+        {
+          "continent_id": 4,
+          "spots": 4,
+          "max_groups": 8,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 0,
+          "best_third_placed": 0
+        },
+        {
+          "continent_id": 5,
+          "spots": 1,
+          "max_groups": 2,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner"],
+          "best_runners_up": 0,
+          "best_third_placed": 0
+        }
+      ]
+    },
+    "tournament": {
+      "total_teams": 32,
+      "group_count": 8,
+      "teams_per_group": 4,
+      "advance_per_group": 2,
+      "best_third_placed": 0
+    },
+    "schedule": {
+      "qualifying_dates": [
+        { "month": 9, "day": 6, "year_offset": 0 },
+        { "month": 9, "day": 9, "year_offset": 0 },
+        { "month": 10, "day": 11, "year_offset": 0 },
+        { "month": 10, "day": 14, "year_offset": 0 },
+        { "month": 11, "day": 15, "year_offset": 0 },
+        { "month": 11, "day": 18, "year_offset": 0 },
+        { "month": 3, "day": 22, "year_offset": 1 },
+        { "month": 3, "day": 25, "year_offset": 1 }
+      ],
+      "tournament_group_dates": [
+        { "month": 6, "day": 14, "year_offset": 2 },
+        { "month": 6, "day": 15, "year_offset": 2 },
+        { "month": 6, "day": 16, "year_offset": 2 },
+        { "month": 6, "day": 18, "year_offset": 2 },
+        { "month": 6, "day": 19, "year_offset": 2 },
+        { "month": 6, "day": 20, "year_offset": 2 },
+        { "month": 6, "day": 22, "year_offset": 2 },
+        { "month": 6, "day": 23, "year_offset": 2 },
+        { "month": 6, "day": 24, "year_offset": 2 }
+      ],
+      "tournament_knockout_dates": [
+        { "month": 6, "day": 28, "year_offset": 2 },
+        { "month": 6, "day": 29, "year_offset": 2 },
+        { "month": 7, "day": 2, "year_offset": 2 },
+        { "month": 7, "day": 3, "year_offset": 2 },
+        { "month": 7, "day": 6, "year_offset": 2 },
+        { "month": 7, "day": 7, "year_offset": 2 },
+        { "month": 7, "day": 10, "year_offset": 2 }
+      ]
+    }
+  },
+  {
+    "id": 2,
+    "name": "UEFA European Championship",
+    "short_name": "EC",
+    "scope": "continental",
+    "continent_id": 1,
+    "cycle_years": 4,
+    "cycle_offset": 0,
+    "qualifying": {
+      "zones": [
+        {
+          "continent_id": 1,
+          "spots": 24,
+          "max_groups": 10,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner", "runner_up"],
+          "best_runners_up": 0,
+          "best_third_placed": 4
+        }
+      ]
+    },
+    "tournament": {
+      "total_teams": 24,
+      "group_count": 6,
+      "teams_per_group": 4,
+      "advance_per_group": 2,
+      "best_third_placed": 4
+    },
+    "schedule": {
+      "qualifying_dates": [
+        { "month": 9, "day": 6, "year_offset": 0 },
+        { "month": 9, "day": 9, "year_offset": 0 },
+        { "month": 10, "day": 11, "year_offset": 0 },
+        { "month": 10, "day": 14, "year_offset": 0 },
+        { "month": 11, "day": 15, "year_offset": 0 },
+        { "month": 11, "day": 18, "year_offset": 0 },
+        { "month": 3, "day": 22, "year_offset": 1 },
+        { "month": 3, "day": 25, "year_offset": 1 }
+      ],
+      "tournament_group_dates": [
+        { "month": 6, "day": 14, "year_offset": 2 },
+        { "month": 6, "day": 15, "year_offset": 2 },
+        { "month": 6, "day": 16, "year_offset": 2 },
+        { "month": 6, "day": 18, "year_offset": 2 },
+        { "month": 6, "day": 19, "year_offset": 2 },
+        { "month": 6, "day": 20, "year_offset": 2 },
+        { "month": 6, "day": 22, "year_offset": 2 },
+        { "month": 6, "day": 23, "year_offset": 2 },
+        { "month": 6, "day": 24, "year_offset": 2 }
+      ],
+      "tournament_knockout_dates": [
+        { "month": 6, "day": 28, "year_offset": 2 },
+        { "month": 6, "day": 29, "year_offset": 2 },
+        { "month": 7, "day": 2, "year_offset": 2 },
+        { "month": 7, "day": 3, "year_offset": 2 },
+        { "month": 7, "day": 6, "year_offset": 2 },
+        { "month": 7, "day": 7, "year_offset": 2 },
+        { "month": 7, "day": 10, "year_offset": 2 }
+      ]
+    }
+  },
+  {
+    "id": 3,
+    "name": "Copa America",
+    "short_name": "CA",
+    "scope": "continental",
+    "continent_id": 3,
+    "cycle_years": 4,
+    "cycle_offset": 0,
+    "qualifying": {
+      "zones": [
+        {
+          "continent_id": 3,
+          "spots": 12,
+          "max_groups": 4,
+          "teams_per_group_target": 5,
+          "qualifiers_per_group": ["winner", "runner_up"],
+          "best_runners_up": 0,
+          "best_third_placed": 4
+        }
+      ]
+    },
+    "tournament": {
+      "total_teams": 12,
+      "group_count": 4,
+      "teams_per_group": 3,
+      "advance_per_group": 2,
+      "best_third_placed": 0
+    },
+    "schedule": {
+      "qualifying_dates": [
+        { "month": 9, "day": 6, "year_offset": 0 },
+        { "month": 9, "day": 9, "year_offset": 0 },
+        { "month": 10, "day": 11, "year_offset": 0 },
+        { "month": 10, "day": 14, "year_offset": 0 },
+        { "month": 11, "day": 15, "year_offset": 0 },
+        { "month": 11, "day": 18, "year_offset": 0 },
+        { "month": 3, "day": 22, "year_offset": 1 },
+        { "month": 3, "day": 25, "year_offset": 1 }
+      ],
+      "tournament_group_dates": [
+        { "month": 6, "day": 14, "year_offset": 2 },
+        { "month": 6, "day": 15, "year_offset": 2 },
+        { "month": 6, "day": 16, "year_offset": 2 },
+        { "month": 6, "day": 18, "year_offset": 2 },
+        { "month": 6, "day": 19, "year_offset": 2 },
+        { "month": 6, "day": 20, "year_offset": 2 },
+        { "month": 6, "day": 22, "year_offset": 2 },
+        { "month": 6, "day": 23, "year_offset": 2 },
+        { "month": 6, "day": 24, "year_offset": 2 }
+      ],
+      "tournament_knockout_dates": [
+        { "month": 6, "day": 28, "year_offset": 2 },
+        { "month": 6, "day": 29, "year_offset": 2 },
+        { "month": 7, "day": 2, "year_offset": 2 },
+        { "month": 7, "day": 3, "year_offset": 2 },
+        { "month": 7, "day": 6, "year_offset": 2 },
+        { "month": 7, "day": 7, "year_offset": 2 },
+        { "month": 7, "day": 10, "year_offset": 2 }
+      ]
+    }
+  }
+]
