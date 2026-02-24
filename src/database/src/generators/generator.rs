@@ -6,7 +6,7 @@ use chrono::{NaiveDate, NaiveDateTime};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::continent::Continent;
-use core::global_competitions::GlobalCompetitions;
+use core::competitions::GlobalCompetitions;
 use core::league::LeagueCollection;
 use core::league::{DayMonthPeriod, League, LeagueSettings};
 use core::shared::Location;
