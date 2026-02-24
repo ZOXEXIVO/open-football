@@ -33,6 +33,7 @@ pub mod transfers;
 
 pub mod shared;
 pub mod utils;
+pub mod ai;
 
 // Re-export club items
 pub use club::{
@@ -141,3 +142,4 @@ pub use country::CompetitionType as ContinentalCompetitionType;
 
 pub use nalgebra::*;
 pub use utils::*;
+pub use ai::*;

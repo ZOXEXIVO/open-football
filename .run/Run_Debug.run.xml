@@ -3,7 +3,9 @@
     <option name="buildProfileId" value="dev" />
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
-    <envs />
+    <envs>
+      <env name="OLLAMA_ENABLED" value="true" />
+    </envs>
     <option name="emulateTerminal" value="false" />
     <option name="channel" value="DEFAULT" />
     <option name="requiredFeatures" value="true" />

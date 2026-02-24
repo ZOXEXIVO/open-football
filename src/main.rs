@@ -1,31 +1,28 @@
-use std::env;
 use core::utils::TimeEstimation;
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
-use log::{info};
-use web::{FootballSimulatorServer, GameAppData, I18nManager};
+use log::info;
+use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
 use std::sync::Arc;
 use tokio::sync::RwLock;
+use web::ollama::OllamaRequest;
 
 #[tokio::main]
 async fn main() {
     color_eyre::install().unwrap();
 
     env_logger::Builder::from_env(Env::default()
-        .default_filter_or("debug")
+        .default_filter_or("info")
     ).init();
 
-    let is_match_events_enabled = env::args().any(|arg| arg == "--match-events");
-    if is_match_events_enabled {
-        core::set_match_events_mode(true);
-        info!("Debug mode enabled - match events will be recorded");
-    }
+    let settings = Settings::from_env();
 
-    let is_match_recordings_disabled = env::args().any(|arg| arg == "--skip-match-recording")
-        || env::var("SKIP_MATCH_RECORDING").map(|v| v == "true").unwrap_or(false);
-    if is_match_recordings_disabled {
-        core::set_match_recordings_mode(false);
-        info!("Match recordings mode disabled");
+    settings.apply();
+    settings.log();
+
+    if settings.ollama_enabled {
+        let ai = OllamaRequest::from_env();
+        core::ai::set_ai(Box::new(ai));
     }
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
@@ -39,6 +36,6 @@ async fn main() {
         data: Arc::new(RwLock::new(Some(game_data))),
         i18n: Arc::new(I18nManager::new())
     };
-    
+
     FootballSimulatorServer::new(data).run().await;
 }

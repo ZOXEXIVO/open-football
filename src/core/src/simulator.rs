@@ -6,7 +6,7 @@ use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::utils::Logging;
-use crate::Player;
+use crate::{Player};
 use chrono::{Duration, NaiveDateTime};
 
 pub struct FootballSimulator;
@@ -60,7 +60,7 @@ pub struct SimulatorData {
 
     pub watchlist: Vec<u32>,
 
-    pub global_competitions: GlobalCompetitions,
+    pub global_competitions: GlobalCompetitions
 }
 
 impl SimulatorData {
@@ -72,7 +72,7 @@ impl SimulatorData {
             indexes: None,
             match_played: false,
             watchlist: Vec::new(),
-            global_competitions,
+            global_competitions
         };
 
         let mut indexes = SimulatorDataIndexes::new();

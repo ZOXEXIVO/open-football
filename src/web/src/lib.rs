@@ -13,6 +13,10 @@ mod teams;
 mod views;
 mod watchlist;
 mod common;
+pub mod ollama;
+pub mod settings;
+
+pub use settings::Settings;
 
 pub use error::{ApiError, ApiResult};
 pub use i18n::{I18n, I18nManager};

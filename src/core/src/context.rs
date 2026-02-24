@@ -4,7 +4,7 @@ use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, 
 use crate::continent::ContinentContext;
 use crate::country::CountryContext;
 use crate::league::LeagueContext;
-use crate::TeamContext;
+use crate::{ai_instance_enabled, ai_instance, TeamContext};
 
 #[derive(Clone)]
 pub struct GlobalContext<'gc> {
@@ -89,6 +89,16 @@ impl<'gc> GlobalContext<'gc> {
         let mut ctx = GlobalContext::clone(self);
         ctx.finance = Some(ClubFinanceContext::new());
         ctx
+    }
+
+    pub fn ai_enabled(&self) -> bool {
+        ai_instance_enabled()
+    }
+
+    pub fn ai<T: serde::de::DeserializeOwned>(&self, query: String, format: String) -> Option<T> {
+        let ai_request = ai_instance()?;
+        let response = ai_request.query_ai(query, format).ok()?;
+        serde_json::from_str(&response).ok()
     }
 }
 

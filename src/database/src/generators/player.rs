@@ -285,7 +285,7 @@ impl PlayerGenerator {
             let max_u21 = (u21_years as f32 * rep_factor * 8.0) as i32;
             IntegerUtils::random(0, max_u21.max(1)) as u16
         };
-        let u21_goals = if u21_apps > 0 {
+        let _u21_goals = if u21_apps > 0 {
             IntegerUtils::random(0, (u21_apps as f32 * 0.35) as i32) as u16
         } else {
             0

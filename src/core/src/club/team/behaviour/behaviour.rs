@@ -3,7 +3,7 @@ use crate::context::GlobalContext;
 use crate::utils::{DateUtils, FloatUtils};
 use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType, StaffCollection, Staff, StaffPosition};
 use chrono::Datelike;
-use log::{debug, info};
+use log::debug;
 
 #[derive(Debug)]
 pub struct TeamBehaviour {
