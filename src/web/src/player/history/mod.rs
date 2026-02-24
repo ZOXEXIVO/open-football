@@ -386,6 +386,12 @@ pub async fn player_history_action(
         .map(|t| matches!(t.transfer_type, core::transfers::TransferType::Free) || (matches!(t.transfer_type, core::transfers::TransferType::Permanent) && t.fee.amount <= 0.0))
         .unwrap_or(false);
 
+    // Remove the current team's current-season entry from history items —
+    // it is already shown as the hardcoded "current" row at the top.
+    items.retain(|item| {
+        !(item.start_year == current_season_year && item.team_slug == team.slug)
+    });
+
     Ok(PlayerHistoryTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
