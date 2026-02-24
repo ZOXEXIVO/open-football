@@ -2,7 +2,7 @@
   <configuration default="false" name="Dev:Graphics" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
     <option name="buildProfileId" value="release" />
     <option name="command" value="run" />
-    <option name="workingDirectory" value="file://$PROJECT_DIR$/src/dev/graphics" />
+    <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="true" />
     <option name="channel" value="DEFAULT" />
