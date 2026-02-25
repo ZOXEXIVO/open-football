@@ -75,8 +75,22 @@ impl TransferListManager {
             return;
         }
 
-        // Collect team indices
-        let team_indices: Vec<(usize, &str)> = teams
+        let team_indices = Self::collect_team_indices(teams);
+        let query = Self::build_prompt(teams, main_idx, &team_indices, date);
+        let format = Self::response_format();
+
+        let advice: AiTransferListAdvice = match ctx.ai(query, format) {
+            Some(a) => a,
+            None => return,
+        };
+
+        Self::execute_advice(teams, main_idx, &team_indices, &advice, date);
+    }
+
+    // ─── Prompt building ──────────────────────────────────────────
+
+    fn collect_team_indices(teams: &[Team]) -> Vec<(usize, &'static str)> {
+        teams
             .iter()
             .enumerate()
             .map(|(idx, t)| {
@@ -91,17 +105,46 @@ impl TransferListManager {
                 };
                 (idx, label)
             })
-            .collect();
+            .collect()
+    }
 
-        let main_coach = teams[main_idx].staffs.head_coach();
-        let staff_data = main_coach.as_llm();
-        let staff_json: serde_json::Value = serde_json::from_str(&staff_data).unwrap();
+    fn build_prompt(
+        teams: &[Team],
+        main_idx: usize,
+        team_indices: &[(usize, &str)],
+        _date: NaiveDate,
+    ) -> String {
+        let staff_data = teams[main_idx].staffs.head_coach().as_llm();
+        let data_json = Self::build_data_json(teams, main_idx, team_indices, &staff_data);
+        let teams_section = Self::build_teams_section(teams, team_indices);
+        let previous_decisions_section = Self::build_previous_decisions(teams, team_indices);
+        let current_tl = Self::build_current_transfer_list_section(teams, main_idx, &data_json);
+        let current_loans = Self::build_current_loans_section(teams, main_idx);
+
+        format!(
+            include_str!("prompt.md"),
+            staff_legend = Staff::llm_legend(),
+            staff_data = staff_data,
+            teams_section = teams_section,
+            current_tl = current_tl,
+            current_loans = current_loans,
+            previous_decisions_section = previous_decisions_section,
+            data_json = data_json,
+        )
+    }
+
+    fn build_data_json(
+        teams: &[Team],
+        main_idx: usize,
+        team_indices: &[(usize, &str)],
+        staff_data: &str,
+    ) -> String {
+        let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
         let staff_legend_json: serde_json::Value =
             serde_json::from_str(Staff::llm_legend()).unwrap();
         let player_legend_json: serde_json::Value =
             serde_json::from_str(Player::llm_legend()).unwrap();
 
-        // Current transfer list entries
         let current_transfer_list: Vec<TransferListEntryLlm> = teams[main_idx]
             .transfer_list
             .items()
@@ -112,7 +155,6 @@ impl TransferListManager {
             })
             .collect();
 
-        // Build squad data per team
         let squad_teams: Vec<TeamPlayersLlm> = team_indices
             .iter()
             .map(|&(idx, label)| {
@@ -141,18 +183,32 @@ impl TransferListManager {
             teams: squad_teams,
         };
 
-        let data_json = if cfg!(debug_assertions) {
+        if cfg!(debug_assertions) {
             serde_json::to_string_pretty(&query_data).unwrap()
         } else {
             serde_json::to_string(&query_data).unwrap()
-        };
+        }
+    }
 
-        // Collect previous decisions
-        let mut previous_decisions = String::new();
-        for &(idx, _) in &team_indices {
+    fn build_teams_section(teams: &[Team], team_indices: &[(usize, &str)]) -> String {
+        team_indices
+            .iter()
+            .map(|&(idx, label)| {
+                format!(
+                    "team_index={}, type={}, players={}",
+                    idx, label, teams[idx].players.players.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn build_previous_decisions(teams: &[Team], team_indices: &[(usize, &str)]) -> String {
+        let mut decisions = String::new();
+        for &(idx, _) in team_indices {
             for player in &teams[idx].players.players {
                 for d in &player.decision_history.items {
-                    previous_decisions.push_str(&format!(
+                    decisions.push_str(&format!(
                         "id={},action={},reason={},date={}\n",
                         player.id,
                         d.decision,
@@ -163,27 +219,27 @@ impl TransferListManager {
             }
         }
 
-        let previous_decisions_section = if previous_decisions.is_empty() {
+        if decisions.is_empty() {
             String::new()
         } else {
-            format!("\n[PREVIOUS DECISIONS]\n{}", previous_decisions)
-        };
+            format!("\n[PREVIOUS DECISIONS]\n{}", decisions)
+        }
+    }
 
-        // Build teams description
-        let teams_section: String = team_indices
-            .iter()
-            .map(|&(idx, label)| {
-                let team = &teams[idx];
-                format!(
-                    "team_index={}, type={}, players={}",
-                    idx, label, team.players.players.len()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
+    fn build_current_transfer_list_section(
+        teams: &[Team],
+        main_idx: usize,
+        data_json: &str,
+    ) -> String {
+        if teams[main_idx].transfer_list.items().is_empty() {
+            "None".to_string()
+        } else {
+            data_json.to_string()
+        }
+    }
 
-        // Loan-listed player IDs
-        let loan_listed: Vec<u32> = teams[main_idx]
+    fn build_current_loans_section(teams: &[Team], main_idx: usize) -> String {
+        let loan_ids: Vec<u32> = teams[main_idx]
             .players
             .players
             .iter()
@@ -191,61 +247,61 @@ impl TransferListManager {
             .map(|p| p.id)
             .collect();
 
-        let current_loans_section = if loan_listed.is_empty() {
+        if loan_ids.is_empty() {
             "None".to_string()
         } else {
-            loan_listed
+            loan_ids
                 .iter()
                 .map(|id| id.to_string())
                 .collect::<Vec<_>>()
                 .join(", ")
-        };
+        }
+    }
 
-        let current_tl = if teams[main_idx].transfer_list.items().is_empty() {
-            "None".to_string()
-        } else {
-            data_json.clone()
-        };
+    fn response_format() -> String {
+        r#"Respond ONLY with JSON: {"transfer_list":[{"player_id":123,"reason":"..."}],"loan_list":[{"player_id":456,"reason":"..."}],"delist":[{"player_id":789,"reason":"..."}]}"#.to_string()
+    }
 
-        let query = format!(
-            include_str!("prompt.md"),
-            staff_legend = Staff::llm_legend(),
-            staff_data = staff_data,
-            teams_section = teams_section,
-            current_tl = current_tl,
-            current_loans = current_loans_section,
-            previous_decisions_section = previous_decisions_section,
-            data_json = data_json,
-        );
+    // ─── Advice execution ─────────────────────────────────────────
 
-        let format = String::from(
-            r#"Respond ONLY with JSON: {"transfer_list":[{"player_id":123,"reason":"..."}],"loan_list":[{"player_id":456,"reason":"..."}],"delist":[{"player_id":789,"reason":"..."}]}"#,
-        );
-
-        let advice: AiTransferListAdvice = match ctx.ai(query, format) {
-            Some(a) => a,
-            None => return,
-        };
-
+    fn execute_advice(
+        teams: &mut [Team],
+        main_idx: usize,
+        team_indices: &[(usize, &str)],
+        advice: &AiTransferListAdvice,
+        date: NaiveDate,
+    ) {
         let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
 
-        // Collect all player IDs being listed to detect double-listing
         let transfer_ids: Vec<u32> = advice.transfer_list.iter().map(|d| d.player_id).collect();
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();
 
-        // Execute transfer list additions
-        for decision in &advice.transfer_list {
+        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date);
+        Self::execute_loan_listings(teams, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date);
+        Self::execute_delistings(teams, main_idx, team_indices, &advice.delist, &coach_name, date);
+    }
+
+    fn execute_transfer_listings(
+        teams: &mut [Team],
+        main_idx: usize,
+        team_indices: &[(usize, &str)],
+        decisions: &[AiListingDecision],
+        loan_ids: &[u32],
+        coach_name: &str,
+        date: NaiveDate,
+    ) {
+        for decision in decisions {
             if loan_ids.contains(&decision.player_id) {
                 continue;
             }
-            if !player_exists_in_teams(teams, &team_indices, decision.player_id) {
+            if !player_exists_in_teams(teams, team_indices, decision.player_id) {
                 continue;
             }
             if teams[main_idx].transfer_list.contains(decision.player_id) {
                 continue;
             }
 
-            let asking_price = find_player_in_teams(teams, &team_indices, decision.player_id)
+            let asking_price = find_player_in_teams(teams, team_indices, decision.player_id)
                 .map(|p| p.value(date))
                 .unwrap_or(0.0);
 
@@ -256,43 +312,52 @@ impl TransferListManager {
                     CurrencyValue::new(asking_price, Currency::Usd),
                 ));
 
-            set_player_status(teams, &team_indices, decision.player_id, PlayerStatusType::Lst, date);
-
-            record_listing_decision(
-                teams, &team_indices, decision.player_id, date, &coach_name,
-                &format!("Transfer listed: {}", decision.reason),
-            );
+            set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Lst, date);
+            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
+                &format!("Transfer listed: {}", decision.reason));
         }
+    }
 
-        // Execute loan list additions
-        for decision in &advice.loan_list {
+    fn execute_loan_listings(
+        teams: &mut [Team],
+        team_indices: &[(usize, &str)],
+        decisions: &[AiListingDecision],
+        transfer_ids: &[u32],
+        coach_name: &str,
+        date: NaiveDate,
+    ) {
+        for decision in decisions {
             if transfer_ids.contains(&decision.player_id) {
                 continue;
             }
-            if !player_exists_in_teams(teams, &team_indices, decision.player_id) {
+            if !player_exists_in_teams(teams, team_indices, decision.player_id) {
                 continue;
             }
-            if has_status(teams, &team_indices, decision.player_id, PlayerStatusType::Loa) {
+            if has_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa) {
                 continue;
             }
 
-            set_player_status(teams, &team_indices, decision.player_id, PlayerStatusType::Loa, date);
-
-            record_listing_decision(
-                teams, &team_indices, decision.player_id, date, &coach_name,
-                &format!("Loan listed: {}", decision.reason),
-            );
+            set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa, date);
+            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
+                &format!("Loan listed: {}", decision.reason));
         }
+    }
 
-        // Execute delistings
-        for decision in &advice.delist {
-            if !player_exists_in_teams(teams, &team_indices, decision.player_id) {
+    fn execute_delistings(
+        teams: &mut [Team],
+        main_idx: usize,
+        team_indices: &[(usize, &str)],
+        decisions: &[AiListingDecision],
+        coach_name: &str,
+        date: NaiveDate,
+    ) {
+        for decision in decisions {
+            if !player_exists_in_teams(teams, team_indices, decision.player_id) {
                 continue;
             }
 
             let was_transfer_listed = teams[main_idx].transfer_list.contains(decision.player_id);
-            let was_loan_listed =
-                has_status(teams, &team_indices, decision.player_id, PlayerStatusType::Loa);
+            let was_loan_listed = has_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa);
 
             if !was_transfer_listed && !was_loan_listed {
                 continue;
@@ -300,17 +365,15 @@ impl TransferListManager {
 
             if was_transfer_listed {
                 teams[main_idx].transfer_list.remove(decision.player_id);
-                remove_player_status(teams, &team_indices, decision.player_id, PlayerStatusType::Lst);
+                remove_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Lst);
             }
 
             if was_loan_listed {
-                remove_player_status(teams, &team_indices, decision.player_id, PlayerStatusType::Loa);
+                remove_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa);
             }
 
-            record_listing_decision(
-                teams, &team_indices, decision.player_id, date, &coach_name,
-                &format!("Delisted: {}", decision.reason),
-            );
+            record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
+                &format!("Delisted: {}", decision.reason));
         }
     }
 }
