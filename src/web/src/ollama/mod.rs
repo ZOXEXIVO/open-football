@@ -27,11 +27,14 @@ impl AIRequest for OllamaRequest {
     fn query_ai(&self, query: String, format: String) -> Result<String, String> {
         let prompt = format!("{} | OUTPUT FORMAT: {}", query, format);
 
-        let response = tokio::task::block_in_place(|| {
-            tokio::runtime::Handle::current().block_on(
-                self.api.generate(GenerationRequest::new(self.model.clone(), prompt))
-            )
-        });
+        let future = self.api.generate(GenerationRequest::new(self.model.clone(), prompt));
+
+        let response = match tokio::runtime::Handle::try_current() {
+            Ok(handle) => tokio::task::block_in_place(|| handle.block_on(future)),
+            Err(_) => tokio::runtime::Runtime::new()
+                .map_err(|e| format!("Failed to create runtime: {}", e))?
+                .block_on(future),
+        };
 
         match response {
             Ok(ollama_response) => {

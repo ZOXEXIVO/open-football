@@ -302,5 +302,10 @@
     "watchlist": "Список наблюдения",
     "add_to_watchlist": "Добавить в список",
     "remove_from_watchlist": "Убрать из списка",
-    "no_watchlist_players": "Нет игроков в списке наблюдения"
+    "no_watchlist_players": "Нет игроков в списке наблюдения",
+    "decisions_who": "Кто",
+    "decisions_movement": "Перемещение",
+    "decisions_decision": "Решение",
+    "decisions_when": "Когда",
+    "no_decisions": "Решения ещё не записаны"
 }

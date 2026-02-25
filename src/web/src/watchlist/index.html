@@ -48,7 +48,7 @@
                     </td>
                     <td class="wl-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">
-                            {{ player.first_name }}&nbsp;{{ player.last_name }}
+                            {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                         </a>
                     </td>
                     <td class="wl-nat">

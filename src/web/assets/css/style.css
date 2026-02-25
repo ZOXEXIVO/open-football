@@ -612,6 +612,16 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #fff;
 }
 
+.fm-badge-loa {
+  background: #1565c0;
+  color: #fff;
+}
+
+.fm-badge-des {
+  background: #e8eaed;
+  color: #1a2228;
+}
+
 /* Badge Deck — stacked card interaction */
 .fm-badge-deck {
   position: relative;
@@ -1683,6 +1693,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-history-table td.sq-league { text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
 .fm-history-table td.sq-fee { font-size: 11px; text-align: center; white-space: nowrap; }
 .fm-history-table td.sq-stat { width: 6em; min-width: 52px; max-width: 52px; }
+
+/* --- Player Decisions Table --- */
+
+.fm-decisions-table .dec-when     { width: 12%; color: #7a868e; font-size: 12px; }
+.fm-decisions-table .dec-movement { width: 24%; white-space: nowrap; }
+.fm-decisions-table .dec-decision { width: 44%; }
+.fm-decisions-table .dec-who      { width: 20%; color: #7a868e; font-size: 12px; }
 
 /* --- Team Stats Table --- */
 

@@ -302,5 +302,10 @@
     "watchlist": "Lista de seguimiento",
     "add_to_watchlist": "Añadir a seguimiento",
     "remove_from_watchlist": "Quitar de seguimiento",
-    "no_watchlist_players": "No hay jugadores en seguimiento"
+    "no_watchlist_players": "No hay jugadores en seguimiento",
+    "decisions_who": "Qui\u00e9n",
+    "decisions_movement": "Movimiento",
+    "decisions_decision": "Decisi\u00f3n",
+    "decisions_when": "Cu\u00e1ndo",
+    "no_decisions": "Sin decisiones registradas"
 }

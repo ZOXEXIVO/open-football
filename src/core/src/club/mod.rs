@@ -54,6 +54,7 @@ pub use player::{
     PlayerClubContract, ContractType, PlayerSquadStatus, PlayerTransferStatus,
     ContractBonusType, ContractBonus, ContractClauseType, ContractClause,
     PlayerMailbox, PlayerMessage, PlayerMessageType, PlayerContractProposal, PlayerMailboxResult,
+    PlayerDecisionHistory, PlayerDecision,
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,

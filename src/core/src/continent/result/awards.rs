@@ -6,7 +6,7 @@ use log::{debug, info};
 
 impl ContinentResult {
     pub(crate) fn process_continental_awards(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
-        info!("🏆 Processing continental awards");
+        debug!("🏆 Processing continental awards");
 
         let continent_id = self.get_continent_id(data);
 

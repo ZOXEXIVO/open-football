@@ -40,6 +40,7 @@ impl CountryResult {
             for team in &mut club.teams.teams {
                 let team_name = team.name.clone();
                 let team_slug = team.slug.clone();
+                let team_reputation = team.reputation.world;
 
                 let (league_name, league_slug) = team.league_id
                     .and_then(|lid| league_lookup.get(&lid))
@@ -51,6 +52,7 @@ impl CountryResult {
                         season.clone(),
                         &team_name,
                         &team_slug,
+                        team_reputation,
                         &league_name,
                         &league_slug,
                         date,

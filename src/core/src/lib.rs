@@ -67,6 +67,7 @@ pub use club::{
     ContractBonusType, ContractBonus, ContractClauseType, ContractClause,
     PlayerMailbox, PlayerMessage, PlayerMessageType, PlayerContractProposal, PlayerMailboxResult,
     AcceptContractHandler, ProcessContractHandler, handlers,
+    PlayerDecisionHistory, PlayerDecision,
     PlayerTraining, PlayerTrainingHistory, TrainingRecord, PlayerTrainingResult,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,

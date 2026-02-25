@@ -101,7 +101,7 @@ impl ContinentResult {
         data: &mut SimulatorData,
         result: &mut SimulationResult,
     ) {
-        info!("🏆 Processing continental competition results");
+        debug!("🏆 Processing continental competition results");
 
         // Process Champions League results
         if let Some(cl_results) = comp_results.champions_league_results {
@@ -246,7 +246,7 @@ impl ContinentResult {
     }
 
     fn distribute_competition_rewards(&self, data: &mut SimulatorData) {
-        info!("💰 Distributing continental competition rewards");
+        debug!("💰 Distributing continental competition rewards");
 
         let continent_id = self.get_continent_id(data);
 

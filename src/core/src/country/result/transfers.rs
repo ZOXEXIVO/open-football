@@ -731,6 +731,7 @@ impl CountryResult {
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
+        let mut selling_team_reputation: u16 = 0;
         let mut selling_league_id = None;
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
@@ -740,6 +741,7 @@ impl CountryResult {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
                     selling_team_slug = team.slug.clone();
+                    selling_team_reputation = team.reputation.world;
                     selling_league_id = team.league_id;
                     team.transfer_list.remove(player_id);
                     break;
@@ -766,6 +768,7 @@ impl CountryResult {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
+                team_reputation: selling_team_reputation,
                 league_name: selling_league_name,
                 league_slug: selling_league_slug,
                 is_loan: false,
@@ -821,6 +824,7 @@ impl CountryResult {
         let mut player = None;
         let mut selling_team_name = String::new();
         let mut selling_team_slug = String::new();
+        let mut selling_team_reputation: u16 = 0;
         let mut selling_league_id = None;
 
         if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
@@ -830,6 +834,7 @@ impl CountryResult {
                 if let Some(p) = team.players.take_player(&player_id) {
                     player = Some(p);
                     selling_team_slug = team.slug.clone();
+                    selling_team_reputation = team.reputation.world;
                     selling_league_id = team.league_id;
                     team.transfer_list.remove(player_id);
                     break;
@@ -856,6 +861,7 @@ impl CountryResult {
                 season: Season::new(season_year),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
+                team_reputation: selling_team_reputation,
                 league_name: selling_league_name,
                 league_slug: selling_league_slug,
                 is_loan: false,
@@ -865,11 +871,13 @@ impl CountryResult {
 
             let mut buying_club_name = String::new();
             let mut buying_team_slug = String::new();
+            let mut buying_team_reputation: u16 = 0;
             let mut buying_league_id = None;
             if let Some(buying_club) = country.clubs.iter().find(|c| c.id == buying_club_id) {
                 buying_club_name = buying_club.name.clone();
                 if let Some(first_team) = buying_club.teams.teams.first() {
                     buying_team_slug = first_team.slug.clone();
+                    buying_team_reputation = first_team.reputation.world;
                     buying_league_id = first_team.league_id;
                 }
             }
@@ -883,6 +891,7 @@ impl CountryResult {
                 season: Season::new(season_year),
                 team_name: buying_club_name,
                 team_slug: buying_team_slug,
+                team_reputation: buying_team_reputation,
                 league_name: buying_league_name,
                 league_slug: buying_league_slug,
                 is_loan: true,

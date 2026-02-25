@@ -32,7 +32,7 @@
                 {% for member in staff %}
                 <tr>
                     <td class="st-name">
-                        {{ member.last_name }}&nbsp;{{ member.first_name }}
+                        {{ member.last_name }}{% if !member.first_name.is_empty() %}&nbsp;{{ member.first_name }}{% endif %}
                     </td>
                     <td class="st-role">{{ i18n.t(&member.role_key) }}</td>
                     <td class="st-nat">

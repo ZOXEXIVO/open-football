@@ -33,6 +33,7 @@ pub struct PlayerStatisticsHistoryItem {
     pub season: Season,
     pub team_name: String,
     pub team_slug: String,
+    pub team_reputation: u16,
     pub league_name: String,
     pub league_slug: String,
     pub is_loan: bool,

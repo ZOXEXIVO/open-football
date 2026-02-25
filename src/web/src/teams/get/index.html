@@ -47,14 +47,20 @@
                             {% if player.transfer_listed %}
                             <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                             {% endif %}
+                            {% if player.loan_listed %}
+                            <span class="fm-badge fm-badge-loa">Loa</span>
+                            {% endif %}
                             {% if player.is_youth %}
                             <span class="fm-badge fm-badge-yth">Yth</span>
+                            {% endif %}
+                            {% if player.has_recent_decision %}
+                            <span class="fm-badge fm-badge-des">Des</span>
                             {% endif %}
                         </div>
                     </td>
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">
-                            {{ player.first_name }}&nbsp;{{ player.last_name }}
+                            {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                         </a>
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>

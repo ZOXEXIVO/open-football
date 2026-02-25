@@ -31,10 +31,14 @@ impl PlayerTrainingHistory {
 
         weeks_since_last_training
     }
+
+    pub fn records(&self) -> &[TrainingRecord] {
+        &self.records
+    }
 }
 
 #[derive(Debug)]
 pub struct TrainingRecord {
     date: NaiveDateTime,
-    _skills: PlayerSkills,
+    pub skills: PlayerSkills,
 }

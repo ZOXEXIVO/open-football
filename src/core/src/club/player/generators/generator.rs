@@ -2,9 +2,10 @@ use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
     Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState, Physical, Player,
-    PlayerAttributes, PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType,
-    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
-    PlayerStatus, PlayerTraining, PlayerTrainingHistory, Relations, Technical,
+    PlayerAttributes, PlayerDecisionHistory, PlayerHappiness, PlayerMailbox, PlayerPosition,
+    PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics,
+    PlayerStatisticsHistory, PlayerStatus, PlayerTraining, PlayerTrainingHistory, Relations,
+    Technical,
 };
 use chrono::{Datelike, NaiveDate};
 
@@ -125,6 +126,7 @@ impl PlayerGenerator {
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
+            decision_history: PlayerDecisionHistory::new(),
         }
     }
 }

@@ -40,7 +40,7 @@ impl Continent {
         let continent_name = self.name.clone();
         let date = ctx.simulation.date.date();
 
-        info!(
+        debug!(
             "Simulating continent: {} ({} countries)",
             continent_name,
             self.countries.len()

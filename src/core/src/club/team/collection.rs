@@ -1,5 +1,5 @@
 use crate::club::team::coach_perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::SquadManager;
+use crate::club::team::squad::{SquadComposition, SquadManager, TransferListManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
@@ -113,13 +113,30 @@ impl TeamCollection {
         self.ensure_coach_state(date);
         self.update_all_impressions(date);
 
-        SquadManager::manage_composition(
+        SquadComposition::manage(
             ctx,
             &mut self.teams,
             &mut self.coach_state,
             main_idx,
             reserve_idx,
             youth_idx,
+            date,
+        );
+    }
+
+    pub fn manage_transfer_lists(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
+        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        self.ensure_coach_state(date);
+
+        TransferListManager::manage(
+            ctx,
+            &mut self.teams,
+            &self.coach_state,
+            main_idx,
             date,
         );
     }

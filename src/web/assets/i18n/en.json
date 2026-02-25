@@ -302,5 +302,10 @@
     "watchlist": "Watch List",
     "add_to_watchlist": "Add to Watch List",
     "remove_from_watchlist": "Remove from Watch List",
-    "no_watchlist_players": "No players in watch list"
+    "no_watchlist_players": "No players in watch list",
+    "decisions_who": "Who",
+    "decisions_movement": "Movement",
+    "decisions_decision": "Decision",
+    "decisions_when": "When",
+    "no_decisions": "No decisions recorded yet"
 }

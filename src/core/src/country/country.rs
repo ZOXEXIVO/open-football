@@ -5,8 +5,10 @@ use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::utils::Logging;
 use crate::{Club, ClubResult};
-use log::info;
+use log::{debug};
+use rayon::prelude::IntoParallelRefMutIterator;
 use crate::country::builder::CountryBuilder;
+use rayon::iter::ParallelIterator;
 
 use super::{
     CountrySettings, CountryGeneratorData, CountryEconomicFactors,
@@ -50,7 +52,7 @@ impl Country {
         let country_name = self.name.clone();
         let _date = ctx.simulation.date.date();
 
-        info!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
+        debug!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
 
         // Phase 1: League Competitions
         let league_results = self.simulate_leagues(&ctx);
@@ -69,7 +71,7 @@ impl Country {
         // Phase 3: Country-level scouting is now handled by the transfer pipeline
         // (PipelineProcessor::process_scouting called from simulate_transfer_market in result.rs)
 
-        info!("✅ Country {} simulation complete", country_name);
+        debug!("✅ Country {} simulation complete", country_name);
 
         CountryResult::new(self.id, league_results, clubs_results)
     }
@@ -80,7 +82,7 @@ impl Country {
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
         self.clubs
-            .iter_mut()
+            .par_iter_mut()
             .map(|club| {
                 let message = &format!("simulate club: {}", &club.name);
                 Logging::estimate_result(
