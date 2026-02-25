@@ -1,8 +1,9 @@
 use chrono::Datelike;
 use log::info;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use super::CountryResult;
 use crate::league::Season;
+use crate::PlayerStatistics;
 use crate::simulator::SimulatorData;
 
 impl CountryResult {
@@ -28,6 +29,12 @@ impl CountryResult {
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
+        // Build friendly league lookup — friendly leagues don't archive to history
+        let friendly_leagues: HashSet<u32> = country.leagues.leagues.iter()
+            .filter(|l| l.friendly)
+            .map(|l| l.id)
+            .collect();
+
         for club in &mut country.clubs {
             // Find main team's league as fallback for youth/reserve teams without league_id
             let main_team_league = club.teams.teams.iter()
@@ -38,6 +45,18 @@ impl CountryResult {
                 .unwrap_or_default();
 
             for team in &mut club.teams.teams {
+                let is_friendly = team.league_id
+                    .map(|lid| friendly_leagues.contains(&lid))
+                    .unwrap_or(false);
+
+                if is_friendly {
+                    // Friendly league: reset stats but don't archive to history
+                    for player in &mut team.players.players {
+                        player.statistics = PlayerStatistics::default();
+                    }
+                    continue;
+                }
+
                 let team_name = team.name.clone();
                 let team_slug = team.slug.clone();
                 let team_reputation = team.reputation.world;

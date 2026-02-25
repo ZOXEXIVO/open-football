@@ -276,9 +276,12 @@ impl TransferListManager {
         let transfer_ids: Vec<u32> = advice.transfer_list.iter().map(|d| d.player_id).collect();
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();
 
-        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date);
-        Self::execute_loan_listings(teams, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date);
-        Self::execute_delistings(teams, main_idx, team_indices, &advice.delist, &coach_name, date);
+        // Collect all IDs being listed this tick to prevent contradictory delist
+        let mut just_listed: Vec<u32> = Vec::new();
+
+        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date, &mut just_listed);
+        Self::execute_loan_listings(teams, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date, &mut just_listed);
+        Self::execute_delistings(teams, main_idx, team_indices, &advice.delist, &just_listed, &coach_name, date);
     }
 
     fn execute_transfer_listings(
@@ -289,6 +292,7 @@ impl TransferListManager {
         loan_ids: &[u32],
         coach_name: &str,
         date: NaiveDate,
+        just_listed: &mut Vec<u32>,
     ) {
         for decision in decisions {
             if loan_ids.contains(&decision.player_id) {
@@ -300,7 +304,6 @@ impl TransferListManager {
             if teams[main_idx].transfer_list.contains(decision.player_id) {
                 continue;
             }
-
             let asking_price = find_player_in_teams(teams, team_indices, decision.player_id)
                 .map(|p| p.value(date))
                 .unwrap_or(0.0);
@@ -315,6 +318,7 @@ impl TransferListManager {
             set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Lst, date);
             record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
                 &format!("Transfer listed: {}", decision.reason));
+            just_listed.push(decision.player_id);
         }
     }
 
@@ -325,6 +329,7 @@ impl TransferListManager {
         transfer_ids: &[u32],
         coach_name: &str,
         date: NaiveDate,
+        just_listed: &mut Vec<u32>,
     ) {
         for decision in decisions {
             if transfer_ids.contains(&decision.player_id) {
@@ -340,6 +345,7 @@ impl TransferListManager {
             set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa, date);
             record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
                 &format!("Loan listed: {}", decision.reason));
+            just_listed.push(decision.player_id);
         }
     }
 
@@ -348,10 +354,14 @@ impl TransferListManager {
         main_idx: usize,
         team_indices: &[(usize, &str)],
         decisions: &[AiListingDecision],
+        just_listed: &[u32],
         coach_name: &str,
         date: NaiveDate,
     ) {
         for decision in decisions {
+            if just_listed.contains(&decision.player_id) {
+                continue;
+            }
             if !player_exists_in_teams(teams, team_indices, decision.player_id) {
                 continue;
             }

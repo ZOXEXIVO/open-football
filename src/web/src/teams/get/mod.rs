@@ -136,7 +136,7 @@ pub async fn team_get_action(
                 .map(|c| c.contract_type == ContractType::Youth)
                 .unwrap_or(false);
 
-            let has_recent_decision = has_decision_within_days(p, now, 7);
+            let has_recent_decision = has_decision_within_days(p, now, 30);
 
             Some(TeamPlayer {
                 id: p.id,
@@ -297,6 +297,7 @@ fn get_neighbor_teams(
         .country_by_club(club_id)
         .map(|country| {
             country.leagues.leagues.iter()
+                .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
         })

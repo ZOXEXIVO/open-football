@@ -83,6 +83,8 @@ impl Club {
             // Weekly: comprehensive review (demotions, recalls, youth promotions, salaries)
             // Subsumes daily critical moves to avoid double-processing
             self.teams.manage_squad_composition(&ctx, date);
+            self.teams.manage_demotions(&ctx, date);
+            self.teams.manage_promotions(&ctx, date);
             self.teams.manage_transfer_lists(&ctx, date);
             self.process_salaries(ctx);
         } else {

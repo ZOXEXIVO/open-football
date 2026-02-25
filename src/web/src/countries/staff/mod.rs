@@ -99,7 +99,7 @@ pub async fn country_staff_action(
         .collect();
 
     let current_path = format!("/{}/countries/{}/staff", route_params.lang, route_params.country_slug);
-    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().map(|l| (l.name.as_str(), l.slug.as_str())).collect();
+    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.name.as_str(), l.slug.as_str())).collect();
 
     Ok(CountryStaffTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,

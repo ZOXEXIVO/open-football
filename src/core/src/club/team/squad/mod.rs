@@ -1,19 +1,13 @@
 mod composition;
 mod demotion;
 mod promotion;
-mod recall;
 mod satisfaction;
-mod swap;
 mod transfer_listing;
 
-pub(crate) mod legacy;
-
 pub use composition::SquadComposition;
-pub use demotion::DemotionEvaluator;
-pub use promotion::YouthPromotionEvaluator;
-pub use recall::RecallEvaluator;
+pub use demotion::SquadDemotion;
+pub use promotion::YouthPromotion;
 pub use satisfaction::compute_squad_satisfaction;
-pub use swap::AbilitySwapEvaluator;
 pub use transfer_listing::TransferListManager;
 
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
@@ -35,7 +29,7 @@ impl SquadManager {
         date: NaiveDate,
     ) {
         let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
-        let demotions = DemotionEvaluator::identify_administrative_demotions(&teams[main_idx]);
+        let demotions = SquadDemotion::identify_administrative_demotions(&teams[main_idx]);
         let max_age = teams[reserve_idx].team_type.max_age();
         let demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
         if !demotions.is_empty() {

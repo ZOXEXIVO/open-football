@@ -26,6 +26,7 @@ pub struct League {
     pub regulations: LeagueRegulations,
     pub statistics: LeagueStatistics,
     pub milestones: LeagueMilestones,
+    pub friendly: bool,
 }
 
 impl League {
@@ -36,6 +37,7 @@ impl League {
         country_id: u32,
         reputation: u16,
         settings: LeagueSettings,
+        friendly: bool,
     ) -> Self {
         League {
             id,
@@ -52,6 +54,7 @@ impl League {
             regulations: LeagueRegulations::new(),
             statistics: LeagueStatistics::new(),
             milestones: LeagueMilestones::new(),
+            friendly,
         }
     }
 
@@ -95,6 +98,7 @@ impl League {
                 &mut schedule_result.scheduled_matches,
                 clubs,
                 &ctx,
+                self.friendly,
             );
 
             self.process_match_day_results(&match_results, clubs, &ctx, current_date);
@@ -155,6 +159,7 @@ impl League {
         scheduled_matches: &mut Vec<LeagueMatch>,
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
+        friendly: bool,
     ) -> Vec<MatchResult> {
         use rayon::iter::ParallelIterator;
 
@@ -168,6 +173,7 @@ impl League {
                     ctx,
                     &self.dynamics,
                     &self.table,
+                    friendly,
                 )
             })
             .collect();
@@ -190,6 +196,7 @@ impl League {
         ctx: &GlobalContext<'_>,
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
+        friendly: bool,
     ) -> MatchResult {
         let home_team = clubs
             .iter()
@@ -216,12 +223,17 @@ impl League {
         );
 
         // Gather reserve players from the same club for each team
-        let home_reserves: Vec<&Player> = Self::collect_reserve_players(
-            clubs, home_team.club_id, home_team.id,
-        );
-        let away_reserves: Vec<&Player> = Self::collect_reserve_players(
-            clubs, away_team.club_id, away_team.id,
-        );
+        // For friendly leagues (U18), don't pull reserves — teams play their own squad only
+        let home_reserves: Vec<&Player> = if friendly {
+            Vec::new()
+        } else {
+            Self::collect_reserve_players(clubs, home_team.club_id, home_team.id)
+        };
+        let away_reserves: Vec<&Player> = if friendly {
+            Vec::new()
+        } else {
+            Self::collect_reserve_players(clubs, away_team.club_id, away_team.id)
+        };
 
         // Prepare squads with reserve pool and psychological modifiers
         let mut home_squad = home_team.get_enhanced_match_squad(&home_reserves);
@@ -1255,7 +1267,7 @@ impl Schedule {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct DayMonthPeriod {
     pub from_day: u8,
     pub from_month: u8,
@@ -1275,7 +1287,7 @@ impl DayMonthPeriod {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueSettings {
     pub season_starting_half: DayMonthPeriod,
     pub season_ending_half: DayMonthPeriod,

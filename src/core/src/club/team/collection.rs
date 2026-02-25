@@ -1,5 +1,5 @@
 use crate::club::team::coach_perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::{SquadComposition, SquadManager, TransferListManager};
+use crate::club::team::squad::{SquadComposition, SquadDemotion, SquadManager, TransferListManager, YouthPromotion};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
@@ -119,6 +119,56 @@ impl TeamCollection {
             &mut self.coach_state,
             main_idx,
             reserve_idx,
+            youth_idx,
+            date,
+        );
+    }
+
+    pub fn manage_demotions(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
+        if self.teams.len() < 2 {
+            return;
+        }
+
+        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let reserve_idx = self.find_reserve_team_index();
+
+        self.ensure_coach_state(date);
+        self.update_all_impressions(date);
+
+        SquadDemotion::manage(
+            ctx,
+            &mut self.teams,
+            &mut self.coach_state,
+            main_idx,
+            reserve_idx,
+            date,
+        );
+    }
+
+    pub fn manage_promotions(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
+        if self.teams.len() < 2 {
+            return;
+        }
+
+        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+            Some(idx) => idx,
+            None => return,
+        };
+
+        let youth_idx = self.find_youth_team_index();
+
+        self.ensure_coach_state(date);
+        self.update_all_impressions(date);
+
+        YouthPromotion::manage(
+            ctx,
+            &mut self.teams,
+            &mut self.coach_state,
+            main_idx,
             youth_idx,
             date,
         );

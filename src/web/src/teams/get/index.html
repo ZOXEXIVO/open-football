@@ -29,6 +29,7 @@
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
                     <th class="sq-cond">{{ i18n.t("condition") }}</th>
                     <th class="sq-morale">{{ i18n.t("morale") }}</th>
+                    <th class="sq-dec">{{ i18n.t("decisions") }}</th>
                     <th class="sq-games">{{ i18n.t("apps") }}</th>
                     <th class="sq-value">{{ i18n.t("value") }}</th>
                 </tr>
@@ -52,9 +53,6 @@
                             {% endif %}
                             {% if player.is_youth %}
                             <span class="fm-badge fm-badge-yth">Yth</span>
-                            {% endif %}
-                            {% if player.has_recent_decision %}
-                            <span class="fm-badge fm-badge-des">Des</span>
                             {% endif %}
                         </div>
                     </td>
@@ -87,6 +85,7 @@
                         </div>
                     </td>
                     <td class="sq-morale">{{ player.behaviour }}</td>
+                    <td class="sq-dec">{% if player.has_recent_decision %}<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot"></a>{% endif %}</td>
                     <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
                     <td class="sq-value">{{ player.value }}</td>
                 </tr>

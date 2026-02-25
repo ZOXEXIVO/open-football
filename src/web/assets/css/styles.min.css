@@ -620,9 +620,17 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #c8f0d0;
 }
 
-.fm-badge-des {
+.sq-dec {
+  text-align: center;
+  width: 28px;
+}
+
+.sq-dec-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
   background: #e8eaed;
-  color: #1a2228;
 }
 
 /* Badge Deck — stacked card interaction */
@@ -667,6 +675,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-badge-deck.open .fm-badge {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
+
 
 /* ============================================
    FM STARS
