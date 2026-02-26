@@ -171,58 +171,68 @@ impl DatabaseGenerator {
     }
 
     fn create_youth_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>) {
-        // Find the tier-1 league (lowest tier number) for this country
-        let tier1 = leagues.iter().min_by_key(|l| l.settings.tier);
-        let tier1 = match tier1 {
-            Some(l) => l,
-            None => return,
-        };
-
-        let tier1_name = tier1.name.clone();
-        let tier1_slug = tier1.slug.clone();
-        let tier1_reputation = tier1.reputation;
-        let tier1_settings = tier1.settings.clone();
-
-        // Collect all U18 team IDs from clubs in this country
-        let u18_team_ids: Vec<u32> = clubs
+        // Build a map: club_id → parent league_id (from the club's Main team)
+        let club_league_map: Vec<(u32, u32)> = clubs
             .iter()
-            .flat_map(|c| &c.teams.teams)
-            .filter(|t| t.team_type == TeamType::U18)
-            .map(|t| t.id)
+            .filter_map(|club| {
+                let main_league_id = club.teams.teams
+                    .iter()
+                    .find(|t| t.team_type == TeamType::Main)
+                    .and_then(|t| t.league_id)?;
+                Some((club.id, main_league_id))
+            })
             .collect();
 
-        if u18_team_ids.is_empty() {
-            return;
-        }
+        // Snapshot parent leagues to create one U18 league per parent
+        let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
+            .iter()
+            .map(|l| (l.id, l.name.clone(), l.slug.clone(), l.reputation, l.settings.clone()))
+            .collect();
 
-        let youth_league_id = country_id + 100000;
-        let youth_reputation = (tier1_reputation / 10).max(100);
+        for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
+            // Check if any club in this parent league has a U18 team
+            let has_u18 = clubs.iter().any(|club| {
+                club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
+                    && club.teams.teams.iter().any(|t| t.team_type == TeamType::U18)
+            });
 
-        let youth_settings = LeagueSettings {
-            season_starting_half: tier1_settings.season_starting_half,
-            season_ending_half: tier1_settings.season_ending_half,
-            tier: 99,
-            promotion_spots: 0,
-            relegation_spots: 0,
-        };
+            if !has_u18 {
+                continue;
+            }
 
-        let youth_league = League::new(
-            youth_league_id,
-            format!("{} U18", tier1_name),
-            format!("{}-u18", tier1_slug),
-            country_id,
-            youth_reputation,
-            youth_settings,
-            true,
-        );
+            let youth_league_id = parent_id + 100000;
+            let youth_reputation = (parent_rep / 10).max(100);
 
-        leagues.push(youth_league);
+            let youth_settings = LeagueSettings {
+                season_starting_half: parent_settings.season_starting_half,
+                season_ending_half: parent_settings.season_ending_half,
+                tier: 99,
+                promotion_spots: 0,
+                relegation_spots: 0,
+            };
 
-        // Assign league_id to all U18 teams
-        for club in clubs.iter_mut() {
-            for team in &mut club.teams.teams {
-                if team.team_type == TeamType::U18 {
-                    team.league_id = Some(youth_league_id);
+            let youth_league = League::new(
+                youth_league_id,
+                format!("{} U18", parent_name),
+                format!("{}-u18", parent_slug),
+                country_id,
+                youth_reputation,
+                youth_settings,
+                true,
+            );
+
+            leagues.push(youth_league);
+
+            // Assign U18 teams to this youth league based on their club's parent league
+            for club in clubs.iter_mut() {
+                let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
+                if !is_in_parent {
+                    continue;
+                }
+                for team in &mut club.teams.teams {
+                    if team.team_type == TeamType::U18 {
+                        team.league_id = Some(youth_league_id);
+                    }
                 }
             }
         }
@@ -258,14 +268,33 @@ impl DatabaseGenerator {
                         .iter()
                         .map(|t| {
                             let team_rep = t.reputation.world;
+                            let team_type = TeamType::from_str(&t.team_type).unwrap();
+
+                            let team_name = match &team_type {
+                                TeamType::Main => t.name.clone(),
+                                _ => format!("{} {}", t.name, team_type),
+                            };
+
+                            let players = PlayerCollection::new(Self::generate_players(
+                                player_generator,
+                                country_id,
+                                team_rep,
+                                &team_type,
+                                t.league_id,
+                                data,
+                            ));
+
+                            let staffs = StaffCollection::new(
+                                Self::generate_staffs(staff_generator, country_id, team_rep, &team_type)
+                            );
 
                             Team::builder()
                                 .id(t.id)
                                 .league_id(t.league_id)
                                 .club_id(club.id)
-                                .name(t.name.clone())
+                                .name(team_name)
                                 .slug(t.slug.clone())
-                                .team_type(TeamType::from_str(&t.team_type).unwrap())
+                                .team_type(team_type)
                                 .training_schedule(TrainingSchedule::new(
                                     NaiveTime::from_hms_opt(10, 0, 0).unwrap(),
                                     NaiveTime::from_hms_opt(17, 0, 0).unwrap(),
@@ -275,17 +304,8 @@ impl DatabaseGenerator {
                                     t.reputation.national,
                                     t.reputation.world,
                                 ))
-                                .players(PlayerCollection::new(Self::generate_players(
-                                    player_generator,
-                                    country_id,
-                                    team_rep,
-                                    &TeamType::from_str(&t.team_type).unwrap(),
-                                    t.league_id,
-                                    data,
-                                )))
-                                .staffs(StaffCollection::new(
-                                    Self::generate_staffs(staff_generator, country_id, team_rep, &TeamType::from_str(&t.team_type).unwrap())
-                                ))
+                                .players(players)
+                                .staffs(staffs)
                                 .build()
                                 .expect("Failed to build Team")
                         })
