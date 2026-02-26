@@ -5,7 +5,6 @@
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
       <env name="SKIP_MATCH_RECORDING" value="true" />
-      <env name="OLLAMA_ENABLED" value="true" />
     </envs>
     <option name="emulateTerminal" value="false" />
     <option name="channel" value="DEFAULT" />

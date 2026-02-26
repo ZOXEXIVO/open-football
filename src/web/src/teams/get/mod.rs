@@ -66,6 +66,8 @@ pub struct TeamPlayer {
     pub age: u8,
     pub played: u16,
     pub played_subs: u16,
+    pub goals: u16,
+    pub average_rating: String,
     pub has_recent_decision: bool,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
@@ -160,8 +162,10 @@ pub async fn team_get_action(
                 current_ability: get_current_ability_stars(p),
                 potential_ability: get_potential_ability_stars(p),
                 age: DateUtils::age(p.birth_date, now),
-                played: p.statistics.played,
-                played_subs: p.statistics.played_subs,
+                played: p.statistics.played + p.friendly_statistics.played,
+                played_subs: p.statistics.played_subs + p.friendly_statistics.played_subs,
+                goals: p.statistics.goals + p.friendly_statistics.goals,
+                average_rating: format_combined_rating(&p.statistics, &p.friendly_statistics),
                 has_recent_decision,
                 status: PlayerStatusDto::new(p.statuses.get()),
             })
@@ -225,8 +229,10 @@ pub async fn team_get_action(
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars(player),
                     age: DateUtils::age(player.birth_date, now),
-                    played: player.statistics.played,
-                    played_subs: player.statistics.played_subs,
+                    played: player.statistics.played + player.friendly_statistics.played,
+                    played_subs: player.statistics.played_subs + player.friendly_statistics.played_subs,
+                    goals: player.statistics.goals + player.friendly_statistics.goals,
+                    average_rating: format_combined_rating(&player.statistics, &player.friendly_statistics),
                     has_recent_decision: has_decision_within_days(player, now, 7),
                     status: PlayerStatusDto::new(player.statuses.get()),
                 });
@@ -320,6 +326,19 @@ pub fn get_current_ability_stars(player: &Player) -> u8 {
 
 pub fn get_potential_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)) as u8
+}
+
+fn format_combined_rating(stats: &core::PlayerStatistics, friendly: &core::PlayerStatistics) -> String {
+    let games_official = stats.played + stats.played_subs;
+    let games_friendly = friendly.played + friendly.played_subs;
+    let total = games_official + games_friendly;
+    if total == 0 {
+        return "-".to_string();
+    }
+    let combined = (stats.average_rating * games_official as f32
+        + friendly.average_rating * games_friendly as f32)
+        / total as f32;
+    format!("{:.2}", combined)
 }
 
 fn has_decision_within_days(player: &Player, now: NaiveDate, days: i64) -> bool {

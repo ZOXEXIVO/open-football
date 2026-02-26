@@ -87,25 +87,37 @@ impl LeagueResult {
             None => return,
         };
 
+        // Look up friendly flag before mutable borrows
+        let is_friendly = data.league(result.league_id)
+            .map(|l| l.friendly)
+            .unwrap_or(false);
+
+        // Helper macro to select the correct statistics field
+        macro_rules! stats {
+            ($player:expr) => {
+                if is_friendly { &mut $player.friendly_statistics } else { &mut $player.statistics }
+            };
+        }
+
         // Mark players as played (main squad) or played_subs (substitutes)
         for player_id in &details.left_team_players.main {
             if let Some(player) = data.player_mut(*player_id) {
-                player.statistics.played += 1;
+                stats!(player).played += 1;
             }
         }
         for player_id in &details.left_team_players.substitutes_used {
             if let Some(player) = data.player_mut(*player_id) {
-                player.statistics.played_subs += 1;
+                stats!(player).played_subs += 1;
             }
         }
         for player_id in &details.right_team_players.main {
             if let Some(player) = data.player_mut(*player_id) {
-                player.statistics.played += 1;
+                stats!(player).played += 1;
             }
         }
         for player_id in &details.right_team_players.substitutes_used {
             if let Some(player) = data.player_mut(*player_id) {
-                player.statistics.played_subs += 1;
+                stats!(player).played_subs += 1;
             }
         }
 
@@ -114,12 +126,12 @@ impl LeagueResult {
             match detail.stat_type {
                 MatchStatisticType::Goal => {
                     if let Some(player) = data.player_mut(detail.player_id) {
-                        player.statistics.goals += 1;
+                        stats!(player).goals += 1;
                     }
                 }
                 MatchStatisticType::Assist => {
                     if let Some(player) = data.player_mut(detail.player_id) {
-                        player.statistics.assists += 1;
+                        stats!(player).assists += 1;
                     }
                 }
             }
@@ -129,34 +141,35 @@ impl LeagueResult {
         let mut best_rating: f32 = 0.0;
         let mut best_player_id: Option<u32> = None;
 
-        for (player_id, stats) in &details.player_stats {
+        for (player_id, stats_data) in &details.player_stats {
             if let Some(player) = data.player_mut(*player_id) {
-                player.statistics.shots_on_target += stats.shots_on_target as f32;
-                player.statistics.tackling += stats.tackles as f32;
-                if stats.passes_attempted > 0 {
-                    let match_pct = (stats.passes_completed as f32 / stats.passes_attempted as f32 * 100.0) as u8;
-                    let games = player.statistics.played + player.statistics.played_subs;
+                let s = stats!(player);
+                s.shots_on_target += stats_data.shots_on_target as f32;
+                s.tackling += stats_data.tackles as f32;
+                if stats_data.passes_attempted > 0 {
+                    let match_pct = (stats_data.passes_completed as f32 / stats_data.passes_attempted as f32 * 100.0) as u8;
+                    let games = s.played + s.played_subs;
                     if games <= 1 {
-                        player.statistics.passes = match_pct;
+                        s.passes = match_pct;
                     } else {
-                        let prev = player.statistics.passes as f32;
-                        player.statistics.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
+                        let prev = s.passes as f32;
+                        s.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
                     }
                 }
 
                 // Update running average rating
-                let games = player.statistics.played + player.statistics.played_subs;
+                let games = s.played + s.played_subs;
                 if games <= 1 {
-                    player.statistics.average_rating = stats.match_rating;
+                    s.average_rating = stats_data.match_rating;
                 } else {
-                    let prev = player.statistics.average_rating;
-                    player.statistics.average_rating =
-                        (prev * (games - 1) as f32 + stats.match_rating) / games as f32;
+                    let prev = s.average_rating;
+                    s.average_rating =
+                        (prev * (games - 1) as f32 + stats_data.match_rating) / games as f32;
                 }
 
                 // Track best rating for player of the match
-                if stats.match_rating > best_rating {
-                    best_rating = stats.match_rating;
+                if stats_data.match_rating > best_rating {
+                    best_rating = stats_data.match_rating;
                     best_player_id = Some(*player_id);
                 }
             }
@@ -165,7 +178,7 @@ impl LeagueResult {
         // Award player of the match
         if let Some(motm_id) = best_player_id {
             if let Some(player) = data.player_mut(motm_id) {
-                player.statistics.player_of_the_match += 1;
+                stats!(player).player_of_the_match += 1;
                 player.happiness.add_event(HappinessEventType::PlayerOfTheMatch, 4.0);
             }
         }
@@ -184,9 +197,9 @@ impl LeagueResult {
                     } else {
                         home_goals
                     };
-                    player.statistics.conceded += goals_against as u16;
+                    stats!(player).conceded += goals_against as u16;
                     if goals_against == 0 {
-                        player.statistics.clean_sheets += 1;
+                        stats!(player).clean_sheets += 1;
                     }
                 }
             }
@@ -199,15 +212,15 @@ impl LeagueResult {
                     } else {
                         home_goals
                     };
-                    player.statistics.conceded += goals_against as u16;
+                    stats!(player).conceded += goals_against as u16;
                     if goals_against == 0 {
-                        player.statistics.clean_sheets += 1;
+                        stats!(player).clean_sheets += 1;
                     }
                 }
             }
         }
 
-        // Apply physical effects from match participation
+        // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
 
         // Save PoM to match result

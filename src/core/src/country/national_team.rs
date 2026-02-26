@@ -932,6 +932,7 @@ impl NationalTeam {
             training_history: PlayerTrainingHistory::new(),
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
+            friendly_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
         }

@@ -29,8 +29,9 @@
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
                     <th class="sq-cond">{{ i18n.t("condition") }}</th>
                     <th class="sq-morale">{{ i18n.t("morale") }}</th>
-                    <th class="sq-dec">{{ i18n.t("decisions") }}</th>
                     <th class="sq-games">{{ i18n.t("apps") }}</th>
+                    <th class="sq-goals">{{ i18n.t("gls") }}</th>
+                    <th class="sq-rating">{{ i18n.t("av_rat") }}</th>
                     <th class="sq-value">{{ i18n.t("value") }}</th>
                 </tr>
             </thead>
@@ -59,7 +60,7 @@
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
-                        </a>
+                        </a>{% if player.has_recent_decision %}&nbsp;&nbsp;<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot"></a>{% endif %}
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
                     <td class="sq-nat">
@@ -84,9 +85,10 @@
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
                         </div>
                     </td>
-                    <td class="sq-morale">{{ player.behaviour }}</td>
-                    <td class="sq-dec">{% if player.has_recent_decision %}<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot"></a>{% endif %}</td>
+                    <td class="sq-morale"><span class="fm-morale fm-morale-{{ player.behaviour|lowercase }}">{% if player.behaviour == "Good" %}&#9650;{% else if player.behaviour == "Poor" %}&#9660;{% else %}&#9654;{% endif %}</span></td>
                     <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
+                    <td class="sq-goals">{% if player.goals > 0 %}{{ player.goals }}{% else %}-{% endif %}</td>
+                    <td class="sq-rating">{{ player.average_rating }}</td>
                     <td class="sq-value">{{ player.value }}</td>
                 </tr>
                 {% endfor %}

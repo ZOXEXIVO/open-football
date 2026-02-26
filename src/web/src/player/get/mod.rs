@@ -62,6 +62,7 @@ pub struct PlayerViewModel {
     pub preferred_foot: String,
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
+    pub friendly_statistics: Option<PlayerStatistics>,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
@@ -252,6 +253,7 @@ pub async fn player_get_action(
         preferred_foot: player.preferred_foot_str().to_string(),
         player_attributes: get_attributes(player),
         statistics: get_statistics(player),
+        friendly_statistics: get_friendly_statistics(player),
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status,
@@ -381,6 +383,27 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
         passes: player.statistics.passes,
         average_rating: format!("{:.2}", player.statistics.average_rating),
     }
+}
+
+fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
+    let fs = &player.friendly_statistics;
+    if fs.played == 0 && fs.played_subs == 0 {
+        return None;
+    }
+    Some(PlayerStatistics {
+        played: fs.played,
+        played_subs: fs.played_subs,
+        goals: fs.goals,
+        assists: fs.assists,
+        penalties: fs.penalties,
+        player_of_the_match: fs.player_of_the_match,
+        yellow_cards: fs.yellow_cards,
+        red_cards: fs.red_cards,
+        shots_on_target: fs.shots_on_target,
+        tackling: fs.tackling,
+        passes: fs.passes,
+        average_rating: format!("{:.2}", fs.average_rating),
+    })
 }
 
 pub fn get_conditions(player: &Player) -> u8 {

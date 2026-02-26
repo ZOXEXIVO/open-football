@@ -53,6 +53,7 @@ impl CountryResult {
                     // Friendly league: reset stats but don't archive to history
                     for player in &mut team.players.players {
                         player.statistics = PlayerStatistics::default();
+                        player.friendly_statistics = PlayerStatistics::default();
                     }
                     continue;
                 }

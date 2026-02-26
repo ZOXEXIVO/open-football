@@ -215,6 +215,22 @@
                 </tr>
             </thead>
             <tbody>
+                {% if let Some(fs) = player.friendly_statistics %}
+                <tr>
+                    <td>{{ i18n.t("friendly") }}</td>
+                    <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
+                    <td>{{ fs.goals }}</td>
+                    <td>{{ fs.assists }}</td>
+                    <td>{{ fs.penalties }}</td>
+                    <td>{{ fs.player_of_the_match }}</td>
+                    <td>{{ fs.yellow_cards }}</td>
+                    <td>{{ fs.red_cards }}</td>
+                    <td>{{ fs.shots_on_target }}</td>
+                    <td>{{ fs.passes }}</td>
+                    <td>{{ fs.tackling }}</td>
+                    <td>{{ fs.average_rating }}</td>
+                </tr>
+                {% endif %}
                 <tr>
                     <td>{{ i18n.t("league") }}</td>
                     <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>

@@ -17,7 +17,7 @@ impl ContinentResult {
     }
 
     pub(crate) fn conduct_competition_draws(&self, data: &mut SimulatorData, date: NaiveDate) {
-        info!("🎲 Conducting continental competition draws");
+        debug!("🎲 Conducting continental competition draws");
 
         let continent_id = self.get_continent_id();
 

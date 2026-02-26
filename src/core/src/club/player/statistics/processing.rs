@@ -20,6 +20,7 @@ impl Player {
             .unwrap_or(false);
 
         let old_stats = std::mem::take(&mut self.statistics);
+        self.friendly_statistics = Default::default();
         self.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
             season,
             team_name: team_name.to_string(),

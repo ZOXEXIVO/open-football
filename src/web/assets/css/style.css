@@ -624,10 +624,30 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
 .sq-dec-dot {
   display: inline-block;
-  width: 8px;
-  height: 8px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
-  background: #e8eaed;
+  background: #a2bcfb;
+}
+
+/* Morale direction arrows (FM-style) */
+.fm-morale {
+  display: inline-block;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.fm-morale-good {
+  color: #4caf50;
+}
+
+.fm-morale-normal {
+  color: #9e9e9e;
+  font-size: 9px;
+}
+
+.fm-morale-poor {
+  color: #e53935;
 }
 
 /* Badge Deck — stacked card interaction */
@@ -987,7 +1007,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-squad .sq-potential { width: 3.5em; }
 .fm-squad .sq-age { width: 6em; text-align: center; }
 .fm-squad .sq-games { text-align: center; }
-.fm-squad .sq-cond { width: 12em; }
+.fm-squad .sq-cond { width: 8em; }
 .fm-squad .sq-morale { text-align: center; }
 .fm-squad .sq-value { text-align: center; }
 
@@ -3018,7 +3038,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
     font-size: 12px;
   }
 
-  .fm-squad .sq-cond { width: 100px; }
+  .fm-squad .sq-cond { width: 130px; }
   .fm-squad .sq-name a { font-size: 12px; }
 
   /* Transfers page: stack side-by-side panels */
@@ -3249,8 +3269,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   }
 
   .fm-squad .sq-inf { width: 32px; }
-  .fm-squad .sq-cond { width: 90px; }
-  .fm-cond-bar { width: 40px; }
+  .fm-squad .sq-cond { width: 117px; }
+  .fm-cond-bar { width: 52px; }
 
   .fm-stars .star {
     width: 12px;

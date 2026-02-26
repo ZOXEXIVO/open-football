@@ -27,6 +27,7 @@ pub struct PlayerBuilder {
     training_history: Option<PlayerTrainingHistory>,
     relations: Option<Relations>,
     statistics: Option<PlayerStatistics>,
+    friendly_statistics: Option<PlayerStatistics>,
     statistics_history: Option<PlayerStatisticsHistory>,
     decision_history: Option<PlayerDecisionHistory>,
 }
@@ -156,6 +157,7 @@ impl PlayerBuilder {
             training_history: self.training_history.unwrap_or_else(PlayerTrainingHistory::new),
             relations: self.relations.unwrap_or_else(Relations::new),
             statistics: self.statistics.unwrap_or_default(),
+            friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             statistics_history: self.statistics_history.unwrap_or_else(PlayerStatisticsHistory::new),
             decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
         })
