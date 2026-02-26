@@ -133,6 +133,7 @@ pub async fn country_schedule_action(
         .leagues
         .leagues
         .iter()
+        .filter(|l| !l.friendly)
         .map(|l| (l.name.as_str(), l.slug.as_str()))
         .collect();
 

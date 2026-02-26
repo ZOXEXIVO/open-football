@@ -1,4 +1,4 @@
-﻿use crate::r#match::stores::MatchStore;
+use crate::r#match::stores::MatchStore;
 use crate::GameAppData;
 use axum::extract::{Query, State};
 use axum::http::{HeaderMap, HeaderValue, StatusCode};
@@ -24,33 +24,25 @@ pub async fn game_process_action(
     let days = query.days.unwrap_or(1);
 
     let mut simulator_data_guard = data.write_owned().await;
+    let simulator_data = simulator_data_guard.as_mut().unwrap();
 
-    let result = tokio::task::spawn_blocking(move || {
-        let simulator_data = simulator_data_guard.as_mut().unwrap();
-
-        for _ in 0..days {
-            let result = FootballSimulator::simulate(simulator_data);
-            if result.has_match_results() {
-                if core::is_match_recordings_mode() {
-                    tokio::task::spawn(async {
-                        write_match_results(result).await
-                    });
-                }
-
-                simulator_data.match_played = true;
+    for _ in 0..days {
+        let result = FootballSimulator::simulate(simulator_data).await;
+        if result.has_match_results() {
+            if core::is_match_recordings_mode() {
+                tokio::task::spawn(async {
+                    write_match_results(result).await
+                });
             }
+
+            simulator_data.match_played = true;
         }
-    })
-    .await;
+    }
 
     let mut headers = HeaderMap::new();
     headers.insert("HX-Refresh", HeaderValue::from_static("true"));
 
-    if result.is_ok() {
-        (StatusCode::OK, headers, "")
-    } else {
-        (StatusCode::BAD_REQUEST, headers, "")
-    }
+    (StatusCode::OK, headers, "")
 }
 
 async fn write_match_results(result: SimulationResult) {

@@ -2,7 +2,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use crate::{Club, Player, PlayerStatusType, Team};
+use crate::{Club, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -26,6 +26,7 @@ pub struct League {
     pub regulations: LeagueRegulations,
     pub statistics: LeagueStatistics,
     pub milestones: LeagueMilestones,
+    pub friendly: bool,
 }
 
 impl League {
@@ -36,6 +37,7 @@ impl League {
         country_id: u32,
         reputation: u16,
         settings: LeagueSettings,
+        friendly: bool,
     ) -> Self {
         League {
             id,
@@ -52,6 +54,7 @@ impl League {
             regulations: LeagueRegulations::new(),
             statistics: LeagueStatistics::new(),
             milestones: LeagueMilestones::new(),
+            friendly,
         }
     }
 
@@ -59,7 +62,7 @@ impl League {
         let league_name = self.name.clone();
         let current_date = ctx.simulation.date.date();
 
-        info!("⚽ Simulating league: {} (Reputation: {})", league_name, self.reputation);
+        debug!("⚽ Simulating league: {} (Reputation: {})", league_name, self.reputation);
 
         // Phase 1: Pre-match preparations
         self.prepare_matchday(&ctx, clubs);
@@ -86,7 +89,7 @@ impl League {
         if schedule_result.generated {
             self.table = LeagueTable::new(&league_teams);
             self.matches = MatchStorage::new();
-            info!("📊 League table reset for new season: {}", self.name);
+            debug!("📊 League table reset for new season: {}", self.name);
         }
 
         // Phase 4: Match execution with enhanced dynamics
@@ -95,6 +98,7 @@ impl League {
                 &mut schedule_result.scheduled_matches,
                 clubs,
                 &ctx,
+                self.friendly,
             );
 
             self.process_match_day_results(&match_results, clubs, &ctx, current_date);
@@ -155,6 +159,7 @@ impl League {
         scheduled_matches: &mut Vec<LeagueMatch>,
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
+        friendly: bool,
     ) -> Vec<MatchResult> {
         use rayon::iter::ParallelIterator;
 
@@ -168,6 +173,7 @@ impl League {
                     ctx,
                     &self.dynamics,
                     &self.table,
+                    friendly,
                 )
             })
             .collect();
@@ -190,6 +196,7 @@ impl League {
         ctx: &GlobalContext<'_>,
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
+        friendly: bool,
     ) -> MatchResult {
         let home_team = clubs
             .iter()
@@ -216,12 +223,17 @@ impl League {
         );
 
         // Gather reserve players from the same club for each team
-        let home_reserves: Vec<&Player> = Self::collect_reserve_players(
-            clubs, home_team.club_id, home_team.id,
-        );
-        let away_reserves: Vec<&Player> = Self::collect_reserve_players(
-            clubs, away_team.club_id, away_team.id,
-        );
+        // For friendly leagues (U18), don't pull reserves — teams play their own squad only
+        let home_reserves: Vec<&Player> = if friendly {
+            Vec::new()
+        } else {
+            Self::collect_reserve_players(clubs, home_team.club_id, home_team.id)
+        };
+        let away_reserves: Vec<&Player> = if friendly {
+            Vec::new()
+        } else {
+            Self::collect_reserve_players(clubs, away_team.club_id, away_team.id)
+        };
 
         // Prepare squads with reserve pool and psychological modifiers
         let mut home_squad = home_team.get_enhanced_match_squad(&home_reserves);
@@ -255,7 +267,8 @@ impl League {
         match_result
     }
 
-    /// Collect available reserve/youth players from the same club (excluding the main team)
+    /// Collect available reserve players from the same club.
+    /// Only pulls from B/U21/U23 teams — not from youth academies (U18/U19/U20).
     fn collect_reserve_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
@@ -268,7 +281,10 @@ impl League {
         club.teams
             .teams
             .iter()
-            .filter(|t| t.id != team_id) // skip the team itself
+            .filter(|t| {
+                t.id != team_id
+                    && matches!(t.team_type, TeamType::B | TeamType::U21 | TeamType::U23)
+            })
             .flat_map(|t| t.players.players.iter())
             .filter(|p| {
                 let statuses = p.statuses.get();
@@ -1255,7 +1271,7 @@ impl Schedule {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct DayMonthPeriod {
     pub from_day: u8,
     pub from_month: u8,
@@ -1275,7 +1291,7 @@ impl DayMonthPeriod {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueSettings {
     pub season_starting_half: DayMonthPeriod,
     pub season_ending_half: DayMonthPeriod,

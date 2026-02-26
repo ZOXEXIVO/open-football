@@ -6,7 +6,7 @@ use crate::club::{
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
-use crate::{CoachFocus, Logging, Person, PersonAttributes, PersonBehaviourState, Player, PlayerSquadStatus, PlayerStatusType, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
+use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 #[derive(Debug)]
@@ -121,102 +121,6 @@ impl StaffCollection {
         };
 
         self.get_by_id(staff_id.unwrap())
-    }
-
-    /// Staff responsible for outgoing transfers evaluates squad and decides who to list
-    pub fn evaluate_outgoing_transfers(&self, players: &[&Player], date: NaiveDate) -> Vec<u32> {
-        // Find the staff member responsible for outgoing first-team transfers
-        let staff = self
-            .responsibility
-            .outgoing_transfers
-            .find_clubs_for_transfers_and_loans_listed_first_team
-            .and_then(|id| self.staffs.iter().find(|s| s.id == id))
-            .or_else(|| {
-                // Fallback: Director of Football, then Manager
-                self.staffs.iter().find(|s| {
-                    s.contract.as_ref().map(|c| &c.position)
-                        == Some(&StaffPosition::DirectorOfFootball)
-                }).or_else(|| {
-                    self.manager()
-                })
-            });
-
-        let staff = match staff {
-            Some(s) => s,
-            None => return Vec::new(),
-        };
-
-        let judging_ability = staff.staff_attributes.knowledge.judging_player_ability as f32;
-
-        // Calculate squad average ability
-        let total_ability: u32 = players.iter()
-            .map(|p| p.player_attributes.current_ability as u32)
-            .sum();
-        let avg_ability = if !players.is_empty() {
-            total_ability as f32 / players.len() as f32
-        } else {
-            return Vec::new();
-        };
-
-        let mut to_list = Vec::new();
-
-        for player in players {
-            // Under-16: handled as free transfer at country level
-            let age = player.age(date);
-            if age < 16 {
-                continue;
-            }
-
-            // Already listed
-            if player.statuses.get().contains(&PlayerStatusType::Lst) {
-                continue;
-            }
-
-            // Player requested transfer — always list
-            if player.statuses.get().contains(&PlayerStatusType::Req) {
-                to_list.push(player.id);
-                continue;
-            }
-
-            // Player unhappy — always list
-            if player.statuses.get().contains(&PlayerStatusType::Unh) {
-                to_list.push(player.id);
-                continue;
-            }
-
-            // Contract says not needed — always list
-            if let Some(ref contract) = player.contract {
-                if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-                    to_list.push(player.id);
-                    continue;
-                }
-                if contract.is_transfer_listed {
-                    to_list.push(player.id);
-                    continue;
-                }
-            }
-
-            // Staff evaluates: low ability relative to squad
-            // Better staff (higher judging_ability) sets a tighter threshold
-            let threshold = 10.0 + (20.0 - judging_ability) * 0.5; // 10-20 range
-            let ability = player.player_attributes.current_ability as f32;
-            if ability < avg_ability - threshold {
-                to_list.push(player.id);
-                continue;
-            }
-
-            // Aging player with declining ability and low potential gap
-            let age = player.age(date);
-            if age >= 32 {
-                let potential_gap = player.player_attributes.potential_ability as i16
-                    - player.player_attributes.current_ability as i16;
-                if potential_gap <= 0 && ability < avg_ability {
-                    to_list.push(player.id);
-                }
-            }
-        }
-
-        to_list
     }
 
     fn get_by_position(&self, position: StaffPosition) -> &Staff {

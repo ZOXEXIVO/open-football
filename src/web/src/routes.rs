@@ -1,3 +1,4 @@
+use crate::ai::ai_routes;
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
 use crate::face::face_routes;
@@ -42,6 +43,7 @@ impl ServerRoutes {
             .merge(current_date_routes())
             .merge(face_routes())
             .merge(watchlist_routes())
+            .merge(ai_routes())
             .fallback(default_handler)
     }
 }

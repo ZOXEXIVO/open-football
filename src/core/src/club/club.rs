@@ -71,6 +71,7 @@ impl Club {
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubResult {
         let result = ClubResult::new(
+            self.id,
             self.finance.simulate(ctx.with_finance()),
             self.teams.simulate(ctx.with_club(self.id, &self.name)),
             self.board.simulate(ctx.with_board()),
@@ -80,13 +81,21 @@ impl Club {
         let date = ctx.simulation.date.date();
 
         if ctx.simulation.is_week_beginning() {
-            // Weekly: comprehensive review (demotions, recalls, youth promotions, salaries)
-            // Subsumes daily critical moves to avoid double-processing
-            self.teams.manage_squad_composition(&ctx, date);
-            self.process_salaries(ctx);
+            // Weekly: coach state, impressions, salaries
+            self.teams.ensure_coach_state(date);
+            self.teams.update_all_impressions(date);
+            self.process_salaries(ctx.clone());
         } else {
             // Daily: only immediate demotions + ability swaps
             self.teams.manage_critical_squad_moves(date);
+        }
+
+        // Monthly: AI-driven squad composition and transfer listings
+        if ctx.simulation.is_month_beginning() {
+            self.teams.ensure_coach_state(date);
+            for req in self.teams.prepare_ai_requests(date, self.id) {
+                ctx.ai.push(req);
+            }
         }
 
         result

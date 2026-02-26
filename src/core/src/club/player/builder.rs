@@ -3,7 +3,7 @@ use crate::club::{
     PlayerSkills, PlayerTraining,
 };
 use crate::shared::fullname::FullName;
-use crate::{PersonAttributes, Player, PlayerHappiness, PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, Relations};
+use crate::{PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, Relations};
 use chrono::NaiveDate;
 
 // Builder for Player
@@ -28,6 +28,7 @@ pub struct PlayerBuilder {
     relations: Option<Relations>,
     statistics: Option<PlayerStatistics>,
     statistics_history: Option<PlayerStatisticsHistory>,
+    decision_history: Option<PlayerDecisionHistory>,
 }
 
 impl PlayerBuilder {
@@ -130,6 +131,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn decision_history(mut self, decision_history: PlayerDecisionHistory) -> Self {
+        self.decision_history = Some(decision_history);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
         Ok(Player {
             id: self.id.ok_or("id is required")?,
@@ -151,6 +157,7 @@ impl PlayerBuilder {
             relations: self.relations.unwrap_or_else(Relations::new),
             statistics: self.statistics.unwrap_or_default(),
             statistics_history: self.statistics_history.unwrap_or_else(PlayerStatisticsHistory::new),
+            decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
         })
     }
 }

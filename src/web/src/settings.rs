@@ -4,7 +4,6 @@ use log::info;
 pub struct Settings {
     pub match_events: bool,
     pub match_recordings: bool,
-    pub ollama_enabled: bool,
 }
 
 impl Settings {
@@ -18,15 +17,9 @@ impl Settings {
                 .map(|v| v == "true")
                 .unwrap_or(false));
 
-        let ollama_enabled = args.iter().any(|arg| arg == "--ollama")
-            || env::var("OLLAMA_ENABLED")
-                .map(|v| v == "true")
-                .unwrap_or(false);
-
         Settings {
             match_events,
             match_recordings,
-            ollama_enabled,
         }
     }
 
@@ -41,9 +34,6 @@ impl Settings {
         }
         if !self.match_recordings {
             info!("Match recordings mode disabled");
-        }
-        if self.ollama_enabled {
-            info!("Ollama AI enabled");
         }
     }
 }

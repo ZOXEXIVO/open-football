@@ -5,10 +5,11 @@ use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
     Club, MatchTacticType, Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState,
-    Physical, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerHappiness, PlayerMailbox,
-    PlayerPosition, PlayerPositionType, PlayerPositions, PlayerPreferredFoot, PlayerSkills,
-    PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerStatusType, PlayerTraining,
-    PlayerTrainingHistory, Relations, Tactics, TeamType, Technical,
+    Physical, Player, PlayerAttributes, PlayerDecisionHistory, PlayerFieldPositionGroup,
+    PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType, PlayerPositions,
+    PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerStatusType, PlayerTraining, PlayerTrainingHistory, Relations, Tactics, TeamType,
+    Technical,
 };
 use crate::Country;
 use chrono::{Datelike, NaiveDate};
@@ -932,6 +933,7 @@ impl NationalTeam {
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
+            decision_history: PlayerDecisionHistory::new(),
         }
     }
 

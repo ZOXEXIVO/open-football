@@ -7,7 +7,7 @@ use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
 use crate::{
-    Person, PersonAttributes, PlayerHappiness,
+    Person, PersonAttributes, PlayerDecisionHistory, PlayerHappiness,
     PlayerPositionType, PlayerPositions,
     PlayerStatistics, PlayerStatisticsHistory,
     PlayerStatus, PlayerTrainingHistory, PlayerValueCalculator, Relations,
@@ -41,6 +41,7 @@ pub struct Player {
 
     pub statistics: PlayerStatistics,
     pub statistics_history: PlayerStatisticsHistory,
+    pub decision_history: PlayerDecisionHistory,
 }
 
 impl Player {

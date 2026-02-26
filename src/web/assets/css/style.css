@@ -612,6 +612,24 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #fff;
 }
 
+.fm-badge-loa {
+  background: #2a7a3f;
+  color: #c8f0d0;
+}
+
+.sq-dec {
+  text-align: center;
+  width: 28px;
+}
+
+.sq-dec-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e8eaed;
+}
+
 /* Badge Deck — stacked card interaction */
 .fm-badge-deck {
   position: relative;
@@ -654,6 +672,7 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-badge-deck.open .fm-badge {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5);
 }
+
 
 /* ============================================
    FM STARS
@@ -1683,6 +1702,13 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-history-table td.sq-league { text-align: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 140px; }
 .fm-history-table td.sq-fee { font-size: 11px; text-align: center; white-space: nowrap; }
 .fm-history-table td.sq-stat { width: 6em; min-width: 52px; max-width: 52px; }
+
+/* --- Player Decisions Table --- */
+
+.fm-decisions-table .dec-when     { width: 12%; color: #7a868e; font-size: 12px; }
+.fm-decisions-table .dec-movement { width: 24%; white-space: nowrap; }
+.fm-decisions-table .dec-decision { width: 44%; }
+.fm-decisions-table .dec-who      { width: 20%; color: #7a868e; font-size: 12px; }
 
 /* --- Team Stats Table --- */
 
@@ -3325,4 +3351,189 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   .fm-watchlist-table thead .wl-potential,
   .fm-watchlist-table thead .wl-league,
   .fm-watchlist-table thead .wl-apps { display: none; }
+}
+
+/* ============================================
+   AI PAGE
+   ============================================ */
+
+.fm-ai-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 12px;
+  font-size: 18px;
+  color: #6e7b85;
+  transition: color 0.15s;
+}
+
+.fm-ai-icon:hover {
+  color: #4a9eff;
+}
+
+.fm-header-colored .fm-ai-icon {
+  color: var(--tab-fg, rgba(255,255,255,0.6));
+}
+
+.fm-header-colored .fm-ai-icon:hover {
+  color: var(--tab-fg-active, #fff);
+}
+
+.fm-ai-stats {
+  display: flex;
+  gap: 24px;
+  padding: 16px 14px;
+}
+
+.fm-ai-stat-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.fm-ai-stat-label {
+  font-size: 11px;
+  color: #546a78;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.fm-ai-stat-value {
+  font-size: 22px;
+  font-weight: 600;
+  color: #d0d6dc;
+}
+
+.fm-ai-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 1px solid #2a8636;
+  border-radius: 4px;
+  background: transparent;
+  color: #2a8636;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fm-ai-add-btn:hover {
+  background: #2a8636;
+  color: #fff;
+}
+
+.fm-ai-remove-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: #a04040;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background 0.15s, color 0.15s;
+}
+
+.fm-ai-remove-btn:hover {
+  background: rgba(160, 64, 64, 0.15);
+  color: #d04040;
+}
+
+.fm-ai-modal {
+  display: none;
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(0, 0, 0, 0.6);
+  z-index: 1050;
+  align-items: center;
+  justify-content: center;
+}
+
+.fm-ai-modal-content {
+  background: #1e2830;
+  border: 1px solid #2a3640;
+  border-radius: 8px;
+  padding: 24px;
+  width: 400px;
+  max-width: 90vw;
+}
+
+.fm-ai-modal-content h3 {
+  margin: 0 0 16px;
+  font-size: 16px;
+  font-weight: 600;
+  color: #d0d6dc;
+}
+
+.fm-ai-form-group {
+  margin-bottom: 12px;
+}
+
+.fm-ai-form-group label {
+  display: block;
+  font-size: 12px;
+  color: #7a8a96;
+  margin-bottom: 4px;
+}
+
+.fm-ai-form-group input {
+  width: 100%;
+  padding: 8px 10px;
+  background: #151c22;
+  border: 1px solid #2a3640;
+  border-radius: 4px;
+  color: #d0d6dc;
+  font-size: 14px;
+  font-family: inherit;
+  box-sizing: border-box;
+}
+
+.fm-ai-form-group input:focus {
+  outline: none;
+  border-color: #4a9eff;
+}
+
+.fm-ai-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.fm-ai-cancel-btn,
+.fm-ai-save-btn {
+  padding: 8px 16px;
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+  cursor: pointer;
+  border: 1px solid #2a3640;
+  transition: background 0.15s;
+}
+
+.fm-ai-cancel-btn {
+  background: transparent;
+  color: #7a8a96;
+}
+
+.fm-ai-cancel-btn:hover {
+  background: rgba(255,255,255,0.05);
+}
+
+.fm-ai-save-btn {
+  background: #2a8636;
+  color: #fff;
+  border-color: #2a8636;
+}
+
+.fm-ai-save-btn:hover {
+  background: #339944;
 }

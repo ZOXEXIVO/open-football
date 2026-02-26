@@ -29,6 +29,7 @@
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
                     <th class="sq-cond">{{ i18n.t("condition") }}</th>
                     <th class="sq-morale">{{ i18n.t("morale") }}</th>
+                    <th class="sq-dec">{{ i18n.t("decisions") }}</th>
                     <th class="sq-games">{{ i18n.t("apps") }}</th>
                     <th class="sq-value">{{ i18n.t("value") }}</th>
                 </tr>
@@ -47,6 +48,9 @@
                             {% if player.transfer_listed %}
                             <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                             {% endif %}
+                            {% if player.loan_listed %}
+                            <span class="fm-badge fm-badge-loa">Loa</span>
+                            {% endif %}
                             {% if player.is_youth %}
                             <span class="fm-badge fm-badge-yth">Yth</span>
                             {% endif %}
@@ -54,7 +58,7 @@
                     </td>
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">
-                            {{ player.first_name }}&nbsp;{{ player.last_name }}
+                            {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                         </a>
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
@@ -81,6 +85,7 @@
                         </div>
                     </td>
                     <td class="sq-morale">{{ player.behaviour }}</td>
+                    <td class="sq-dec">{% if player.has_recent_decision %}<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot"></a>{% endif %}</td>
                     <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
                     <td class="sq-value">{{ player.value }}</td>
                 </tr>

@@ -1,3 +1,4 @@
+pub mod ai;
 mod countries;
 mod date;
 mod error;
@@ -13,7 +14,6 @@ mod teams;
 mod views;
 mod watchlist;
 mod common;
-pub mod ollama;
 pub mod settings;
 
 pub use settings::Settings;
@@ -23,6 +23,7 @@ pub use i18n::{I18n, I18nManager};
 
 use crate::routes::ServerRoutes;
 use axum::response::IntoResponse;
+use crate::ai::registry::AiProviderRegistry;
 use core::SimulatorData;
 use database::DatabaseEntity;
 use log::{error, info};
@@ -80,7 +81,8 @@ impl FootballSimulatorServer {
 pub struct GameAppData {
     pub database: Arc<DatabaseEntity>,
     pub data: Arc<RwLock<Option<SimulatorData>>>,
-    pub i18n: Arc<I18nManager>
+    pub i18n: Arc<I18nManager>,
+    pub ai_registry: Arc<AiProviderRegistry>,
 }
 
 impl Clone for GameAppData {
@@ -88,7 +90,8 @@ impl Clone for GameAppData {
         GameAppData {
             database: Arc::clone(&self.database),
             data: Arc::clone(&self.data),
-            i18n: Arc::clone(&self.i18n)
+            i18n: Arc::clone(&self.i18n),
+            ai_registry: Arc::clone(&self.ai_registry),
         }
     }
 }

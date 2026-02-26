@@ -1,13 +1,13 @@
 use super::ContinentResult;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
-use log::info;
+use log::{debug};
 
 impl ContinentResult {
     pub(crate) fn update_economic_zone(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
-        info!("💰 Updating continental economic zone");
+        debug!("💰 Updating continental economic zone");
 
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         if let Some(continent) = data.continent_mut(continent_id) {
             // Calculate overall economic health

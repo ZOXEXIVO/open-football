@@ -1,4 +1,12 @@
 (function() {
+    var BADGE_PRIORITY = {
+        'fm-badge-inj': 0,
+        'fm-badge-unh': 1,
+        'fm-badge-lst': 2,
+        'fm-badge-loa': 3,
+        'fm-badge-yth': 4
+    };
+
     function initDecks() {
         document.querySelectorAll('.fm-badge-deck').forEach(function(deck) {
             if (deck.dataset.init) return;
@@ -8,11 +16,7 @@
             if (badges.length < 2) return;
 
             badges.sort(function(a, b) {
-                var aInj = a.classList.contains('fm-badge-inj');
-                var bInj = b.classList.contains('fm-badge-inj');
-                if (aInj && !bInj) return -1;
-                if (!aInj && bInj) return 1;
-                return badgeClass(a).localeCompare(badgeClass(b));
+                return badgePriority(a) - badgePriority(b);
             });
 
             badges.forEach(function(b) { deck.appendChild(b); });
@@ -33,12 +37,12 @@
         });
     }
 
-    function badgeClass(el) {
+    function badgePriority(el) {
         for (var i = 0; i < el.classList.length; i++) {
-            if (el.classList[i] !== 'fm-badge' && el.classList[i].indexOf('fm-badge-') === 0)
-                return el.classList[i];
+            var cls = el.classList[i];
+            if (cls in BADGE_PRIORITY) return BADGE_PRIORITY[cls];
         }
-        return '';
+        return 50;
     }
 
     function setCollapsed(badges) {

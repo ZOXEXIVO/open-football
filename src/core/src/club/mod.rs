@@ -1,4 +1,5 @@
 pub mod academy;
+pub mod ai;
 pub mod board;
 pub mod club;
 pub mod context;
@@ -54,6 +55,7 @@ pub use player::{
     PlayerClubContract, ContractType, PlayerSquadStatus, PlayerTransferStatus,
     ContractBonusType, ContractBonus, ContractClauseType, ContractClause,
     PlayerMailbox, PlayerMessage, PlayerMessageType, PlayerContractProposal, PlayerMailboxResult,
+    PlayerDecisionHistory, PlayerDecision,
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,

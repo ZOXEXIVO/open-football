@@ -1,0 +1,122 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("ai_statistics") }}</h3>
+        </div>
+        <div class="fm-ai-stats">
+            <div class="fm-ai-stat-item">
+                <span class="fm-ai-stat-label">{{ i18n.t("ai_total_requests") }}</span>
+                <span class="fm-ai-stat-value">{{ total_requests }}</span>
+            </div>
+            <div class="fm-ai-stat-item">
+                <span class="fm-ai-stat-label">{{ i18n.t("ai_providers_count") }}</span>
+                <span class="fm-ai-stat-value">{{ provider_count }}</span>
+            </div>
+        </div>
+    </section>
+
+    <section class="fm-panel mt-3">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("ai_providers") }}</h3>
+            <button class="fm-ai-add-btn" onclick="document.getElementById('ai-modal').style.display='flex'" title="{{ i18n.t("ai_add_provider") }}">
+                <i class="fa fa-plus"></i>
+            </button>
+        </div>
+        {% if providers.is_empty() %}
+        <div style="padding: 20px 14px; color: #546a78; font-size: 13px;">
+            {{ i18n.t("ai_no_providers") }}
+        </div>
+        {% else %}
+        <table class="fm-squad">
+            <thead>
+                <tr>
+                    <th>{{ i18n.t("name") }}</th>
+                    <th>{{ i18n.t("ai_host") }}</th>
+                    <th>{{ i18n.t("ai_port") }}</th>
+                    <th>{{ i18n.t("ai_model") }}</th>
+                    <th>{{ i18n.t("ai_requests") }}</th>
+                    <th>{{ i18n.t("ai_errors") }}</th>
+                    <th>{{ i18n.t("ai_avg_response") }}</th>
+                    <th></th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for provider in providers %}
+                <tr>
+                    <td>{{ provider.name }}</td>
+                    <td>{{ provider.host }}</td>
+                    <td>{{ provider.port }}</td>
+                    <td>{{ provider.model }}</td>
+                    <td>{{ provider.request_count }}</td>
+                    <td>{{ provider.error_count }}</td>
+                    <td>{{ provider.avg_response_ms }} ms</td>
+                    <td>
+                        <button class="fm-ai-remove-btn" data-provider-id="{{ provider.id }}" title="{{ i18n.t("ai_remove_provider") }}">
+                            <i class="fa fa-trash"></i>
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+
+<div class="fm-ai-modal" id="ai-modal">
+    <div class="fm-ai-modal-content">
+        <h3>{{ i18n.t("ai_add_provider") }}</h3>
+        <div class="fm-ai-form-group">
+            <label>{{ i18n.t("name") }}</label>
+            <input type="text" id="ai-name" value="Ollama" />
+        </div>
+        <div class="fm-ai-form-group">
+            <label>{{ i18n.t("ai_host") }}</label>
+            <input type="text" id="ai-host" value="http://localhost" />
+        </div>
+        <div class="fm-ai-form-group">
+            <label>{{ i18n.t("ai_port") }}</label>
+            <input type="number" id="ai-port" value="11434" />
+        </div>
+        <div class="fm-ai-form-group">
+            <label>{{ i18n.t("ai_model") }}</label>
+            <input type="text" id="ai-model" value="gpt-oss:20b" />
+        </div>
+        <div class="fm-ai-modal-actions">
+            <button class="fm-ai-cancel-btn" onclick="document.getElementById('ai-modal').style.display='none'">{{ i18n.t("ai_cancel") }}</button>
+            <button class="fm-ai-save-btn" id="ai-save-btn">{{ i18n.t("ai_save") }}</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    document.getElementById('ai-save-btn').addEventListener('click', function() {
+        var body = {
+            name: document.getElementById('ai-name').value,
+            host: document.getElementById('ai-host').value,
+            port: parseInt(document.getElementById('ai-port').value, 10),
+            model: document.getElementById('ai-model').value
+        };
+        fetch('/api/ai/providers', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        }).then(function() { location.reload(); });
+    });
+
+    document.querySelectorAll('.fm-ai-remove-btn').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            var id = this.dataset.providerId;
+            fetch('/api/ai/providers/' + id, { method: 'DELETE' })
+                .then(function() { location.reload(); });
+        });
+    });
+})();
+</script>
+{% endblock %}

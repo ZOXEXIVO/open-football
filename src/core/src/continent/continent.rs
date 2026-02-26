@@ -40,7 +40,7 @@ impl Continent {
         let continent_name = self.name.clone();
         let date = ctx.simulation.date.date();
 
-        info!(
+        debug!(
             "Simulating continent: {} ({} countries)",
             continent_name,
             self.countries.len()
@@ -57,7 +57,7 @@ impl Continent {
 
         debug!("Continent {} simulation complete", continent_name);
 
-        ContinentResult::new(country_results)
+        ContinentResult::new(self.id, country_results)
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {

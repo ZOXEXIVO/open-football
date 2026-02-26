@@ -11,6 +11,28 @@ pub struct MenuItem {
     pub active: bool,
 }
 
+pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    let ai_url = format!("/{}/ai", lang);
+    vec![
+        MenuSection {
+            items: vec![MenuItem {
+                title: i18n.t("home").to_string(),
+                url: format!("/{}", lang),
+                icon: "fa-home".to_string(),
+                active: false,
+            }],
+        },
+        MenuSection {
+            items: vec![MenuItem {
+                active: current_path == ai_url,
+                title: i18n.t("ai_management").to_string(),
+                url: ai_url,
+                icon: "fa-robot".to_string(),
+            }],
+        },
+    ]
+}
+
 pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     vec![
         MenuSection {

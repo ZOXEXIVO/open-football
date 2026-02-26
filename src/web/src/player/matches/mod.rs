@@ -168,6 +168,7 @@ fn get_neighbor_teams(
         .country_by_club(club_id)
         .map(|country| {
             country.leagues.leagues.iter()
+                .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
         })

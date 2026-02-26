@@ -13,6 +13,7 @@ use core::PlayerStatusType;
 use core::transfers::TransferType;
 use core::utils::{DateUtils, FormattingUtils};
 use core::{SimulatorData, Team};
+use chrono::NaiveDate;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -52,6 +53,7 @@ pub struct TeamPlayer {
     pub injured: bool,
     pub unhappy: bool,
     pub transfer_listed: bool,
+    pub loan_listed: bool,
     pub is_loan: bool,
     pub is_loaned_out: bool,
     pub is_youth: bool,
@@ -64,6 +66,7 @@ pub struct TeamPlayer {
     pub age: u8,
     pub played: u16,
     pub played_subs: u16,
+    pub has_recent_decision: bool,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
 }
@@ -133,6 +136,8 @@ pub async fn team_get_action(
                 .map(|c| c.contract_type == ContractType::Youth)
                 .unwrap_or(false);
 
+            let has_recent_decision = has_decision_within_days(p, now, 30);
+
             Some(TeamPlayer {
                 id: p.id,
                 first_name: p.full_name.display_first_name().to_string(),
@@ -142,6 +147,7 @@ pub async fn team_get_action(
                 injured: p.player_attributes.is_injured,
                 unhappy: !p.happiness.is_happy(),
                 transfer_listed: p.statuses.get().contains(&PlayerStatusType::Lst),
+                loan_listed: p.statuses.get().contains(&PlayerStatusType::Loa),
                 is_loan,
                 is_loaned_out: false,
                 is_youth,
@@ -156,6 +162,7 @@ pub async fn team_get_action(
                 age: DateUtils::age(p.birth_date, now),
                 played: p.statistics.played,
                 played_subs: p.statistics.played_subs,
+                has_recent_decision,
                 status: PlayerStatusDto::new(p.statuses.get()),
             })
         })
@@ -205,6 +212,7 @@ pub async fn team_get_action(
                     injured: player.player_attributes.is_injured,
                     unhappy: !player.happiness.is_happy(),
                     transfer_listed: false,
+                    loan_listed: false,
                     is_loan: false,
                     is_loaned_out: true,
                     is_youth: false,
@@ -219,6 +227,7 @@ pub async fn team_get_action(
                     age: DateUtils::age(player.birth_date, now),
                     played: player.statistics.played,
                     played_subs: player.statistics.played_subs,
+                    has_recent_decision: has_decision_within_days(player, now, 7),
                     status: PlayerStatusDto::new(player.statuses.get()),
                 });
             }
@@ -288,6 +297,7 @@ fn get_neighbor_teams(
         .country_by_club(club_id)
         .map(|country| {
             country.leagues.leagues.iter()
+                .filter(|l| !l.friendly)
                 .map(|l| (l.id, l.name.clone(), l.slug.clone()))
                 .collect()
         })
@@ -310,4 +320,10 @@ pub fn get_current_ability_stars(player: &Player) -> u8 {
 
 pub fn get_potential_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)) as u8
+}
+
+fn has_decision_within_days(player: &Player, now: NaiveDate, days: i64) -> bool {
+    player.decision_history.items.iter().any(|d| {
+        (now - d.date).num_days() <= days
+    })
 }

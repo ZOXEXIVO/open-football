@@ -26,6 +26,14 @@ impl Transfers {
         self.items.retain(|item| item.player_id != player_id);
     }
 
+    pub fn contains(&self, player_id: u32) -> bool {
+        self.items.iter().any(|i| i.player_id == player_id)
+    }
+
+    pub fn listed_player_ids(&self) -> Vec<u32> {
+        self.items.iter().map(|i| i.player_id).collect()
+    }
+
     pub fn items(&self) -> &[TransferItem] {
         &self.items
     }

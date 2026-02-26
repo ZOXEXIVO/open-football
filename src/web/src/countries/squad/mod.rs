@@ -121,7 +121,7 @@ pub async fn country_squad_action(
     });
 
     let current_path = format!("/{}/countries/{}", route_params.lang, route_params.country_slug);
-    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().map(|l| (l.name.as_str(), l.slug.as_str())).collect();
+    let cl: Vec<(&str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.name.as_str(), l.slug.as_str())).collect();
 
     Ok(CountrySquadTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,

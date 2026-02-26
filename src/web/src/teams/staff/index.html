@@ -42,7 +42,7 @@
                     {% for member in group.members %}
                     <tr>
                         <td class="st-name">
-                            <a href="/{{ lang }}/staff/{{ member.id }}">{{ member.last_name }}&nbsp;{{ member.first_name }}</a>
+                            <a href="/{{ lang }}/staff/{{ member.id }}">{{ member.last_name }}{% if !member.first_name.is_empty() %}&nbsp;{{ member.first_name }}{% endif %}</a>
                         </td>
                         <td class="st-role">{{ i18n.t(&member.role_key) }}</td>
                         <td class="st-nat">

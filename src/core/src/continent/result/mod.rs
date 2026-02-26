@@ -13,6 +13,7 @@ use crate::SimulationResult;
 use chrono::Datelike;
 
 pub struct ContinentResult {
+    pub continent_id: u32,
     pub countries: Vec<CountryResult>,
 
     // New fields for continental-level results
@@ -23,8 +24,9 @@ pub struct ContinentResult {
 }
 
 impl ContinentResult {
-    pub fn new(countries: Vec<CountryResult>) -> Self {
+    pub fn new(continent_id: u32, countries: Vec<CountryResult>) -> Self {
         ContinentResult {
+            continent_id,
             countries,
             competition_results: None,
             rankings_update: None,
@@ -71,16 +73,8 @@ impl ContinentResult {
         }
     }
 
-    pub(crate) fn get_continent_id(&self, _data: &SimulatorData) -> u32 {
-        // Assuming we can get continent ID from the first country
-        // You might want to store this in ContinentResult
-        if let Some(_first_country) = self.countries.first() {
-            // Get country from data and return its continent_id
-            // This is a placeholder - adjust based on your actual data structure
-            0 // Replace with actual logic
-        } else {
-            0
-        }
+    pub(crate) fn get_continent_id(&self) -> u32 {
+        self.continent_id
     }
 }
 

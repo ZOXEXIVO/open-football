@@ -1,0 +1,48 @@
+{% extends "layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("decisions") }}{% endblock %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/matches">{{ i18n.t("matches") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/transfers">{{ i18n.t("transfers") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/players/{{ player_id }}/decisions">{{ i18n.t("decisions") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("decisions") }}</h3>
+            <span class="fm-panel-count">{{ decisions.len() }}</span>
+        </div>
+        {% if decisions.len() == 0 %}
+        <div class="fm-empty">{{ i18n.t("no_decisions") }}</div>
+        {% else %}
+        <table class="fm-squad fm-decisions-table">
+            <thead>
+                <tr>
+                    <th class="dec-when">{{ i18n.t("decisions_when") }}</th>
+                    <th class="dec-movement">{{ i18n.t("decisions_movement") }}</th>
+                    <th class="dec-decision">{{ i18n.t("decisions_decision") }}</th>
+                    <th class="dec-who">{{ i18n.t("decisions_who") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for item in decisions %}
+                <tr>
+                    <td class="dec-when">{{ item.date }}</td>
+                    <td class="dec-movement">{{ item.movement }}</td>
+                    <td class="dec-decision">{{ item.decision }}</td>
+                    <td class="dec-who">{{ item.decided_by }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}
