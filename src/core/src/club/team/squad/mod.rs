@@ -1,18 +1,14 @@
 mod composition;
-mod demotion;
-mod promotion;
 mod satisfaction;
 mod transfer_listing;
 
 pub use composition::SquadComposition;
-pub use demotion::SquadDemotion;
-pub use promotion::YouthPromotion;
 pub use satisfaction::compute_squad_satisfaction;
 pub use transfer_listing::TransferListManager;
 
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
 use crate::utils::DateUtils;
-use crate::Team;
+use crate::{PlayerStatusType, Team};
 use chrono::NaiveDate;
 
 pub struct SquadManager;
@@ -20,7 +16,7 @@ pub struct SquadManager;
 impl SquadManager {
     /// Daily: only mandatory administrative demotions (Lst, Loa).
     /// All other squad decisions (recalls, swaps, performance demotions)
-    /// go through the trigger-gated weekly manage_composition.
+    /// go through the monthly AI-driven squad composition.
     pub fn manage_critical_moves(
         teams: &mut [Team],
         coach_state: &mut Option<CoachDecisionState>,
@@ -29,7 +25,7 @@ impl SquadManager {
         date: NaiveDate,
     ) {
         let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
-        let demotions = SquadDemotion::identify_administrative_demotions(&teams[main_idx]);
+        let demotions = Self::identify_administrative_demotions(&teams[main_idx]);
         let max_age = teams[reserve_idx].team_type.max_age();
         let demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
         if !demotions.is_empty() {
@@ -37,13 +33,30 @@ impl SquadManager {
             record_player_decisions(teams, main_idx, reserve_idx, &demotions, date, &coach_name, "Administrative demotion");
             record_moves(coach_state, &demotions, RecentMoveType::DemotedToReserves, date);
 
-            // Administrative demotions increase trigger pressure so the weekly
-            // review reacts faster (recalls, replacements).
             if let Some(state) = coach_state {
                 state.trigger_pressure = (state.trigger_pressure + 0.15 * demotions.len() as f32)
                     .clamp(0.0, 1.0);
             }
         }
+    }
+
+    /// Mandatory administrative demotions: Lst and Loa status players.
+    fn identify_administrative_demotions(main_team: &Team) -> Vec<u32> {
+        main_team
+            .players
+            .players
+            .iter()
+            .filter_map(|player| {
+                let statuses = player.statuses.get();
+                if statuses.contains(&PlayerStatusType::Lst)
+                    || statuses.contains(&PlayerStatusType::Loa)
+                {
+                    Some(player.id)
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 

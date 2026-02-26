@@ -4,19 +4,19 @@ use super::PendingAiRequest;
 #[derive(Clone)]
 pub struct Ai {
     requests: Arc<Mutex<Vec<PendingAiRequest>>>,
-    enabled: bool,
+}
+
+impl Default for Ai {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Ai {
-    pub fn new(enabled: bool) -> Self {
+    pub fn new() -> Self {
         Ai {
             requests: Arc::new(Mutex::new(Vec::new())),
-            enabled,
         }
-    }
-
-    pub fn enabled(&self) -> bool {
-        self.enabled
     }
 
     pub fn push(&self, request: PendingAiRequest) {

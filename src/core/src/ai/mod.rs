@@ -33,7 +33,3 @@ pub fn set_ai_service(service: Box<dyn AiService>) {
 pub fn ai_service() -> Option<&'static dyn AiService> {
     AI_SERVICE.get().map(|b| b.as_ref())
 }
-
-pub fn ai_instance_enabled() -> bool {
-    ai_service().is_some_and(|s| s.is_enabled())
-}

@@ -1,6 +1,6 @@
 use crate::ai::PendingAiRequest;
 use crate::club::team::coach_perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::{SquadComposition, SquadDemotion, SquadManager, TransferListManager, YouthPromotion};
+use crate::club::team::squad::{SquadComposition, SquadManager, TransferListManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
@@ -115,7 +115,7 @@ impl TeamCollection {
 
         let mut requests = Vec::new();
 
-        // Squad composition (priority 0 — runs first)
+        // Squad composition (priority 0 — handles promotions, demotions, and swaps)
         {
             let (query, format) = SquadComposition::prepare_request(
                 &self.teams, main_idx, reserve_idx, youth_idx,
@@ -135,52 +135,14 @@ impl TeamCollection {
             });
         }
 
-        // Demotion (priority 1)
-        if let Some((query, format)) = SquadDemotion::prepare_request(
-            &self.teams, main_idx, reserve_idx,
-        ) {
-            requests.push(PendingAiRequest {
-                club_id,
-                priority: 1,
-                query,
-                format,
-                handler: Box::new(move |response, data| {
-                    let club = data.club_mut(club_id).unwrap();
-                    SquadDemotion::execute_response(
-                        response, &mut club.teams.teams, &mut club.teams.coach_state,
-                        main_idx, reserve_idx, date,
-                    );
-                }),
-            });
-        }
-
-        // Promotion (priority 2)
-        if let Some((query, format)) = YouthPromotion::prepare_request(
-            &self.teams, main_idx, youth_idx,
-        ) {
-            requests.push(PendingAiRequest {
-                club_id,
-                priority: 2,
-                query,
-                format,
-                handler: Box::new(move |response, data| {
-                    let club = data.club_mut(club_id).unwrap();
-                    YouthPromotion::execute_response(
-                        response, &mut club.teams.teams, &mut club.teams.coach_state,
-                        main_idx, youth_idx, date,
-                    );
-                }),
-            });
-        }
-
-        // Transfer listing (priority 3 — runs last)
+        // Transfer listing (priority 1)
         {
             let (query, format) = TransferListManager::prepare_request(
                 &self.teams, main_idx, date,
             );
             requests.push(PendingAiRequest {
                 club_id,
-                priority: 3,
+                priority: 1,
                 query,
                 format,
                 handler: Box::new(move |response, data| {

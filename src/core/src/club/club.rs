@@ -81,20 +81,21 @@ impl Club {
         let date = ctx.simulation.date.date();
 
         if ctx.simulation.is_week_beginning() {
-            // Weekly: prepare coach state and impressions, then build AI requests
+            // Weekly: coach state, impressions, salaries
             self.teams.ensure_coach_state(date);
             self.teams.update_all_impressions(date);
-
-            if ctx.ai.enabled() {
-                for req in self.teams.prepare_ai_requests(date, self.id) {
-                    ctx.ai.push(req);
-                }
-            }
-
-            self.process_salaries(ctx);
+            self.process_salaries(ctx.clone());
         } else {
             // Daily: only immediate demotions + ability swaps
             self.teams.manage_critical_squad_moves(date);
+        }
+
+        // Monthly: AI-driven squad composition and transfer listings
+        if ctx.simulation.is_month_beginning() {
+            self.teams.ensure_coach_state(date);
+            for req in self.teams.prepare_ai_requests(date, self.id) {
+                ctx.ai.push(req);
+            }
         }
 
         result

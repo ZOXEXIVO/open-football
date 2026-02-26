@@ -2,7 +2,7 @@ use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult};
 use crate::utils::Logging;
-use crate::{Club, Player, PlayerStatusType, Team};
+use crate::{Club, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
 use rayon::iter::IntoParallelRefMutIterator;
@@ -267,7 +267,8 @@ impl League {
         match_result
     }
 
-    /// Collect available reserve/youth players from the same club (excluding the main team)
+    /// Collect available reserve players from the same club.
+    /// Only pulls from B/U21/U23 teams — not from youth academies (U18/U19/U20).
     fn collect_reserve_players<'a>(
         clubs: &'a [Club],
         club_id: u32,
@@ -280,7 +281,10 @@ impl League {
         club.teams
             .teams
             .iter()
-            .filter(|t| t.id != team_id) // skip the team itself
+            .filter(|t| {
+                t.id != team_id
+                    && matches!(t.team_type, TeamType::B | TeamType::U21 | TeamType::U23)
+            })
             .flat_map(|t| t.players.players.iter())
             .filter(|p| {
                 let statuses = p.statuses.get();

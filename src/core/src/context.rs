@@ -214,7 +214,7 @@ mod tests {
         let sim_ctx = SimulationContext::new(date);
 
         // Create a global context with the simulation context
-        let global_ctx = GlobalContext::new(sim_ctx.clone(), Ai::new(false));
+        let global_ctx = GlobalContext::new(sim_ctx.clone(), Ai::new());
 
         // Test if the simulation context is set correctly
         assert_eq!(global_ctx.simulation.date, sim_ctx.date);

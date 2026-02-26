@@ -1,4 +1,4 @@
-use crate::ai::{ai_instance_enabled, Ai, AiBatchProcessor};
+use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::{Continent, ContinentResult};
@@ -19,8 +19,7 @@ impl FootballSimulator {
         let current_data = data.date;
         let now = Instant::now();
 
-        let ai = Ai::new(ai_instance_enabled());
-        let ctx = GlobalContext::new(SimulationContext::new(data.date), ai);
+        let ctx = GlobalContext::new(SimulationContext::new(data.date), Ai::new());
 
         // Phase A: Simulate (AI requests built, not executed)
         let results: Vec<ContinentResult> = data
