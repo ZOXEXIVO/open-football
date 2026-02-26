@@ -104,5 +104,959 @@
       "background": "#000000",
       "foreground": "#0454a5"
     }
+  },
+  {
+    "id": 1099,
+    "name": "AC Milan",
+    "country_id": 776,
+    "location": {
+      "city_id": 2
+    },
+    "finance": {
+      "balance": 250000000
+    },
+    "teams": [
+      {
+        "id": 1099,
+        "name": "AC Milan",
+        "slug": "ac-milan",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 8450,
+          "national": 8450,
+          "world": 8450
+        }
+      },
+      {
+        "id": 98036567,
+        "name": "AC Milan",
+        "slug": "ac-milan-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2535,
+          "national": 2535,
+          "world": 2535
+        }
+      },
+      {
+        "id": 98036568,
+        "name": "AC Milan",
+        "slug": "ac-milan-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1690,
+          "national": 1690,
+          "world": 1690
+        }
+      }
+    ],
+    "colors": {
+      "background": "#1f1f1f",
+      "foreground": "#a00404"
+    }
+  },
+  {
+    "id": 1150,
+    "name": "Napoli",
+    "country_id": 776,
+    "location": {
+      "city_id": 3
+    },
+    "finance": {
+      "balance": 17176918
+    },
+    "teams": [
+      {
+        "id": 1150,
+        "name": "Napoli",
+        "slug": "napoli",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 8050,
+          "national": 8050,
+          "world": 8050
+        }
+      },
+      {
+        "id": 98036649,
+        "name": "Napoli",
+        "slug": "napoli-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2415,
+          "national": 2415,
+          "world": 2415
+        }
+      },
+      {
+        "id": 98036650,
+        "name": "Napoli",
+        "slug": "napoli-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1610,
+          "national": 1610,
+          "world": 1610
+        }
+      }
+    ],
+    "colors": {
+      "background": "#05619e",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1100,
+    "name": "AS Roma",
+    "country_id": 776,
+    "location": {
+      "city_id": 553
+    },
+    "finance": {
+      "balance": 21775330
+    },
+    "teams": [
+      {
+        "id": 1100,
+        "name": "AS Roma",
+        "slug": "as-roma",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 8100,
+          "national": 8100,
+          "world": 8100
+        }
+      },
+      {
+        "id": 98036569,
+        "name": "AS Roma",
+        "slug": "as-roma-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 4800,
+          "national": 4500,
+          "world": 4200
+        }
+      },
+      {
+        "id": 98036570,
+        "name": "AS Roma",
+        "slug": "as-roma-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 2800,
+          "national": 2600,
+          "world": 2500
+        }
+      }
+    ],
+    "colors": {
+      "background": "#4d1f1f",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1140,
+    "name": "Lazio",
+    "country_id": 776,
+    "location": {
+      "city_id": 4
+    },
+    "finance": {
+      "balance": 10425277
+    },
+    "teams": [
+      {
+        "id": 1140,
+        "name": "Lazio",
+        "slug": "lazio",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 7550,
+          "national": 7550,
+          "world": 7550
+        }
+      },
+      {
+        "id": 98036633,
+        "name": "Lazio",
+        "slug": "lazio-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2265,
+          "national": 2265,
+          "world": 2265
+        }
+      },
+      {
+        "id": 98036634,
+        "name": "Lazio",
+        "slug": "lazio-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1510,
+          "national": 1510,
+          "world": 1510
+        }
+      }
+    ],
+    "colors": {
+      "background": "#5ca0cd",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1106,
+    "name": "Atalanta",
+    "country_id": 776,
+    "location": {
+      "city_id": 465
+    },
+    "finance": {
+      "balance": 5642135
+    },
+    "teams": [
+      {
+        "id": 1106,
+        "name": "Atalanta",
+        "slug": "atalanta",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6400,
+          "national": 6400,
+          "world": 6400
+        }
+      },
+      {
+        "id": 98036577,
+        "name": "Atalanta",
+        "slug": "atalanta-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1920,
+          "national": 1920,
+          "world": 1920
+        }
+      },
+      {
+        "id": 98036578,
+        "name": "Atalanta",
+        "slug": "atalanta-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1280,
+          "national": 1280,
+          "world": 1280
+        }
+      }
+    ],
+    "colors": {
+      "background": "#0d56ed",
+      "foreground": "#000000"
+    }
+  },
+  {
+    "id": 1129,
+    "name": "Fiorentina",
+    "country_id": 776,
+    "location": {
+      "city_id": 499
+    },
+    "finance": {
+      "balance": 14231649
+    },
+    "teams": [
+      {
+        "id": 1129,
+        "name": "Fiorentina",
+        "slug": "fiorentina",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 7800,
+          "national": 7800,
+          "world": 7800
+        }
+      },
+      {
+        "id": 98036617,
+        "name": "Fiorentina",
+        "slug": "fiorentina-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2340,
+          "national": 2340,
+          "world": 2340
+        }
+      },
+      {
+        "id": 98036618,
+        "name": "Fiorentina",
+        "slug": "fiorentina-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1560,
+          "national": 1560,
+          "world": 1560
+        }
+      }
+    ],
+    "colors": {
+      "background": "#710aa9",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1111,
+    "name": "Bologna",
+    "country_id": 776,
+    "location": {
+      "city_id": 474
+    },
+    "finance": {
+      "balance": 8395496
+    },
+    "teams": [
+      {
+        "id": 1111,
+        "name": "Bologna",
+        "slug": "bologna",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6200,
+          "national": 6200,
+          "world": 6200
+        }
+      },
+      {
+        "id": 98036585,
+        "name": "Bologna",
+        "slug": "bologna-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1860,
+          "national": 1860,
+          "world": 1860
+        }
+      },
+      {
+        "id": 98036586,
+        "name": "Bologna",
+        "slug": "bologna-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1240,
+          "national": 1240,
+          "world": 1240
+        }
+      }
+    ],
+    "colors": {
+      "background": "#020a56",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1174,
+    "name": "Torino",
+    "country_id": 776,
+    "location": {
+      "city_id": 1
+    },
+    "finance": {
+      "balance": 6728996
+    },
+    "teams": [
+      {
+        "id": 1174,
+        "name": "Torino",
+        "slug": "torino",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6800,
+          "national": 6800,
+          "world": 6800
+        }
+      },
+      {
+        "id": 98036687,
+        "name": "Torino",
+        "slug": "torino-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2040,
+          "national": 2040,
+          "world": 2040
+        }
+      },
+      {
+        "id": 98036688,
+        "name": "Torino",
+        "slug": "torino-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1360,
+          "national": 1360,
+          "world": 1360
+        }
+      }
+    ],
+    "colors": {
+      "background": "#530101",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 3800256,
+    "name": "Sassuolo",
+    "country_id": 776,
+    "location": {
+      "city_id": 3800254
+    },
+    "finance": {
+      "balance": 10973751
+    },
+    "teams": [
+      {
+        "id": 3800256,
+        "name": "Sassuolo",
+        "slug": "sassuolo",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6400,
+          "national": 6400,
+          "world": 6400
+        }
+      },
+      {
+        "id": 98045446,
+        "name": "Sassuolo",
+        "slug": "sassuolo-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1920,
+          "national": 1920,
+          "world": 1920
+        }
+      },
+      {
+        "id": 98045447,
+        "name": "Sassuolo",
+        "slug": "sassuolo-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1280,
+          "national": 1280,
+          "world": 1280
+        }
+      }
+    ],
+    "colors": {
+      "background": "#13321c",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1178,
+    "name": "Udinese",
+    "country_id": 776,
+    "location": {
+      "city_id": 575
+    },
+    "finance": {
+      "balance": 9243855
+    },
+    "teams": [
+      {
+        "id": 1178,
+        "name": "Udinese",
+        "slug": "udinese",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6900,
+          "national": 6900,
+          "world": 6900
+        }
+      },
+      {
+        "id": 98036693,
+        "name": "Udinese",
+        "slug": "udinese-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2070,
+          "national": 2070,
+          "world": 2070
+        }
+      },
+      {
+        "id": 98036694,
+        "name": "Udinese",
+        "slug": "udinese-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1380,
+          "national": 1380,
+          "world": 1380
+        }
+      }
+    ],
+    "colors": {
+      "background": "#ffffff",
+      "foreground": "#000000"
+    }
+  },
+  {
+    "id": 1132,
+    "name": "Genoa",
+    "country_id": 776,
+    "location": {
+      "city_id": 504
+    },
+    "finance": {
+      "balance": 8730805
+    },
+    "teams": [
+      {
+        "id": 1132,
+        "name": "Genoa",
+        "slug": "genoa",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6700,
+          "national": 6700,
+          "world": 6700
+        }
+      },
+      {
+        "id": 98036623,
+        "name": "Genoa",
+        "slug": "genoa-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 2010,
+          "national": 2010,
+          "world": 2010
+        }
+      },
+      {
+        "id": 98036624,
+        "name": "Genoa",
+        "slug": "genoa-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1340,
+          "national": 1340,
+          "world": 1340
+        }
+      }
+    ],
+    "colors": {
+      "background": "#00144c",
+      "foreground": "#a92b2b"
+    }
+  },
+  {
+    "id": 1114,
+    "name": "Cagliari",
+    "country_id": 776,
+    "location": {
+      "city_id": 477
+    },
+    "finance": {
+      "balance": 2605296
+    },
+    "teams": [
+      {
+        "id": 1114,
+        "name": "Cagliari",
+        "slug": "cagliari",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6050,
+          "national": 6050,
+          "world": 6050
+        }
+      },
+      {
+        "id": 98036591,
+        "name": "Cagliari",
+        "slug": "cagliari-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1815,
+          "national": 1815,
+          "world": 1815
+        }
+      },
+      {
+        "id": 98036592,
+        "name": "Cagliari",
+        "slug": "cagliari-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1210,
+          "national": 1210,
+          "world": 1210
+        }
+      }
+    ],
+    "colors": {
+      "background": "#022e4c",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1123,
+    "name": "Como",
+    "country_id": 776,
+    "location": {
+      "city_id": 491
+    },
+    "finance": {
+      "balance": 495456
+    },
+    "teams": [
+      {
+        "id": 1123,
+        "name": "Como",
+        "slug": "como",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 5300,
+          "national": 5300,
+          "world": 5300
+        }
+      },
+      {
+        "id": 98036607,
+        "name": "Como",
+        "slug": "como-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1590,
+          "national": 1590,
+          "world": 1590
+        }
+      },
+      {
+        "id": 98036608,
+        "name": "Como",
+        "slug": "como-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1060,
+          "national": 1060,
+          "world": 1060
+        }
+      }
+    ],
+    "colors": {
+      "background": "#496bff",
+      "foreground": "#ffffff"
+    }
+  },
+  {
+    "id": 1156,
+    "name": "Parma",
+    "country_id": 776,
+    "location": {
+      "city_id": 538
+    },
+    "finance": {
+      "balance": 241446
+    },
+    "teams": [
+      {
+        "id": 1156,
+        "name": "Parma",
+        "slug": "parma",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 5750,
+          "national": 5750,
+          "world": 5750
+        }
+      },
+      {
+        "id": 98036657,
+        "name": "Parma",
+        "slug": "parma-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1725,
+          "national": 1725,
+          "world": 1725
+        }
+      },
+      {
+        "id": 98036658,
+        "name": "Parma",
+        "slug": "parma-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1150,
+          "national": 1150,
+          "world": 1150
+        }
+      }
+    ],
+    "colors": {
+      "background": "#ffe206",
+      "foreground": "#023386"
+    }
+  },
+  {
+    "id": 1141,
+    "name": "Lecce",
+    "country_id": 776,
+    "location": {
+      "city_id": 516
+    },
+    "finance": {
+      "balance": 496892
+    },
+    "teams": [
+      {
+        "id": 1141,
+        "name": "Lecce",
+        "slug": "lecce",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 5250,
+          "national": 5250,
+          "world": 5250
+        }
+      },
+      {
+        "id": 98036635,
+        "name": "Lecce",
+        "slug": "lecce-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1575,
+          "national": 1575,
+          "world": 1575
+        }
+      },
+      {
+        "id": 98036636,
+        "name": "Lecce",
+        "slug": "lecce-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1050,
+          "national": 1050,
+          "world": 1050
+        }
+      }
+    ],
+    "colors": {
+      "background": "#ddc512",
+      "foreground": "#f53434"
+    }
+  },
+  {
+    "id": 2215,
+    "name": "Pisa",
+    "country_id": 776,
+    "location": {
+      "city_id": 542
+    },
+    "finance": {
+      "balance": 168561
+    },
+    "teams": [
+      {
+        "id": 2215,
+        "name": "Pisa",
+        "slug": "pisa",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 4950,
+          "national": 4950,
+          "world": 4950
+        }
+      },
+      {
+        "id": 98037820,
+        "name": "Pisa",
+        "slug": "pisa-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1485,
+          "national": 1485,
+          "world": 1485
+        }
+      },
+      {
+        "id": 98037821,
+        "name": "Pisa",
+        "slug": "pisa-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 990,
+          "national": 990,
+          "world": 990
+        }
+      }
+    ],
+    "colors": {
+      "background": "#003580",
+      "foreground": "#000000"
+    }
+  },
+  {
+    "id": 1125,
+    "name": "Cremonese",
+    "country_id": 776,
+    "location": {
+      "city_id": 494
+    },
+    "finance": {
+      "balance": 253590
+    },
+    "teams": [
+      {
+        "id": 1125,
+        "name": "Cremonese",
+        "slug": "cremonese",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 4900,
+          "national": 4900,
+          "world": 4900
+        }
+      },
+      {
+        "id": 98036611,
+        "name": "Cremonese",
+        "slug": "cremonese-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1470,
+          "national": 1470,
+          "world": 1470
+        }
+      },
+      {
+        "id": 98036612,
+        "name": "Cremonese",
+        "slug": "cremonese-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 980,
+          "national": 980,
+          "world": 980
+        }
+      }
+    ],
+    "colors": {
+      "background": "#63000b",
+      "foreground": "#746767"
+    }
+  },
+  {
+    "id": 2201,
+    "name": "Hellas Verona",
+    "country_id": 776,
+    "location": {
+      "city_id": 508
+    },
+    "finance": {
+      "balance": 5057568
+    },
+    "teams": [
+      {
+        "id": 2201,
+        "name": "Hellas Verona",
+        "slug": "hellas-verona",
+        "team_type": "Main",
+        "league_id": 32,
+        "reputation": {
+          "home": 6400,
+          "national": 6400,
+          "world": 6400
+        }
+      },
+      {
+        "id": 98037800,
+        "name": "Hellas Verona",
+        "slug": "hellas-verona-u20",
+        "team_type": "U20",
+        "league_id": null,
+        "reputation": {
+          "home": 1920,
+          "national": 1920,
+          "world": 1920
+        }
+      },
+      {
+        "id": 98037801,
+        "name": "Hellas Verona",
+        "slug": "hellas-verona-u18",
+        "team_type": "U18",
+        "league_id": null,
+        "reputation": {
+          "home": 1280,
+          "national": 1280,
+          "world": 1280
+        }
+      }
+    ],
+    "colors": {
+      "background": "#ddc512",
+      "foreground": "#023386"
+    }
   }
 ]

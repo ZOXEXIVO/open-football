@@ -7,6 +7,7 @@ use crate::{
 };
 
 pub struct ClubResult {
+    pub club_id: u32,
     pub finance: ClubFinanceResult,
     pub teams: Vec<TeamResult>,
     pub board: BoardResult,
@@ -15,12 +16,14 @@ pub struct ClubResult {
 
 impl ClubResult {
     pub fn new(
+        club_id: u32,
         finance: ClubFinanceResult,
         teams: Vec<TeamResult>,
         board: BoardResult,
         academy: ClubAcademyResult,
     ) -> Self {
         ClubResult {
+            club_id,
             finance,
             teams,
             board,

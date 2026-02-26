@@ -57,7 +57,7 @@ impl Continent {
 
         debug!("Continent {} simulation complete", continent_name);
 
-        ContinentResult::new(country_results)
+        ContinentResult::new(self.id, country_results)
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {

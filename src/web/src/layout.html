@@ -48,6 +48,9 @@
                                     <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<span class="flag flag-{{ sub_title_country_code }}" style="vertical-align: middle; margin-right: 6px;"></span>{% endif %}<a href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
                                 <div class="fm-header-actions">
+                                    <a class="fm-ai-icon" href="/{{ lang }}/ai" title="AI">
+                                        <i class="fa fa-robot"></i>
+                                    </a>
                                     <div class="fm-lang-dropdown">
                                         <div class="fm-lang-current">
                                             <span class="fm-date-compact" id="date-up-compact"></span>

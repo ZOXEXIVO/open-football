@@ -19,7 +19,7 @@ impl ContinentResult {
     pub(crate) fn conduct_competition_draws(&self, data: &mut SimulatorData, date: NaiveDate) {
         info!("🎲 Conducting continental competition draws");
 
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         if let Some(continent) = data.continent_mut(continent_id) {
             let qualified_clubs = continent.continental_rankings.get_qualified_clubs();
@@ -58,7 +58,7 @@ impl ContinentResult {
         data: &mut SimulatorData,
         date: NaiveDate,
     ) -> Option<ContinentalCompetitionResults> {
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         let continent = data.continent_mut(continent_id)?;
         let mut results = ContinentalCompetitionResults::new();
@@ -248,7 +248,7 @@ impl ContinentResult {
     fn distribute_competition_rewards(&self, data: &mut SimulatorData) {
         debug!("💰 Distributing continental competition rewards");
 
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         // Collect participating clubs data first to avoid borrow conflicts
         let (cl_clubs, el_clubs, conf_clubs) = if let Some(continent) = data.continent(continent_id) {

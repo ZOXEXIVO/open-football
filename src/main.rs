@@ -3,9 +3,10 @@ use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
 use log::info;
 use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
+use web::ai::registry::{AiProviderRegistry, RegistryAiService};
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use web::ollama::OllamaRequest;
+use web::ai::providers::OllamaRequest;
 
 #[tokio::main]
 async fn main() {
@@ -20,10 +21,22 @@ async fn main() {
     settings.apply();
     settings.log();
 
-    if settings.ollama_enabled {
-        let ai = OllamaRequest::from_env();
-        core::ai::set_ai(Box::new(ai));
-    }
+    let ai_registry = Arc::new(AiProviderRegistry::new());
+
+    ai_registry.add(
+        "Local Ollama",
+        "http://localhost",
+        11434,
+        "gpt-oss:20b",
+        Box::new(OllamaRequest::new("http://localhost", 11434, "gpt-oss:20b")),
+    ).await;
+
+    // Register service so core can use it via trait — no tokio in core
+    core::ai::set_ai_service(Box::new(RegistryAiService {
+        registry: Arc::clone(&ai_registry),
+    }));
+
+    info!("AI registry initialized with default Local Ollama provider");
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
 
@@ -34,7 +47,8 @@ async fn main() {
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(game_data))),
-        i18n: Arc::new(I18nManager::new())
+        i18n: Arc::new(I18nManager::new()),
+        ai_registry,
     };
 
     FootballSimulatorServer::new(data).run().await;

@@ -18,6 +18,7 @@ Player IDs with LOA status: {current_loans}
 
 [EVALUATION CRITERIA]
 Use the data fields to judge each player:
+- sk (skills): technical/mental/physical averages 0-20. Compare with teammates at same position to judge squad standing
 - st (status): OK=available, INJ Nd=injured N days, REC Nd=recovering, BAN=banned, LST=transfer listed, LOA=loan listed, REQ=requested transfer, UNH=unhappy
 - cond: physical condition 0-100%
 - mor: morale 0-100. Low morale may indicate unhappiness
@@ -30,13 +31,13 @@ Use the data fields to judge each player:
 TRANSFER LIST when:
 - Player has requested a transfer (REQ status)
 - Player is unhappy (UNH status) and situation cannot be resolved
-- Squad status is NotNeeded and player is below squad standard
-- Player is aging (32+) and clearly declining (negative training trend)
+- Player's skills (sk) are clearly below squad standard compared to teammates in same position
+- Player is aging (32+) and clearly declining (negative training trend + low skills)
 - Excessive depth at a position with no path to playing time
 
 LOAN LIST when:
 - Young player (under 23) needs regular match time to develop
-- Player is blocked by clearly better players at their position
+- Player is blocked by clearly better players at their position (compare sk values)
 - Player returning from long injury needs match fitness elsewhere
 - Surplus player but has future value — loan rather than sell
 

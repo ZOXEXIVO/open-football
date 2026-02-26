@@ -1,7 +1,6 @@
 use crate::club::player::player::Player;
 use crate::club::staff::staff::Staff;
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
-use crate::context::GlobalContext;
 use crate::{PlayerStatusType, Team};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -52,37 +51,42 @@ struct TeamPlayersLlm {
 pub struct SquadDemotion;
 
 impl SquadDemotion {
-    /// AI-driven demotion decisions. Skips if AI is unavailable.
-    pub fn manage(
-        ctx: &GlobalContext<'_>,
+    /// Build AI prompt without calling AI (read-only teams).
+    pub fn prepare_request(
+        teams: &[Team],
+        main_idx: usize,
+        reserve_idx: Option<usize>,
+    ) -> Option<(String, String)> {
+        let reserve_idx = reserve_idx?;
+
+        if teams[main_idx].players.players.is_empty() {
+            return None;
+        }
+
+        let team_indices = Self::collect_team_indices(main_idx, reserve_idx);
+        let query = Self::build_prompt(teams, main_idx, &team_indices);
+        let format = Self::response_format();
+        Some((query, format))
+    }
+
+    /// Apply raw AI response string to mutable teams.
+    pub fn execute_response(
+        response: &str,
         teams: &mut [Team],
         coach_state: &mut Option<CoachDecisionState>,
         main_idx: usize,
         reserve_idx: Option<usize>,
         date: NaiveDate,
     ) {
-        if !ctx.ai_enabled() {
-            return;
-        }
-
         let reserve_idx = match reserve_idx {
             Some(idx) => idx,
             None => return,
         };
-
-        if teams[main_idx].players.players.is_empty() {
-            return;
-        }
-
-        let team_indices = Self::collect_team_indices(main_idx, reserve_idx);
-        let query = Self::build_prompt(teams, main_idx, &team_indices);
-        let format = Self::response_format();
-
-        let advice: AiDemotionAdvice = match ctx.ai(query, format) {
-            Some(a) => a,
-            None => return,
+        let advice: AiDemotionAdvice = match serde_json::from_str(response) {
+            Ok(a) => a,
+            Err(_) => return,
         };
-
+        let team_indices = Self::collect_team_indices(main_idx, reserve_idx);
         Self::execute_advice(teams, coach_state, main_idx, reserve_idx, &team_indices, &advice, date);
     }
 

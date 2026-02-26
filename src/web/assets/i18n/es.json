@@ -307,5 +307,21 @@
     "decisions_movement": "Movimiento",
     "decisions_decision": "Decisi\u00f3n",
     "decisions_when": "Cu\u00e1ndo",
-    "no_decisions": "Sin decisiones registradas"
+    "no_decisions": "Sin decisiones registradas",
+    "ai_management": "Gesti\u00f3n de IA",
+    "ai_statistics": "Estad\u00edsticas",
+    "ai_total_requests": "Total de solicitudes",
+    "ai_providers_count": "Proveedores",
+    "ai_providers": "Proveedores",
+    "ai_add_provider": "A\u00f1adir proveedor",
+    "ai_remove_provider": "Eliminar",
+    "ai_no_providers": "No hay proveedores de IA configurados",
+    "ai_host": "Host",
+    "ai_port": "Puerto",
+    "ai_model": "Modelo",
+    "ai_requests": "Solicitudes",
+    "ai_errors": "Errores",
+    "ai_avg_response": "Resp. promedio",
+    "ai_cancel": "Cancelar",
+    "ai_save": "Guardar"
 }

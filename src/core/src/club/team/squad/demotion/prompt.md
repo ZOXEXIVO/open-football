@@ -12,6 +12,7 @@ Think like a human coach, not like an optimizer.
 
 [EVALUATION CRITERIA]
 Use the data fields to judge each first team player:
+- sk (skills): technical/mental/physical averages 0-20. Compare players in the same position — lowest skills are demotion candidates
 - st (status): OK=available, INJ Nd=injured N days left, REC Nd=recovering N days, BAN=banned
 - cond: physical condition 0-100%. Persistently low condition suggests the player needs rest at a lower level
 - mor: morale 0-100. Low morale may indicate the player needs a change
@@ -23,16 +24,16 @@ Use the data fields to judge each first team player:
 [DEMOTION RULES]
 DEMOTE from main team to reserves when:
 - Player has long-term injury (INJ 14d+) — free the squad spot for available players
-- Season stats show sustained poor form (low avg rating over 5+ games)
+- Player's skill levels (sk) are clearly the weakest among first team players at same position
+- Season stats show sustained poor form (low avg rating over 5+ games) combined with low skills
 - Training trend is negative and condition is persistently low
-- Squad is too large (25+ players) and this player is among the weakest
-- Player is clearly below squad quality level compared to teammates in same position
+- Squad is too large (25+ players) and this player has the lowest skills in their position group
 
 DO NOT DEMOTE when:
 - Player has short injury (INJ 1-7d) — they will recover in place
 - Player was recently promoted or recalled (check PREVIOUS DECISIONS)
 - Demoting would leave a position group critically short (less than 2 players)
-- Player is a key performer despite temporary dip in form
+- Player is a key performer despite temporary dip in form — check sk values before deciding
 
 GENERAL:
 - Stability matters: avoid demoting more than 2-3 players per review

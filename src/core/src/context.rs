@@ -1,14 +1,16 @@
 pub use chrono::prelude::*;
 
+use crate::ai::Ai;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
 use crate::country::CountryContext;
 use crate::league::LeagueContext;
-use crate::{ai_instance_enabled, ai_instance, TeamContext};
+use crate::TeamContext;
 
 #[derive(Clone)]
 pub struct GlobalContext<'gc> {
     pub simulation: SimulationContext,
+    pub ai: Ai,
     pub continent: Option<ContinentContext>,
     pub country: Option<CountryContext>,
     pub league: Option<LeagueContext<'gc>>,
@@ -21,9 +23,10 @@ pub struct GlobalContext<'gc> {
 }
 
 impl<'gc> GlobalContext<'gc> {
-    pub fn new(simulation_ctx: SimulationContext) -> Self {
+    pub fn new(simulation_ctx: SimulationContext, ai: Ai) -> Self {
         GlobalContext {
             simulation: simulation_ctx,
+            ai,
             continent: None,
             country: None,
             league: None,
@@ -91,15 +94,6 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn ai_enabled(&self) -> bool {
-        ai_instance_enabled()
-    }
-
-    pub fn ai<T: serde::de::DeserializeOwned>(&self, query: String, format: String) -> Option<T> {
-        let ai_request = ai_instance()?;
-        let response = ai_request.query_ai(query, format).ok()?;
-        serde_json::from_str(&response).ok()
-    }
 }
 
 #[derive(Clone)]
@@ -220,7 +214,7 @@ mod tests {
         let sim_ctx = SimulationContext::new(date);
 
         // Create a global context with the simulation context
-        let global_ctx = GlobalContext::new(sim_ctx.clone());
+        let global_ctx = GlobalContext::new(sim_ctx.clone(), Ai::new(false));
 
         // Test if the simulation context is set correctly
         assert_eq!(global_ctx.simulation.date, sim_ctx.date);

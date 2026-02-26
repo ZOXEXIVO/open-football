@@ -50,6 +50,16 @@ struct PlayerHistoryLlm {
 // ─── as_llm() struct ────────────────────────────────────────────────
 
 #[derive(Serialize)]
+struct PlayerSkillsLlm {
+    #[serde(rename = "tec")]
+    technical: f32,
+    #[serde(rename = "men")]
+    mental: f32,
+    #[serde(rename = "phy")]
+    physical: f32,
+}
+
+#[derive(Serialize)]
 struct PlayerLlm {
     id: u32,
     #[serde(rename = "age")]
@@ -58,6 +68,8 @@ struct PlayerLlm {
     positions: String,
     #[serde(rename = "ft")]
     preferred_foot: String,
+    #[serde(rename = "sk")]
+    skills: PlayerSkillsLlm,
     #[serde(rename = "cond")]
     condition_pct: u32,
     #[serde(rename = "mor")]
@@ -74,7 +86,7 @@ struct PlayerLlm {
     staff_opinion: String,
 }
 
-const PLAYER_LEGEND: &str = r#"{"id":"Player ID","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd|LST|LOA|REQ|UNH","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating","op":"Staff opinion:favored/liked/neutral/disliked/conflict + trust"}"#;
+const PLAYER_LEGEND: &str = r#"{"id":"Player ID","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","sk":"Skills avg 0-20:tec=technical,men=mental,phy=physical","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd|LST|LOA|REQ|UNH","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating","op":"Staff opinion:favored/liked/neutral/disliked/conflict + trust"}"#;
 
 // ─── as_internal_llm() struct ───────────────────────────────────────
 
@@ -233,6 +245,11 @@ impl Player {
             age,
             positions: pos,
             preferred_foot: self.preferred_foot_str().to_string(),
+            skills: PlayerSkillsLlm {
+                technical: (self.skills.technical.average() * 10.0).round() / 10.0,
+                mental: (self.skills.mental.average() * 10.0).round() / 10.0,
+                physical: (self.skills.physical.average() * 10.0).round() / 10.0,
+            },
             condition_pct: cond,
             morale_pct: morale,
             status,

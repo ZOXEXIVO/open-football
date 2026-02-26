@@ -6,10 +6,10 @@ use log::{debug, info};
 
 impl ContinentResult {
     pub(crate) fn update_continental_rankings(&self, data: &mut SimulatorData, _result: &mut SimulationResult) {
-        info!("📊 Updating continental rankings");
+        debug!("📊 Updating continental rankings");
 
         // Get continent from data
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         if let Some(continent) = data.continent_mut(continent_id) {
             // Update country coefficients based on club performances

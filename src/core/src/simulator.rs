@@ -1,50 +1,56 @@
+use crate::ai::{ai_instance_enabled, Ai, AiBatchProcessor};
+use crate::club::ai::apply_ai_responses;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::{Continent, ContinentResult};
 use crate::competitions::GlobalCompetitions;
-use crate::competitions::simulation;
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
-use crate::utils::Logging;
-use crate::{Player};
+use crate::Player;
 use chrono::{Duration, NaiveDateTime};
+use std::time::Instant;
 
 pub struct FootballSimulator;
 
 impl FootballSimulator {
-    pub fn simulate(data: &mut SimulatorData) -> SimulationResult {
+    pub async fn simulate(data: &mut SimulatorData) -> SimulationResult {
         let mut result = SimulationResult::new();
 
         let current_data = data.date;
+        let now = Instant::now();
 
-        Logging::estimate(
-            || {
-                let ctx = GlobalContext::new(SimulationContext::new(data.date));
+        let ai = Ai::new(ai_instance_enabled());
+        let ctx = GlobalContext::new(SimulationContext::new(data.date), ai);
 
-                let results: Vec<ContinentResult> = data
-                    .continents
-                    .iter_mut()
-                    .map(|continent| continent.simulate(ctx.with_continent(continent.id)))
-                    .collect();
+        // Phase A: Simulate (AI requests built, not executed)
+        let results: Vec<ContinentResult> = data
+            .continents
+            .iter_mut()
+            .map(|continent| continent.simulate(ctx.with_continent(continent.id)))
+            .collect();
 
-                for continent_result in results {
-                    continent_result.process(data, &mut result);
-                }
+        // Phase B: Collect & batch-execute all AI requests
+        let all_requests = ctx.ai.drain();
 
-                // Global competitions: assembly + simulation + phase transitions
-                let date = data.date.date();
-                data.global_competitions.check_tournament_assembly(date, &data.continents);
-                simulation::simulate_global_competitions(data, date);
-                data.global_competitions.check_phase_transitions();
+        if !all_requests.is_empty() {
+            let completed = AiBatchProcessor::execute(all_requests).await;
+            apply_ai_responses(completed, data);
+        }
 
-                data.next_date();
-            },
-            &format!("simulate date {}", current_data),
-        );
+        // Phase C: Process results
+        for continent_result in results {
+            continent_result.process(data, &mut result);
+        }
+
+        // Global competitions
+        crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
+
+        data.next_date();
+
+        log::debug!("simulate date {}, {}ms", current_data, now.elapsed().as_millis());
 
         result
     }
-
 }
 
 pub struct SimulatorData {

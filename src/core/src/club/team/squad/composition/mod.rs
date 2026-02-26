@@ -1,7 +1,6 @@
 use crate::club::player::player::Player;
 use crate::club::staff::staff::Staff;
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
-use crate::context::GlobalContext;
 use crate::Team;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
@@ -52,9 +51,22 @@ struct AiSquadMove {
 pub struct SquadComposition;
 
 impl SquadComposition {
-    /// Weekly AI-driven squad review (demotions, recalls, youth promotions).
-    pub fn manage(
-        ctx: &GlobalContext<'_>,
+    /// Build AI prompt without calling AI (read-only teams).
+    pub fn prepare_request(
+        teams: &[Team],
+        main_idx: usize,
+        reserve_idx: Option<usize>,
+        youth_idx: Option<usize>,
+    ) -> (String, String) {
+        let team_indices = Self::collect_team_indices(main_idx, reserve_idx, youth_idx);
+        let query = Self::build_prompt(teams, main_idx, &team_indices);
+        let format = Self::response_format();
+        (query, format)
+    }
+
+    /// Apply raw AI response string to mutable teams.
+    pub fn execute_response(
+        response: &str,
         teams: &mut [Team],
         coach_state: &mut Option<CoachDecisionState>,
         main_idx: usize,
@@ -62,19 +74,11 @@ impl SquadComposition {
         youth_idx: Option<usize>,
         date: NaiveDate,
     ) {
-        if !ctx.ai_enabled() {
-            return;
-        }
-
-        let team_indices = Self::collect_team_indices(main_idx, reserve_idx, youth_idx);
-        let query = Self::build_prompt(teams, main_idx, &team_indices);
-        let format = Self::response_format();
-
-        let advice: AiSquadAdvice = match ctx.ai(query, format) {
-            Some(a) => a,
-            None => return,
+        let advice: AiSquadAdvice = match serde_json::from_str(response) {
+            Ok(a) => a,
+            Err(_) => return,
         };
-
+        let team_indices = Self::collect_team_indices(main_idx, reserve_idx, youth_idx);
         Self::execute_advice(teams, coach_state, main_idx, &team_indices, &advice, date);
     }
 

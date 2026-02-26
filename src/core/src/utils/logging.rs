@@ -21,4 +21,19 @@ impl Logging {
 
         result
     }
+
+    pub async fn estimate_result_async<T, Fut>(action: Fut, message: &str) -> T
+    where
+        Fut: std::future::Future<Output = T>,
+    {
+        let now = std::time::Instant::now();
+        let result = action.await;
+        let duration_ms = now.elapsed().as_millis() as u32;
+
+        if duration_ms > MAX_DURATION_THRESHOLD_MS {
+            warn!("{}, {}ms", message, duration_ms);
+        }
+
+        result
+    }
 }

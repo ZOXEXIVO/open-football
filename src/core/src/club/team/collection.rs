@@ -1,3 +1,4 @@
+use crate::ai::PendingAiRequest;
 use crate::club::team::coach_perception::{CoachDecisionState, date_to_week};
 use crate::club::team::squad::{SquadComposition, SquadDemotion, SquadManager, TransferListManager, YouthPromotion};
 use crate::context::GlobalContext;
@@ -53,7 +54,7 @@ impl TeamCollection {
 
     // ─── Coach state management ──────────────────────────────────────
 
-    fn ensure_coach_state(&mut self, date: NaiveDate) {
+    pub fn ensure_coach_state(&mut self, date: NaiveDate) {
         let main_team = match self.teams.iter().find(|t| t.team_type == TeamType::Main) {
             Some(t) => t,
             None => return,
@@ -77,7 +78,7 @@ impl TeamCollection {
     }
 
     /// Updates impressions via Option::take(). Decays emotional heat once per cycle.
-    fn update_all_impressions(&mut self, date: NaiveDate) {
+    pub fn update_all_impressions(&mut self, date: NaiveDate) {
         let mut state = match self.coach_state.take() {
             Some(s) => s,
             None => return,
@@ -95,100 +96,103 @@ impl TeamCollection {
         self.coach_state = Some(state);
     }
 
-    // ─── Squad management (delegates to SquadManager) ────────────────
-
-    pub fn manage_squad_composition(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
+    /// Build pending AI requests for all squad management operations.
+    /// Called during simulate() phase; actual AI calls happen in batch later.
+    /// Each request carries its own handler closure — adding new request types
+    /// only requires changes here.
+    pub fn prepare_ai_requests(&self, date: NaiveDate, club_id: u32) -> Vec<PendingAiRequest> {
         if self.teams.len() < 2 {
-            return;
+            return Vec::new();
         }
 
         let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
             Some(idx) => idx,
-            None => return,
+            None => return Vec::new(),
         };
 
         let reserve_idx = self.find_reserve_team_index();
         let youth_idx = self.find_youth_team_index();
 
-        self.ensure_coach_state(date);
-        self.update_all_impressions(date);
+        let mut requests = Vec::new();
 
-        SquadComposition::manage(
-            ctx,
-            &mut self.teams,
-            &mut self.coach_state,
-            main_idx,
-            reserve_idx,
-            youth_idx,
-            date,
-        );
-    }
-
-    pub fn manage_demotions(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
-        if self.teams.len() < 2 {
-            return;
+        // Squad composition (priority 0 — runs first)
+        {
+            let (query, format) = SquadComposition::prepare_request(
+                &self.teams, main_idx, reserve_idx, youth_idx,
+            );
+            requests.push(PendingAiRequest {
+                club_id,
+                priority: 0,
+                query,
+                format,
+                handler: Box::new(move |response, data| {
+                    let club = data.club_mut(club_id).unwrap();
+                    SquadComposition::execute_response(
+                        response, &mut club.teams.teams, &mut club.teams.coach_state,
+                        main_idx, reserve_idx, youth_idx, date,
+                    );
+                }),
+            });
         }
 
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
-            Some(idx) => idx,
-            None => return,
-        };
-
-        let reserve_idx = self.find_reserve_team_index();
-
-        self.ensure_coach_state(date);
-        self.update_all_impressions(date);
-
-        SquadDemotion::manage(
-            ctx,
-            &mut self.teams,
-            &mut self.coach_state,
-            main_idx,
-            reserve_idx,
-            date,
-        );
-    }
-
-    pub fn manage_promotions(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
-        if self.teams.len() < 2 {
-            return;
+        // Demotion (priority 1)
+        if let Some((query, format)) = SquadDemotion::prepare_request(
+            &self.teams, main_idx, reserve_idx,
+        ) {
+            requests.push(PendingAiRequest {
+                club_id,
+                priority: 1,
+                query,
+                format,
+                handler: Box::new(move |response, data| {
+                    let club = data.club_mut(club_id).unwrap();
+                    SquadDemotion::execute_response(
+                        response, &mut club.teams.teams, &mut club.teams.coach_state,
+                        main_idx, reserve_idx, date,
+                    );
+                }),
+            });
         }
 
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
-            Some(idx) => idx,
-            None => return,
-        };
+        // Promotion (priority 2)
+        if let Some((query, format)) = YouthPromotion::prepare_request(
+            &self.teams, main_idx, youth_idx,
+        ) {
+            requests.push(PendingAiRequest {
+                club_id,
+                priority: 2,
+                query,
+                format,
+                handler: Box::new(move |response, data| {
+                    let club = data.club_mut(club_id).unwrap();
+                    YouthPromotion::execute_response(
+                        response, &mut club.teams.teams, &mut club.teams.coach_state,
+                        main_idx, youth_idx, date,
+                    );
+                }),
+            });
+        }
 
-        let youth_idx = self.find_youth_team_index();
+        // Transfer listing (priority 3 — runs last)
+        {
+            let (query, format) = TransferListManager::prepare_request(
+                &self.teams, main_idx, date,
+            );
+            requests.push(PendingAiRequest {
+                club_id,
+                priority: 3,
+                query,
+                format,
+                handler: Box::new(move |response, data| {
+                    let club = data.club_mut(club_id).unwrap();
+                    TransferListManager::execute_response(
+                        response, &mut club.teams.teams, main_idx, date,
+                    );
+                }),
+            });
+        }
 
-        self.ensure_coach_state(date);
-        self.update_all_impressions(date);
-
-        YouthPromotion::manage(
-            ctx,
-            &mut self.teams,
-            &mut self.coach_state,
-            main_idx,
-            youth_idx,
-            date,
-        );
-    }
-
-    pub fn manage_transfer_lists(&mut self, ctx: &GlobalContext<'_>, date: NaiveDate) {
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
-            Some(idx) => idx,
-            None => return,
-        };
-
-        self.ensure_coach_state(date);
-
-        TransferListManager::manage(
-            ctx,
-            &mut self.teams,
-            &self.coach_state,
-            main_idx,
-            date,
-        );
+        requests
     }
 
     /// Daily critical squad moves: immediate demotions and ability-based swaps

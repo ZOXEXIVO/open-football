@@ -12,6 +12,7 @@ Think like a human, not like an optimizer.
 
 [EVALUATION CRITERIA]
 Use the data fields to judge each player:
+- sk (skills): technical/mental/physical averages 0-20. Use to compare player quality across teams — higher sk = stronger player
 - st (status): OK=available, INJ Nd=injured N days left, REC Nd=recovering N days, BAN=banned
 - cond: physical condition 0-100%. Below 40% = exhausted, 40-65% = needs rest, 65-85% = acceptable, 85%+ = match fit
 - mor: morale 0-100. Low morale players may need a change of environment
@@ -22,19 +23,19 @@ Use the data fields to judge each player:
 [MOVE RULES]
 DEMOTE to reserve/youth when:
 - Player has long-term injury (INJ 14d+) — let them recover without blocking a squad spot
+- Player's skills (sk) are clearly below first team standard compared to teammates in same position
 - Condition persistently low and not improving between reviews
 - Season stats show poor form (low avg rating over many games)
-- Player is young and not getting enough game time at current level
 
 RECALL to main team when:
-- Previously demoted player is now status OK with good condition (70%+)
-- Reserve/youth player shows strong season stats or positive training trend
+- Previously demoted player is now status OK with good condition (70%+) AND skills competitive with first team
+- Reserve/youth player's skills (sk) are now competitive with main team players in same position
 - Main team has positional gaps that this player can fill
 - Injury that caused demotion has healed (was INJ, now OK or REC with few days left)
 
 PROMOTE youth when:
-- Exceptional training trend and decent season stats at youth level
-- Main team needs cover in their position
+- Skills (sk) are competitive with weakest first team players in same position
+- Positive training trend confirms skill growth is real, not a fluke
 
 GENERAL:
 - Do NOT leave recovered players stranded in reserves — check PREVIOUS MOVES and bring back players whose demotion reason no longer applies

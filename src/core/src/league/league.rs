@@ -62,7 +62,7 @@ impl League {
         let league_name = self.name.clone();
         let current_date = ctx.simulation.date.date();
 
-        info!("⚽ Simulating league: {} (Reputation: {})", league_name, self.reputation);
+        debug!("⚽ Simulating league: {} (Reputation: {})", league_name, self.reputation);
 
         // Phase 1: Pre-match preparations
         self.prepare_matchday(&ctx, clubs);
@@ -89,7 +89,7 @@ impl League {
         if schedule_result.generated {
             self.table = LeagueTable::new(&league_teams);
             self.matches = MatchStorage::new();
-            info!("📊 League table reset for new season: {}", self.name);
+            debug!("📊 League table reset for new season: {}", self.name);
         }
 
         // Phase 4: Match execution with enhanced dynamics

@@ -1,7 +1,5 @@
 use crate::club::player::player::Player;
 use crate::club::staff::staff::Staff;
-use crate::club::team::coach_perception::CoachDecisionState;
-use crate::context::GlobalContext;
 use crate::shared::{Currency, CurrencyValue};
 use crate::{PlayerStatusType, Team, TransferItem};
 use chrono::NaiveDate;
@@ -63,27 +61,30 @@ struct TeamPlayersLlm {
 pub struct TransferListManager;
 
 impl TransferListManager {
-    /// AI-only transfer list management. Skips entirely if AI is unavailable.
-    pub fn manage(
-        ctx: &GlobalContext<'_>,
-        teams: &mut [Team],
-        _coach_state: &Option<CoachDecisionState>,
+    /// Build AI prompt without calling AI (read-only teams).
+    pub fn prepare_request(
+        teams: &[Team],
         main_idx: usize,
         date: NaiveDate,
-    ) {
-        if !ctx.ai_enabled() {
-            return;
-        }
-
+    ) -> (String, String) {
         let team_indices = Self::collect_team_indices(teams);
         let query = Self::build_prompt(teams, main_idx, &team_indices, date);
         let format = Self::response_format();
+        (query, format)
+    }
 
-        let advice: AiTransferListAdvice = match ctx.ai(query, format) {
-            Some(a) => a,
-            None => return,
+    /// Apply raw AI response string to mutable teams.
+    pub fn execute_response(
+        response: &str,
+        teams: &mut [Team],
+        main_idx: usize,
+        date: NaiveDate,
+    ) {
+        let advice: AiTransferListAdvice = match serde_json::from_str(response) {
+            Ok(a) => a,
+            Err(_) => return,
         };
-
+        let team_indices = Self::collect_team_indices(teams);
         Self::execute_advice(teams, main_idx, &team_indices, &advice, date);
     }
 

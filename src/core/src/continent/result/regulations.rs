@@ -5,9 +5,9 @@ use log::{debug, info};
 
 impl ContinentResult {
     pub(crate) fn update_continental_regulations(&self, data: &mut SimulatorData, date: NaiveDate) {
-        info!("📋 Updating continental regulations");
+        debug!("📋 Updating continental regulations");
 
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         if let Some(continent) = data.continent_mut(continent_id) {
             // Financial Fair Play adjustments

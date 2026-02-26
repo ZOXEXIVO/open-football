@@ -8,7 +8,7 @@ impl ContinentResult {
     pub(crate) fn process_continental_awards(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {
         debug!("🏆 Processing continental awards");
 
-        let continent_id = self.get_continent_id(data);
+        let continent_id = self.get_continent_id();
 
         if let Some(continent) = data.continent(continent_id) {
             // Player of the Year
