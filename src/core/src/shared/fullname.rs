@@ -1,6 +1,6 @@
 use std::fmt::{Display, Formatter, Result};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FullName {
     pub first_name: String,
     pub last_name: String,

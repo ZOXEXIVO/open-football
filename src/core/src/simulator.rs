@@ -52,6 +52,7 @@ impl FootballSimulator {
     }
 }
 
+#[derive(Clone)]
 pub struct SimulatorData {
     pub continents: Vec<Continent>,
 

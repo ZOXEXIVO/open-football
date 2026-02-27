@@ -1,7 +1,7 @@
 use crate::context::SimulationContext;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StaffPosition {
     Free,
     Coach,
@@ -27,13 +27,13 @@ pub enum StaffPosition {
     CaretakerManager,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum StaffStatus {
     Active,
     ExpiredContract,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StaffClubContract {
     pub expired: NaiveDate,
     pub salary: u32,

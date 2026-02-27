@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 const PICKUP_DISTANCE_THRESHOLD: f32 = 1.0; // Maximum distance to pick up the ball
 const PICKUP_SUCCESS_PROBABILITY: f32 = 0.9; // Probability of successfully picking up the ball
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPickingUpState {}
 
 impl StateProcessingHandler for GoalkeeperPickingUpState {

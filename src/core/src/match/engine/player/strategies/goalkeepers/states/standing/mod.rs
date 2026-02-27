@@ -11,7 +11,7 @@ const CLOSE_DANGER_DISTANCE: f32 = 80.0;
 const MEDIUM_THREAT_DISTANCE: f32 = 150.0;
 const FAR_THREAT_DISTANCE: f32 = 250.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperStandingState {}
 
 impl StateProcessingHandler for GoalkeeperStandingState {

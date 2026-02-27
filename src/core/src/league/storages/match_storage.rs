@@ -1,7 +1,7 @@
 use crate::r#match::MatchResult;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchStorage {
     results: HashMap<String, MatchResult>,
 }

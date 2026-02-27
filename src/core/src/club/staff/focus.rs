@@ -1,4 +1,4 @@
-﻿#[derive(Debug)]
+﻿#[derive(Debug, Clone)]
 pub struct CoachFocus {
     pub technical_focus: Vec<TechnicalFocusType>,
     pub mental_focus: Vec<MentalFocusType>,

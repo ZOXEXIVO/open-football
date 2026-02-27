@@ -3,7 +3,7 @@ use crate::{ChangeType, Player, PlayerPositionType, PlayerTraining, Relationship
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TeamTraining;
 
 impl TeamTraining {
@@ -536,7 +536,7 @@ impl WeeklyTrainingPlan {
 
 // ============== Training Effects System ==============
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingEffects {
     pub physical_gains: PhysicalGains,
     pub technical_gains: TechnicalGains,
@@ -546,7 +546,7 @@ pub struct TrainingEffects {
     pub morale_change: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PhysicalGains {
     pub stamina: f32,
     pub strength: f32,
@@ -557,7 +557,7 @@ pub struct PhysicalGains {
     pub natural_fitness: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TechnicalGains {
     pub first_touch: f32,
     pub passing: f32,
@@ -569,7 +569,7 @@ pub struct TechnicalGains {
     pub technique: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct MentalGains {
     pub concentration: f32,
     pub decisions: f32,
@@ -582,7 +582,7 @@ pub struct MentalGains {
 
 // ============== Individual Player Training Plans ==============
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct IndividualTrainingPlan {
     pub player_id: u32,
     pub focus_areas: Vec<TrainingFocus>,
@@ -657,7 +657,7 @@ pub enum RotationPreference {
 
 // ============== Training Ground Facilities ==============
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingFacilities {
     pub quality: FacilityQuality,
     pub gym_quality: FacilityQuality,
@@ -736,12 +736,12 @@ impl TrainingFacilities {
 
 // ============== Training Load Management ==============
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingLoadManager {
     pub player_loads: HashMap<u32, PlayerTrainingLoad>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerTrainingLoad {
     pub acute_load: f32,        // Last 7 days
     pub chronic_load: f32,      // Last 28 days

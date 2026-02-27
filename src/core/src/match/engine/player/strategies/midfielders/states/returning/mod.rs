@@ -7,7 +7,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderReturningState {}
 
 impl StateProcessingHandler for MidfielderReturningState {

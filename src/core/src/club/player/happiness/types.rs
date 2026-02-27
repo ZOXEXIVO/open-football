@@ -1,11 +1,11 @@
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerHappiness {
     pub morale: f32,
     pub factors: HappinessFactors,
     pub recent_events: Vec<HappinessEvent>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct HappinessFactors {
     pub playing_time: f32,
     pub salary_satisfaction: f32,
@@ -119,13 +119,13 @@ impl PlayerHappiness {
 }
 
 /// Kept for backward compatibility
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PositiveHappiness {
     pub description: String,
 }
 
 /// Kept for backward compatibility
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NegativeHappiness {
     pub description: String,
 }

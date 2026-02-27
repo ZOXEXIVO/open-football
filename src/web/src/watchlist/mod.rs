@@ -8,9 +8,9 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::Player;
 use core::PlayerStatusType;
+use std::sync::Arc;
 use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
-use std::sync::Arc;
 
 pub fn watchlist_routes() -> axum::Router<GameAppData> {
     routes::routes()
@@ -143,8 +143,9 @@ pub async fn watchlist_add_action(
     let data = Arc::clone(&state.data);
     let mut guard = data.write().await;
 
-    if let Some(ref mut simulator_data) = *guard {
+    if let Some(ref mut arc_data) = *guard {
         let player_id = route_params.player_id;
+        let simulator_data = Arc::make_mut(arc_data);
         if !simulator_data.watchlist.contains(&player_id) {
             simulator_data.watchlist.push(player_id);
         }
@@ -160,7 +161,8 @@ pub async fn watchlist_remove_action(
     let data = Arc::clone(&state.data);
     let mut guard = data.write().await;
 
-    if let Some(ref mut simulator_data) = *guard {
+    if let Some(ref mut arc_data) = *guard {
+        let simulator_data = Arc::make_mut(arc_data);
         simulator_data.watchlist.retain(|&id| id != route_params.player_id);
     }
 

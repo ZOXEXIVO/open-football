@@ -3,7 +3,7 @@ use crate::league::LeagueTableResult;
 use crate::r#match::MatchResult;
 use std::cmp::Ordering;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueTable {
     pub rows: Vec<LeagueTableRow>,
 }

@@ -3,7 +3,7 @@ use crate::r#match::player::strategies::processor::{StateProcessingContext, Stat
 use crate::r#match::{ConditionContext};
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CommonInjuredState {}
 
 impl StateProcessingHandler for CommonInjuredState {

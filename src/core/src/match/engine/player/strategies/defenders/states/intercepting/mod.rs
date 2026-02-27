@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderInterceptingState {}
 
 impl StateProcessingHandler for DefenderInterceptingState {

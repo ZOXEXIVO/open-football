@@ -12,7 +12,7 @@ use rand::RngExt;
 const TACKLE_DISTANCE_THRESHOLD: f32 = 5.0; // Maximum distance to attempt a tackle (in meters)
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}
 
 impl StateProcessingHandler for MidfielderTacklingState {

@@ -16,6 +16,7 @@ use chrono::{Datelike, NaiveDate};
 use log::info;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct NationalTeam {
     pub country_id: u32,
     pub country_name: String,
@@ -28,6 +29,7 @@ pub struct NationalTeam {
     pub schedule: Vec<NationalTeamFixture>,
 }
 
+#[derive(Clone)]
 pub struct NationalTeamStaffMember {
     pub first_name: String,
     pub last_name: String,
@@ -57,12 +59,14 @@ impl NationalTeamStaffRole {
     }
 }
 
+#[derive(Clone)]
 pub struct NationalSquadPlayer {
     pub player_id: u32,
     pub club_id: u32,
     pub team_id: u32,
 }
 
+#[derive(Clone)]
 pub struct NationalTeamFixture {
     pub date: NaiveDate,
     pub opponent_country_id: u32,

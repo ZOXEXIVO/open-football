@@ -1,7 +1,7 @@
 use crate::club::{BoardMood, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubBoard {
     pub mood: BoardMood,
     pub director: Option<StaffClubContract>,

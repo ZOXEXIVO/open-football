@@ -1,7 +1,7 @@
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::{MatchHistory, PlayerCollection, StaffCollection, Tactics, Team, TeamReputation, TeamType, TrainingSchedule, Transfers};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct TeamBuilder {
     id: Option<u32>,
     league_id: Option<Option<u32>>,

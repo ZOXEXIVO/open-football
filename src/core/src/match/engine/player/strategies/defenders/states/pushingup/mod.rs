@@ -13,7 +13,7 @@ const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 const MAX_PUSH_UP_DISTANCE: f32 = 0.7;
 const PUSH_UP_HYSTERESIS: f32 = 0.05; // Hysteresis to prevent rapid state changes
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderPushingUpState {}
 
 impl StateProcessingHandler for DefenderPushingUpState {

@@ -9,7 +9,7 @@
     <link href="/css/flags.css" rel="stylesheet">
     <link href="/css/font.min.css" rel="stylesheet">
     <link href="/css/styles.min.css?v={{ css_version }}" rel="stylesheet">
-    <script src="/js/htmx.min.js"></script>
+
 </head>
 <body>
     <div class="container-fluid">
@@ -75,11 +75,8 @@
                                         <div class="fm-date-main" id="date-up"></div>
                                         <div class="fm-date-sub" id="date-down"></div>
                                     </div>
-                                    <div class="fm-process-btn"
-                                         hx-post="/api/game/process"
-                                         hx-swap="none"
-                                         hx-disabled-elt="this"
-                                         onclick="if(event.shiftKey){this.setAttribute('hx-post','/api/game/process?days=30')}else{this.setAttribute('hx-post','/api/game/process')};htmx.process(this)">
+                                    <div class="fm-process-btn" id="process-btn"
+                                         onclick="startProcess(event)">
                                         <span class="fm-process-label">{{ i18n.t("process") }}</span>
                                         <div class="spinner-wrapper" id="process-spinner">
                                             <div class="spinner"></div>
@@ -117,7 +114,6 @@
             }
         }
         updateDate();
-        document.body.addEventListener('htmx:afterRequest', function() { updateDate(); });
 
         document.querySelectorAll('.fm-lang-option').forEach(function(el) {
             var lang = el.dataset.lang;
@@ -137,6 +133,53 @@
                 if (!dd.contains(e.target)) dd.classList.remove('fm-lang-open');
             });
         })();
+
+        var _pollTimer = null;
+
+        function setProcessing(active) {
+            var btn = document.getElementById('process-btn');
+            if (!btn) return;
+            if (active) {
+                btn.classList.add('fm-processing');
+                if (!_pollTimer) {
+                    _pollTimer = setInterval(checkProcessingStatus, 1000);
+                }
+            } else {
+                btn.classList.remove('fm-processing');
+                if (_pollTimer) {
+                    clearInterval(_pollTimer);
+                    _pollTimer = null;
+                }
+            }
+        }
+
+        async function checkProcessingStatus() {
+            try {
+                var res = await fetch('/api/game/processing');
+                var data = await res.json();
+                if (!data.processing) {
+                    setProcessing(false);
+                    updateDate();
+                    window.location.reload();
+                }
+            } catch(e) {}
+        }
+
+        function startProcess(event) {
+            var btn = document.getElementById('process-btn');
+            if (!btn || btn.classList.contains('fm-processing')) return;
+            var url = event.shiftKey ? '/api/game/process?days=30' : '/api/game/process';
+            setProcessing(true);
+            fetch(url, { method: 'POST' }).catch(function() {});
+        }
+
+        // Check if already processing on page load
+        fetch('/api/game/processing')
+            .then(function(res) { return res.json(); })
+            .then(function(data) {
+                if (data.processing) setProcessing(true);
+            })
+            .catch(function() {});
     </script>
     {% block scripts %}{% endblock %}
 

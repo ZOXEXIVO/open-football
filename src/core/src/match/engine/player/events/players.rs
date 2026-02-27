@@ -90,7 +90,7 @@ enum TrajectoryType {
     Chip,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PlayerEvent {
     Goal(u32, bool),
     Assist(u32),

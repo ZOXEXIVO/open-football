@@ -3,7 +3,7 @@ use crate::{Player, PlayerValueCalculator};
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransferWindowManager {
     pub windows: HashMap<u32, TransferWindow>, // Keyed by country_id
 }

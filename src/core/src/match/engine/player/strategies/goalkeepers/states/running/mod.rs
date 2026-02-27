@@ -6,7 +6,7 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChan
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperRunningState {}
 
 impl StateProcessingHandler for GoalkeeperRunningState {

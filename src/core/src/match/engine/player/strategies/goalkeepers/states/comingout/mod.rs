@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 const CLAIM_BALL_DISTANCE: f32 = 15.0;
 const MAX_COMING_OUT_DISTANCE: f32 = 120.0; // Maximum distance to pursue ball
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperComingOutState {}
 
 impl StateProcessingHandler for GoalkeeperComingOutState {

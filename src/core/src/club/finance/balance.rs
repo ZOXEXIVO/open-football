@@ -4,7 +4,7 @@ use crate::{ClubFinanceResult, ClubFinancialBalanceHistory, ClubSponsorship, Clu
 use chrono::NaiveDate;
 use log::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubFinances {
     pub balance: ClubFinancialBalance,
     pub history: ClubFinancialBalanceHistory,

@@ -1,12 +1,12 @@
 use crate::r#match::{MatchField, PlayerSide};
 use nalgebra::Vector3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerFieldData {
     pub items: Vec<PlayerFieldMetadata>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerFieldMetadata {
     pub player_id: u32,
     pub side: PlayerSide,

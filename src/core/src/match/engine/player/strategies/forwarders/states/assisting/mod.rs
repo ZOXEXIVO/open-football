@@ -3,7 +3,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardAssistingState {}
 
 impl StateProcessingHandler for ForwardAssistingState {

@@ -5,7 +5,7 @@ use crate::r#match::Score;
 use chrono::{Datelike, NaiveDate, NaiveDateTime};
 use log::error;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct Schedule {
     pub tours: Vec<ScheduleTour>,
 }

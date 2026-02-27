@@ -10,6 +10,7 @@ use crate::{Country, NationalTeam};
 use log::{debug, info};
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct Continent {
     pub id: u32,
     pub name: String,

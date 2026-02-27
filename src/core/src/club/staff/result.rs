@@ -17,7 +17,7 @@ impl StaffCollectionResult {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ScoutingReport {
     pub player_id: u32,
     pub assessed_ability: u8,

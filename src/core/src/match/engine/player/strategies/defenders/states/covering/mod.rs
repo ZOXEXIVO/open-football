@@ -16,7 +16,7 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle
 const MIN_STATE_TIME_DEFAULT: u64 = 20; // Reduced - faster reactions
 const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to threats
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {

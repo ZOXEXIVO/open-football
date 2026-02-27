@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 use rand::RngExt;
 
 /// Goalkeeper clearing state - emergency clearance of the ball away from danger
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperClearingState {}
 
 impl StateProcessingHandler for GoalkeeperClearingState {

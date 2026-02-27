@@ -7,7 +7,7 @@ use crate::{PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, Pl
 use chrono::NaiveDate;
 
 // Builder for Player
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PlayerBuilder {
     id: Option<u32>,
     full_name: Option<FullName>,

@@ -1,11 +1,11 @@
 use chrono::NaiveDate;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerDecisionHistory {
     pub items: Vec<PlayerDecision>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerDecision {
     pub date: NaiveDate,
     pub movement: String,

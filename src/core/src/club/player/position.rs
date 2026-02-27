@@ -138,7 +138,7 @@ impl PlayerPositionType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerPositions {
     pub positions: Vec<PlayerPosition>,
 }
@@ -188,7 +188,7 @@ impl PlayerPositions {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerPosition {
     pub position: PlayerPositionType,
     pub level: u8,

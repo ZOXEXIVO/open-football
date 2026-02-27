@@ -10,7 +10,7 @@ use nalgebra::Vector3;
 const MAX_DIVE_TIME: f32 = 1.5; // Maximum time to stay in diving state (in seconds)
 const BALL_CLAIM_DISTANCE: f32 = 4.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperDivingState {}
 
 impl StateProcessingHandler for GoalkeeperDivingState {

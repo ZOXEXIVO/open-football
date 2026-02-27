@@ -17,6 +17,7 @@ Use the data fields to judge each player:
 - cond: physical condition 0-100%. Below 40% = exhausted, 40-65% = needs rest, 65-85% = acceptable, 85%+ = match fit
 - mor: morale 0-100. Low morale players may need a change of environment
 - ss: season performance (goals, assists, avg rating). Underperformers may benefit from lower level; standouts deserve promotion
+- fs: friendly match performance (goals, assists, avg rating). Use as extra signal — strong friendly form suggests readiness; null means no friendly appearances
 - tt: training trend. Positive = improving, negative = declining
 - op: your personal relationship with player. May influence decisions
 

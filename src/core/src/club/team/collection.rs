@@ -6,7 +6,7 @@ use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TeamCollection {
     pub teams: Vec<Team>,
     pub coach_state: Option<CoachDecisionState>,

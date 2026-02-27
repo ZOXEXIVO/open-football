@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 
 const CROSS_EXECUTION_TIME: u64 = 5;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardCrossingState {}
 
 impl StateProcessingHandler for ForwardCrossingState {

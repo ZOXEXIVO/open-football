@@ -316,7 +316,7 @@ impl PlayerImpression {
 
 // ─── CoachDecisionState ──────────────────────────────────────────────
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoachDecisionState {
     pub profile: CoachProfile,
     pub impressions: HashMap<u32, PlayerImpression>,

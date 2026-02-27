@@ -219,7 +219,7 @@ impl TacticalSquadAnalyzer {
 }
 
 /// Analysis of squad composition
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SquadComposition {
     pub goalkeeper_quality: Vec<f32>,
     pub defender_quality: Vec<f32>,
@@ -285,7 +285,7 @@ impl SquadComposition {
 }
 
 /// Coach tactical preferences
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CoachPreferences {
     pub tactical_knowledge: u8,
     pub attacking_preference: u8,

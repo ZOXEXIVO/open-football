@@ -5,7 +5,7 @@ use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperDistributingState {}
 
 impl StateProcessingHandler for GoalkeeperDistributingState {

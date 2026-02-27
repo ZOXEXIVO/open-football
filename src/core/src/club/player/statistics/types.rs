@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use crate::league::Season;
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PlayerStatistics {
     pub played: u16,
     pub played_subs: u16,
@@ -23,12 +23,12 @@ pub struct PlayerStatistics {
     pub clean_sheets: u16,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistory {
     pub items: Vec<PlayerStatisticsHistoryItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistoryItem {
     pub season: Season,
     pub team_name: String,

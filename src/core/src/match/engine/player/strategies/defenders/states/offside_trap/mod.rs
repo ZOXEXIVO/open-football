@@ -7,7 +7,7 @@ use rand::RngExt;
 const OFFSIDE_TRAP_DISTANCE: f32 = 5.0; // Distance to move forward to set the trap
 const OFFSIDE_TRAP_SPEED_MULTIPLIER: f32 = 1.2; // Speed multiplier when executing the trap
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderOffsideTrapState {}
 
 impl StateProcessingHandler for DefenderOffsideTrapState {

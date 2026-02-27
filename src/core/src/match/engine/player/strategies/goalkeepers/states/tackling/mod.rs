@@ -13,7 +13,7 @@ const TACKLE_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt a tac
 const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.7; // Base chance of successful tackle for goalkeeper
 const FOUL_CHANCE_BASE: f32 = 0.1; // Base chance of committing a foul for goalkeeper
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperTacklingState {}
 
 impl StateProcessingHandler for GoalkeeperTacklingState {

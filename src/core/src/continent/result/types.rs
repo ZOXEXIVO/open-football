@@ -2,7 +2,7 @@ use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalRanki
 use crate::transfers::CompletedTransfer;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContinentalCompetitionResults {
     pub champions_league_results: Option<Vec<ContinentalMatchResult>>,
     pub europa_league_results: Option<Vec<ContinentalMatchResult>>,

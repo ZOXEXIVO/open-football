@@ -7,7 +7,7 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardWalkingState {}
 
 impl StateProcessingHandler for ForwardWalkingState {

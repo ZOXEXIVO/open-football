@@ -11,7 +11,7 @@ const MAX_PRESS_DISTANCE_FROM_START: f32 = 200.0;
 /// Ball must be within this range to keep pressing
 const MAX_PRESS_BALL_DISTANCE: f32 = 120.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardPressingState {}
 
 impl StateProcessingHandler for ForwardPressingState {

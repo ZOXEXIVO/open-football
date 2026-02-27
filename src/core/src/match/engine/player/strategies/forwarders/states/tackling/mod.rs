@@ -15,7 +15,7 @@ const FOUL_CHANCE_BASE: f32 = 0.15; // Base chance of committing a foul
 const CHASE_DISTANCE_THRESHOLD: f32 = 100.0; // Maximum distance to chase for tackle
 const PRESSURE_DISTANCE: f32 = 20.0; // Distance to apply pressure without tackling
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardTacklingState {}
 
 impl StateProcessingHandler for ForwardTacklingState {

@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderInterceptingState {}
 
 impl StateProcessingHandler for MidfielderInterceptingState {

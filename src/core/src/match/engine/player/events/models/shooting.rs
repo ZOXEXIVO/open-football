@@ -1,7 +1,7 @@
 use crate::r#match::StateProcessingContext;
 use nalgebra::Vector3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ShootingEventContext {
     pub from_player_id: u32,
     pub target: Vector3<f32>,

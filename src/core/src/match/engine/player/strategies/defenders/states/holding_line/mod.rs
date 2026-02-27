@@ -12,7 +12,7 @@ const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 80.0; // Distance to scan for dangerous
 const DANGEROUS_RUN_SPEED: f32 = 2.5; // Minimum speed to consider a dangerous run
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Minimum alignment toward goal
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {

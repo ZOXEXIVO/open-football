@@ -2,7 +2,7 @@ use crate::context::SimulationContext;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 use chrono::NaiveDateTime;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ContractType {
     PartTime,
     FullTime,
@@ -12,7 +12,7 @@ pub enum ContractType {
     Loan,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PlayerSquadStatus {
     Invalid,
     NotYetSet,
@@ -26,14 +26,14 @@ pub enum PlayerSquadStatus {
     SquadStatusCount,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PlayerTransferStatus {
     TransferListed,
     LoadListed,
     TransferAndLoadListed,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerClubContract {
     pub shirt_number: Option<u8>,
 
@@ -112,7 +112,7 @@ impl PlayerClubContract {
 }
 
 // Bonuses
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ContractBonusType {
     AppearanceFee,
     GoalFee,
@@ -125,7 +125,7 @@ pub enum ContractBonusType {
     UnusedSubstitutionFee,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContractBonus {
     pub value: i32,
     pub bonus_type: ContractBonusType,
@@ -138,7 +138,7 @@ impl ContractBonus {
 }
 
 // Clauses
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ContractClauseType {
     MinimumFeeRelease,
     RelegationFeeRelease,
@@ -162,7 +162,7 @@ pub enum ContractClauseType {
     OptionalContractExtensionByClub,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ContractClause {
     pub value: i32,
     pub bonus_type: ContractClauseType,

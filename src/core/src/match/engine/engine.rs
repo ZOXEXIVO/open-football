@@ -655,7 +655,7 @@ impl MatchTime {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct PlayMatchStateResult {
     pub additional_time: u64,
 }

@@ -32,7 +32,7 @@ pub struct Ball {
     pub goal_scored: bool,  // Flag set when goal detected, used to force reset after event dispatch
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct BallFlags {
     pub in_flight_state: usize,
     pub running_for_ball: bool,

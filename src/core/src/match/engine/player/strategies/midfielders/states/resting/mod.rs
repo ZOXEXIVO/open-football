@@ -10,7 +10,7 @@ const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
 const MARKING_DISTANCE_THRESHOLD: f32 = 10.0;
 const OPPONENT_THREAT_THRESHOLD: usize = 2;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderRestingState {}
 
 impl StateProcessingHandler for MidfielderRestingState {

@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::prelude::IteratorRandom;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderDribblingState {}
 
 impl StateProcessingHandler for MidfielderDribblingState {

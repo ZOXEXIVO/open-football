@@ -5,6 +5,15 @@ pub struct TransferPool<T> {
     pool: Mutex<HashMap<u32, Vec<T>>>,
 }
 
+impl<T: Clone> Clone for TransferPool<T> {
+    fn clone(&self) -> Self {
+        let pool = self.pool.lock().unwrap();
+        TransferPool {
+            pool: Mutex::new(pool.clone()),
+        }
+    }
+}
+
 impl<T> TransferPool<T> {
     pub fn new() -> Self {
         TransferPool {

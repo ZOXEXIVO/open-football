@@ -9,7 +9,7 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperWalkingState {}
 
 impl StateProcessingHandler for GoalkeeperWalkingState {

@@ -5,7 +5,7 @@ use log::info;
 use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
 use web::ai::registry::{AiProviderRegistry, RegistryAiService};
 use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use web::ai::providers::OllamaRequest;
 
 #[tokio::main]
@@ -46,7 +46,8 @@ async fn main() {
 
     let data = GameAppData {
         database: Arc::new(database),
-        data: Arc::new(RwLock::new(Some(game_data))),
+        data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
+        process_lock: Arc::new(Mutex::new(())),
         i18n: Arc::new(I18nManager::new()),
         ai_registry,
     };

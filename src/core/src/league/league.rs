@@ -8,7 +8,7 @@ use log::{debug, info, warn};
 use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct League {
     pub id: u32,
     pub name: String,
@@ -664,7 +664,7 @@ impl League {
 
 // Supporting structures for enhanced simulation
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueDynamics {
     pub team_momentum: HashMap<u32, f32>,
     pub team_streaks: HashMap<u32, TeamStreak>,
@@ -846,31 +846,31 @@ impl LeagueDynamics {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TeamStreak {
     pub winning_streak: u8,
     pub losing_streak: u8,
     pub unbeaten_streak: u8,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct TitleRace {
     pub leader_id: u32,
     pub gap_to_second: i8,
     pub contenders: Vec<u32>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct RelegationBattle {
     pub teams_in_danger: Vec<u32>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct EuropeanRace {
     pub teams_in_contention: Vec<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueRegulations {
     pub suspended_players: HashMap<u32, u8>, // player_id -> matches remaining
     pub yellow_card_accumulation: HashMap<u32, u8>, // player_id -> yellow cards
@@ -917,21 +917,21 @@ impl LeagueRegulations {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FFPViolation {
     pub club_id: u32,
     pub violation_type: FFPViolationType,
     pub sanction: FFPSanction,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FFPViolationType {
     ExcessiveDeficit,
     UnpaidDebts,
     FalseAccounting,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FFPSanction {
     Warning,
     Fine(u32),
@@ -939,14 +939,14 @@ pub enum FFPSanction {
     TransferBan,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct DisciplinaryCase {
     pub player_id: u32,
     pub incident_type: String,
     pub hearing_date: NaiveDate,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueStatistics {
     pub total_goals: u32,
     pub total_matches: u32,
@@ -1110,7 +1110,7 @@ impl LeagueStatistics {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct LeagueMilestones {
     pub all_time_records: AllTimeRecords,
     pub season_milestones: Vec<Milestone>,
@@ -1213,7 +1213,7 @@ impl LeagueMilestones {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct AllTimeRecords {
     pub most_points_in_season: (u32, u8), // team_id, points
     pub most_goals_in_season: (u32, i32), // team_id, goals
@@ -1223,7 +1223,7 @@ pub struct AllTimeRecords {
     pub longest_unbeaten_streak: (u32, u8), // team_id, matches
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Milestone {
     pub milestone_type: MilestoneType,
     pub team_id: u32,
@@ -1231,7 +1231,7 @@ pub struct Milestone {
     pub matches_played: u8,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum MilestoneType {
     TitleWon,
     RelegationConfirmed,

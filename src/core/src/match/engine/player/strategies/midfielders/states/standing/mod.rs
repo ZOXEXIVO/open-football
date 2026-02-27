@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 
 const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Adjust as needed
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderStandingState {}
 
 impl StateProcessingHandler for MidfielderStandingState {

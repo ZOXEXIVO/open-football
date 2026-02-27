@@ -15,7 +15,7 @@ use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason
 use crate::transfers::pipeline_processor::PipelineProcessor;
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(super) struct TransferActivitySummary {
     pub(super) total_listings: u32,
     pub(super) active_negotiations: u32,
@@ -41,7 +41,7 @@ impl TransferActivitySummary {
 }
 
 #[allow(dead_code)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct SquadAnalysis {
     surplus_positions: Vec<PlayerPositionType>,
     needed_positions: Vec<PlayerPositionType>,

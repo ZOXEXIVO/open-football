@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 const SWEEPING_DISTANCE_THRESHOLD: f32 = 20.0; // Distance from goal to consider sweeping
 const SWEEPING_SPEED_MULTIPLIER: f32 = 1.2; // Multiplier for sweeping speed
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperSweepingState {}
 
 impl StateProcessingHandler for GoalkeeperSweepingState {

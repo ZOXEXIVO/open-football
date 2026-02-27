@@ -22,7 +22,7 @@ impl Default for ClubColors {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Club {
     pub id: u32,
     pub name: String,

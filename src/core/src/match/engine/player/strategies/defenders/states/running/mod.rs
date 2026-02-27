@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 80.0; // Defenders rarely shoot, only from close range
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {

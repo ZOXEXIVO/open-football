@@ -2,7 +2,7 @@ use crate::club::player::training::result::PlayerTrainingResult;
 use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, TrainingEffects, TrainingIntensity, TrainingSession, TrainingType};
 use chrono::NaiveDateTime;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerTraining {}
 
 impl Default for PlayerTraining {

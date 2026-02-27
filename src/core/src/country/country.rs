@@ -15,6 +15,7 @@ use super::{
     InternationalCompetition, MediaCoverage, CountryRegulations,
 };
 
+#[derive(Clone)]
 pub struct Country {
     pub id: u32,
     pub code: String,

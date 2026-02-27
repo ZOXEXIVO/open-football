@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AcademySettings {
     pub players_count_range: Range<u8>,
 }

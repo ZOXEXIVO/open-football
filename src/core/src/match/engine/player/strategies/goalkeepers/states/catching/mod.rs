@@ -4,7 +4,7 @@ use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, PlayerDistanceFromStartPosition, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperCatchingState {}
 
 impl StateProcessingHandler for GoalkeeperCatchingState {

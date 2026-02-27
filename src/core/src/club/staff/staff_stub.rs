@@ -7,7 +7,7 @@ use crate::{
 };
 use chrono::NaiveDate;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StaffStub;
 
 impl StaffStub {

@@ -78,6 +78,8 @@ struct PlayerLlm {
     status: String,
     #[serde(rename = "ss")]
     season_stats: Option<PlayerSeasonStatsLlm>,
+    #[serde(rename = "fs")]
+    friendly_stats: Option<PlayerSeasonStatsLlm>,
     #[serde(rename = "tt")]
     training_trend: Option<PlayerTrainingTrendLlm>,
     #[serde(rename = "ch")]
@@ -86,7 +88,7 @@ struct PlayerLlm {
     staff_opinion: String,
 }
 
-const PLAYER_LEGEND: &str = r#"{"id":"Player ID","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","sk":"Skills avg 0-20:tec=technical,men=mental,phy=physical","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd|LST|LOA|REQ|UNH","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating","op":"Staff opinion:favored/liked/neutral/disliked/conflict + trust"}"#;
+const PLAYER_LEGEND: &str = r#"{"id":"Player ID","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","sk":"Skills avg 0-20:tec=technical,men=mental,phy=physical","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd|LST|LOA|REQ|UNH","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","fs":"Friendly matches:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating","op":"Staff opinion:favored/liked/neutral/disliked/conflict + trust"}"#;
 
 // ─── as_internal_llm() struct ───────────────────────────────────────
 
@@ -240,6 +242,20 @@ impl Player {
             None
         };
 
+        let fs = &self.friendly_statistics;
+        let friendly_stats = if fs.played > 0 || fs.played_subs > 0 {
+            Some(PlayerSeasonStatsLlm {
+                played: fs.played,
+                played_subs: fs.played_subs,
+                goals: fs.goals,
+                assists: fs.assists,
+                yellow_cards: fs.yellow_cards,
+                average_rating: fs.average_rating,
+            })
+        } else {
+            None
+        };
+
         let player = PlayerLlm {
             id: self.id,
             age,
@@ -254,6 +270,7 @@ impl Player {
             morale_pct: morale,
             status,
             season_stats,
+            friendly_stats,
             training_trend: self.training_trend_llm(),
             club_history: self.club_history_vec(),
             staff_opinion: Self::staff_relationship_llm(staff, self.id),

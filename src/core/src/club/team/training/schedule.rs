@@ -1,6 +1,6 @@
 use chrono::{NaiveDateTime, NaiveTime};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingSchedule {
     pub morning_time: NaiveTime,
     pub evening_time: NaiveTime,

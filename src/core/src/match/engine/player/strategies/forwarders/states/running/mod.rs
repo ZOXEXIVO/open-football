@@ -28,7 +28,7 @@ const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.7; // Teammate must be 30% closer
 // Performance thresholds
 const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {

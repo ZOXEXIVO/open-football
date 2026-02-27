@@ -30,7 +30,7 @@ pub struct PersonAttributes {
     pub temperament: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct PersonBehaviour {
     pub state: PersonBehaviourState,
 }
@@ -61,8 +61,7 @@ impl PersonBehaviour {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Copy, Clone, Debug, PartialEq, Default)]
 pub enum PersonBehaviourState {
     Poor,
     #[default]

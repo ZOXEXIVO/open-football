@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 
 const PRESSURE_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance from the goal to be considered under pressure
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPressureState {}
 
 impl StateProcessingHandler for GoalkeeperPressureState {

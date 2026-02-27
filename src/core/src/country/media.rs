@@ -1,7 +1,7 @@
 use crate::Club;
 use std::collections::HashMap;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MediaCoverage {
     pub intensity: f32,
     pub trending_stories: Vec<MediaStory>,
@@ -50,14 +50,14 @@ impl MediaCoverage {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MediaStory {
     pub club_id: u32,
     pub story_type: StoryType,
     pub intensity: f32,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StoryType {
     TransferRumor,
     ManagerPressure,

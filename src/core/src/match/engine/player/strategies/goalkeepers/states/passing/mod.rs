@@ -27,7 +27,7 @@ const SAFE_PASS_DISTANCE: f32 = 30.0;
 const MEDIUM_PASS_DISTANCE: f32 = 60.0;
 const LONG_KICK_MIN_DISTANCE: f32 = 60.0; // Reduced from 100.0
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPassingState {}
 
 impl StateProcessingHandler for GoalkeeperPassingState {

@@ -10,7 +10,7 @@ const TRACKING_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to track the 
 const STAMINA_THRESHOLD: f32 = 50.0; // Minimum stamina required to continue tracking
 const BALL_INTERCEPTION_DISTANCE: f32 = 15.0; // Distance to switch to intercepting ball
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderTrackingRunnerState {}
 
 impl StateProcessingHandler for MidfielderTrackingRunnerState {

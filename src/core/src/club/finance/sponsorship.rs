@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubSponsorship {
     pub sponsorship_contracts: Vec<ClubSponsorshipContract>,
 }
@@ -24,7 +24,7 @@ impl ClubSponsorship {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubSponsorshipContract {
     pub sponsor_name: String,
     pub wage: i32,

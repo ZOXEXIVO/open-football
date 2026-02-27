@@ -12,7 +12,7 @@ const MAX_PASS_DURATION: u64 = 30; // Ticks before trying alternative action (re
 const MIN_POSITION_ADJUSTMENT_TIME: u64 = 5; // Minimum ticks before adjusting position (prevents immediate twitching)
 const MAX_POSITION_ADJUSTMENT_TIME: u64 = 20; // Maximum ticks to spend adjusting position
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardPassingState {}
 
 impl StateProcessingHandler for ForwardPassingState {

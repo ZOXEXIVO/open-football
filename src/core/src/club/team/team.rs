@@ -11,7 +11,7 @@ use std::fmt;
 use std::str::FromStr;
 use crate::club::team::builder::TeamBuilder;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TeamType {
     Main = 0,
     B = 1,
@@ -62,7 +62,7 @@ impl fmt::Display for TeamType {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Team {
     pub id: u32,
     pub league_id: Option<u32>,

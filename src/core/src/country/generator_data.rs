@@ -1,4 +1,5 @@
 // Update CountryGeneratorData and PeopleNameGeneratorData as per original
+#[derive(Clone)]
 pub struct CountryGeneratorData {
     pub people_names: PeopleNameGeneratorData,
 }
@@ -25,6 +26,7 @@ impl CountryGeneratorData {
     }
 }
 
+#[derive(Clone)]
 pub struct PeopleNameGeneratorData {
     pub first_names: Vec<String>,
     pub last_names: Vec<String>,

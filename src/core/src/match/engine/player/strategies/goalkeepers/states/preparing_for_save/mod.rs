@@ -10,7 +10,7 @@ const DIVE_DISTANCE: f32 = 25.0; // Distance to attempt diving save
 const CATCH_DISTANCE: f32 = 25.0; // Distance to attempt catching
 const PUNCH_DISTANCE: f32 = 12.0; // Distance to attempt punching
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPreparingForSaveState {}
 
 impl StateProcessingHandler for GoalkeeperPreparingForSaveState {

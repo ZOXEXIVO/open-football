@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 const PUNCHING_DISTANCE_THRESHOLD: f32 = 2.0; // Maximum distance to attempt punching
 const PUNCH_SUCCESS_PROBABILITY: f32 = 0.8; // Probability of a successful punch
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPunchingState {}
 
 impl StateProcessingHandler for GoalkeeperPunchingState {

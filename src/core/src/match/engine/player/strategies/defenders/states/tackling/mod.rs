@@ -14,7 +14,7 @@ const FOUL_CHANCE_BASE: f32 = 0.2;
 const PRESSING_DISTANCE: f32 = 70.0;
 const RETURN_DISTANCE: f32 = 100.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {

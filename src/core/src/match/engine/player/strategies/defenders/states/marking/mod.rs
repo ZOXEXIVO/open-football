@@ -14,7 +14,7 @@ const HEADING_DISTANCE: f32 = 5.0;
 const GOAL_SIDE_WEIGHT: f32 = 0.6; // How much to prioritize being goal-side
 const SWITCH_OPPONENT_THRESHOLD: f32 = 50.0; // Distance to consider switching marking target
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {

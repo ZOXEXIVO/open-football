@@ -12,7 +12,7 @@ const SPACE_CREATION_RADIUS: f32 = 20.0;
 #[allow(dead_code)]
 const HALF_SPACE_WIDTH: f32 = 15.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderCreatingSpaceState {}
 
 impl StateProcessingHandler for MidfielderCreatingSpaceState {
@@ -923,7 +923,7 @@ enum OverloadStrategy {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct TeamShape {
     width: f32,
     depth: f32,
@@ -938,7 +938,7 @@ impl TeamShape {
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 struct OpponentShape {
     high_line: bool,
     compact_central: bool,

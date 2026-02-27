@@ -159,7 +159,7 @@ impl TacticalDecisionEngine {
 }
 
 /// Result of tactical decision analysis
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TacticalDecisionResult {
     pub formation_change: Option<FormationChange>,
     pub squad_analysis: SquadAnalysis,
@@ -177,7 +177,7 @@ impl TacticalDecisionResult {
 }
 
 /// Suggested formation change
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FormationChange {
     pub from: Option<crate::MatchTacticType>,
     pub to: crate::MatchTacticType,
@@ -186,7 +186,7 @@ pub struct FormationChange {
 }
 
 /// Analysis of squad selection quality
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct SquadAnalysis {
     pub average_rating: f32,
     pub formation_fitness: f32,
@@ -208,7 +208,7 @@ impl SquadAnalysis {
 }
 
 /// Tactical recommendation for team improvement
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TacticalRecommendation {
     pub priority: RecommendationPriority,
     pub category: RecommendationCategory,
@@ -216,7 +216,7 @@ pub struct TacticalRecommendation {
     pub suggested_action: Option<String>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum RecommendationPriority {
     Low,
     Medium,
@@ -224,7 +224,7 @@ pub enum RecommendationPriority {
     Critical,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RecommendationCategory {
     Formation,
     SquadSelection,

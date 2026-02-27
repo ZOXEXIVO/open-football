@@ -1,6 +1,7 @@
 use crate::SimulatorData;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct SimulatorDataIndexes {
     pub league_indexes: HashMap<u32, (u32, u32)>,
     pub club_indexes: HashMap<u32, (u32, u32)>,
@@ -193,6 +194,7 @@ impl SimulatorDataIndexes {
     }
 }
 
+#[derive(Clone)]
 pub struct SlugIndexes {
     country_slug_index: HashMap<String, u32>,
     league_slug_index: HashMap<String, u32>,
@@ -242,6 +244,7 @@ impl SlugIndexes {
     }
 }
 
+#[derive(Clone)]
 pub struct TeamData {
     pub name: String,
     pub slug: String,

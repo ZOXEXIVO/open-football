@@ -5,12 +5,12 @@ use std::collections::BinaryHeap;
 
 const MAX_DISTANCE: f32 = 999.0;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerDistanceClosure {
     pub distances: BinaryHeap<PlayerDistanceItem>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerDistanceItem {
     pub player_from_id: u32,
     pub player_from_team: u32,

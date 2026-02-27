@@ -8,7 +8,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperAttentiveState {}
 
 impl StateProcessingHandler for GoalkeeperAttentiveState {

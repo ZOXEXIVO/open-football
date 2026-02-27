@@ -3,7 +3,7 @@ use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::{Club, Country, CountryEconomicFactors, CountryGeneratorData, CountryRegulations, CountrySettings, InternationalCompetition, MediaCoverage};
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CountryBuilder {
     id: Option<u32>,
     code: Option<String>,

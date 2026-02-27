@@ -13,7 +13,7 @@ const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pre
 const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderRunningState {}
 
 impl StateProcessingHandler for MidfielderRunningState {

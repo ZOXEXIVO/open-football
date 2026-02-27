@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 
 const PENALTY_SAVE_PROBABILITY: f32 = 0.3; // Probability of saving a penalty
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperPenaltyState {}
 
 impl StateProcessingHandler for GoalkeeperPenaltyState {

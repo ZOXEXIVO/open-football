@@ -6,7 +6,7 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 150.0; // Maximum distance to attempt a shot
 const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (e.g., edge of penalty area)
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderHoldingPossessionState {}
 
 impl StateProcessingHandler for MidfielderHoldingPossessionState {

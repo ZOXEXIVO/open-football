@@ -10,7 +10,7 @@ const BLOCK_DISTANCE_THRESHOLD: f32 = 5.0; // Increased from 2.0 - wider blockin
 const MAX_BLOCK_TIME: u64 = 500; // Don't stay in blocking state too long
 const SHOT_SPEED_THRESHOLD: f32 = 6.0; // Ball speed indicating a shot
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderBlockingState {}
 
 impl StateProcessingHandler for DefenderBlockingState {

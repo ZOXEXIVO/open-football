@@ -11,7 +11,7 @@ const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.6; // Base chance of successful tackle
 const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
 const STAMINA_THRESHOLD: f32 = 25.0; // Minimum stamina to attempt a sliding tackle
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderSlidingTackleState {}
 
 impl StateProcessingHandler for DefenderSlidingTackleState {

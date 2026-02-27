@@ -3,7 +3,7 @@ use chrono::NaiveDateTime;
 
 const DEFAULT_MATCH_LIST_SIZE: usize = 10;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchHistory {
     items: Vec<MatchHistoryItem>,
 }
@@ -30,7 +30,7 @@ impl MatchHistory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct MatchHistoryItem {
     pub date: NaiveDateTime,
     pub rival_team_id: u32,

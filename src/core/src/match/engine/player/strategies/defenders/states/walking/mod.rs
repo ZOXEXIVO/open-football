@@ -11,7 +11,7 @@ const PRESSING_DISTANCE: f32 = 80.0;
 const TACKLE_DISTANCE: f32 = 25.0;
 const RUNNING_TO_THE_BALL_DISTANCE: f32 = 150.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderWalkingState {}
 
 impl StateProcessingHandler for DefenderWalkingState {

@@ -5,7 +5,7 @@ use nalgebra::Vector3;
 
 const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardStandingState {}
 
 impl StateProcessingHandler for ForwardStandingState {

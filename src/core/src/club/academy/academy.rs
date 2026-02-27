@@ -7,7 +7,7 @@ use crate::{Person, Player, PlayerCollection, PlayerGenerator, PlayerPositionTyp
 use chrono::Datelike;
 use log::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubAcademy {
     settings: AcademySettings,
     players: PlayerCollection,

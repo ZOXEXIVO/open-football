@@ -9,7 +9,7 @@ const JUMP_HEIGHT: f32 = 2.5; // Maximum jump height
 const MIN_DIVING_DISTANCE: f32 = 1.0; // Minimum distance to dive
 const MAX_DIVING_DISTANCE: f32 = 5.0; // Maximum distance to dive
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperJumpingState {}
 
 impl StateProcessingHandler for GoalkeeperJumpingState {

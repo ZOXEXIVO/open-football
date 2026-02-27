@@ -1,7 +1,7 @@
 use crate::PlayerSkills;
 use chrono::{NaiveDate, NaiveDateTime};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerTrainingHistory {
     records: Vec<TrainingRecord>,
 }
@@ -37,7 +37,7 @@ impl PlayerTrainingHistory {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TrainingRecord {
     date: NaiveDateTime,
     pub skills: PlayerSkills,

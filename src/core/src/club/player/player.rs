@@ -16,7 +16,7 @@ use chrono::NaiveDate;
 use std::fmt::{Display, Formatter, Result};
 use crate::club::player::builder::PlayerBuilder;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Player {
     //person data
     pub id: u32,
@@ -160,7 +160,7 @@ impl Person for Player {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PlayerPreferredFoot {
     Left,
     Right,

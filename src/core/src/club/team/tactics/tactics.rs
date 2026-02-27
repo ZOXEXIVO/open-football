@@ -627,7 +627,7 @@ impl TacticsSelector {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct TeamCompositionAnalysis {
     goalkeeper_count: u8,
     goalkeeper_quality: f32,

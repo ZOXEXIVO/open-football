@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 
 const RESTING_STAMINA_THRESHOLD: u32 = 60; // Minimum stamina to transition out of resting state
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperRestingState {}
 
 impl StateProcessingHandler for GoalkeeperRestingState {

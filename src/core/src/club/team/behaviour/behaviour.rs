@@ -5,7 +5,7 @@ use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, 
 use chrono::Datelike;
 use log::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TeamBehaviour {
     last_full_update: Option<chrono::NaiveDateTime>,
     last_minor_update: Option<chrono::NaiveDateTime>,

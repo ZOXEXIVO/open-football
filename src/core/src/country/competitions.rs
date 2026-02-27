@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use log::debug;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct InternationalCompetition {
     pub name: String,
     pub competition_type: CompetitionType,
@@ -16,7 +16,7 @@ impl InternationalCompetition {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum CompetitionType {
     ChampionsLeague,
     EuropaLeague,

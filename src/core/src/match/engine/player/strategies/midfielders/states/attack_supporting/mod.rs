@@ -11,7 +11,7 @@ const PRESS_RANGE: f32 = 100.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct MidfielderAttackSupportingState {}
 
 impl StateProcessingHandler for MidfielderAttackSupportingState {

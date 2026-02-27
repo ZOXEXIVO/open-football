@@ -1,7 +1,7 @@
 use crate::r#match::StateProcessingContext;
 use nalgebra::Vector3;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PassingEventContext {
     pub from_player_id: u32,
     pub to_player_id: u32,

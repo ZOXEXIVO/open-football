@@ -26,7 +26,7 @@ const DANGEROUS_RUN_SPEED: f32 = 2.5; // Reduced from 3.0 - detect slower danger
 #[allow(dead_code)]
 const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle detection
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderStandingState {}
 
 impl StateProcessingHandler for DefenderStandingState {

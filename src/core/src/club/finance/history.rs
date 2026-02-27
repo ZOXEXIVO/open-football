@@ -2,7 +2,7 @@ use crate::club::ClubFinancialBalance;
 use chrono::NaiveDate;
 use std::collections::LinkedList;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ClubFinancialBalanceHistory {
     history: LinkedList<(NaiveDate, ClubFinancialBalance)>,
 }

@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use serde::Serialize;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StatusData {
     pub start_date: NaiveDate,
     pub status: PlayerStatusType,
@@ -13,7 +13,7 @@ impl StatusData {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerStatus {
     pub statuses: Vec<StatusData>,
 }

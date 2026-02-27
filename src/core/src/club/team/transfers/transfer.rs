@@ -2,7 +2,7 @@ use crate::shared::CurrencyValue;
 
 const DEFAULT_TRANSFER_LIST_SIZE: usize = 10;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Transfers {
     items: Vec<TransferItem>,
 }
@@ -39,7 +39,7 @@ impl Transfers {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TransferItem {
     pub player_id: u32,
     pub amount: CurrencyValue,

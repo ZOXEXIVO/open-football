@@ -26,7 +26,7 @@ const SPACE_SCAN_RADIUS: f32 = 100.0;
 const CONGESTION_THRESHOLD: f32 = 3.0;
 const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lanes
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ForwardCreatingSpaceState {}
 
 impl StateProcessingHandler for ForwardCreatingSpaceState {

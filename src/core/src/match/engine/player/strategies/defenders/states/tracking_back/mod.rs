@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 const CLOSE_TO_START_DISTANCE: f32 = 10.0;
 const BALL_INTERCEPTION_DISTANCE: f32 = 30.0;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderTrackingBackState {}
 
 impl StateProcessingHandler for DefenderTrackingBackState {

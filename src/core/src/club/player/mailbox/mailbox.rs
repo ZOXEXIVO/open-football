@@ -4,18 +4,18 @@ use chrono::NaiveDate;
 use std::collections::VecDeque;
 use std::sync::Mutex;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerMessage {
     pub message_type: PlayerMessageType,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum PlayerMessageType {
     Greeting,
     ContractProposal(PlayerContractProposal),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerContractProposal {
     pub salary: u32,
     pub years: u8,
@@ -24,6 +24,15 @@ pub struct PlayerContractProposal {
 #[derive(Debug)]
 pub struct PlayerMailbox {
     messages: Mutex<VecDeque<PlayerMessage>>,
+}
+
+impl Clone for PlayerMailbox {
+    fn clone(&self) -> Self {
+        let messages = self.messages.lock().unwrap();
+        PlayerMailbox {
+            messages: Mutex::new(messages.clone()),
+        }
+    }
 }
 
 impl PlayerMailbox {

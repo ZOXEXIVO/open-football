@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 
 const HOLDING_DURATION: u64 = 50;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct GoalkeeperHoldingState {}
 
 impl StateProcessingHandler for GoalkeeperHoldingState {

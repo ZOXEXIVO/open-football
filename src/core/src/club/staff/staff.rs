@@ -9,7 +9,7 @@ use crate::utils::DateUtils;
 use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Staff {
     pub id: u32,
     pub full_name: FullName,
@@ -31,7 +31,7 @@ pub struct Staff {
     pub training_schedule: Vec<StaffTrainingSession>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct StaffCollection {
     pub staffs: Vec<Staff>,
 
@@ -748,7 +748,7 @@ impl Staff {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StaffContractResult {
     pub expired: bool,
     pub no_contract: bool,
@@ -762,7 +762,7 @@ pub struct StaffContractResult {
     pub requested_salary: f32,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct StaffTrainingResult {
     pub sessions_planned: u8,
     pub session_conducted: bool,
@@ -771,7 +771,7 @@ pub struct StaffTrainingResult {
     pub team_id: Option<u32>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StaffWarning {
     HighFatigue,
     BurnoutRisk,
@@ -779,14 +779,14 @@ pub enum StaffWarning {
     PoorPerformance,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StaffMoraleEvent {
     Birthday,
     HighSatisfaction,
     ExcellentPerformance,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum ResignationReason {
     LowSatisfaction,
     Burnout,
@@ -795,14 +795,14 @@ pub enum ResignationReason {
     Retirement,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HealthIssue {
     StressRelated,
     PhysicalInjury,
     Illness,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RelationshipEvent {
     PositiveInteraction,
     Conflict,
@@ -810,7 +810,7 @@ pub enum RelationshipEvent {
     TrustBuilt,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum StaffLicenseType {
     ContinentalPro,
     ContinentalA,

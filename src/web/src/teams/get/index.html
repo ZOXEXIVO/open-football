@@ -85,7 +85,7 @@
                             <span class="fm-cond-val">{{ player.conditions }}%</span>
                         </div>
                     </td>
-                    <td class="sq-morale"><span class="fm-morale fm-morale-{{ player.behaviour|lowercase }}">{% if player.behaviour == "Good" %}&#9650;{% else if player.behaviour == "Poor" %}&#9660;{% else %}&#9654;{% endif %}</span></td>
+                    <td class="sq-morale"><span class="fm-morale fm-morale-{{ player.behaviour|lowercase }}">{% if player.behaviour == "Good" %}&#9650;{% else if player.behaviour == "Poor" %}&#9660;{% else %}&#9644;{% endif %}</span></td>
                     <td class="sq-games">{% if player.played > 0 || player.played_subs > 0 %}{{ player.played }}{% if player.played_subs > 0 %} ({{ player.played_subs }}){% endif %}{% else %}-{% endif %}</td>
                     <td class="sq-goals">{% if player.goals > 0 %}{{ player.goals }}{% else %}-{% endif %}</td>
                     <td class="sq-rating">{{ player.average_rating }}</td>

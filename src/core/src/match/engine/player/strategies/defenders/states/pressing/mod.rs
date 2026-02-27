@@ -12,7 +12,7 @@ const CLOSE_PRESSING_DISTANCE: f32 = 20.0; // Increased from 15.0 - wider close 
 const STAMINA_THRESHOLD: f32 = 35.0; // Reduced from 40.0 - press more aggressively
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderPressingState {}
 
 impl StateProcessingHandler for DefenderPressingState {

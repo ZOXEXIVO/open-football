@@ -14,7 +14,7 @@ const HEADING_DISTANCE_THRESHOLD: f32 = 1.5; // Maximum distance to the ball for
 #[allow(dead_code)]
 const HEADING_SUCCESS_THRESHOLD: f32 = 0.5; // Threshold for heading success based on skills
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct DefenderHeadingState {}
 
 impl StateProcessingHandler for DefenderHeadingState {

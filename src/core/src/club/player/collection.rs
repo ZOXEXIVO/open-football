@@ -7,7 +7,7 @@ use std::ops::Index;
 
 pub const DEFAULT_PLAYER_TRANSFER_BUFFER_SIZE: usize = 10;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerCollection {
     pub players: Vec<Player>,
 }
