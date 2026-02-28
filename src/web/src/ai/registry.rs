@@ -4,7 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 use tokio::task::JoinSet;
-use log::info;
+use log::{debug};
 
 use core::ai::{AiService, CompletedAiRequest, PendingAiRequest};
 use super::providers::AiProvider;
@@ -104,9 +104,10 @@ impl AiProviderRegistry {
             .iter()
             .map(|p| {
                 let request_count = p.stats.request_count.load(Ordering::Relaxed);
+                let completed_count = p.stats.completed_count.load(Ordering::Relaxed);
                 let total_duration_ms = p.stats.total_duration_ms.load(Ordering::Relaxed);
-                let avg_response_ms = if request_count > 0 {
-                    total_duration_ms / request_count
+                let avg_response_ms = if completed_count > 0 {
+                    total_duration_ms / completed_count
                 } else {
                     0
                 };
@@ -118,7 +119,7 @@ impl AiProviderRegistry {
                     model: p.model.clone(),
                     batch_size: p.batch_size,
                     request_count,
-                    completed_count: p.stats.completed_count.load(Ordering::Relaxed),
+                    completed_count,
                     error_count: p.stats.error_count.load(Ordering::Relaxed),
                     avg_response_ms,
                 }
@@ -222,7 +223,7 @@ impl AiService for RegistryAiService {
             }
             drop(providers);
 
-            info!(
+            debug!(
                 "distributing {} requests across {} providers",
                 total, provider_count
             );

@@ -118,7 +118,7 @@ impl TeamCollection {
         // Squad composition (priority 0 — handles promotions, demotions, and swaps)
         {
             let (query, format) = SquadComposition::prepare_request(
-                &self.teams, main_idx, reserve_idx, youth_idx,
+                &self.teams, main_idx, reserve_idx, youth_idx, date,
             );
             requests.push(PendingAiRequest {
                 club_id,

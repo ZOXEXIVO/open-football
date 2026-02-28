@@ -40,7 +40,7 @@ impl Relations {
 
     /// Simple update method for backward compatibility
     /// Updates a player relationship by a simple increment value
-    pub fn update(&mut self, player_id: u32, increment: f32) {
+    pub fn update(&mut self, player_id: u32, increment: f32, date: NaiveDate) {
         // Create a relationship change based on the increment
         let change = if increment >= 0.0 {
             RelationshipChange::positive(
@@ -54,10 +54,6 @@ impl Relations {
             )
         };
 
-        // Use the current date (you might want to pass this as a parameter)
-        let date = chrono::Local::now().date_naive();
-
-        // Update using the existing method
         self.update_player_relationship(player_id, change, date);
     }
 

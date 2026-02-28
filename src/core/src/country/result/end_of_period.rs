@@ -6,7 +6,6 @@ use crate::simulator::SimulatorData;
 
 impl CountryResult {
     pub(super) fn process_end_of_period(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         date: NaiveDate,

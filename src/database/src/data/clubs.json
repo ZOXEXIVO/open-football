@@ -27,7 +27,7 @@
         "id": 98036631,
         "name": "Juventus",
         "slug": "juventus-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2670,
@@ -80,7 +80,7 @@
         "id": 98036625,
         "name": "Inter",
         "slug": "inter-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2475,
@@ -133,7 +133,7 @@
         "id": 98036567,
         "name": "AC Milan",
         "slug": "ac-milan-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2535,
@@ -186,7 +186,7 @@
         "id": 98036649,
         "name": "Napoli",
         "slug": "napoli-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2415,
@@ -239,7 +239,7 @@
         "id": 98036569,
         "name": "AS Roma",
         "slug": "as-roma-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 4800,
@@ -292,7 +292,7 @@
         "id": 98036633,
         "name": "Lazio",
         "slug": "lazio-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2265,
@@ -345,7 +345,7 @@
         "id": 98036577,
         "name": "Atalanta",
         "slug": "atalanta-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1920,
@@ -398,7 +398,7 @@
         "id": 98036617,
         "name": "Fiorentina",
         "slug": "fiorentina-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2340,
@@ -451,7 +451,7 @@
         "id": 98036585,
         "name": "Bologna",
         "slug": "bologna-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1860,
@@ -504,7 +504,7 @@
         "id": 98036687,
         "name": "Torino",
         "slug": "torino-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2040,
@@ -557,7 +557,7 @@
         "id": 98045446,
         "name": "Sassuolo",
         "slug": "sassuolo-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1920,
@@ -610,7 +610,7 @@
         "id": 98036693,
         "name": "Udinese",
         "slug": "udinese-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2070,
@@ -663,7 +663,7 @@
         "id": 98036623,
         "name": "Genoa",
         "slug": "genoa-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 2010,
@@ -716,7 +716,7 @@
         "id": 98036591,
         "name": "Cagliari",
         "slug": "cagliari-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1815,
@@ -769,7 +769,7 @@
         "id": 98036607,
         "name": "Como",
         "slug": "como-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1590,
@@ -822,7 +822,7 @@
         "id": 98036657,
         "name": "Parma",
         "slug": "parma-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1725,
@@ -875,7 +875,7 @@
         "id": 98036635,
         "name": "Lecce",
         "slug": "lecce-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1575,
@@ -928,7 +928,7 @@
         "id": 98037820,
         "name": "Pisa",
         "slug": "pisa-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1485,
@@ -981,7 +981,7 @@
         "id": 98036611,
         "name": "Cremonese",
         "slug": "cremonese-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1470,
@@ -1034,7 +1034,7 @@
         "id": 98037800,
         "name": "Hellas Verona",
         "slug": "hellas-verona-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1920,
@@ -1087,7 +1087,7 @@
         "id": 98036695,
         "name": "Venezia",
         "slug": "venezia-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1125,
@@ -1140,7 +1140,7 @@
         "id": 98036647,
         "name": "Monza",
         "slug": "monza-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1035,
@@ -1193,7 +1193,7 @@
         "id": 98036677,
         "name": "Sampdoria",
         "slug": "sampdoria-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1035,
@@ -1246,7 +1246,7 @@
         "id": 98037788,
         "name": "Palermo",
         "slug": "palermo-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1905,
@@ -1299,7 +1299,7 @@
         "id": 98036613,
         "name": "Empoli",
         "slug": "empoli-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1830,
@@ -1352,7 +1352,7 @@
         "id": 98036685,
         "name": "Spezia",
         "slug": "spezia-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1710,
@@ -1405,7 +1405,7 @@
         "id": 98036599,
         "name": "Catanzaro",
         "slug": "catanzaro-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1260,
@@ -1458,7 +1458,7 @@
         "id": 98036601,
         "name": "Cesena",
         "slug": "cesena-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1770,
@@ -1511,7 +1511,7 @@
         "id": 98036645,
         "name": "Modena",
         "slug": "modena-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1695,
@@ -1564,7 +1564,7 @@
         "id": 98037796,
         "name": "Frosinone",
         "slug": "frosinone-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1770,
@@ -1617,7 +1617,7 @@
         "id": 98042599,
         "name": "Mantova",
         "slug": "mantova-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1170,
@@ -1670,7 +1670,7 @@
         "id": 98036583,
         "name": "Bari",
         "slug": "bari-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1740,
@@ -1723,7 +1723,7 @@
         "id": 98036629,
         "name": "Juve Stabia",
         "slug": "juve-stabia-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1485,
@@ -1776,7 +1776,7 @@
         "id": 98036673,
         "name": "Reggiana",
         "slug": "reggiana-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1260,
@@ -1829,7 +1829,7 @@
         "id": 98036595,
         "name": "Carrarese",
         "slug": "carrarese-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1065,
@@ -1882,7 +1882,7 @@
         "id": 98036661,
         "name": "Pescara",
         "slug": "pescara-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1740,
@@ -1935,7 +1935,7 @@
         "id": 98043353,
         "name": "Südtirol",
         "slug": "sudtirol-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1140,
@@ -1988,7 +1988,7 @@
         "id": 98036581,
         "name": "Avellino",
         "slug": "avellino-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1695,
@@ -2041,7 +2041,7 @@
         "id": 98036655,
         "name": "Padova",
         "slug": "padova-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1365,
@@ -2095,7 +2095,7 @@
         "id": 98061121,
         "name": "Virtus Entella",
         "slug": "virtus-entella-u20",
-        "team_type": "U20",
+        "team_type": "Reserve",
         "league_id": null,
         "reputation": {
           "home": 1590,

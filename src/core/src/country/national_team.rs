@@ -1109,7 +1109,7 @@ impl NationalTeam {
         home_squad: MatchSquad,
         away_squad: MatchSquad,
     ) -> (u8, u8, HashMap<u32, u16>) {
-        let match_result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode());
+        let match_result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode(), false);
 
         let score = match_result
             .score

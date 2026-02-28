@@ -1,7 +1,7 @@
 use crate::club::team::behaviour::TeamBehaviour;
 use crate::context::GlobalContext;
 use crate::r#match::{
-    EnhancedTacticsSelector, MatchPlayer, MatchSquad, SquadSelector,
+    EnhancedTacticsSelector, MatchPlayer, MatchSquad, SelectionContext, SquadSelector,
 };
 use crate::shared::CurrencyValue;
 use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, RecommendationPriority, StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
@@ -15,23 +15,25 @@ use crate::club::team::builder::TeamBuilder;
 pub enum TeamType {
     Main = 0,
     B = 1,
-    U18 = 2,
-    U19 = 3,
-    U20 = 4,
-    U21 = 5,
-    U23 = 6
+    Reserve = 2,
+    U18 = 3,
+    U19 = 4,
+    U20 = 5,
+    U21 = 6,
+    U23 = 7,
 }
 
 impl TeamType {
     pub fn as_i18n_key(&self) -> &'static str {
         match self {
             TeamType::Main => "first_team",
-            TeamType::B => "reserve_team",
+            TeamType::B => "b_team",
+            TeamType::Reserve => "reserve_team",
             TeamType::U18 => "under_18s",
             TeamType::U19 => "under_19s",
             TeamType::U20 => "under_20s",
             TeamType::U21 => "under_21s",
-            TeamType::U23 => "under_23s"
+            TeamType::U23 => "under_23s",
         }
     }
 
@@ -43,7 +45,7 @@ impl TeamType {
             TeamType::U20 => Some(20),
             TeamType::U21 => Some(21),
             TeamType::U23 => Some(23),
-            TeamType::B | TeamType::Main => None,
+            TeamType::B | TeamType::Reserve | TeamType::Main => None,
         }
     }
 }
@@ -52,7 +54,8 @@ impl fmt::Display for TeamType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             TeamType::Main => write!(f, "First team"),
-            TeamType::B => write!(f, "Reserve"),
+            TeamType::B => write!(f, "B Team"),
+            TeamType::Reserve => write!(f, "Reserve"),
             TeamType::U18 => write!(f, "Under 18s"),
             TeamType::U19 => write!(f, "Under 19s"),
             TeamType::U20 => write!(f, "Under 20s"),
@@ -137,13 +140,70 @@ impl Team {
             .sum()
     }
 
+    /// Get match squad using rotation — prioritizes players who haven't played recently.
+    /// Used for friendly/development leagues where all players need game time.
+    pub fn get_rotation_match_squad(&self) -> MatchSquad {
+        let head_coach = self.staffs.head_coach();
+
+        let squad_result = SquadSelector::select_for_rotation(self, head_coach);
+
+        let final_tactics = self
+            .tactics
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TacticsSelector::select(self, head_coach));
+
+        self.validate_squad_selection(&squad_result, &final_tactics);
+
+        MatchSquad {
+            team_id: self.id,
+            team_name: self.name.clone(),
+            tactics: final_tactics,
+            main_squad: squad_result.main_squad,
+            substitutes: squad_result.substitutes,
+            captain_id: self.select_captain(),
+            vice_captain_id: self.select_vice_captain(),
+            penalty_taker_id: self.select_penalty_taker(),
+            free_kick_taker_id: self.select_free_kick_taker(),
+        }
+    }
+
+    /// Get match squad using rotation with supplementary players from other club teams.
+    /// Ensures non-main teams always have enough players for a full squad.
+    pub fn get_rotation_match_squad_with_reserves(&self, reserve_players: &[&Player], ctx: &SelectionContext) -> MatchSquad {
+        let head_coach = self.staffs.head_coach();
+
+        let squad_result =
+            SquadSelector::select_for_rotation_with_context(self, head_coach, reserve_players, ctx);
+
+        let final_tactics = self
+            .tactics
+            .as_ref()
+            .cloned()
+            .unwrap_or_else(|| TacticsSelector::select(self, head_coach));
+
+        self.validate_squad_selection(&squad_result, &final_tactics);
+
+        MatchSquad {
+            team_id: self.id,
+            team_name: self.name.clone(),
+            tactics: final_tactics,
+            main_squad: squad_result.main_squad,
+            substitutes: squad_result.substitutes,
+            captain_id: self.select_captain(),
+            vice_captain_id: self.select_vice_captain(),
+            penalty_taker_id: self.select_penalty_taker(),
+            free_kick_taker_id: self.select_free_kick_taker(),
+        }
+    }
+
     /// Enhanced get_match_squad that uses improved tactical analysis
     /// Accepts optional reserve players that can be selected for the match squad
-    pub fn get_enhanced_match_squad(&self, reserve_players: &[&Player]) -> MatchSquad {
+    pub fn get_enhanced_match_squad(&self, reserve_players: &[&Player], ctx: &SelectionContext) -> MatchSquad {
         let head_coach = self.staffs.head_coach();
 
         // Use squad selection with reserve pool
-        let squad_result = SquadSelector::select_with_reserves(self, head_coach, reserve_players);
+        let squad_result = SquadSelector::select_with_context(self, head_coach, reserve_players, ctx);
 
         // Step 3: Create match squad with selected tactics
         let final_tactics = self
@@ -419,6 +479,7 @@ impl FromStr for TeamType {
         match s {
             "Main" => Ok(TeamType::Main),
             "B" => Ok(TeamType::B),
+            "Reserve" => Ok(TeamType::Reserve),
             "U18" => Ok(TeamType::U18),
             "U19" => Ok(TeamType::U19),
             "U20" => Ok(TeamType::U20),

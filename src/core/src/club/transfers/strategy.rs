@@ -25,7 +25,7 @@ impl ClubTransferStrategy {
         }
     }
 
-    pub fn decide_player_interest(&self, player: &Player) -> bool {
+    pub fn decide_player_interest(&self, player: &Player, date: NaiveDate) -> bool {
         // Decide if the club should be interested in this player
 
         // Position need
@@ -35,7 +35,7 @@ impl ClubTransferStrategy {
         }
 
         // Age policy
-        let age = player.age(chrono::Local::now().naive_local().date());
+        let age = player.age(date);
         if self.reputation_level > 80 && age > 30 {
             // Top clubs rarely sign older players
             return false;

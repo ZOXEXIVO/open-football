@@ -9,6 +9,7 @@ pub struct Match {
     league_slug: String,
     pub home_squad: MatchSquad,
     pub away_squad: MatchSquad,
+    pub is_friendly: bool,
 }
 
 impl Match {
@@ -18,6 +19,7 @@ impl Match {
         league_slug: &str,
         home_squad: MatchSquad,
         away_squad: MatchSquad,
+        is_friendly: bool,
     ) -> Self {
         Match {
             id,
@@ -25,6 +27,7 @@ impl Match {
             league_slug: String::from(league_slug),
             home_squad,
             away_squad,
+            is_friendly,
         }
     }
 
@@ -35,7 +38,7 @@ impl Match {
         let away_team_id = self.away_squad.team_id;
         let away_team_name = String::from(&self.away_squad.team_name);
 
-        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, crate::is_match_recordings_mode());
+        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, crate::is_match_recordings_mode(), self.is_friendly);
 
         let score = match_result.score.as_ref().expect("no score");
 

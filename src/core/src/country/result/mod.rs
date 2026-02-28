@@ -23,30 +23,13 @@ impl CountryResult {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
 
-        // Phase 3: Pre-season activities (if applicable)
-        if Self::is_preseason(current_date) {
-            self.simulate_preseason_activities(data, country_id, current_date);
-        }
+        // Phases that need &self.leagues / &self.clubs references run BEFORE the consuming loops
+        Self::simulate_media_coverage(data, country_id, &self.leagues);
+        Self::process_end_of_period(data, country_id, current_date, &self.clubs);
+        Self::update_country_reputation(data, country_id, &self.leagues, &self.clubs);
 
-        // Phase 4: Transfer Market Activities
-        let _transfer_activities = self.simulate_transfer_market(data, country_id, current_date);
-
-        // Phase 5: International Competitions
-        self.simulate_international_competitions(data, country_id, current_date);
-
-        // Phase 6: Economic Updates
-        self.update_economic_factors(data, country_id, current_date);
-
-        // Phase 7: Media and Public Interest
-        self.simulate_media_coverage(data, country_id, &self.leagues);
-
-        // Phase 8: End of Period Processing
-        self.process_end_of_period(data, country_id, current_date, &self.clubs);
-
-        // Phase 9: Country Reputation Update
-        self.update_country_reputation(data, country_id, &self.leagues, &self.clubs);
-
-        // Phase 1: Process league results
+        // Phase 1: Process league results — apply match stats, injuries, condition
+        // before transfers or club sim act on player state
         let any_new_season = self.leagues.iter().any(|l| l.new_season_started);
 
         for league_result in self.leagues {
@@ -58,10 +41,25 @@ impl CountryResult {
             Self::snapshot_player_season_statistics(data, self.country_id);
         }
 
-        // Phase 2: Process club results
+        // Phase 2: Process club results (morale, training use post-match state)
         for club_result in self.clubs {
             club_result.process(data, result);
         }
+
+        // Phase 3: Pre-season activities (if applicable)
+        if Self::is_preseason(current_date) {
+            Self::simulate_preseason_activities(data, country_id, current_date);
+        }
+
+        // Phase 4: Transfer Market Activities (runs with up-to-date player state,
+        // after match results have been applied)
+        let _transfer_activities = Self::simulate_transfer_market(data, country_id, current_date);
+
+        // Phase 5: International Competitions
+        Self::simulate_international_competitions(data, country_id, current_date);
+
+        // Phase 6: Economic Updates
+        Self::update_economic_factors(data, country_id, current_date);
     }
 
     fn get_country_id(&self, _data: &SimulatorData) -> u32 {

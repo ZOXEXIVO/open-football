@@ -44,7 +44,7 @@ impl TeamTraining {
         }
 
         // Apply team cohesion effects
-        Self::apply_team_cohesion_effects(team, &result);
+        Self::apply_team_cohesion_effects(team, &result, date.date());
 
         result
     }
@@ -113,7 +113,7 @@ impl TeamTraining {
             player.player_attributes.condition_percentage() > 30
     }
 
-    fn apply_team_cohesion_effects(team: &mut Team, training_results: &TeamTrainingResult) {
+    fn apply_team_cohesion_effects(team: &mut Team, training_results: &TeamTrainingResult, sim_date: chrono::NaiveDate) {
         // Players training together build relationships
         let participant_ids: Vec<u32> = training_results.player_results
             .iter()
@@ -124,10 +124,10 @@ impl TeamTraining {
         for i in 0..participant_ids.len() {
             for j in i + 1..participant_ids.len() {
                 if let Some(player_i) = team.players.players.iter_mut().find(|p| p.id == participant_ids[i]) {
-                    player_i.relations.update(participant_ids[j], 0.01);
+                    player_i.relations.update(participant_ids[j], 0.01, sim_date);
                 }
                 if let Some(player_j) = team.players.players.iter_mut().find(|p| p.id == participant_ids[j]) {
-                    player_j.relations.update(participant_ids[i], 0.01);
+                    player_j.relations.update(participant_ids[i], 0.01, sim_date);
                 }
             }
         }
@@ -150,7 +150,6 @@ impl TeamTraining {
         // Positive training session: update coach-player relationships
         if avg_morale > 0.0 {
             let relationship_boost = 0.01 + coach_effectiveness * 0.02; // 0.01 to 0.03
-            let sim_date = chrono::Local::now().date_naive();
 
             for &player_id in &participant_ids {
                 if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {

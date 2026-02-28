@@ -81,7 +81,7 @@ impl TeamReputation {
         );
 
         // Decay old factors
-        self.factors.decay();
+        self.factors.decay(date);
     }
 
     /// Process a major achievement (trophy, promotion, etc.)
@@ -375,9 +375,9 @@ struct ReputationFactors {
 }
 
 impl ReputationFactors {
-    fn decay(&mut self) {
+    fn decay(&mut self, today: chrono::NaiveDate) {
         // Remove old achievements
-        self.achievements.retain(|a| !a.is_expired());
+        self.achievements.retain(|a| !a.is_expired(today));
 
         // Decay other factors
         if self.star_players_signed > 0 {
@@ -445,9 +445,8 @@ impl Achievement {
         }
     }
 
-    fn is_expired(&self) -> bool {
+    fn is_expired(&self, today: chrono::NaiveDate) -> bool {
         // Achievements expire after 2 years
-        let today = chrono::Local::now().date_naive();
         (today - self.date).num_days() > 730
     }
 }

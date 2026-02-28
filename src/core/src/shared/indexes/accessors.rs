@@ -239,31 +239,50 @@ impl SimulatorData {
     }
 
     pub fn player_mut(&mut self, id: u32) -> Option<&mut Player> {
-        let (player_continent_id, player_country_id, player_club_id, player_team_id) = self
-            .indexes
-            .as_ref()
-            .and_then(|indexes| indexes.get_player_location(id))?;
+        // Phase 1: immutable search for array indices
+        let pos = self.find_player_position(id);
 
-        self.continent_mut(player_continent_id)
-            .and_then(|continent| {
-                continent
-                    .countries
-                    .iter_mut()
-                    .find(|country| country.id == player_country_id)
-            })
-            .and_then(|country| {
-                country
-                    .clubs
-                    .iter_mut()
-                    .find(|club| club.id == player_club_id)
-            })
-            .and_then(|club| {
-                club.teams
-                    .teams
-                    .iter_mut()
-                    .find(|team| team.id == player_team_id)
-            })
-            .and_then(|team| team.players.players.iter_mut().find(|c| c.id == id))
+        // Phase 2: mutable access at known position
+        let (ci, coi, cli, ti) = pos?;
+        self.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.players.iter_mut().find(|p| p.id == id)
+    }
+
+    fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
+        // Fast path: indexed lookup
+        if let Some((pc, pco, pcl, pt)) =
+            self.indexes.as_ref().and_then(|indexes| indexes.get_player_location(id))
+        {
+            for (ci, continent) in self.continents.iter().enumerate() {
+                if continent.id != pc { continue; }
+                for (coi, country) in continent.countries.iter().enumerate() {
+                    if country.id != pco { continue; }
+                    for (cli, club) in country.clubs.iter().enumerate() {
+                        if club.id != pcl { continue; }
+                        for (ti, team) in club.teams.teams.iter().enumerate() {
+                            if team.id != pt { continue; }
+                            if team.players.players.iter().any(|p| p.id == id) {
+                                return Some((ci, coi, cli, ti));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: brute-force scan (index may be stale after transfers)
+        for (ci, continent) in self.continents.iter().enumerate() {
+            for (coi, country) in continent.countries.iter().enumerate() {
+                for (cli, club) in country.clubs.iter().enumerate() {
+                    for (ti, team) in club.teams.teams.iter().enumerate() {
+                        if team.players.players.iter().any(|p| p.id == id) {
+                            return Some((ci, coi, cli, ti));
+                        }
+                    }
+                }
+            }
+        }
+        None
     }
 
     pub fn staff_with_team(&self, staff_id: u32) -> Option<(&Staff, &Team)> {

@@ -10,7 +10,7 @@ impl CountryResult {
         month == 6 || month == 7
     }
 
-    pub(super) fn simulate_preseason_activities(&self, data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
+    pub(super) fn simulate_preseason_activities(data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
         debug!("Running preseason activities...");
 
         if let Some(country) = data.country_mut(country_id) {

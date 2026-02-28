@@ -72,7 +72,6 @@ impl CountryResult {
     // ============================================================
 
     pub(super) fn simulate_transfer_market(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         current_date: NaiveDate,
@@ -143,7 +142,7 @@ impl CountryResult {
         let price_level = country.settings.pricing.price_level;
 
         for club in &country.clubs {
-            let squad_analysis = Self::analyze_squad_needs(club);
+            let squad_analysis = Self::analyze_squad_needs(club, date);
 
             if club.teams.teams.is_empty() {
                 continue;
@@ -534,7 +533,7 @@ impl CountryResult {
     // Transfer helpers
     // ============================================================
 
-    fn analyze_squad_needs(club: &Club) -> SquadAnalysis {
+    fn analyze_squad_needs(club: &Club, current_date: NaiveDate) -> SquadAnalysis {
         if club.teams.teams.is_empty() {
             return SquadAnalysis {
                 surplus_positions: vec![],
@@ -559,13 +558,11 @@ impl CountryResult {
         let mut group_counts: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
         let mut total_ability: u32 = 0;
         let mut total_age: u32 = 0;
-        let now = chrono::Local::now().naive_local().date();
-
         for player in players {
             let group = player.position().position_group();
             *group_counts.entry(group).or_insert(0) += 1;
             total_ability += player.player_attributes.current_ability as u32;
-            total_age += player.age(now) as u32;
+            total_age += player.age(current_date) as u32;
         }
 
         let avg_ability = (total_ability / players.len() as u32) as u8;

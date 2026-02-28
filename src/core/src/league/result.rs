@@ -51,12 +51,13 @@ impl LeagueResult {
     fn process_match_results(result: &mut MatchResult, data: &mut SimulatorData) {
         let now = data.date;
 
-        let league = data.league_mut(result.league_id).unwrap();
-
-        league.schedule.update_match_result(
-            &result.id,
-            &result.score,
-        );
+        // Update league schedule (skip for friendlies without a league)
+        if let Some(league) = data.league_mut(result.league_id) {
+            league.schedule.update_match_result(
+                &result.id,
+                &result.score,
+            );
+        }
 
         let home_team = data.team_mut(result.score.home_team.team_id).unwrap();
         home_team.match_history.add(MatchHistoryItem::new(

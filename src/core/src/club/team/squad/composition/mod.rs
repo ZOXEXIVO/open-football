@@ -46,9 +46,10 @@ impl SquadComposition {
         main_idx: usize,
         reserve_idx: Option<usize>,
         youth_idx: Option<usize>,
+        sim_date: NaiveDate,
     ) -> (String, String) {
         let team_indices = Self::collect_team_indices(main_idx, reserve_idx, youth_idx);
-        let query = Self::build_prompt(teams, main_idx, &team_indices);
+        let query = Self::build_prompt(teams, main_idx, &team_indices, sim_date);
         let format = Self::response_format();
         (query, format)
     }
@@ -88,9 +89,10 @@ impl SquadComposition {
         teams: &[Team],
         main_idx: usize,
         team_indices: &[(usize, &str)],
+        sim_date: NaiveDate,
     ) -> String {
         let staff_data = teams[main_idx].staffs.head_coach().as_llm();
-        let data_json = Self::build_data_json(teams, team_indices, &staff_data);
+        let data_json = Self::build_data_json(teams, team_indices, &staff_data, sim_date);
         let teams_section = Self::build_teams_section(teams, team_indices);
         let previous_moves_section = Self::build_previous_moves(teams, team_indices);
 
@@ -107,6 +109,7 @@ impl SquadComposition {
         teams: &[Team],
         team_indices: &[(usize, &str)],
         staff_data: &str,
+        sim_date: NaiveDate,
     ) -> String {
         let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
 
@@ -119,7 +122,7 @@ impl SquadComposition {
                     .players
                     .players
                     .iter()
-                    .map(|p| serde_json::from_str(&p.as_llm(head_coach)).unwrap())
+                    .map(|p| serde_json::from_str(&p.as_llm(head_coach, sim_date)).unwrap())
                     .collect();
                 TeamPlayersLlm {
                     label: label.to_string(),
@@ -147,7 +150,8 @@ impl SquadComposition {
             .map(|&(idx, _)| {
                 let type_name = match teams[idx].team_type {
                     crate::TeamType::Main => "Main",
-                    crate::TeamType::B => "Reserve",
+                    crate::TeamType::B => "B Team",
+                    crate::TeamType::Reserve => "Reserve",
                     crate::TeamType::U18 => "Under 18s",
                     crate::TeamType::U19 => "Under 19s",
                     crate::TeamType::U20 => "Under 20s",

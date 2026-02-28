@@ -23,7 +23,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         FootballEngine {}
     }
 
-    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad, match_recordings: bool) -> MatchResultRaw {
+    pub fn play(left_squad: MatchSquad, right_squad: MatchSquad, match_recordings: bool, is_friendly: bool) -> MatchResultRaw {
         let score = Score::new(left_squad.team_id, right_squad.team_id);
 
         let players = MatchPlayerCollection::from_squads(&left_squad, &right_squad);
@@ -38,7 +38,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut field = MatchField::new(W, H, left_squad, right_squad);
 
-        let mut context = MatchContext::new(&field, players, score);
+        let mut context = MatchContext::new(&field, players, score, is_friendly);
 
         if crate::is_match_events_mode() {
             context.enable_logging();

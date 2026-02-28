@@ -33,7 +33,7 @@ impl PlayerTraining {
 
         // Base effectiveness factors
         let coach_quality = Self::calculate_coach_effectiveness(coach, &session.session_type);
-        let player_receptiveness = Self::calculate_player_receptiveness(player, coach);
+        let player_receptiveness = Self::calculate_player_receptiveness(player, coach, date.date());
         let age_factor = Self::calculate_age_training_factor(player.age(date.date()));
 
         // Intensity multipliers
@@ -213,7 +213,7 @@ impl PlayerTraining {
         (base_effectiveness * 0.7 + determination_factor * 0.3).min(1.0)
     }
 
-    fn calculate_player_receptiveness(player: &Player, coach: &Staff) -> f32 {
+    fn calculate_player_receptiveness(player: &Player, coach: &Staff, sim_date: chrono::NaiveDate) -> f32 {
         // Base receptiveness from player attributes
         let base = (player.attributes.professionalism + player.attributes.ambition) / 40.0;
 
@@ -227,7 +227,7 @@ impl PlayerTraining {
         };
 
         // Age affects receptiveness (younger players learn faster)
-        let age_bonus = match player.age(chrono::Local::now().date_naive()) {
+        let age_bonus = match player.age(sim_date) {
             16..=20 => 0.3,
             21..=24 => 0.2,
             25..=28 => 0.1,

@@ -2,7 +2,6 @@ use nalgebra::Vector3;
 use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
-const MAX_SUBSTITUTIONS_PER_TEAM: usize = 5;
 
 pub struct SubstitutionRecord {
     pub team_id: u32,
@@ -30,10 +29,11 @@ pub struct MatchContext {
     pub total_match_time: u64,
 
     pub substitutions: Vec<SubstitutionRecord>,
+    pub max_substitutions_per_team: usize,
 }
 
 impl MatchContext {
-    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score) -> Self {
+    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score, is_friendly: bool) -> Self {
         MatchContext {
             state: GameState::new(),
             time: MatchTime::new(),
@@ -47,6 +47,7 @@ impl MatchContext {
             logging_enabled: false,
             total_match_time: 0,
             substitutions: Vec::new(),
+            max_substitutions_per_team: if is_friendly { usize::MAX } else { 3 },
         }
     }
 
@@ -105,7 +106,7 @@ impl MatchContext {
     }
 
     pub fn can_substitute(&self, team_id: u32) -> bool {
-        self.subs_used_by_team(team_id) < MAX_SUBSTITUTIONS_PER_TEAM
+        self.subs_used_by_team(team_id) < self.max_substitutions_per_team
     }
 
     pub fn record_substitution(&mut self, team_id: u32, player_out_id: u32, player_in_id: u32, match_time: u64) {

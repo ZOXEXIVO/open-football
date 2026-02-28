@@ -1,6 +1,6 @@
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem};
-use crate::r#match::{Match, MatchResult};
+use crate::r#match::{Match, MatchResult, SelectionContext};
 use crate::utils::Logging;
 use crate::{Club, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
@@ -222,22 +222,31 @@ impl League {
             table,
         );
 
-        // Gather reserve players from the same club for each team
-        // For friendly leagues (U18), don't pull reserves — teams play their own squad only
-        let home_reserves: Vec<&Player> = if friendly {
-            Vec::new()
-        } else {
-            Self::collect_reserve_players(clubs, home_team.club_id, home_team.id)
-        };
-        let away_reserves: Vec<&Player> = if friendly {
-            Vec::new()
-        } else {
-            Self::collect_reserve_players(clubs, away_team.club_id, away_team.id)
+        // Build selection context
+        let selection_ctx = SelectionContext {
+            is_friendly: friendly,
+            date: ctx.simulation.date.date(),
         };
 
-        // Prepare squads with reserve pool and psychological modifiers
-        let mut home_squad = home_team.get_enhanced_match_squad(&home_reserves);
-        let mut away_squad = away_team.get_enhanced_match_squad(&away_reserves);
+        // Prepare squads: friendly leagues use rotation (development), competitive use best-11
+        let (mut home_squad, mut away_squad) = if friendly {
+            // Rotation selection — prioritizes players who haven't played recently
+            // Non-main teams borrow players from other club teams when short-staffed
+            let home_supplements = Self::collect_supplementary_players(clubs, home_team.club_id, home_team.id, friendly);
+            let away_supplements = Self::collect_supplementary_players(clubs, away_team.club_id, away_team.id, friendly);
+            (
+                home_team.get_rotation_match_squad_with_reserves(&home_supplements, &selection_ctx),
+                away_team.get_rotation_match_squad_with_reserves(&away_supplements, &selection_ctx),
+            )
+        } else {
+            // Competitive selection — gather reserve players and pick best squad
+            let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly);
+            let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly);
+            (
+                home_team.get_enhanced_match_squad(&home_reserves, &selection_ctx),
+                away_team.get_enhanced_match_squad(&away_reserves, &selection_ctx),
+            )
+        };
 
         Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
         Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
@@ -249,6 +258,7 @@ impl League {
             &scheduled_match.league_slug,
             home_squad,
             away_squad,
+            friendly,
         );
 
         let message = &format!(
@@ -273,6 +283,7 @@ impl League {
         clubs: &'a [Club],
         club_id: u32,
         team_id: u32,
+        is_friendly: bool,
     ) -> Vec<&'a Player> {
         let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
             return Vec::new();
@@ -283,18 +294,54 @@ impl League {
             .iter()
             .filter(|t| {
                 t.id != team_id
-                    && matches!(t.team_type, TeamType::B | TeamType::U21 | TeamType::U23)
+                    && matches!(t.team_type, TeamType::B | TeamType::Reserve | TeamType::U21 | TeamType::U23)
             })
             .flat_map(|t| t.players.players.iter())
-            .filter(|p| {
-                let statuses = p.statuses.get();
-                !p.player_attributes.is_injured
-                    && !p.player_attributes.is_banned
-                    && !statuses.contains(&PlayerStatusType::Lst)
-                    && !statuses.contains(&PlayerStatusType::Loa)
-                    && !statuses.contains(&PlayerStatusType::Int)
-            })
+            .filter(|p| Self::is_player_available(p, is_friendly))
             .collect()
+    }
+
+    /// Collect supplementary players from other teams in the same club.
+    /// Used by non-main teams in friendly leagues to ensure they have enough players.
+    /// Pulls from ALL other teams in the club (including Main).
+    fn collect_supplementary_players<'a>(
+        clubs: &'a [Club],
+        club_id: u32,
+        team_id: u32,
+        is_friendly: bool,
+    ) -> Vec<&'a Player> {
+        let Some(club) = clubs.iter().find(|c| c.id == club_id) else {
+            return Vec::new();
+        };
+
+        club.teams
+            .teams
+            .iter()
+            .filter(|t| t.id != team_id)
+            .flat_map(|t| t.players.players.iter())
+            .filter(|p| Self::is_player_available(p, is_friendly))
+            .collect()
+    }
+
+    /// Check if a player is available for selection.
+    /// In friendly matches: injured and Int still block, but Lst/Loa/banned can play.
+    fn is_player_available(player: &Player, is_friendly: bool) -> bool {
+        if player.player_attributes.is_injured {
+            return false;
+        }
+        if player.statuses.get().contains(&PlayerStatusType::Int) {
+            return false;
+        }
+        if !is_friendly {
+            if player.player_attributes.is_banned {
+                return false;
+            }
+            let s = player.statuses.get();
+            if s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa) {
+                return false;
+            }
+        }
+        true
     }
 
     #[allow(dead_code)]
@@ -595,7 +642,7 @@ impl League {
 
         // End of season processing
         if self.is_season_end(current_date) {
-            self.process_season_end(clubs);
+            self.process_season_end(clubs, current_date);
         }
 
         // Mid-season break
@@ -625,13 +672,13 @@ impl League {
             (date.month() == 3 && date.day() >= 20 && date.day() <= 28)
     }
 
-    fn process_season_end(&mut self, _clubs: &[Club]) {
+    fn process_season_end(&mut self, _clubs: &[Club], current_date: NaiveDate) {
         info!("🏆 Season ended for league: {}", self.name);
 
         let champion_id = self.table.rows.first().map(|r| r.team_id);
         if let Some(champion) = champion_id {
             info!("🥇 Champions: Team {}", champion);
-            self.milestones.record_champion(champion);
+            self.milestones.record_champion(champion, current_date);
         }
 
         // Save final table for promotion/relegation processing
@@ -1196,8 +1243,8 @@ impl LeagueMilestones {
         }
     }
 
-    pub fn record_champion(&mut self, team_id: u32) {
-        let year = chrono::Local::now().year() as u16;
+    pub fn record_champion(&mut self, team_id: u32, date: NaiveDate) {
+        let year = date.year() as u16;
         self.historic_champions.push((year, team_id));
 
         // Check for consecutive titles

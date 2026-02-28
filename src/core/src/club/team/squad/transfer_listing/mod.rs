@@ -83,7 +83,8 @@ impl TransferListManager {
             .map(|(idx, t)| {
                 let label = match t.team_type {
                     crate::TeamType::Main => "Main Team",
-                    crate::TeamType::B => "Reserve Team",
+                    crate::TeamType::B => "B Team",
+                    crate::TeamType::Reserve => "Reserve Team",
                     crate::TeamType::U18 => "Under 18s",
                     crate::TeamType::U19 => "Under 19s",
                     crate::TeamType::U20 => "Under 20s",
@@ -99,10 +100,10 @@ impl TransferListManager {
         teams: &[Team],
         main_idx: usize,
         team_indices: &[(usize, &str)],
-        _date: NaiveDate,
+        sim_date: NaiveDate,
     ) -> String {
         let staff_data = teams[main_idx].staffs.head_coach().as_llm();
-        let data_json = Self::build_data_json(teams, main_idx, team_indices, &staff_data);
+        let data_json = Self::build_data_json(teams, main_idx, team_indices, &staff_data, sim_date);
         let teams_section = Self::build_teams_section(teams, team_indices);
         let previous_decisions_section = Self::build_previous_decisions(teams, team_indices);
         let current_tl = Self::build_current_transfer_list_section(teams, main_idx, &data_json);
@@ -124,6 +125,7 @@ impl TransferListManager {
         main_idx: usize,
         team_indices: &[(usize, &str)],
         staff_data: &str,
+        sim_date: NaiveDate,
     ) -> String {
         let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
 
@@ -146,7 +148,7 @@ impl TransferListManager {
                     .players
                     .players
                     .iter()
-                    .map(|p| serde_json::from_str(&p.as_llm(head_coach)).unwrap())
+                    .map(|p| serde_json::from_str(&p.as_llm(head_coach, sim_date)).unwrap())
                     .collect();
                 TeamPlayersLlm {
                     label: label.to_string(),

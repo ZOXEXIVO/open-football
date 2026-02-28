@@ -1301,7 +1301,7 @@ impl PipelineProcessor {
     // Step 5: Shortlist Building
     // ============================================================
 
-    pub fn build_shortlists(country: &mut Country, _date: NaiveDate) {
+    pub fn build_shortlists(country: &mut Country, date: NaiveDate) {
         let mut results: Vec<ShortlistResult> = Vec::new();
 
         for club in &country.clubs {
@@ -1419,7 +1419,7 @@ impl PipelineProcessor {
                         .iter()
                         .filter(|l| l.club_id != club.id)
                         .filter_map(|l| {
-                            Self::find_player_summary_in_country(country, l.player_id).and_then(
+                            Self::find_player_summary_in_country(country, l.player_id, date).and_then(
                                 |p| {
                                     if p.position_group == request.position.position_group()
                                         && p.current_ability >= request.min_ability
@@ -2996,11 +2996,11 @@ impl PipelineProcessor {
     fn find_player_summary_in_country(
         country: &Country,
         player_id: u32,
+        date: NaiveDate,
     ) -> Option<PlayerSummary> {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
-                    let now = chrono::Local::now().naive_local().date();
                     return Some(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
@@ -3008,7 +3008,7 @@ impl PipelineProcessor {
                         position_group: player.position().position_group(),
                         current_ability: player.player_attributes.current_ability,
                         potential_ability: player.player_attributes.potential_ability,
-                        age: player.age(now),
+                        age: player.age(date),
                         estimated_value: player.player_attributes.current_ability as f64 * 10000.0,
                         is_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
                         is_loan_listed: player.statuses.get().contains(&PlayerStatusType::Loa),

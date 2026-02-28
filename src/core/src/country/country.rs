@@ -58,7 +58,7 @@ impl Country {
         // Phase 1: League Competitions
         let league_results = self.simulate_leagues(&ctx);
 
-        // Phase 1.5: National Team (international breaks)
+        // Phase 2: National Team (international breaks)
         let date = ctx.simulation.date.date();
         let country_id = self.id;
         // Pass country context to national team
@@ -66,10 +66,10 @@ impl Country {
         self.national_team.reputation = self.reputation;
         self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids, candidates);
 
-        // Phase 2: Club Operations
+        // Phase 3: Club Operations
         let clubs_results = self.simulate_clubs(&ctx);
 
-        // Phase 3: Country-level scouting is now handled by the transfer pipeline
+        // Phase 4: Country-level scouting is now handled by the transfer pipeline
         // (PipelineProcessor::process_scouting called from simulate_transfer_market in result.rs)
 
         debug!("✅ Country {} simulation complete", country_name);

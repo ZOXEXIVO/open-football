@@ -124,9 +124,8 @@ fn pct(val: f32) -> String {
 // ─── Implementation ─────────────────────────────────────────────────
 
 impl Player {
-    pub fn as_llm(&self, staff: &Staff) -> String {
-        let now = chrono::Local::now().date_naive();
-        let age = DateUtils::age(self.birth_date, now);
+    pub fn as_llm(&self, staff: &Staff, sim_date: chrono::NaiveDate) -> String {
+        let age = DateUtils::age(self.birth_date, sim_date);
         let positions: BTreeMap<String, String> = self.positions.positions
             .iter()
             .filter(|p| p.level >= 5)

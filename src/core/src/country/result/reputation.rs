@@ -7,7 +7,6 @@ use crate::simulator::SimulatorData;
 
 impl CountryResult {
     pub(super) fn simulate_international_competitions(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         date: NaiveDate,
@@ -20,7 +19,6 @@ impl CountryResult {
     }
 
     pub(super) fn update_economic_factors(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         date: NaiveDate,
@@ -33,7 +31,6 @@ impl CountryResult {
     }
 
     pub(super) fn simulate_media_coverage(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         league_results: &[LeagueResult],
@@ -45,7 +42,6 @@ impl CountryResult {
     }
 
     pub(super) fn update_country_reputation(
-        &self,
         data: &mut SimulatorData,
         country_id: u32,
         _league_results: &[LeagueResult],

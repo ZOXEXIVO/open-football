@@ -115,6 +115,7 @@ impl DatabaseGenerator {
 
                 let mut leagues_vec = DatabaseGenerator::generate_leagues(country.id, data);
                 DatabaseGenerator::create_youth_leagues(country.id, &mut clubs, &mut leagues_vec);
+                DatabaseGenerator::create_friendly_leagues(country.id, &mut clubs, &mut leagues_vec);
                 let leagues = LeagueCollection::new(leagues_vec);
 
                 let settings = CountrySettings {
@@ -238,6 +239,74 @@ impl DatabaseGenerator {
         }
     }
 
+    fn create_friendly_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>) {
+        // Build a map: club_id → parent league_id (from the club's Main team)
+        let club_league_map: Vec<(u32, u32)> = clubs
+            .iter()
+            .filter_map(|club| {
+                let main_league_id = club.teams.teams
+                    .iter()
+                    .find(|t| t.team_type == TeamType::Main)
+                    .and_then(|t| t.league_id)?;
+                Some((club.id, main_league_id))
+            })
+            .collect();
+
+        let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
+            .iter()
+            .filter(|l| !l.friendly)
+            .map(|l| (l.id, l.name.clone(), l.slug.clone(), l.reputation, l.settings.clone()))
+            .collect();
+
+        for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
+            // Find clubs in this parent league that have teams without a league assignment
+            let has_unassigned = clubs.iter().any(|club| {
+                club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
+                    && club.teams.teams.iter().any(|t| t.league_id.is_none())
+            });
+
+            if !has_unassigned {
+                continue;
+            }
+
+            let friendly_league_id = parent_id + 200000;
+            let friendly_reputation = (parent_rep / 10).max(100);
+
+            let friendly_settings = LeagueSettings {
+                season_starting_half: parent_settings.season_starting_half,
+                season_ending_half: parent_settings.season_ending_half,
+                tier: 99,
+                promotion_spots: 0,
+                relegation_spots: 0,
+            };
+
+            let friendly_league = League::new(
+                friendly_league_id,
+                format!("{} Reserves", parent_name),
+                format!("{}-reserves", parent_slug),
+                country_id,
+                friendly_reputation,
+                friendly_settings,
+                true,
+            );
+
+            leagues.push(friendly_league);
+
+            // Assign teams without league_id to this friendly league
+            for club in clubs.iter_mut() {
+                let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
+                if !is_in_parent {
+                    continue;
+                }
+                for team in &mut club.teams.teams {
+                    if team.league_id.is_none() {
+                        team.league_id = Some(friendly_league_id);
+                    }
+                }
+            }
+        }
+    }
+
     fn generate_clubs(
         country_id: u32,
         data: &DatabaseEntity,
@@ -332,7 +401,7 @@ impl DatabaseGenerator {
             TeamType::U20 => (16, 20),
             TeamType::U21 => (16, 21),
             TeamType::U23 => (17, 23),
-            TeamType::B => (17, 28),
+            TeamType::B | TeamType::Reserve => (17, 28),
             TeamType::Main => (17, 35),
         };
 
