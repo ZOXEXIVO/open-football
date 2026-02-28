@@ -624,11 +624,23 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 }
 
 .sq-dec-dot {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 13px;
+  height: 13px;
   border-radius: 50%;
-  background: #a2bcfb;
+  background: #fff;
+  font-size: 8.5px;
+  font-weight: 600;
+  font-style: normal;
+  line-height: 1;
+  color: #000;
+  text-decoration: none;
+}
+
+.sq-dec-dot::after {
+  content: "i";
 }
 
 /* Morale direction arrows (FM-style) */
@@ -1000,6 +1012,8 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-squad .sq-inf { width: 45px; text-align: center; }
 .fm-squad a { color: #d8dee4; }
 .fm-squad a:hover { color: #fff; text-decoration: underline !important; }
+.fm-squad a.sq-dec-dot { color: #000; }
+.fm-squad a.sq-dec-dot:hover { color: #000; text-decoration: none !important; }
 .fm-squad .sq-name a { font-weight: 500; }
 .fm-squad .sq-pos { color: #7a868e; font-size: 12px; width: 2em; }
 .fm-squad .sq-nat { width: 32px; }

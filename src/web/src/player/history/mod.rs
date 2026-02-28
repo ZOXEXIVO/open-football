@@ -356,8 +356,18 @@ pub async fn player_history_action(
         format!("{}/{}", year - 1, year % 100)
     };
 
-    // Current team's country/league info
-    let current_location = find_team_location(simulator_data, &team.slug);
+    // For non-main teams, resolve main team's slug and league info
+    let main_team_slug = if team.team_type != core::TeamType::Main {
+        simulator_data.club(team.club_id)
+            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
+            .map(|t| t.slug.clone())
+    } else {
+        None
+    };
+    let current_display_slug = main_team_slug.as_deref().unwrap_or(&team.slug);
+
+    // Current team's country/league info (use main team for non-main teams)
+    let current_location = find_team_location(simulator_data, current_display_slug);
 
     let current_is_loan = player.contract.as_ref()
         .map(|c| c.contract_type == ContractType::Loan)
@@ -389,14 +399,14 @@ pub async fn player_history_action(
     // Remove the current team's current-season entry from history items —
     // it is already shown as the hardcoded "current" row at the top.
     items.retain(|item| {
-        !(item.start_year == current_season_year && item.team_slug == team.slug)
+        !(item.start_year == current_season_year && item.team_slug == current_display_slug)
     });
 
     Ok(PlayerHistoryTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: if team.team_type == core::TeamType::Main { String::new() } else { i18n.t(team.team_type.as_i18n_key()).to_string() },
+        sub_title_suffix: String::new(),
         sub_title: team.name.clone(),
         sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
         sub_title_country_code: String::new(),
@@ -405,10 +415,10 @@ pub async fn player_history_action(
         menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs),
         i18n,
         lang: route_params.lang.clone(),
-        team_slug: team.slug.clone(),
+        team_slug: current_display_slug.to_string(),
         player_id: route_params.player_id,
         items,
-        current_club: team.name.clone(),
+        current_club: simulator_data.club(team.club_id).map(|c| c.name.clone()).unwrap_or_else(|| team.name.clone()),
         current_is_loan,
         current_is_free_transfer,
         current_transfer_fee,

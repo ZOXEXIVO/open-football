@@ -11,6 +11,7 @@ use super::providers::AiProvider;
 
 pub struct AiProviderStats {
     pub request_count: AtomicU64,
+    pub completed_count: AtomicU64,
     pub error_count: AtomicU64,
     pub total_duration_ms: AtomicU64,
 }
@@ -19,6 +20,7 @@ impl AiProviderStats {
     fn new() -> Self {
         AiProviderStats {
             request_count: AtomicU64::new(0),
+            completed_count: AtomicU64::new(0),
             error_count: AtomicU64::new(0),
             total_duration_ms: AtomicU64::new(0),
         }
@@ -31,6 +33,7 @@ pub struct AiProviderEntry {
     pub host: String,
     pub port: u16,
     pub model: String,
+    pub batch_size: usize,
     pub provider: Box<dyn AiProvider>,
     pub stats: AiProviderStats,
 }
@@ -42,7 +45,9 @@ pub struct AiProviderInfo {
     pub host: String,
     pub port: u16,
     pub model: String,
+    pub batch_size: usize,
     pub request_count: u64,
+    pub completed_count: u64,
     pub error_count: u64,
     pub avg_response_ms: u64,
 }
@@ -69,18 +74,16 @@ impl AiProviderRegistry {
     pub async fn add(
         &self,
         name: &str,
-        host: &str,
-        port: u16,
-        model: &str,
         provider: Box<dyn AiProvider>,
     ) -> u64 {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let entry = AiProviderEntry {
             id,
             name: name.to_string(),
-            host: host.to_string(),
-            port,
-            model: model.to_string(),
+            host: provider.host().to_string(),
+            port: provider.port(),
+            model: provider.model().to_string(),
+            batch_size: provider.batch_size(),
             provider,
             stats: AiProviderStats::new(),
         };
@@ -113,7 +116,9 @@ impl AiProviderRegistry {
                     host: p.host.clone(),
                     port: p.port,
                     model: p.model.clone(),
+                    batch_size: p.batch_size,
                     request_count,
+                    completed_count: p.stats.completed_count.load(Ordering::Relaxed),
                     error_count: p.stats.error_count.load(Ordering::Relaxed),
                     avg_response_ms,
                 }
@@ -129,6 +134,11 @@ impl AiProviderRegistry {
             .sum()
     }
 
+    pub async fn total_completed_count(&self) -> u64 {
+        let providers = self.providers.read().await;
+        providers.iter().map(|p| p.stats.completed_count.load(Ordering::Relaxed)).sum()
+    }
+
     pub async fn provider_count(&self) -> usize {
         self.providers.read().await.len()
     }
@@ -140,7 +150,6 @@ impl AiProviderRegistry {
     ) -> CompletedAiRequest {
         let providers = self.providers.read().await;
         let response = if let Some(entry) = providers.get(provider_index) {
-            entry.stats.request_count.fetch_add(1, Ordering::Relaxed);
             let start = std::time::Instant::now();
             let result = match entry.provider.query(req.query, req.format).await {
                 Ok(r) => Some(r),
@@ -151,6 +160,7 @@ impl AiProviderRegistry {
             };
             let elapsed_ms = start.elapsed().as_millis() as u64;
             entry.stats.total_duration_ms.fetch_add(elapsed_ms, Ordering::Relaxed);
+            entry.stats.completed_count.fetch_add(1, Ordering::Relaxed);
             result
         } else {
             None
@@ -186,10 +196,13 @@ impl AiService for RegistryAiService {
     ) -> Pin<Box<dyn Future<Output = Vec<CompletedAiRequest>> + Send + '_>> {
         let registry = Arc::clone(&self.registry);
         Box::pin(async move {
-            let provider_count = registry.providers.read().await.len();
+            let providers = registry.providers.read().await;
+            let provider_count = providers.len();
             if provider_count == 0 {
                 return Vec::new();
             }
+
+            let batch_sizes: Vec<usize> = providers.iter().map(|p| p.batch_size).collect();
 
             let total = requests.len();
 
@@ -201,18 +214,27 @@ impl AiService for RegistryAiService {
                 per_provider[i % provider_count].push(req);
             }
 
+            // Set request_count upfront so total is known immediately
+            for (idx, batch) in per_provider.iter().enumerate() {
+                if let Some(entry) = providers.get(idx) {
+                    entry.stats.request_count.fetch_add(batch.len() as u64, Ordering::Relaxed);
+                }
+            }
+            drop(providers);
+
             info!(
                 "distributing {} requests across {} providers",
                 total, provider_count
             );
 
-            // Each provider runs its requests in parallel
+            // Each provider runs its requests with batch_size concurrency limit
             let mut set = JoinSet::new();
 
             for (provider_idx, provider_requests) in per_provider.into_iter().enumerate() {
                 let reg = Arc::clone(&registry);
+                let batch_size = batch_sizes[provider_idx];
                 set.spawn(async move {
-                    execute_provider_batch(provider_idx, provider_requests, &reg).await
+                    execute_provider_batch(provider_idx, provider_requests, &reg, batch_size).await
                 });
             }
 
@@ -230,18 +252,33 @@ async fn execute_provider_batch(
     provider_index: usize,
     requests: Vec<PendingAiRequest>,
     registry: &Arc<AiProviderRegistry>,
+    batch_size: usize,
 ) -> Vec<CompletedAiRequest> {
-    let mut set = JoinSet::new();
+    let mut results = Vec::with_capacity(requests.len());
+    let mut iter = requests.into_iter();
 
-    for req in requests {
-        let reg = Arc::clone(registry);
-        let idx = provider_index;
-        set.spawn(async move { reg.execute_on_provider(idx, req).await });
+    loop {
+        let mut set = JoinSet::new();
+        let mut spawned = 0;
+
+        for req in iter.by_ref() {
+            let reg = Arc::clone(registry);
+            let idx = provider_index;
+            set.spawn(async move { reg.execute_on_provider(idx, req).await });
+            spawned += 1;
+            if spawned >= batch_size {
+                break;
+            }
+        }
+
+        if spawned == 0 {
+            break;
+        }
+
+        while let Some(Ok(completed)) = set.join_next().await {
+            results.push(completed);
+        }
     }
 
-    let mut results = Vec::with_capacity(set.len());
-    while let Some(Ok(completed)) = set.join_next().await {
-        results.push(completed);
-    }
     results
 }

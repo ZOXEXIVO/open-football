@@ -13,7 +13,7 @@ async fn main() {
     color_eyre::install().unwrap();
 
     env_logger::Builder::from_env(Env::default()
-        .default_filter_or("info")
+        .default_filter_or("debug")
     ).init();
 
     let settings = Settings::from_env();
@@ -25,9 +25,6 @@ async fn main() {
 
     ai_registry.add(
         "Local Ollama",
-        "http://localhost",
-        11434,
-        "gpt-oss:20b",
         Box::new(OllamaRequest::new("http://localhost", 11434, "gpt-oss:20b")),
     ).await;
 

@@ -9,7 +9,7 @@
         <div class="fm-ai-stats">
             <div class="fm-ai-stat-item">
                 <span class="fm-ai-stat-label">{{ i18n.t("ai_total_requests") }}</span>
-                <span class="fm-ai-stat-value">{{ total_requests }}</span>
+                <span class="fm-ai-stat-value">{{ total_completed }} / {{ total_requests }}</span>
             </div>
             <div class="fm-ai-stat-item">
                 <span class="fm-ai-stat-label">{{ i18n.t("ai_providers_count") }}</span>
@@ -37,6 +37,7 @@
                     <th>{{ i18n.t("ai_host") }}</th>
                     <th>{{ i18n.t("ai_port") }}</th>
                     <th>{{ i18n.t("ai_model") }}</th>
+                    <th>{{ i18n.t("ai_batch_size") }}</th>
                     <th>{{ i18n.t("ai_requests") }}</th>
                     <th>{{ i18n.t("ai_errors") }}</th>
                     <th>{{ i18n.t("ai_avg_response") }}</th>
@@ -50,7 +51,8 @@
                     <td>{{ provider.host }}</td>
                     <td>{{ provider.port }}</td>
                     <td>{{ provider.model }}</td>
-                    <td>{{ provider.request_count }}</td>
+                    <td>{{ provider.batch_size }}</td>
+                    <td>{{ provider.completed_count }} / {{ provider.request_count }}</td>
                     <td>{{ provider.error_count }}</td>
                     <td>{{ provider.avg_response_ms }} ms</td>
                     <td>
@@ -85,6 +87,10 @@
             <label>{{ i18n.t("ai_model") }}</label>
             <input type="text" id="ai-model" value="gpt-oss:20b" />
         </div>
+        <div class="fm-ai-form-group">
+            <label>{{ i18n.t("ai_batch_size") }}</label>
+            <input type="number" id="ai-batch-size" value="1" min="1" />
+        </div>
         <div class="fm-ai-modal-actions">
             <button class="fm-ai-cancel-btn" onclick="document.getElementById('ai-modal').style.display='none'">{{ i18n.t("ai_cancel") }}</button>
             <button class="fm-ai-save-btn" id="ai-save-btn">{{ i18n.t("ai_save") }}</button>
@@ -101,7 +107,8 @@
             name: document.getElementById('ai-name').value,
             host: document.getElementById('ai-host').value,
             port: parseInt(document.getElementById('ai-port').value, 10),
-            model: document.getElementById('ai-model').value
+            model: document.getElementById('ai-model').value,
+            batch_size: parseInt(document.getElementById('ai-batch-size').value, 10) || 1
         };
         fetch('/api/ai/providers', {
             method: 'POST',

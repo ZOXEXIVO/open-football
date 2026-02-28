@@ -17,7 +17,7 @@ impl Continent {
                 let fixture = &country.national_team.schedule[fixture_idx];
                 let our_squad = country.national_team.build_match_squad(&country.clubs);
                 let opponent_squad =
-                    NationalTeam::build_synthetic_opponent_squad(fixture.opponent_country_id);
+                    NationalTeam::build_synthetic_opponent_squad(fixture.opponent_country_id, &fixture.opponent_country_name);
 
                 let (home_squad, away_squad) = if fixture.is_home {
                     (our_squad, opponent_squad)

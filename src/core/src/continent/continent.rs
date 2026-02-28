@@ -62,7 +62,7 @@ impl Continent {
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
-        let country_ids: Vec<u32> = self.countries.iter().map(|c| c.id).collect();
+        let country_ids: Vec<(u32, String)> = self.countries.iter().map(|c| (c.id, c.name.clone())).collect();
         let date = ctx.simulation.date.date();
 
         // Pre-collect national team candidates from ALL clubs across ALL countries

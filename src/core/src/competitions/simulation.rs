@@ -133,6 +133,6 @@ impl GlobalCompetitionSimulator {
             .flat_map(|c| &c.countries)
             .find(|c| c.id == country_id)
             .map(|c| c.name.clone())
-            .unwrap_or_else(|| format!("Country {}", country_id))
+            .unwrap_or_default()
     }
 }

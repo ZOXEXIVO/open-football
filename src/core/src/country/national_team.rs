@@ -70,6 +70,7 @@ pub struct NationalSquadPlayer {
 pub struct NationalTeamFixture {
     pub date: NaiveDate,
     pub opponent_country_id: u32,
+    pub opponent_country_name: String,
     pub is_home: bool,
     pub result: Option<NationalTeamMatchResult>,
 }
@@ -219,7 +220,7 @@ impl NationalTeam {
         clubs: &mut [Club],
         date: NaiveDate,
         country_id: u32,
-        country_ids: &[u32],
+        country_ids: &[(u32, String)],
         candidates: Option<Vec<CallUpCandidate>>,
     ) {
         if self.reputation < MIN_REPUTATION_FOR_FRIENDLIES {
@@ -266,6 +267,7 @@ impl NationalTeam {
     ) {
         let fixture = &self.schedule[fixture_idx];
         let opponent_id = fixture.opponent_country_id;
+        let opponent_name = fixture.opponent_country_name.clone();
         let is_home = fixture.is_home;
 
         let score = match_result
@@ -311,8 +313,8 @@ impl NationalTeam {
         self.schedule[fixture_idx].result = Some(result);
 
         info!(
-            "International friendly: {} vs country {} - {}:{}",
-            self.country_name, opponent_id, home_score, away_score
+            "International friendly: {} vs {} - {}:{}",
+            self.country_name, opponent_name, home_score, away_score
         );
     }
 
@@ -469,7 +471,7 @@ impl NationalTeam {
         candidates: Vec<CallUpCandidate>,
         date: NaiveDate,
         country_id: u32,
-        country_ids: &[u32],
+        country_ids: &[(u32, String)],
     ) {
         self.squad.clear();
         self.schedule.clear();
@@ -520,18 +522,20 @@ impl NationalTeam {
                 NaiveDate::from_ymd_opt(year, month, match_day_1),
                 NaiveDate::from_ymd_opt(year, month, match_day_2),
             ) {
-                let opponent_1 = Self::random_opponent(country_id, country_ids);
-                let opponent_2 = Self::random_opponent(country_id, country_ids);
+                let (opp_id_1, opp_name_1) = Self::random_opponent(country_id, country_ids);
+                let (opp_id_2, opp_name_2) = Self::random_opponent(country_id, country_ids);
 
                 self.schedule.push(NationalTeamFixture {
                     date: d1,
-                    opponent_country_id: opponent_1,
+                    opponent_country_id: opp_id_1,
+                    opponent_country_name: opp_name_1,
                     is_home: true,
                     result: None,
                 });
                 self.schedule.push(NationalTeamFixture {
                     date: d2,
-                    opponent_country_id: opponent_2,
+                    opponent_country_id: opp_id_2,
+                    opponent_country_name: opp_name_2,
                     is_home: false,
                     result: None,
                 });
@@ -1126,7 +1130,7 @@ impl NationalTeam {
     }
 
     /// Build a synthetic opponent squad for friendly matches
-    pub fn build_synthetic_opponent_squad(opponent_country_id: u32) -> MatchSquad {
+    pub fn build_synthetic_opponent_squad(opponent_country_id: u32, opponent_name: &str) -> MatchSquad {
         let team_id = opponent_country_id;
 
         // Generate 18 synthetic players with moderate ability
@@ -1196,7 +1200,7 @@ impl NationalTeam {
 
         MatchSquad {
             team_id,
-            team_name: format!("Country {}", opponent_country_id),
+            team_name: opponent_name.to_string(),
             tactics,
             main_squad,
             substitutes,
@@ -1295,18 +1299,17 @@ impl NationalTeam {
             .copied()
     }
 
-    fn random_opponent(exclude_country_id: u32, country_ids: &[u32]) -> u32 {
-        let candidates: Vec<u32> = country_ids
+    fn random_opponent(exclude_country_id: u32, country_ids: &[(u32, String)]) -> (u32, String) {
+        let candidates: Vec<&(u32, String)> = country_ids
             .iter()
-            .copied()
-            .filter(|&id| id != exclude_country_id)
+            .filter(|(id, _)| *id != exclude_country_id)
             .collect();
 
         if candidates.is_empty() {
-            return exclude_country_id;
+            return (exclude_country_id, String::new());
         }
 
         let idx = IntegerUtils::random(0, candidates.len() as i32) as usize;
-        candidates[idx.min(candidates.len() - 1)]
+        candidates[idx.min(candidates.len() - 1)].clone()
     }
 }

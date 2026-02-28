@@ -101,10 +101,14 @@ pub async fn country_schedule_action(
         .schedule
         .iter()
         .map(|fixture| {
-            let opponent_name = simulator_data
-                .country(fixture.opponent_country_id)
-                .map(|c| c.name.clone())
-                .unwrap_or_else(|| format!("Country {}", fixture.opponent_country_id));
+            let opponent_name = if !fixture.opponent_country_name.is_empty() {
+                fixture.opponent_country_name.clone()
+            } else {
+                simulator_data
+                    .country(fixture.opponent_country_id)
+                    .map(|c| c.name.clone())
+                    .unwrap_or_default()
+            };
 
             let opponent_slug = simulator_data
                 .country(fixture.opponent_country_id)

@@ -38,6 +38,7 @@ pub struct AiPageTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub providers: Vec<AiProviderInfo>,
     pub total_requests: u64,
+    pub total_completed: u64,
     pub provider_count: usize,
 }
 
@@ -50,6 +51,7 @@ pub async fn ai_page_action(
 
     let providers = state.ai_registry.list().await;
     let total_requests = state.ai_registry.total_request_count().await;
+    let total_completed = state.ai_registry.total_completed_count().await;
     let provider_count = state.ai_registry.provider_count().await;
 
     let menu_sections = views::ai_menu(&i18n, &route_params.lang, &current_path);
@@ -69,6 +71,7 @@ pub async fn ai_page_action(
         menu_sections,
         providers,
         total_requests,
+        total_completed,
         provider_count,
     })
 }
@@ -79,19 +82,18 @@ pub struct AddProviderRequest {
     pub host: String,
     pub port: u16,
     pub model: String,
+    pub batch_size: Option<usize>,
 }
 
 pub async fn ai_add_provider_action(
     State(state): State<GameAppData>,
     Json(body): Json<AddProviderRequest>,
 ) -> impl IntoResponse {
-    let request = providers::OllamaRequest::new(&body.host, body.port, &body.model);
+    let request = providers::OllamaRequest::new(&body.host, body.port, &body.model)
+        .with_batch_size(body.batch_size.unwrap_or(1));
 
     state.ai_registry.add(
         &body.name,
-        &body.host,
-        body.port,
-        &body.model,
         Box::new(request),
     ).await;
 

@@ -72,10 +72,7 @@ pub(crate) fn execute_moves(teams: &mut [Team], from_idx: usize, to_idx: usize, 
 }
 
 fn team_label(team: &Team) -> String {
-    match team.team_type {
-        crate::TeamType::Main => team.name.clone(),
-        _ => format!("{} {}", team.name, team.team_type.as_i18n_key().replace('_', " ")),
-    }
+    team.name.clone()
 }
 
 pub(crate) fn record_player_decisions(

@@ -60,7 +60,7 @@
                     <td class="sq-name">
                         <a href="/{{ lang }}/players/{{ player.id }}">
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
-                        </a>{% if player.has_recent_decision %}&nbsp;&nbsp;<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot"></a>{% endif %}
+                        </a>{% if player.has_recent_decision %}&nbsp;&nbsp;<a href="/{{ lang }}/players/{{ player.id }}/decisions" class="sq-dec-dot" title="{{ i18n.t("has_recent_decision") }}"></a>{% endif %}
                     </td>
                     <td class="sq-pos">{{ player.position }}</td>
                     <td class="sq-nat">

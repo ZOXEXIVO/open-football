@@ -119,7 +119,7 @@ impl Continent {
 
     /// Build a MatchSquad for a country, ensuring national team has called up players
     pub(crate) fn build_country_match_squad(&mut self, country_id: u32, date: NaiveDate) -> Option<MatchSquad> {
-        let country_ids: Vec<u32> = self.countries.iter().map(|c| c.id).collect();
+        let country_ids: Vec<(u32, String)> = self.countries.iter().map(|c| (c.id, c.name.clone())).collect();
 
         // Find the country and ensure it has a squad
         let country_idx = self.countries.iter().position(|c| c.id == country_id)?;
@@ -190,6 +190,6 @@ impl Continent {
             .iter()
             .find(|c| c.id == country_id)
             .map(|c| c.name.clone())
-            .unwrap_or_else(|| format!("Country {}", country_id))
+            .unwrap_or_default()
     }
 }

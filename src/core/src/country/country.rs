@@ -47,7 +47,7 @@ impl Country {
     pub(crate) fn simulate(
         &mut self,
         ctx: GlobalContext<'_>,
-        country_ids: &[u32],
+        country_ids: &[(u32, String)],
         candidates: Option<Vec<CallUpCandidate>>,
     ) -> CountryResult {
         let country_name = self.name.clone();

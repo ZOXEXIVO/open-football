@@ -2,229 +2,139 @@ use crate::club::player::player::Player;
 use crate::club::staff::staff::Staff;
 use crate::utils::DateUtils;
 use serde::Serialize;
+use std::collections::BTreeMap;
 
 // ─── Shared sub-structs ─────────────────────────────────────────────
 
 #[derive(Serialize)]
 struct PlayerSeasonStatsLlm {
-    #[serde(rename = "p")]
     played: u16,
-    #[serde(rename = "ps")]
     played_subs: u16,
-    #[serde(rename = "g")]
     goals: u16,
-    #[serde(rename = "a")]
     assists: u16,
-    #[serde(rename = "yc")]
     yellow_cards: u8,
-    #[serde(rename = "ar")]
     average_rating: f32,
 }
 
 #[derive(Serialize)]
 struct PlayerTrainingTrendLlm {
-    #[serde(rename = "tec")]
     technical: f32,
-    #[serde(rename = "men")]
     mental: f32,
-    #[serde(rename = "phy")]
     physical: f32,
 }
 
 #[derive(Serialize)]
 struct PlayerHistoryLlm {
-    #[serde(rename = "rep")]
     club_reputation: String,
-    #[serde(rename = "s")]
     season: String,
-    #[serde(rename = "ap")]
     apps: u16,
-    #[serde(rename = "g")]
     goals: u16,
-    #[serde(rename = "a")]
     assists: u16,
-    #[serde(rename = "ar")]
     average_rating: f32,
 }
 
 // ─── as_llm() struct ────────────────────────────────────────────────
 
 #[derive(Serialize)]
-struct PlayerSkillsLlm {
-    #[serde(rename = "tec")]
-    technical: f32,
-    #[serde(rename = "men")]
-    mental: f32,
-    #[serde(rename = "phy")]
-    physical: f32,
-}
-
-#[derive(Serialize)]
 struct PlayerLlm {
     id: u32,
-    #[serde(rename = "age")]
     age: u8,
-    #[serde(rename = "pos")]
-    positions: String,
-    #[serde(rename = "ft")]
+    height: String,
+    weight: String,
+    positions: BTreeMap<String, String>,
     preferred_foot: String,
-    #[serde(rename = "sk")]
-    skills: PlayerSkillsLlm,
-    #[serde(rename = "cond")]
-    condition_pct: u32,
-    #[serde(rename = "mor")]
-    morale_pct: u8,
-    #[serde(rename = "st")]
+    physical_condition: String,
+    match_readiness: String,
+    fitness: String,
+    jadedness: String,
+    morale: String,
     status: String,
-    #[serde(rename = "ss")]
-    season_stats: Option<PlayerSeasonStatsLlm>,
-    #[serde(rename = "fs")]
-    friendly_stats: Option<PlayerSeasonStatsLlm>,
-    #[serde(rename = "tt")]
-    training_trend: Option<PlayerTrainingTrendLlm>,
-    #[serde(rename = "ch")]
-    club_history: Vec<PlayerHistoryLlm>,
-    #[serde(rename = "op")]
-    staff_opinion: String,
-}
-
-const PLAYER_LEGEND: &str = r#"{"id":"Player ID","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","sk":"Skills avg 0-20:tec=technical,men=mental,phy=physical","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd|LST|LOA|REQ|UNH","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","fs":"Friendly matches:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating","op":"Staff opinion:favored/liked/neutral/disliked/conflict + trust"}"#;
-
-// ─── as_internal_llm() struct ───────────────────────────────────────
-
-#[derive(Serialize)]
-struct PlayerInternalLlm {
-    id: u32,
-    #[serde(rename = "age")]
-    age: u8,
-    #[serde(rename = "pos")]
-    positions: String,
-    #[serde(rename = "ft")]
-    preferred_foot: String,
-    #[serde(rename = "cond")]
-    condition_pct: u32,
-    #[serde(rename = "mor")]
-    morale_pct: u8,
-    #[serde(rename = "st")]
-    status: String,
-    #[serde(rename = "tec")]
+    reputation: PlayerReputationLlm,
     technical: PlayerTechnicalLlm,
-    #[serde(rename = "men")]
     mental: PlayerMentalLlm,
-    #[serde(rename = "phy")]
     physical: PlayerPhysicalLlm,
-    #[serde(rename = "ss")]
     season_stats: Option<PlayerSeasonStatsLlm>,
-    #[serde(rename = "tt")]
+    friendly_stats: Option<PlayerSeasonStatsLlm>,
     training_trend: Option<PlayerTrainingTrendLlm>,
-    #[serde(rename = "ch")]
     club_history: Vec<PlayerHistoryLlm>,
+    staff_opinion: String,
 }
 
 #[derive(Serialize)]
 struct PlayerTechnicalLlm {
-    #[serde(rename = "cor")]
-    corners: f32,
-    #[serde(rename = "cro")]
-    crossing: f32,
-    #[serde(rename = "dri")]
-    dribbling: f32,
-    #[serde(rename = "fin")]
-    finishing: f32,
-    #[serde(rename = "fto")]
-    first_touch: f32,
-    #[serde(rename = "fk")]
-    free_kicks: f32,
-    #[serde(rename = "hea")]
-    heading: f32,
-    #[serde(rename = "lsh")]
-    long_shots: f32,
-    #[serde(rename = "lth")]
-    long_throws: f32,
-    #[serde(rename = "mar")]
-    marking: f32,
-    #[serde(rename = "pas")]
-    passing: f32,
-    #[serde(rename = "pen")]
-    penalty_taking: f32,
-    #[serde(rename = "tac")]
-    tackling: f32,
-    #[serde(rename = "tec")]
-    technique: f32,
+    corners: String,
+    crossing: String,
+    dribbling: String,
+    finishing: String,
+    first_touch: String,
+    free_kicks: String,
+    heading: String,
+    long_shots: String,
+    long_throws: String,
+    marking: String,
+    passing: String,
+    penalty_taking: String,
+    tackling: String,
+    technique: String,
 }
 
 #[derive(Serialize)]
 struct PlayerMentalLlm {
-    #[serde(rename = "agg")]
-    aggression: f32,
-    #[serde(rename = "ant")]
-    anticipation: f32,
-    #[serde(rename = "bra")]
-    bravery: f32,
-    #[serde(rename = "cmp")]
-    composure: f32,
-    #[serde(rename = "cnc")]
-    concentration: f32,
-    #[serde(rename = "dec")]
-    decisions: f32,
-    #[serde(rename = "det")]
-    determination: f32,
-    #[serde(rename = "fla")]
-    flair: f32,
-    #[serde(rename = "lea")]
-    leadership: f32,
-    #[serde(rename = "otb")]
-    off_the_ball: f32,
-    #[serde(rename = "pos")]
-    positioning: f32,
-    #[serde(rename = "tea")]
-    teamwork: f32,
-    #[serde(rename = "vis")]
-    vision: f32,
-    #[serde(rename = "wor")]
-    work_rate: f32,
+    aggression: String,
+    anticipation: String,
+    bravery: String,
+    composure: String,
+    concentration: String,
+    decisions: String,
+    determination: String,
+    flair: String,
+    leadership: String,
+    off_the_ball: String,
+    positioning: String,
+    teamwork: String,
+    vision: String,
+    work_rate: String,
 }
 
 #[derive(Serialize)]
 struct PlayerPhysicalLlm {
-    #[serde(rename = "acc")]
-    acceleration: f32,
-    #[serde(rename = "agi")]
-    agility: f32,
-    #[serde(rename = "bal")]
-    balance: f32,
-    #[serde(rename = "jum")]
-    jumping: f32,
-    #[serde(rename = "nfi")]
-    natural_fitness: f32,
-    #[serde(rename = "pac")]
-    pace: f32,
-    #[serde(rename = "sta")]
-    stamina: f32,
-    #[serde(rename = "str")]
-    strength: f32,
-    #[serde(rename = "mr")]
-    match_readiness: f32,
+    acceleration: String,
+    agility: String,
+    balance: String,
+    jumping: String,
+    natural_fitness: String,
+    pace: String,
+    stamina: String,
+    strength: String,
 }
 
-const PLAYER_INTERNAL_LEGEND: &str = r#"{"id":"Player ID","n":"Name","age":"Age","pos":"Positions","ft":"Foot(L/R/B)","cond":"Condition 0-100%","mor":"Morale 0-100","st":"OK|INJ Nd|BAN|REC Nd","tec":"Technical(0-20):cor=corners,cro=crossing,dri=dribbling,fin=finishing,fto=first_touch,fk=free_kicks,hea=heading,lsh=long_shots,lth=long_throws,mar=marking,pas=passing,pen=penalty_taking,tac=tackling,tec=technique","men":"Mental(0-20):agg=aggression,ant=anticipation,bra=bravery,cmp=composure,cnc=concentration,dec=decisions,det=determination,fla=flair,lea=leadership,otb=off_the_ball,pos=positioning,tea=teamwork,vis=vision,wor=work_rate","phy":"Physical(0-20):acc=acceleration,agi=agility,bal=balance,jum=jumping,nfi=natural_fitness,pac=pace,sta=stamina,str=strength,mr=match_readiness","ss":"Season:p=played,ps=subs,g=goals,a=assists,yc=yellows,ar=avg_rating;null if none","tt":"Training trend:tec,men,phy deltas;null if none","ch":"History(last 3):rep=reputation/10000,s=season,ap=apps,g=goals,a=assists,ar=avg_rating"}"#;
+#[derive(Serialize)]
+struct PlayerReputationLlm {
+    current: String,
+    home: String,
+    world: String,
+}
+
+// ─── Helpers ────────────────────────────────────────────────────────
+
+fn pct(val: f32) -> String {
+    format!("{}%", (val / 20.0 * 100.0).round() as u32)
+}
 
 // ─── Implementation ─────────────────────────────────────────────────
 
 impl Player {
-    pub fn llm_legend() -> &'static str {
-        PLAYER_LEGEND
-    }
-
-    pub fn internal_llm_legend() -> &'static str {
-        PLAYER_INTERNAL_LEGEND
-    }
-
     pub fn as_llm(&self, staff: &Staff) -> String {
         let now = chrono::Local::now().date_naive();
         let age = DateUtils::age(self.birth_date, now);
-        let pos = self.positions.display_positions().join(",");
-        let cond = self.player_attributes.condition_percentage();
+        let positions: BTreeMap<String, String> = self.positions.positions
+            .iter()
+            .filter(|p| p.level >= 5)
+            .map(|p| (
+                p.position.get_short_name().to_string(),
+                format!("{}%", p.level as u32 * 5),
+            ))
+            .collect();
         let morale = self.happiness.morale as u8;
         let status = self.status_string();
 
@@ -256,109 +166,77 @@ impl Player {
             None
         };
 
+        let t = &self.skills.technical;
+        let m = &self.skills.mental;
+        let p = &self.skills.physical;
+
+        let attr = &self.player_attributes;
+
         let player = PlayerLlm {
             id: self.id,
             age,
-            positions: pos,
+            height: format!("{:.2}m", attr.height as f32 / 100.0),
+            weight: format!("{}kg", attr.weight),
+            positions,
             preferred_foot: self.preferred_foot_str().to_string(),
-            skills: PlayerSkillsLlm {
-                technical: (self.skills.technical.average() * 10.0).round() / 10.0,
-                mental: (self.skills.mental.average() * 10.0).round() / 10.0,
-                physical: (self.skills.physical.average() * 10.0).round() / 10.0,
-            },
-            condition_pct: cond,
-            morale_pct: morale,
+            physical_condition: format!("{}%", attr.condition_percentage()),
+            match_readiness: pct(self.skills.physical.match_readiness),
+            fitness: format!("{}%", (attr.fitness as f32 / 10000.0 * 100.0).round() as u32),
+            jadedness: format!("{}%", (attr.jadedness as f32 / 10000.0 * 100.0).round() as u32),
+            morale: format!("{}%", morale),
             status,
+            reputation: PlayerReputationLlm {
+                current: format!("{}%", (self.player_attributes.current_reputation as f32 / 10000.0 * 100.0).round() as u32),
+                home: format!("{}%", (self.player_attributes.home_reputation as f32 / 10000.0 * 100.0).round() as u32),
+                world: format!("{}%", (self.player_attributes.world_reputation as f32 / 10000.0 * 100.0).round() as u32),
+            },
+            technical: PlayerTechnicalLlm {
+                corners: pct(t.corners),
+                crossing: pct(t.crossing),
+                dribbling: pct(t.dribbling),
+                finishing: pct(t.finishing),
+                first_touch: pct(t.first_touch),
+                free_kicks: pct(t.free_kicks),
+                heading: pct(t.heading),
+                long_shots: pct(t.long_shots),
+                long_throws: pct(t.long_throws),
+                marking: pct(t.marking),
+                passing: pct(t.passing),
+                penalty_taking: pct(t.penalty_taking),
+                tackling: pct(t.tackling),
+                technique: pct(t.technique),
+            },
+            mental: PlayerMentalLlm {
+                aggression: pct(m.aggression),
+                anticipation: pct(m.anticipation),
+                bravery: pct(m.bravery),
+                composure: pct(m.composure),
+                concentration: pct(m.concentration),
+                decisions: pct(m.decisions),
+                determination: pct(m.determination),
+                flair: pct(m.flair),
+                leadership: pct(m.leadership),
+                off_the_ball: pct(m.off_the_ball),
+                positioning: pct(m.positioning),
+                teamwork: pct(m.teamwork),
+                vision: pct(m.vision),
+                work_rate: pct(m.work_rate),
+            },
+            physical: PlayerPhysicalLlm {
+                acceleration: pct(p.acceleration),
+                agility: pct(p.agility),
+                balance: pct(p.balance),
+                jumping: pct(p.jumping),
+                natural_fitness: pct(p.natural_fitness),
+                pace: pct(p.pace),
+                stamina: pct(p.stamina),
+                strength: pct(p.strength),
+            },
             season_stats,
             friendly_stats,
             training_trend: self.training_trend_llm(),
             club_history: self.club_history_vec(),
             staff_opinion: Self::staff_relationship_llm(staff, self.id),
-        };
-
-        serde_json::to_string(&player).unwrap()
-    }
-
-    pub fn as_internal_llm(&self) -> String {
-        let now = chrono::Local::now().date_naive();
-        let age = DateUtils::age(self.birth_date, now);
-        let pos = self.positions.display_positions().join(",");
-        let cond = self.player_attributes.condition_percentage();
-        let morale = self.happiness.morale as u8;
-        let status = self.status_string();
-
-        let st = &self.statistics;
-        let season_stats = if st.played > 0 || st.played_subs > 0 {
-            Some(PlayerSeasonStatsLlm {
-                played: st.played,
-                played_subs: st.played_subs,
-                goals: st.goals,
-                assists: st.assists,
-                yellow_cards: st.yellow_cards,
-                average_rating: st.average_rating,
-            })
-        } else {
-            None
-        };
-
-        let t = &self.skills.technical;
-        let m = &self.skills.mental;
-        let p = &self.skills.physical;
-
-        let player = PlayerInternalLlm {
-            id: self.id,
-            age,
-            positions: pos,
-            preferred_foot: self.preferred_foot_str().to_string(),
-            condition_pct: cond,
-            morale_pct: morale,
-            status,
-            technical: PlayerTechnicalLlm {
-                corners: t.corners,
-                crossing: t.crossing,
-                dribbling: t.dribbling,
-                finishing: t.finishing,
-                first_touch: t.first_touch,
-                free_kicks: t.free_kicks,
-                heading: t.heading,
-                long_shots: t.long_shots,
-                long_throws: t.long_throws,
-                marking: t.marking,
-                passing: t.passing,
-                penalty_taking: t.penalty_taking,
-                tackling: t.tackling,
-                technique: t.technique,
-            },
-            mental: PlayerMentalLlm {
-                aggression: m.aggression,
-                anticipation: m.anticipation,
-                bravery: m.bravery,
-                composure: m.composure,
-                concentration: m.concentration,
-                decisions: m.decisions,
-                determination: m.determination,
-                flair: m.flair,
-                leadership: m.leadership,
-                off_the_ball: m.off_the_ball,
-                positioning: m.positioning,
-                teamwork: m.teamwork,
-                vision: m.vision,
-                work_rate: m.work_rate,
-            },
-            physical: PlayerPhysicalLlm {
-                acceleration: p.acceleration,
-                agility: p.agility,
-                balance: p.balance,
-                jumping: p.jumping,
-                natural_fitness: p.natural_fitness,
-                pace: p.pace,
-                stamina: p.stamina,
-                strength: p.strength,
-                match_readiness: p.match_readiness,
-            },
-            season_stats,
-            training_trend: self.training_trend_llm(),
-            club_history: self.club_history_vec(),
         };
 
         serde_json::to_string(&player).unwrap()

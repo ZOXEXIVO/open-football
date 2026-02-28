@@ -36,7 +36,12 @@ impl CountryResult {
             .collect();
 
         for club in &mut country.clubs {
-            // Find main team's league as fallback for youth/reserve teams without league_id
+            // Get main team info — used for all teams in player history
+            // so history always shows "Juventus" instead of "Juventus B" / "Juventus U20"
+            let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
+                .find(|t| t.team_type == crate::TeamType::Main)
+                .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
+
             let main_team_league = club.teams.teams.iter()
                 .find(|t| t.team_type == crate::TeamType::Main)
                 .and_then(|t| t.league_id)
@@ -58,14 +63,18 @@ impl CountryResult {
                     continue;
                 }
 
-                let team_name = team.name.clone();
-                let team_slug = team.slug.clone();
-                let team_reputation = team.reputation.world;
+                // Always use main team info in history (show club name, not sub-team)
+                let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
+                    (crate::TeamType::Main, _) | (_, None) => {
+                        (team.name.clone(), team.slug.clone(), team.reputation.world)
+                    }
+                    (_, Some((name, slug, rep))) => {
+                        (name.clone(), slug.clone(), *rep)
+                    }
+                };
 
-                let (league_name, league_slug) = team.league_id
-                    .and_then(|lid| league_lookup.get(&lid))
-                    .cloned()
-                    .unwrap_or_else(|| main_team_league.clone());
+                // Always use main team's league in history
+                let (league_name, league_slug) = main_team_league.clone();
 
                 for player in &mut team.players.players {
                     player.snapshot_season_statistics(

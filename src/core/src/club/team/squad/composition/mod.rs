@@ -1,5 +1,3 @@
-use crate::club::player::player::Player;
-use crate::club::staff::staff::Staff;
 use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
 use crate::Team;
 use chrono::NaiveDate;
@@ -11,23 +9,14 @@ use super::{execute_moves, record_player_decisions, record_moves};
 
 #[derive(Serialize)]
 struct SquadQueryLlm {
-    #[serde(rename = "s")]
     staff: serde_json::Value,
-    #[serde(rename = "sl")]
-    staff_legend: serde_json::Value,
-    #[serde(rename = "pl")]
-    player_legend: serde_json::Value,
-    #[serde(rename = "t")]
     teams: Vec<TeamPlayersLlm>,
 }
 
 #[derive(Serialize)]
 struct TeamPlayersLlm {
-    #[serde(rename = "l")]
     label: String,
-    #[serde(rename = "ti")]
     team_index: usize,
-    #[serde(rename = "p")]
     players: Vec<serde_json::Value>,
 }
 
@@ -107,7 +96,6 @@ impl SquadComposition {
 
         format!(
             include_str!("prompt.md"),
-            staff_legend = Staff::llm_legend(),
             staff_data = staff_data,
             teams_section = teams_section,
             previous_moves_section = previous_moves_section,
@@ -121,10 +109,6 @@ impl SquadComposition {
         staff_data: &str,
     ) -> String {
         let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
-        let staff_legend_json: serde_json::Value =
-            serde_json::from_str(Staff::llm_legend()).unwrap();
-        let player_legend_json: serde_json::Value =
-            serde_json::from_str(Player::llm_legend()).unwrap();
 
         let squad_teams: Vec<TeamPlayersLlm> = team_indices
             .iter()
@@ -147,8 +131,6 @@ impl SquadComposition {
 
         let squad_data = SquadQueryLlm {
             staff: staff_json,
-            staff_legend: staff_legend_json,
-            player_legend: player_legend_json,
             teams: squad_teams,
         };
 

@@ -1,5 +1,4 @@
 use crate::club::player::player::Player;
-use crate::club::staff::staff::Staff;
 use crate::shared::{Currency, CurrencyValue};
 use crate::{PlayerStatusType, Team, TransferItem};
 use chrono::NaiveDate;
@@ -24,35 +23,22 @@ struct AiListingDecision {
 
 #[derive(Serialize)]
 struct TransferListQueryLlm {
-    #[serde(rename = "s")]
     staff: serde_json::Value,
-    #[serde(rename = "sl")]
-    staff_legend: serde_json::Value,
-    #[serde(rename = "pl")]
-    player_legend: serde_json::Value,
-    #[serde(rename = "tl")]
     current_transfer_list: Vec<TransferListEntryLlm>,
-    #[serde(rename = "t")]
     teams: Vec<TeamPlayersLlm>,
 }
 
 #[derive(Serialize)]
 struct TransferListEntryLlm {
-    #[serde(rename = "id")]
     player_id: u32,
-    #[serde(rename = "ask")]
     asking_price: f64,
 }
 
 #[derive(Serialize)]
 struct TeamPlayersLlm {
-    #[serde(rename = "l")]
     label: String,
-    #[serde(rename = "ti")]
     team_index: usize,
-    #[serde(rename = "cnt")]
     player_count: usize,
-    #[serde(rename = "p")]
     players: Vec<serde_json::Value>,
 }
 
@@ -124,7 +110,6 @@ impl TransferListManager {
 
         format!(
             include_str!("prompt.md"),
-            staff_legend = Staff::llm_legend(),
             staff_data = staff_data,
             teams_section = teams_section,
             current_tl = current_tl,
@@ -141,10 +126,6 @@ impl TransferListManager {
         staff_data: &str,
     ) -> String {
         let staff_json: serde_json::Value = serde_json::from_str(staff_data).unwrap();
-        let staff_legend_json: serde_json::Value =
-            serde_json::from_str(Staff::llm_legend()).unwrap();
-        let player_legend_json: serde_json::Value =
-            serde_json::from_str(Player::llm_legend()).unwrap();
 
         let current_transfer_list: Vec<TransferListEntryLlm> = teams[main_idx]
             .transfer_list
@@ -178,8 +159,6 @@ impl TransferListManager {
 
         let query_data = TransferListQueryLlm {
             staff: staff_json,
-            staff_legend: staff_legend_json,
-            player_legend: player_legend_json,
             current_transfer_list,
             teams: squad_teams,
         };

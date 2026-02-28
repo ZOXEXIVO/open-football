@@ -127,7 +127,7 @@ pub async fn player_matches_action(
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: if team.team_type == core::TeamType::Main { String::new() } else { i18n.t(team.team_type.as_i18n_key()).to_string() },
+        sub_title_suffix: String::new(),
         sub_title: team.name.clone(),
         sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
         sub_title_country_code: String::new(),
