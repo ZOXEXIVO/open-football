@@ -85,6 +85,7 @@ pub async fn watchlist_page_action(
             let country = simulator_data.country(player.country_id)?;
             let position = player.positions.display_positions().join(", ");
             let league = team.league_id.and_then(|id| simulator_data.league(id));
+            let head_coach = team.staffs.head_coach();
 
             Some(WatchlistPlayerDto {
                 id: player.id,
@@ -96,7 +97,11 @@ pub async fn watchlist_page_action(
                 country_slug: country.slug.clone(),
                 age: DateUtils::age(player.birth_date, now),
                 current_ability: get_current_ability_stars(player),
-                potential_ability: get_potential_ability_stars(player),
+                potential_ability: get_potential_ability_stars_by_staff(
+                    player,
+                    head_coach.staff_attributes.knowledge.judging_player_potential,
+                    head_coach.id,
+                ),
                 conditions: get_conditions(player),
                 team_name: team.name.clone(),
                 team_slug: team.slug.clone(),
@@ -177,6 +182,18 @@ fn get_current_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
 }
 
-fn get_potential_ability_stars(player: &Player) -> u8 {
-    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
+fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, staff_id: u32) -> u8 {
+    let raw_stars = 5.0 * (player.player_attributes.potential_ability as f32 / 200.0);
+    let accuracy = (staff_judging as f32 / 20.0).clamp(0.0, 1.0);
+    let noise_scale = (1.0 - accuracy) * 1.5;
+
+    let hash = staff_id
+        .wrapping_mul(2654435761)
+        .wrapping_add(player.id.wrapping_mul(2246822519));
+    let hash = hash ^ (hash >> 16);
+    let hash = hash.wrapping_mul(0x45d9f3b);
+    let hash = hash ^ (hash >> 16);
+    let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
+
+    (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
 }

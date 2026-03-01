@@ -412,9 +412,17 @@ impl PlayerGenerator {
 
         // Skills generated BEFORE attributes (CA now derives from skills)
         let positions = Self::generate_positions(position);
-        let skills = Self::generate_skills(&position, age, rep_factor);
+        let mut skills = Self::generate_skills(&position, age, rep_factor);
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, &skills, &positions);
+
+        // High-potential youth players should not have very low skills
+        if is_youth && player_attributes.potential_ability >= 120 {
+            let min_skill = 5.0;
+            skills.technical.raise_floor(min_skill);
+            skills.mental.raise_floor(min_skill);
+            skills.physical.raise_floor(min_skill);
+        }
 
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))

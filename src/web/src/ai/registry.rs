@@ -154,7 +154,8 @@ impl AiProviderRegistry {
             let start = std::time::Instant::now();
             let result = match entry.provider.query(req.query, req.format).await {
                 Ok(r) => Some(r),
-                Err(_e) => {
+                Err(e) => {
+                    debug!("AI provider '{}' (id={}) failed: {}", entry.name, entry.id, e);
                     entry.stats.error_count.fetch_add(1, Ordering::Relaxed);
                     None
                 }

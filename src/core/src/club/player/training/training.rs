@@ -35,6 +35,7 @@ impl PlayerTraining {
         let coach_quality = Self::calculate_coach_effectiveness(coach, &session.session_type);
         let player_receptiveness = Self::calculate_player_receptiveness(player, coach, date.date());
         let age_factor = Self::calculate_age_training_factor(player.age(date.date()));
+        let potential_factor = Self::calculate_potential_development_factor(player, date.date());
 
         // Intensity multipliers
         let intensity_multiplier = match session.intensity {
@@ -146,6 +147,11 @@ impl PlayerTraining {
         effects.technical_gains = Self::apply_bonus_to_technical(effects.technical_gains, professionalism_bonus);
         effects.mental_gains = Self::apply_bonus_to_mental(effects.mental_gains, professionalism_bonus);
 
+        // Apply potential development factor to all skill gains
+        effects.physical_gains = Self::scale_physical(effects.physical_gains, potential_factor);
+        effects.technical_gains = Self::scale_technical(effects.technical_gains, potential_factor);
+        effects.mental_gains = Self::scale_mental(effects.mental_gains, potential_factor);
+
         PlayerTrainingResult::new(player.id, effects)
     }
 
@@ -249,5 +255,67 @@ impl PlayerTraining {
             34..=36 => 0.3,
             _ => 0.1,         // Very old players barely improve
         }
+    }
+
+    /// Players with large gap between potential and current ability develop faster.
+    /// The effect is amplified for younger players who have more room to grow.
+    fn calculate_potential_development_factor(player: &Player, sim_date: chrono::NaiveDate) -> f32 {
+        let pa = player.player_attributes.potential_ability as f32;
+        let ca = player.player_attributes.current_ability as f32;
+
+        if pa <= ca || pa == 0.0 {
+            return 1.0;
+        }
+
+        // Gap ratio: 0.0 (no gap) to 1.0 (CA=0, PA=max)
+        let gap_ratio = (pa - ca) / pa;
+
+        // Age multiplier: young players benefit more from high potential
+        let age = player.age(sim_date);
+        let age_mult = match age {
+            0..=18 => 1.5,
+            19..=21 => 1.3,
+            22..=24 => 1.0,
+            25..=27 => 0.6,
+            28..=30 => 0.3,
+            _ => 0.1,
+        };
+
+        // Result: 1.0 (no boost) up to ~2.0 for young high-PA players far from ceiling
+        1.0 + gap_ratio * age_mult * 0.7
+    }
+
+    fn scale_physical(mut gains: PhysicalGains, factor: f32) -> PhysicalGains {
+        gains.stamina *= factor;
+        gains.strength *= factor;
+        gains.pace *= factor;
+        gains.agility *= factor;
+        gains.balance *= factor;
+        gains.jumping *= factor;
+        gains.natural_fitness *= factor;
+        gains
+    }
+
+    fn scale_technical(mut gains: TechnicalGains, factor: f32) -> TechnicalGains {
+        gains.first_touch *= factor;
+        gains.passing *= factor;
+        gains.crossing *= factor;
+        gains.dribbling *= factor;
+        gains.finishing *= factor;
+        gains.heading *= factor;
+        gains.tackling *= factor;
+        gains.technique *= factor;
+        gains
+    }
+
+    fn scale_mental(mut gains: MentalGains, factor: f32) -> MentalGains {
+        gains.concentration *= factor;
+        gains.decisions *= factor;
+        gains.positioning *= factor;
+        gains.teamwork *= factor;
+        gains.vision *= factor;
+        gains.work_rate *= factor;
+        gains.leadership *= factor;
+        gains
     }
 }

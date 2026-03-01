@@ -122,6 +122,10 @@ pub async fn team_get_action(
         })
         .unwrap_or_default();
 
+    let head_coach = team.staffs.head_coach();
+    let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
+    let staff_id = head_coach.id;
+
     let mut players: Vec<TeamPlayer> = team
         .players()
         .iter()
@@ -160,7 +164,7 @@ pub async fn team_get_action(
                 conditions: get_conditions(p),
                 value: FormattingUtils::format_money(p.value(now)),
                 current_ability: get_current_ability_stars(p),
-                potential_ability: get_potential_ability_stars(p),
+                potential_ability: get_potential_ability_stars_by_staff(p, staff_judging, staff_id),
                 age: DateUtils::age(p.birth_date, now),
                 played: p.statistics.played + p.friendly_statistics.played,
                 played_subs: p.statistics.played_subs + p.friendly_statistics.played_subs,
@@ -227,7 +231,7 @@ pub async fn team_get_action(
                     conditions: get_conditions(player),
                     value: FormattingUtils::format_money(player.value(now)),
                     current_ability: get_current_ability_stars(player),
-                    potential_ability: get_potential_ability_stars(player),
+                    potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
                     age: DateUtils::age(player.birth_date, now),
                     played: player.statistics.played + player.friendly_statistics.played,
                     played_subs: player.statistics.played_subs + player.friendly_statistics.played_subs,
@@ -324,8 +328,23 @@ pub fn get_current_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
 }
 
-pub fn get_potential_ability_stars(player: &Player) -> u8 {
-    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
+/// Potential ability stars as seen through staff's judging ability.
+/// Higher `judging_potential` (1-20) means more accurate assessment.
+pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, staff_id: u32) -> u8 {
+    let raw_stars = 5.0 * (player.player_attributes.potential_ability as f32 / 200.0);
+    let accuracy = (staff_judging as f32 / 20.0).clamp(0.0, 1.0);
+    let noise_scale = (1.0 - accuracy) * 1.5;
+
+    // Deterministic noise per staff+player pair
+    let hash = staff_id
+        .wrapping_mul(2654435761)
+        .wrapping_add(player.id.wrapping_mul(2246822519));
+    let hash = hash ^ (hash >> 16);
+    let hash = hash.wrapping_mul(0x45d9f3b);
+    let hash = hash ^ (hash >> 16);
+    let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
+
+    (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
 }
 
 fn format_combined_rating(stats: &core::PlayerStatistics, friendly: &core::PlayerStatistics) -> String {

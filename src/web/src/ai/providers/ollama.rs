@@ -1,4 +1,4 @@
-use log::{debug, info};
+use log::{debug, error};
 use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
 use super::AiProvider;
@@ -41,10 +41,13 @@ impl AiProvider for OllamaRequest {
 
             match response {
                 Ok(ollama_response) => {
-                    debug!("Ollama Response: {}", ollama_response.response);
+                    debug!("Ollama response from {}:{} model={}: {} bytes", self.host, self.port, self.model, ollama_response.response.len());
                     Ok(ollama_response.response)
                 },
-                Err(e) => Err(format!("Ollama request error: {}", e))
+                Err(e) => {
+                    debug!("Ollama request failed: host={}:{}, model={}, error={}", self.host, self.port, self.model, e);
+                    Err(format!("Ollama request error: {}", e))
+                }
             }
         })
     }

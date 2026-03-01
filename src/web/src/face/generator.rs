@@ -202,7 +202,7 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
         let lx: f32 = 32.0 + ax;
         let rx: f32 = 48.0 - ax * 0.6;
         let ey: f32 = 47.0 + ay;
-        let lid = dk(skin, 0.65);
+        let lid = dk(skin, 0.78);
         let sclera = "#ECE9E6";
 
         match eye_st {
@@ -210,28 +210,31 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
                 // Standard
                 s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{ey}" rx="5" ry="2.8" fill="{sclera}"/>"#));
                 s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{ey}" rx="5" ry="2.8" fill="{sclera}"/>"#));
-                s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{ey}" rx="1.6" ry="1.4" fill="{}"/>"#, eye));
-                s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{ey}" rx="1.6" ry="1.4" fill="{}"/>"#, eye));
-                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.75" fill="#1A1A1A"/>"##));
-                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.75" fill="#1A1A1A"/>"##));
+                s.push_str(&format!(r#"<defs><clipPath id="cL"><ellipse cx="{lx}" cy="{ey}" rx="5" ry="2.8"/></clipPath><clipPath id="cR"><ellipse cx="{rx}" cy="{ey}" rx="5" ry="2.8"/></clipPath></defs>"#));
+                s.push_str(&format!(r#"<g clip-path="url(#cL)"><ellipse cx="{lx}" cy="{ey}" rx="1.6" ry="1.4" fill="{}"/>"#, eye));
+                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.75" fill="#1A1A1A"/></g>"##));
+                s.push_str(&format!(r#"<g clip-path="url(#cR)"><ellipse cx="{rx}" cy="{ey}" rx="1.6" ry="1.4" fill="{}"/>"#, eye));
+                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.75" fill="#1A1A1A"/></g>"##));
             }
             1 => {
                 // Narrower
                 s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{ey}" rx="5" ry="2.2" fill="{sclera}"/>"#));
                 s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{ey}" rx="5" ry="2.2" fill="{sclera}"/>"#));
-                s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{ey}" rx="1.4" ry="1.2" fill="{}"/>"#, eye));
-                s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{ey}" rx="1.4" ry="1.2" fill="{}"/>"#, eye));
-                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.65" fill="#1A1A1A"/>"##));
-                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.65" fill="#1A1A1A"/>"##));
+                s.push_str(&format!(r#"<defs><clipPath id="cL"><ellipse cx="{lx}" cy="{ey}" rx="5" ry="2.2"/></clipPath><clipPath id="cR"><ellipse cx="{rx}" cy="{ey}" rx="5" ry="2.2"/></clipPath></defs>"#));
+                s.push_str(&format!(r#"<g clip-path="url(#cL)"><ellipse cx="{lx}" cy="{ey}" rx="1.4" ry="1.2" fill="{}"/>"#, eye));
+                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.65" fill="#1A1A1A"/></g>"##));
+                s.push_str(&format!(r#"<g clip-path="url(#cR)"><ellipse cx="{rx}" cy="{ey}" rx="1.4" ry="1.2" fill="{}"/>"#, eye));
+                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.65" fill="#1A1A1A"/></g>"##));
             }
             _ => {
                 // Rounder
                 s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{ey}" rx="4.8" ry="3.2" fill="{sclera}"/>"#));
                 s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{ey}" rx="4.8" ry="3.2" fill="{sclera}"/>"#));
-                s.push_str(&format!(r#"<ellipse cx="{lx}" cy="{}" rx="1.8" ry="1.6" fill="{}"/>"#, ey + 0.2, eye));
-                s.push_str(&format!(r#"<ellipse cx="{rx}" cy="{}" rx="1.8" ry="1.6" fill="{}"/>"#, ey + 0.2, eye));
-                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.85" fill="#1A1A1A"/>"##));
-                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.85" fill="#1A1A1A"/>"##));
+                s.push_str(&format!(r#"<defs><clipPath id="cL"><ellipse cx="{lx}" cy="{ey}" rx="4.8" ry="3.2"/></clipPath><clipPath id="cR"><ellipse cx="{rx}" cy="{ey}" rx="4.8" ry="3.2"/></clipPath></defs>"#));
+                s.push_str(&format!(r#"<g clip-path="url(#cL)"><ellipse cx="{lx}" cy="{}" rx="1.8" ry="1.6" fill="{}"/>"#, ey + 0.2, eye));
+                s.push_str(&format!(r##"<circle cx="{lx}" cy="{ey}" r="0.85" fill="#1A1A1A"/></g>"##));
+                s.push_str(&format!(r#"<g clip-path="url(#cR)"><ellipse cx="{rx}" cy="{}" rx="1.8" ry="1.6" fill="{}"/>"#, ey + 0.2, eye));
+                s.push_str(&format!(r##"<circle cx="{rx}" cy="{ey}" r="0.85" fill="#1A1A1A"/></g>"##));
             }
         }
         // Upper eyelid
@@ -245,12 +248,12 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
         ));
         // Eyelid crease
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {}" stroke="{}" stroke-width="0.35" fill="none" opacity="0.2"/>"#,
-            lx - 4.5, ey - 2.0, lx, ey - 5.0, lx + 4.5, ey - 2.0, lid
+            r#"<path d="M{} {} Q{} {} {} {}" stroke="{}" stroke-width="0.3" fill="none" opacity="0.12"/>"#,
+            lx - 4.5, ey - 3.2, lx, ey - 6.0, lx + 4.5, ey - 3.2, lid
         ));
         s.push_str(&format!(
-            r#"<path d="M{} {} Q{} {} {} {}" stroke="{}" stroke-width="0.35" fill="none" opacity="0.2"/>"#,
-            rx - 4.5, ey - 2.0, rx, ey - 5.0, rx + 4.5, ey - 2.0, lid
+            r#"<path d="M{} {} Q{} {} {} {}" stroke="{}" stroke-width="0.3" fill="none" opacity="0.12"/>"#,
+            rx - 4.5, ey - 3.2, rx, ey - 6.0, rx + 4.5, ey - 3.2, lid
         ));
         // Catchlight
         s.push_str(&format!(

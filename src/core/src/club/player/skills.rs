@@ -120,6 +120,23 @@ impl Technical {
             / 14.0
     }
 
+    pub fn raise_floor(&mut self, min: f32) {
+        self.corners = self.corners.max(min);
+        self.crossing = self.crossing.max(min);
+        self.dribbling = self.dribbling.max(min);
+        self.finishing = self.finishing.max(min);
+        self.first_touch = self.first_touch.max(min);
+        self.free_kicks = self.free_kicks.max(min);
+        self.heading = self.heading.max(min);
+        self.long_shots = self.long_shots.max(min);
+        self.long_throws = self.long_throws.max(min);
+        self.marking = self.marking.max(min);
+        self.passing = self.passing.max(min);
+        self.penalty_taking = self.penalty_taking.max(min);
+        self.tackling = self.tackling.max(min);
+        self.technique = self.technique.max(min);
+    }
+
     pub fn rest(&mut self) {}
 }
 
@@ -160,6 +177,23 @@ impl Mental {
             / 14.0
     }
 
+    pub fn raise_floor(&mut self, min: f32) {
+        self.aggression = self.aggression.max(min);
+        self.anticipation = self.anticipation.max(min);
+        self.bravery = self.bravery.max(min);
+        self.composure = self.composure.max(min);
+        self.concentration = self.concentration.max(min);
+        self.decisions = self.decisions.max(min);
+        self.determination = self.determination.max(min);
+        self.flair = self.flair.max(min);
+        self.leadership = self.leadership.max(min);
+        self.off_the_ball = self.off_the_ball.max(min);
+        self.positioning = self.positioning.max(min);
+        self.teamwork = self.teamwork.max(min);
+        self.vision = self.vision.max(min);
+        self.work_rate = self.work_rate.max(min);
+    }
+
     pub fn rest(&mut self) {}
 }
 
@@ -188,6 +222,17 @@ impl Physical {
             + self.stamina
             + self.strength)
             / 8.0
+    }
+
+    pub fn raise_floor(&mut self, min: f32) {
+        self.acceleration = self.acceleration.max(min);
+        self.agility = self.agility.max(min);
+        self.balance = self.balance.max(min);
+        self.jumping = self.jumping.max(min);
+        self.natural_fitness = self.natural_fitness.max(min);
+        self.pace = self.pace.max(min);
+        self.stamina = self.stamina.max(min);
+        self.strength = self.strength.max(min);
     }
 
     pub fn rest(&mut self) {}
