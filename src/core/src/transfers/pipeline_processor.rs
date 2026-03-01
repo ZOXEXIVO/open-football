@@ -156,10 +156,21 @@ impl PipelineProcessor {
                     plan.scouting_assignments.clear();
                     plan.scouting_reports.clear();
                     plan.shortlists.clear();
+                } else {
+                    // On re-evaluation: remove completed assignments and exhausted shortlists
+                    // so new requests can be scouted fresh
+                    plan.scouting_assignments.retain(|a| !a.completed);
+                    plan.shortlists.retain(|s| !s.all_exhausted());
                 }
 
                 plan.total_budget = eval.total_budget;
                 plan.max_concurrent_negotiations = eval.max_concurrent;
+
+                // Track the highest request ID so re-evaluations don't create duplicate IDs
+                if let Some(max_id) = eval.requests.iter().map(|r| r.id).max() {
+                    plan.next_request_id = max_id + 1;
+                }
+
                 plan.transfer_requests.extend(eval.requests);
                 plan.loan_out_candidates.extend(eval.loan_outs);
                 plan.last_evaluation_date = Some(date);
