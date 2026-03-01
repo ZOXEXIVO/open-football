@@ -350,7 +350,7 @@ fn get_happiness_factors(player: &Player, i18n: &crate::I18n) -> Vec<HappinessFa
 fn get_recent_events(player: &Player, i18n: &crate::I18n) -> Vec<RecentEventDto> {
     use core::HappinessEventType;
 
-    player
+    let mut events: Vec<_> = player
         .happiness
         .recent_events
         .iter()
@@ -378,7 +378,11 @@ fn get_recent_events(player: &Player, i18n: &crate::I18n) -> Vec<RecentEventDto>
                 days_ago: e.days_ago,
             }
         })
-        .collect()
+        .collect();
+
+    events.sort_by(|a, b| b.days_ago.cmp(&a.days_ago));
+
+    events
 }
 
 fn get_concerns(player: &Player, i18n: &crate::I18n) -> Vec<String> {
