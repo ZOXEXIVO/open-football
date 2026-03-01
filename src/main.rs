@@ -25,7 +25,7 @@ async fn main() {
 
     ai_registry.add(
         "Local Ollama",
-        Box::new(OllamaRequest::new("http://localhost", 11434, "gpt-oss:20b")),
+        Box::new(OllamaRequest::new("http://localhost", 11434, "qwen3:8b")),
     ).await;
 
     // Register service so core can use it via trait — no tokio in core

@@ -34,33 +34,46 @@ impl PlayerTrainingResult {
         let current_date = data.date.date();
         // Get mutable reference to the player
         if let Some(player) = data.player_mut(self.player_id) {
-            // Apply physical gains
-            player.skills.physical.stamina = (player.skills.physical.stamina + self.effects.physical_gains.stamina).min(20.0);
-            player.skills.physical.strength = (player.skills.physical.strength + self.effects.physical_gains.strength).min(20.0);
-            player.skills.physical.pace = (player.skills.physical.pace + self.effects.physical_gains.pace).min(20.0);
-            player.skills.physical.agility = (player.skills.physical.agility + self.effects.physical_gains.agility).min(20.0);
-            player.skills.physical.balance = (player.skills.physical.balance + self.effects.physical_gains.balance).min(20.0);
-            player.skills.physical.jumping = (player.skills.physical.jumping + self.effects.physical_gains.jumping).min(20.0);
-            player.skills.physical.natural_fitness = (player.skills.physical.natural_fitness + self.effects.physical_gains.natural_fitness).min(20.0);
+            // Gate skill gains by ability gap: players near potential barely grow
+            let current_ability = player.player_attributes.current_ability as f32;
+            let potential_ability = player.player_attributes.potential_ability as f32;
+            let growth_factor = if potential_ability <= 0.0 {
+                0.05 // No potential set — minimal growth
+            } else {
+                let gap_ratio = (potential_ability - current_ability) / potential_ability;
+                gap_ratio.clamp(0.05, 1.0) // At least 5% gains (tiny beyond potential)
+            };
 
-            // Apply technical gains
-            player.skills.technical.first_touch = (player.skills.technical.first_touch + self.effects.technical_gains.first_touch).min(20.0);
-            player.skills.technical.passing = (player.skills.technical.passing + self.effects.technical_gains.passing).min(20.0);
-            player.skills.technical.crossing = (player.skills.technical.crossing + self.effects.technical_gains.crossing).min(20.0);
-            player.skills.technical.dribbling = (player.skills.technical.dribbling + self.effects.technical_gains.dribbling).min(20.0);
-            player.skills.technical.finishing = (player.skills.technical.finishing + self.effects.technical_gains.finishing).min(20.0);
-            player.skills.technical.heading = (player.skills.technical.heading + self.effects.technical_gains.heading).min(20.0);
-            player.skills.technical.tackling = (player.skills.technical.tackling + self.effects.technical_gains.tackling).min(20.0);
-            player.skills.technical.technique = (player.skills.technical.technique + self.effects.technical_gains.technique).min(20.0);
+            // Apply physical gains (scaled by growth factor)
+            player.skills.physical.stamina = (player.skills.physical.stamina + self.effects.physical_gains.stamina * growth_factor).min(20.0);
+            player.skills.physical.strength = (player.skills.physical.strength + self.effects.physical_gains.strength * growth_factor).min(20.0);
+            player.skills.physical.pace = (player.skills.physical.pace + self.effects.physical_gains.pace * growth_factor).min(20.0);
+            player.skills.physical.agility = (player.skills.physical.agility + self.effects.physical_gains.agility * growth_factor).min(20.0);
+            player.skills.physical.balance = (player.skills.physical.balance + self.effects.physical_gains.balance * growth_factor).min(20.0);
+            player.skills.physical.jumping = (player.skills.physical.jumping + self.effects.physical_gains.jumping * growth_factor).min(20.0);
+            player.skills.physical.natural_fitness = (player.skills.physical.natural_fitness + self.effects.physical_gains.natural_fitness * growth_factor).min(20.0);
 
-            // Apply mental gains
-            player.skills.mental.concentration = (player.skills.mental.concentration + self.effects.mental_gains.concentration).min(20.0);
-            player.skills.mental.decisions = (player.skills.mental.decisions + self.effects.mental_gains.decisions).min(20.0);
-            player.skills.mental.positioning = (player.skills.mental.positioning + self.effects.mental_gains.positioning).min(20.0);
-            player.skills.mental.teamwork = (player.skills.mental.teamwork + self.effects.mental_gains.teamwork).min(20.0);
-            player.skills.mental.vision = (player.skills.mental.vision + self.effects.mental_gains.vision).min(20.0);
-            player.skills.mental.work_rate = (player.skills.mental.work_rate + self.effects.mental_gains.work_rate).min(20.0);
-            player.skills.mental.leadership = (player.skills.mental.leadership + self.effects.mental_gains.leadership).min(20.0);
+            // Apply technical gains (scaled by growth factor)
+            player.skills.technical.first_touch = (player.skills.technical.first_touch + self.effects.technical_gains.first_touch * growth_factor).min(20.0);
+            player.skills.technical.passing = (player.skills.technical.passing + self.effects.technical_gains.passing * growth_factor).min(20.0);
+            player.skills.technical.crossing = (player.skills.technical.crossing + self.effects.technical_gains.crossing * growth_factor).min(20.0);
+            player.skills.technical.dribbling = (player.skills.technical.dribbling + self.effects.technical_gains.dribbling * growth_factor).min(20.0);
+            player.skills.technical.finishing = (player.skills.technical.finishing + self.effects.technical_gains.finishing * growth_factor).min(20.0);
+            player.skills.technical.heading = (player.skills.technical.heading + self.effects.technical_gains.heading * growth_factor).min(20.0);
+            player.skills.technical.tackling = (player.skills.technical.tackling + self.effects.technical_gains.tackling * growth_factor).min(20.0);
+            player.skills.technical.technique = (player.skills.technical.technique + self.effects.technical_gains.technique * growth_factor).min(20.0);
+
+            // Apply mental gains (scaled by growth factor)
+            player.skills.mental.concentration = (player.skills.mental.concentration + self.effects.mental_gains.concentration * growth_factor).min(20.0);
+            player.skills.mental.decisions = (player.skills.mental.decisions + self.effects.mental_gains.decisions * growth_factor).min(20.0);
+            player.skills.mental.positioning = (player.skills.mental.positioning + self.effects.mental_gains.positioning * growth_factor).min(20.0);
+            player.skills.mental.teamwork = (player.skills.mental.teamwork + self.effects.mental_gains.teamwork * growth_factor).min(20.0);
+            player.skills.mental.vision = (player.skills.mental.vision + self.effects.mental_gains.vision * growth_factor).min(20.0);
+            player.skills.mental.work_rate = (player.skills.mental.work_rate + self.effects.mental_gains.work_rate * growth_factor).min(20.0);
+            player.skills.mental.leadership = (player.skills.mental.leadership + self.effects.mental_gains.leadership * growth_factor).min(20.0);
+
+            // Recalculate current_ability from actual skill values
+            player.player_attributes.current_ability = player.skills.calculate_ability();
 
             // Apply fatigue changes
             let new_condition = player.player_attributes.condition as f32 - self.effects.fatigue_change;

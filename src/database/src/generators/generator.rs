@@ -407,6 +407,10 @@ impl DatabaseGenerator {
 
         let is_youth = matches!(team_type, TeamType::U18 | TeamType::U19);
 
+        // Youth gem system: 10-20% of non-main team players get boosted reputation
+        let is_non_main = *team_type != TeamType::Main;
+        let gem_rep = (team_reputation as f32 * 2.5).min(10000.0) as u16;
+
         let foreign_players: &[ForeignPlayerEntry] = league_id
             .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
             .map(|l| l.foreign_players.as_slice())
@@ -415,6 +419,13 @@ impl DatabaseGenerator {
         let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
 
         let mut generate_one = |pos: PositionType| -> Player {
+            // 10-20% chance this player is a youth gem with boosted skills
+            let effective_rep = if is_non_main && IntegerUtils::random(0, 100) < 15 {
+                gem_rep
+            } else {
+                team_reputation
+            };
+
             if total_foreign_weight > 0 {
                 let roll = IntegerUtils::random(0, 100);
                 if roll < total_foreign_weight {
@@ -437,12 +448,12 @@ impl DatabaseGenerator {
                                 },
                             };
                             let mut foreign_gen = PlayerGenerator::with_people_names(&people_names);
-                            return foreign_gen.generate(fp.country_id, pos, team_reputation, min_age, max_age, is_youth);
+                            return foreign_gen.generate(fp.country_id, pos, effective_rep, min_age, max_age, is_youth);
                         }
                     }
                 }
             }
-            player_generator.generate(country_id, pos, team_reputation, min_age, max_age, is_youth)
+            player_generator.generate(country_id, pos, effective_rep, min_age, max_age, is_youth)
         };
 
         for _ in 0..IntegerUtils::random(3, 5) {

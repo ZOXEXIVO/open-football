@@ -1,3 +1,5 @@
+use crate::club::player::position::{PlayerFieldPositionGroup, PlayerPositionType};
+
 #[derive(Debug, Copy, Clone, Default)]
 pub struct PlayerSkills {
     pub technical: Technical,
@@ -6,6 +8,38 @@ pub struct PlayerSkills {
 }
 
 impl PlayerSkills {
+    /// Derive current_ability (1-200) from the average of all skills (1-20 each).
+    /// Technical (14) + Mental (14) + Physical (8) averaged, then mapped to 1-200.
+    pub fn calculate_ability(&self) -> u8 {
+        let tech_avg = self.technical.average();
+        let mental_avg = self.mental.average();
+        let physical_avg = self.physical.average();
+        let overall = (tech_avg + mental_avg + physical_avg) / 3.0;
+        Self::skill_to_ability(overall)
+    }
+
+    /// Position-weighted ability calculation — skills that matter for the position count more.
+    pub fn calculate_ability_for_position(&self, position: PlayerPositionType) -> u8 {
+        let group = position.position_group();
+        let (tech_w, mental_w, phys_w) = match group {
+            PlayerFieldPositionGroup::Goalkeeper => (0.15, 0.35, 0.50),
+            PlayerFieldPositionGroup::Defender => (0.25, 0.40, 0.35),
+            PlayerFieldPositionGroup::Midfielder => (0.40, 0.35, 0.25),
+            PlayerFieldPositionGroup::Forward => (0.45, 0.25, 0.30),
+        };
+        let weighted = self.technical.average() * tech_w
+            + self.mental.average() * mental_w
+            + self.physical.average() * phys_w;
+        Self::skill_to_ability(weighted)
+    }
+
+    /// Map a skill average (1.0-20.0) to ability (1-200).
+    /// Skills are 1-based so normalize from 1-20 range before scaling.
+    fn skill_to_ability(avg: f32) -> u8 {
+        let normalized = ((avg - 1.0) / 19.0).clamp(0.0, 1.0);
+        (normalized * 199.0 + 1.0).round().min(200.0).max(1.0) as u8
+    }
+
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;

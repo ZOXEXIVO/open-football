@@ -174,9 +174,9 @@ fn get_conditions(player: &Player) -> u8 {
 }
 
 fn get_current_ability_stars(player: &Player) -> u8 {
-    (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)) as u8
+    (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
 }
 
 fn get_potential_ability_stars(player: &Player) -> u8 {
-    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)) as u8
+    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
 }

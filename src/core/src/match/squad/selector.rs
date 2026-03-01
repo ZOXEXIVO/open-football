@@ -159,6 +159,27 @@ impl ScoringEngine {
         visible_effort * (0.5 + self.profile.attitude_weight * 0.5)
     }
 
+    // ========== CONDITION FLOOR (shared) ==========
+
+    /// Unified condition floor penalty. Returns a non-negative penalty value.
+    /// Used as a hard gate: players below threshold get a steep score reduction
+    /// that makes them effectively unselectable in competitive matches.
+    fn condition_floor_penalty(&self, player: &Player, is_friendly: bool) -> f32 {
+        let p = &self.profile;
+        let condition_pct = player.player_attributes.condition_percentage() as f32;
+        let condition_threshold = if is_friendly {
+            25.0
+        } else {
+            40.0 - p.risk_tolerance * 8.0 // 32%-40% depending on coach
+        };
+        if condition_pct < condition_threshold {
+            let deficit = (condition_threshold - condition_pct) / condition_threshold;
+            deficit * 40.0 * (1.0 - p.risk_tolerance * 0.3)
+        } else {
+            0.0
+        }
+    }
+
     // ========== REPUTATION & RELATIONSHIP SCORING ==========
 
     /// Player status/reputation score.
@@ -259,53 +280,130 @@ impl ScoringEngine {
         staff: &Staff,
         tactics: &Tactics,
         date: NaiveDate,
+        is_friendly: bool,
+        selected_players: &[&Player],
     ) -> f32 {
         let mut score: f32 = 0.0;
         let p = &self.profile;
 
-        // 1. Position fit — blind coaches undervalue position
+        // 1. Position fit — blind coaches undervalue position (0..20 range)
         let position_fit = SquadSelector::position_fit_score(player, slot_position, slot_group);
         let position_weight = 0.30 * (1.0 - p.tactical_blindness * 0.3);
         score += position_fit * position_weight;
 
-        // 2. Perceived quality — accurate judges trust quality more
+        // 2. Perceived quality (0..~20 range)
         let quality = self.perceived_quality(player);
         let quality_weight = 0.25 + p.judging_accuracy * 0.05;
         score += quality * quality_weight;
 
-        // 3. Match readiness — conservative coaches want match-fit players
+        // 3. Match readiness — single condition/readiness contribution (0..20 range)
+        //    Condition is folded into readiness; no separate linear condition bonus (FIX 2)
         let readiness = self.match_readiness(player);
-        let readiness_weight = 0.15 + p.conservatism * 0.05;
+        let readiness_weight = 0.20 + p.conservatism * 0.05;
         score += readiness * readiness_weight;
 
-        // 4. Condition — observable, less coach-dependent
-        let condition =
-            (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0) * 20.0;
-        score += condition * 0.20;
+        // 4. Condition floor — hard gate, not a stacked bonus (FIX 2, 7)
+        score -= self.condition_floor_penalty(player, is_friendly);
 
-        // 5. Tactical style fit
+        // 5. Tactical style fit (0..~3.6 range, small weight)
         let tactical_bonus =
             SquadSelector::tactical_style_bonus(player, slot_position, tactics);
         let tactical_weight = 0.05 * (1.0 - p.tactical_blindness * 0.5);
         score += tactical_bonus * tactical_weight;
 
-        // 6. Reputation — star players are harder to drop
-        score += self.reputation_score(player);
+        // 6-7. Reputation & relationship — diminishing interaction (FIX 1)
+        let rep = self.reputation_score(player);
+        let rel = self.relationship_score(player, staff);
+        score += rep;
+        // High-reputation players get less relationship boost,
+        // but negative relationships still hurt even for stars
+        let rel_dampening = if rel < 0.0 {
+            1.0 // conflicts always bite
+        } else {
+            (1.0 - rep * 0.15).max(0.3)
+        };
+        score += rel * rel_dampening;
 
-        // 7. Coach-player relationship — continuous, not binary
-        score += self.relationship_score(player, staff);
-
-        // 8. Youth bonus
+        // 8. Youth bonus (graduated by age)
         let age = DateUtils::age(player.birth_date, date);
-        if age <= 21 {
-            score += p.youth_preference * 1.5;
-        }
+        let youth_multiplier = match age {
+            0..=16 => 0.0,
+            17..=18 => 2.5,
+            19..=20 => 1.5,
+            21 => 0.8,
+            _ => 0.0,
+        };
+        score += p.youth_preference * youth_multiplier;
 
         // 9. Training impression bleed
         let training = self.training_impression(player);
         score += (training - 10.0) * p.attitude_weight * 0.3;
 
+        // 10. Pairwise chemistry / unit cohesion — strict tiebreaker (FIX 4)
+        score += self.cohesion_bonus(player, selected_players, slot_group);
+
+        // 11. Future-mismatch penalty — reduce greedy lock-in (FIX 3)
+        //     Penalize picking a player out of their natural group to preserve
+        //     better global fits for later slots
+        if player.position().position_group() != slot_group {
+            score -= 1.5;
+        }
+
         score
+    }
+
+    /// Pairwise chemistry bonus based on relationships with already-selected players.
+    /// Acts as a tiebreaker (clamped to -1.0..+1.5), not a dominant factor.
+    fn cohesion_bonus(
+        &self,
+        player: &Player,
+        selected_players: &[&Player],
+        slot_group: PlayerFieldPositionGroup,
+    ) -> f32 {
+        if selected_players.is_empty() {
+            return 0.0;
+        }
+
+        let p = &self.profile;
+        let mut total = 0.0f32;
+        let mut weight_sum = 0.0f32;
+
+        for teammate in selected_players {
+            let proximity_weight = {
+                let teammate_group = teammate.position().position_group();
+                if teammate_group == slot_group {
+                    1.0
+                } else if is_adjacent_group(teammate_group, slot_group) {
+                    0.5
+                } else {
+                    0.2
+                }
+            };
+
+            let rel_quality = match player.relations.get_player(teammate.id) {
+                Some(rel) => {
+                    let level_norm = rel.level / 100.0;
+                    let trust_norm = (rel.trust - 50.0) / 100.0;
+                    let prof_norm = (rel.professional_respect - 50.0) / 100.0;
+                    level_norm * 0.4 + trust_norm * 0.3 + prof_norm * 0.3
+                }
+                None => 0.0,
+            };
+
+            total += rel_quality * proximity_weight;
+            weight_sum += proximity_weight;
+        }
+
+        if weight_sum == 0.0 {
+            return 0.0;
+        }
+
+        let avg = total / weight_sum;
+
+        // Conservative coaches value cohesion slightly more, but capped (FIX 4)
+        let scale = 1.0 + p.conservatism * 0.3;
+
+        (avg * scale * 2.0).clamp(-0.8, 1.0)
     }
 
     /// Coach-driven overall quality (for bench selection)
@@ -315,13 +413,12 @@ impl ScoringEngine {
         staff: &Staff,
         tactics: &Tactics,
         date: NaiveDate,
+        is_friendly: bool,
     ) -> f32 {
         let p = &self.profile;
 
         let quality = self.perceived_quality(player);
         let readiness = self.match_readiness(player);
-        let condition =
-            (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0) * 20.0;
         let primary_level = player
             .positions
             .positions
@@ -330,16 +427,24 @@ impl ScoringEngine {
             .max()
             .unwrap_or(0) as f32;
 
+        // No separate linear condition bonus — readiness is the single contribution (FIX 2, 6)
         let mut score = quality * (0.25 + p.judging_accuracy * 0.05)
-            + condition * 0.20
-            + readiness * (0.15 + p.conservatism * 0.05)
+            + readiness * (0.20 + p.conservatism * 0.05)
             + primary_level * (0.30 * (1.0 - p.tactical_blindness * 0.3));
 
-        // Reputation
-        score += self.reputation_score(player);
+        // Condition floor — hard gate (FIX 7)
+        score -= self.condition_floor_penalty(player, is_friendly);
 
-        // Relationship
-        score += self.relationship_score(player, staff);
+        // Reputation & relationship — diminishing interaction (FIX 1)
+        let rep = self.reputation_score(player);
+        let rel = self.relationship_score(player, staff);
+        score += rep;
+        let rel_dampening = if rel < 0.0 {
+            1.0
+        } else {
+            (1.0 - rep * 0.15).max(0.3)
+        };
+        score += rel * rel_dampening;
 
         let best_pos = SquadSelector::best_tactical_position(player, tactics);
         if player.positions.get_level(best_pos) > 0 {
@@ -347,9 +452,14 @@ impl ScoringEngine {
         }
 
         let age = DateUtils::age(player.birth_date, date);
-        if age <= 21 {
-            score += p.youth_preference * 1.5;
-        }
+        let youth_multiplier = match age {
+            0..=16 => 0.0,
+            17..=18 => 2.5,
+            19..=20 => 1.5,
+            21 => 0.8,
+            _ => 0.0,
+        };
+        score += p.youth_preference * youth_multiplier;
 
         let training = self.training_impression(player);
         score += (training - 10.0) * p.attitude_weight * 0.3;
@@ -358,28 +468,48 @@ impl ScoringEngine {
     }
 
     /// Coach-driven goalkeeper score
-    fn goalkeeper_score(&self, player: &Player, staff: &Staff) -> f32 {
+    fn goalkeeper_score(&self, player: &Player, staff: &Staff, is_friendly: bool) -> f32 {
         let p = &self.profile;
 
         let gk_level = player
             .positions
             .get_level(PlayerPositionType::Goalkeeper) as f32;
         let quality = self.perceived_quality(player);
-        let condition =
-            (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0) * 20.0;
         let readiness = self.match_readiness(player);
 
+        // No separate linear condition bonus — readiness is the single contribution (FIX 2, 6)
         let mut score = gk_level * (0.30 * (1.0 - p.tactical_blindness * 0.3))
             + quality * (0.25 + p.judging_accuracy * 0.05)
-            + condition * 0.25
-            + readiness * (0.20 + p.conservatism * 0.05);
+            + readiness * (0.25 + p.conservatism * 0.05);
 
-        // Reputation and relationship matter for GKs too
-        score += self.reputation_score(player) * 0.5;
-        score += self.relationship_score(player, staff) * 0.5;
+        // Condition floor — same rules as outfield (FIX 5, 7)
+        score -= self.condition_floor_penalty(player, is_friendly);
+
+        // Reputation & relationship — scaled down for GKs, with diminishing interaction (FIX 1, 5)
+        let rep = self.reputation_score(player);
+        let rel = self.relationship_score(player, staff);
+        score += rep * 0.4;
+        let rel_dampening = if rel < 0.0 {
+            1.0
+        } else {
+            (1.0 - rep * 0.15).max(0.3)
+        };
+        score += rel * rel_dampening * 0.4;
 
         score
     }
+}
+
+// ========== HELPERS (free functions) ==========
+
+fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -> bool {
+    matches!(
+        (a, b),
+        (PlayerFieldPositionGroup::Defender, PlayerFieldPositionGroup::Midfielder)
+            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Defender)
+            | (PlayerFieldPositionGroup::Midfielder, PlayerFieldPositionGroup::Forward)
+            | (PlayerFieldPositionGroup::Forward, PlayerFieldPositionGroup::Midfielder)
+    )
 }
 
 // ========== AVAILABILITY CHECK ==========
@@ -391,6 +521,12 @@ fn is_available(player: &Player, is_friendly: bool) -> bool {
     if player.statuses.get().contains(&PlayerStatusType::Int) {
         return false;
     }
+
+    // Hard condition floor — a player below 10% condition physically cannot play
+    if player.player_attributes.condition_percentage() < 10 {
+        return false;
+    }
+
     if !is_friendly {
         if player.player_attributes.is_banned {
             return false;
@@ -472,6 +608,7 @@ impl SquadSelector {
             tactics.borrow(),
             &engine,
             ctx.date,
+            ctx.is_friendly,
         );
 
         // Remaining pool for substitutes
@@ -488,6 +625,7 @@ impl SquadSelector {
             tactics.borrow(),
             &engine,
             ctx.date,
+            ctx.is_friendly,
         );
 
         // Guarantee: never leave bench empty when players exist
@@ -534,13 +672,15 @@ impl SquadSelector {
         tactics: &Tactics,
         engine: &ScoringEngine,
         date: NaiveDate,
+        is_friendly: bool,
     ) -> Vec<MatchPlayer> {
         let mut squad: Vec<MatchPlayer> = Vec::with_capacity(DEFAULT_SQUAD_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();
+        let mut selected_players: Vec<&Player> = Vec::new();
         let required = tactics.positions();
 
         // STEP 1: Goalkeeper — must always be filled
-        if let Some(gk) = Self::pick_best_goalkeeper(available, &used_ids, engine, staff) {
+        if let Some(gk) = Self::pick_best_goalkeeper(available, &used_ids, engine, staff, is_friendly) {
             squad.push(MatchPlayer::from_player(
                 team_id,
                 gk,
@@ -548,6 +688,7 @@ impl SquadSelector {
                 false,
             ));
             used_ids.push(gk.id);
+            selected_players.push(gk);
         } else {
             warn!("No goalkeeper found at all — picking any player as GK");
             if let Some(any) = Self::pick_best_unused(available, &used_ids) {
@@ -558,6 +699,7 @@ impl SquadSelector {
                     false,
                 ));
                 used_ids.push(any.id);
+                selected_players.push(any);
             }
         }
 
@@ -582,6 +724,8 @@ impl SquadSelector {
                         staff,
                         tactics,
                         date,
+                        is_friendly,
+                        &selected_players,
                     );
                     let sb = engine.score_player_for_slot(
                         b,
@@ -590,6 +734,8 @@ impl SquadSelector {
                         staff,
                         tactics,
                         date,
+                        is_friendly,
+                        &selected_players,
                     );
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
@@ -598,6 +744,7 @@ impl SquadSelector {
             if let Some(player) = best {
                 squad.push(MatchPlayer::from_player(team_id, player, pos, false));
                 used_ids.push(player.id);
+                selected_players.push(player);
             }
         }
 
@@ -608,8 +755,8 @@ impl SquadSelector {
                 .filter(|p| !used_ids.contains(&p.id))
                 .filter(|p| !Self::is_goalkeeper_player(p))
                 .max_by(|a, b| {
-                    let sa = engine.overall_quality(a, staff, tactics, date);
-                    let sb = engine.overall_quality(b, staff, tactics, date);
+                    let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
+                    let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied();
@@ -669,12 +816,13 @@ impl SquadSelector {
         tactics: &Tactics,
         engine: &ScoringEngine,
         date: NaiveDate,
+        is_friendly: bool,
     ) -> Vec<MatchPlayer> {
         let mut subs: Vec<MatchPlayer> = Vec::with_capacity(DEFAULT_BENCH_SIZE);
         let mut used_ids: Vec<u32> = Vec::new();
 
         // 1. Backup goalkeeper (always first on the bench)
-        if let Some(gk) = Self::pick_best_goalkeeper(remaining, &used_ids, engine, staff) {
+        if let Some(gk) = Self::pick_best_goalkeeper(remaining, &used_ids, engine, staff, is_friendly) {
             subs.push(MatchPlayer::from_player(
                 team_id,
                 gk,
@@ -706,8 +854,8 @@ impl SquadSelector {
                 .filter(|p| !used_ids.contains(&p.id))
                 .filter(|p| p.position().position_group() == *target_group)
                 .max_by(|a, b| {
-                    let sa = engine.overall_quality(a, staff, tactics, date);
-                    let sb = engine.overall_quality(b, staff, tactics, date);
+                    let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
+                    let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied();
@@ -725,8 +873,8 @@ impl SquadSelector {
                 .iter()
                 .filter(|p| !used_ids.contains(&p.id))
                 .max_by(|a, b| {
-                    let sa = engine.overall_quality(a, staff, tactics, date);
-                    let sb = engine.overall_quality(b, staff, tactics, date);
+                    let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
+                    let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
                     sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied();
@@ -866,14 +1014,15 @@ impl SquadSelector {
         used_ids: &[u32],
         engine: &ScoringEngine,
         staff: &Staff,
+        is_friendly: bool,
     ) -> Option<&'p Player> {
         available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| Self::is_goalkeeper_player(p))
             .max_by(|a, b| {
-                let score_a = engine.goalkeeper_score(a, staff);
-                let score_b = engine.goalkeeper_score(b, staff);
+                let score_a = engine.goalkeeper_score(a, staff, is_friendly);
+                let score_b = engine.goalkeeper_score(b, staff, is_friendly);
                 score_a
                     .partial_cmp(&score_b)
                     .unwrap_or(std::cmp::Ordering::Equal)
@@ -1176,34 +1325,54 @@ impl SquadSelector {
         _staff: &Staff,
         _tactics: &Tactics,
     ) -> f32 {
+        let condition_pct =
+            player.player_attributes.condition_percentage() as f32;
+
+        // Condition floor — exhausted players must not be selected even for rotation
+        if condition_pct < 20.0 {
+            let deficit = (20.0 - condition_pct) / 20.0;
+            return -(deficit * 30.0);
+        }
+
         let mut score: f32 = 0.0;
 
+        // Rest need — prefer players who haven't played recently
         let days = player.player_attributes.days_since_last_match as f32;
         let rest_score = (days / 14.0).min(1.0) * 20.0;
-        score += rest_score * 0.40;
+        score += rest_score * 0.35;
 
+        // Position fit
         let position_fit = Self::position_fit_score(player, slot_position, slot_group);
         score += position_fit * 0.30;
 
-        let condition =
-            (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0);
-        score += condition * 20.0 * 0.20;
+        // Condition as single linear contribution (no double-counting)
+        let condition_norm = (condition_pct / 100.0).clamp(0.0, 1.0);
+        score += condition_norm * 20.0 * 0.20;
 
+        // Ability baseline
         let ability = player.player_attributes.current_ability as f32 / 200.0;
-        score += ability * 20.0 * 0.10;
+        score += ability * 20.0 * 0.15;
 
         score
     }
 
     fn rotation_overall_quality(player: &Player) -> f32 {
+        let condition_pct =
+            player.player_attributes.condition_percentage() as f32;
+
+        // Condition floor — block exhausted players
+        if condition_pct < 20.0 {
+            let deficit = (20.0 - condition_pct) / 20.0;
+            return -(deficit * 30.0);
+        }
+
         let days = player.player_attributes.days_since_last_match as f32;
         let rest_score = (days / 14.0).min(1.0) * 20.0;
-        let condition =
-            (player.player_attributes.condition as f32 / 10000.0).clamp(0.0, 1.0) * 20.0;
+        let condition_norm = (condition_pct / 100.0).clamp(0.0, 1.0) * 20.0;
 
-        rest_score * 0.50
-            + condition * 0.30
-            + (player.player_attributes.current_ability as f32 / 200.0 * 20.0) * 0.20
+        rest_score * 0.40
+            + condition_norm * 0.35
+            + (player.player_attributes.current_ability as f32 / 200.0 * 20.0) * 0.25
     }
 
     fn pick_rotation_goalkeeper<'p>(
@@ -1214,10 +1383,16 @@ impl SquadSelector {
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| Self::is_goalkeeper_player(p))
+            .filter(|p| p.player_attributes.condition_percentage() >= 20)
             .max_by(|a, b| {
-                let da = a.player_attributes.days_since_last_match;
-                let db = b.player_attributes.days_since_last_match;
-                da.cmp(&db)
+                // Prefer better condition first, then rest days as tiebreaker
+                let ca = a.player_attributes.condition_percentage();
+                let cb = b.player_attributes.condition_percentage();
+                ca.cmp(&cb).then_with(|| {
+                    a.player_attributes
+                        .days_since_last_match
+                        .cmp(&b.player_attributes.days_since_last_match)
+                })
             })
             .copied()
     }
@@ -1233,7 +1408,7 @@ impl SquadSelector {
         let group = position.position_group();
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        engine.score_player_for_slot(player, position, group, staff, tactics, date)
+        engine.score_player_for_slot(player, position, group, staff, tactics, date, false, &[])
     }
 
     pub fn select_main_squad(
@@ -1244,7 +1419,7 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        Self::select_starting_eleven(team_id, players, staff, tactics, &engine, date)
+        Self::select_starting_eleven(team_id, players, staff, tactics, &engine, date, false)
     }
 
     pub fn select_substitutes_legacy(
@@ -1255,7 +1430,7 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        Self::select_substitutes(team_id, players, staff, tactics, &engine, date)
+        Self::select_substitutes(team_id, players, staff, tactics, &engine, date, false)
     }
 }
 
