@@ -39,6 +39,7 @@ pub struct PlayerGetTemplate {
     pub i18n: crate::I18n,
     pub lang: String,
     pub player: PlayerViewModel,
+    pub is_goalkeeper: bool,
 }
 
 pub struct PlayerViewModel {
@@ -115,6 +116,8 @@ pub struct PlayerStatistics {
     pub tackling: f32,
     pub passes: u8,
     pub average_rating: String,
+    pub conceded: u16,
+    pub clean_sheets: u16,
 }
 
 pub struct PlayerContractDto {
@@ -269,6 +272,8 @@ pub async fn player_get_action(
         },
     };
 
+    let is_goalkeeper = player.position().is_goalkeeper();
+
     Ok(PlayerGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
@@ -283,6 +288,7 @@ pub async fn player_get_action(
         i18n,
         lang: route_params.lang.clone(),
         player: player_vm,
+        is_goalkeeper,
     })
 }
 
@@ -392,6 +398,8 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
         tackling: player.statistics.tackling,
         passes: player.statistics.passes,
         average_rating: format!("{:.2}", player.statistics.average_rating),
+        conceded: player.statistics.conceded,
+        clean_sheets: player.statistics.clean_sheets,
     }
 }
 
@@ -413,6 +421,8 @@ fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
         tackling: fs.tackling,
         passes: fs.passes,
         average_rating: format!("{:.2}", fs.average_rating),
+        conceded: fs.conceded,
+        clean_sheets: fs.clean_sheets,
     })
 }
 

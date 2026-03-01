@@ -1979,17 +1979,17 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
 .fm-team-stats { table-layout: fixed; }
 .fm-team-stats thead th.ts-name { text-align: left; padding-left: 14px; width: auto; }
-.fm-team-stats thead th.ts-col { width: 44px; }
+.fm-team-stats thead th.ts-col { width: 60px; }
 .fm-team-stats td.ts-name { text-align: left; padding-left: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .fm-team-stats td.ts-name a { color: #d8dee4; }
 .fm-team-stats td.ts-name a:hover { color: #fff; }
-.fm-team-stats thead th.ts-pos { width: 4.5em; text-align: center; }
-.fm-team-stats td.ts-pos { width: 3.5em; text-align: center !important; color: #7a868e; font-size: 12px; }
-.fm-team-stats td.ts-col { width: 44px; }
+.fm-team-stats thead th.ts-pos { width: 4em; text-align: center; }
+.fm-team-stats td.ts-pos { width: 4em; text-align: center !important; color: #7a868e; font-size: 12px; }
+.fm-team-stats td.ts-col { width: 60px; }
 
 @media (max-width: 768px) {
-  .fm-team-stats thead th.ts-col { width: 32px; padding: 8px 2px; font-size: 9px; }
-  .fm-team-stats td.ts-col { width: 32px; padding: 6px 2px; font-size: 11px; }
+  .fm-team-stats thead th.ts-col { width: 42px; padding: 8px 3px; font-size: 9px; }
+  .fm-team-stats td.ts-col { width: 42px; padding: 6px 3px; font-size: 11px; }
   .fm-team-stats td.ts-name { padding-left: 8px; }
 }
 

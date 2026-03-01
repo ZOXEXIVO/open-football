@@ -208,9 +208,14 @@
                 <tr>
                     <th>{{ i18n.t("competition") }}</th>
                     <th>{{ i18n.t("apps") }}</th>
+                    {% if is_goalkeeper %}
+                    <th>{{ i18n.t("con") }}</th>
+                    <th>{{ i18n.t("cln") }}</th>
+                    {% else %}
                     <th>{{ i18n.t("gls") }}</th>
                     <th>{{ i18n.t("ast") }}</th>
                     <th>{{ i18n.t("pen") }}</th>
+                    {% endif %}
                     <th>{{ i18n.t("pom") }}</th>
                     <th>{{ i18n.t("yc") }}</th>
                     <th>{{ i18n.t("rc") }}</th>
@@ -225,9 +230,14 @@
                 <tr>
                     <td>{{ i18n.t("friendly") }}</td>
                     <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td>{{ fs.conceded }}</td>
+                    <td>{{ fs.clean_sheets }}</td>
+                    {% else %}
                     <td>{{ fs.goals }}</td>
                     <td>{{ fs.assists }}</td>
                     <td>{{ fs.penalties }}</td>
+                    {% endif %}
                     <td>{{ fs.player_of_the_match }}</td>
                     <td>{{ fs.yellow_cards }}</td>
                     <td>{{ fs.red_cards }}</td>
@@ -240,9 +250,14 @@
                 <tr>
                     <td>{{ i18n.t("league") }}</td>
                     <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td>{{ player.statistics.conceded }}</td>
+                    <td>{{ player.statistics.clean_sheets }}</td>
+                    {% else %}
                     <td>{{ player.statistics.goals }}</td>
                     <td>{{ player.statistics.assists }}</td>
                     <td>{{ player.statistics.penalties }}</td>
+                    {% endif %}
                     <td>{{ player.statistics.player_of_the_match }}</td>
                     <td>{{ player.statistics.yellow_cards }}</td>
                     <td>{{ player.statistics.red_cards }}</td>
