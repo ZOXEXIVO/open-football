@@ -5,6 +5,7 @@
 {% block submenu %}
 <div class="fm-tabbar">
     <a class="fm-tab active" href="/{{ lang }}/players/{{ player.id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/personal">{{ i18n.t("personal") }}</a>
     <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/matches">{{ i18n.t("matches") }}</a>
     <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/transfers">{{ i18n.t("transfers") }}</a>
     <a class="fm-tab" href="/{{ lang }}/players/{{ player.id }}/decisions">{{ i18n.t("decisions") }}</a>
@@ -66,6 +67,11 @@
                             <span class="fm-detail-value">{{ i18n.t(&contract.squad_status) }}</span>
                         </div>
                         {% endif %}
+                        {% endif %}
+                        {% if let Some(days) = player.injury_days %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-ph-injury">{{ i18n.t("injured_for_days").replace("{days}", &days.to_string()) }}</span>
+                        </div>
                         {% endif %}
                     </div>
                     <div class="fm-ph-id-col">

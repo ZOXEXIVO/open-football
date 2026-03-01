@@ -159,6 +159,32 @@ impl PlayerObservation {
         self.confidence = 1.0 - (1.0 / (self.observation_count as f32 + 1.0));
         self.last_observed = date;
     }
+
+    pub fn add_match_observation(
+        &mut self,
+        assessed_ability: u8,
+        assessed_potential: u8,
+        match_rating: f32,
+        date: NaiveDate,
+    ) {
+        self.observation_count += 1;
+        let weight = 1.0 / self.observation_count as f32;
+        let old_weight = 1.0 - weight;
+        self.assessed_ability =
+            (old_weight * self.assessed_ability as f32 + weight * assessed_ability as f32) as u8;
+        self.assessed_potential =
+            (old_weight * self.assessed_potential as f32 + weight * assessed_potential as f32) as u8;
+        let match_rating_bonus = if match_rating > 7.0 {
+            0.05
+        } else if match_rating > 6.0 {
+            0.02
+        } else {
+            0.0
+        };
+        self.confidence =
+            (1.0 - (0.5 / (self.observation_count as f32 + 1.0)) + match_rating_bonus).min(1.0);
+        self.last_observed = date;
+    }
 }
 
 // ============================================================
@@ -382,6 +408,8 @@ pub enum RecommendationType {
     GameTimeSeeker,
     /// Affordable player who would improve the weakest position in the squad
     WeakSpotFix,
+    /// Player stood out in a youth/reserve match observed by a scout
+    YouthMatchStandout,
 }
 
 #[derive(Debug, Clone)]
@@ -395,6 +423,19 @@ pub struct StaffRecommendation {
     pub confidence: f32,
     pub estimated_fee: f64,
     pub date_recommended: NaiveDate,
+}
+
+// ============================================================
+// ScoutMatchAssignment - Scout assigned to watch a youth/reserve match
+// ============================================================
+
+#[derive(Debug, Clone)]
+pub struct ScoutMatchAssignment {
+    pub scout_staff_id: u32,
+    pub target_team_id: u32,
+    pub target_club_id: u32,
+    pub linked_assignment_ids: Vec<u32>,
+    pub last_attended: Option<NaiveDate>,
 }
 
 // ============================================================
@@ -415,6 +456,8 @@ pub struct ClubTransferPlan {
     pub loan_out_candidates: Vec<LoanOutCandidate>,
 
     pub staff_recommendations: Vec<StaffRecommendation>,
+
+    pub scout_match_assignments: Vec<ScoutMatchAssignment>,
 
     pub max_concurrent_negotiations: u32,
     pub active_negotiation_count: u32,
@@ -438,6 +481,7 @@ impl ClubTransferPlan {
             shortlists: Vec::new(),
             loan_out_candidates: Vec::new(),
             staff_recommendations: Vec::new(),
+            scout_match_assignments: Vec::new(),
             max_concurrent_negotiations: 2,
             active_negotiation_count: 0,
             next_request_id: 1,
@@ -478,6 +522,7 @@ impl ClubTransferPlan {
         self.shortlists.clear();
         self.loan_out_candidates.clear();
         self.staff_recommendations.clear();
+        self.scout_match_assignments.clear();
         self.active_negotiation_count = 0;
         self.spent = 0.0;
         self.reserved = 0.0;

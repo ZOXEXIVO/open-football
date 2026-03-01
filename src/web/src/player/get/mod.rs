@@ -67,6 +67,7 @@ pub struct PlayerViewModel {
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
     pub loan_status: Option<PlayerLoanDto>,
+    pub injury_days: Option<u16>,
 }
 
 pub struct PlayerLoanDto {
@@ -261,6 +262,11 @@ pub async fn player_get_action(
         status: PlayerStatusDto::new(player.statuses.get()),
         position_map: get_position_map(player),
         loan_status,
+        injury_days: if player.player_attributes.is_injured {
+            Some(player.player_attributes.injury_days_remaining)
+        } else {
+            None
+        },
     };
 
     Ok(PlayerGetTemplate {

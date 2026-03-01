@@ -1307,6 +1307,12 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-ph-loan-text a { color: #94a3af; }
 .fm-ph-loan-text a:hover { color: #edf1f5; }
 
+.fm-ph-injury {
+  font-size: 13px;
+  color: #e53935;
+  font-weight: 500;
+}
+
 /* --- Star ratings & condition --- */
 
 .fm-ph-rating-item {
@@ -1376,6 +1382,228 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #546a78;
   font-weight: 400;
 }
+
+/* --- Personal tab --- */
+
+.fm-personal-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.fm-personal-fullrow {
+  margin-top: 20px;
+}
+
+.fm-happiness-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+}
+
+.fm-happiness-col {
+  min-width: 0;
+}
+
+.fm-personal-col {
+  min-width: 0;
+}
+
+.fm-personal-section {
+  padding: 12px 16px;
+}
+
+.fm-personal-section + .fm-personal-section {
+  border-top: 1px solid #1a2a34;
+}
+
+.fm-section-subtitle {
+  font-size: 12px;
+  font-weight: 600;
+  color: #5a7080;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin: 0 0 8px 0;
+}
+
+.fm-personal-detail {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+}
+
+.fm-personal-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.fm-personal-table td {
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.fm-morale-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 0;
+}
+
+.fm-morale-label {
+  font-size: 13px;
+  color: #94a3af;
+  font-weight: 500;
+  min-width: 50px;
+}
+
+.fm-morale-bar {
+  flex: 1;
+  height: 6px;
+  background: #1a2a34;
+  border-radius: 3px;
+  overflow: hidden;
+}
+
+.fm-morale-fill {
+  height: 100%;
+  border-radius: 3px;
+  transition: width 0.3s;
+  background: #5a7080;
+}
+
+.fm-morale-fill.fm-morale-good { background: #4caf50; }
+.fm-morale-fill.fm-morale-okay { background: #ff9800; }
+.fm-morale-fill.fm-morale-poor { background: #e53935; }
+
+.fm-morale-val {
+  font-size: 13px;
+  color: #c8d4de;
+  font-weight: 500;
+  min-width: 70px;
+  text-align: right;
+}
+
+.fm-factor-name {
+  color: #94a3af;
+  font-weight: 500;
+}
+
+.fm-factor-val {
+  color: #c8d4de;
+  font-weight: 500;
+  text-align: right;
+}
+
+.fm-factor-val.fm-factor-pos { color: #4caf50; }
+.fm-factor-val.fm-factor-neg { color: #e53935; }
+
+.fm-concerns-title { color: #e53935; }
+
+.fm-concerns-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.fm-concerns-list li {
+  font-size: 13px;
+  color: #e53935;
+  padding: 3px 0;
+  padding-left: 14px;
+  position: relative;
+}
+
+.fm-concerns-list li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 10px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #e53935;
+}
+
+.fm-rel-good { color: #4caf50; }
+.fm-rel-poor { color: #e53935; }
+
+.fm-mini-bar {
+  flex: 1;
+  height: 4px;
+  background: #1a2a34;
+  border-radius: 2px;
+  overflow: hidden;
+  max-width: 120px;
+}
+
+.fm-mini-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: #437fa2;
+}
+
+.fm-event-desc {
+  color: #94a3af;
+  font-weight: 500;
+}
+
+.fm-event-desc.fm-event-pos { color: #4caf50; }
+.fm-event-desc.fm-event-neg { color: #e53935; }
+
+.fm-event-ago {
+  color: #546a78;
+  font-size: 12px;
+  text-align: right;
+  white-space: nowrap;
+}
+
+/* --- Radar chart --- */
+
+.fm-radar-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 4px 0;
+}
+
+.fm-radar-svg {
+  width: 100%;
+  max-width: 380px;
+}
+
+.fm-radar-grid {
+  fill: none;
+  stroke: #1e3340;
+  stroke-width: 0.7;
+}
+
+.fm-radar-axis {
+  stroke: #1e3340;
+  stroke-width: 0.5;
+}
+
+.fm-radar-area {
+  fill: rgba(67, 127, 162, 0.3);
+  stroke: #437fa2;
+  stroke-width: 1.5;
+}
+
+.fm-radar-label {
+  font-size: 10px;
+  fill: #94a3af;
+  dominant-baseline: middle;
+}
+
+.fm-detail-value-sm {
+  font-size: 12px;
+  color: #c8d4de;
+  min-width: 36px;
+  text-align: right;
+}
+
+.fm-condition-good { background: #4caf50; }
+.fm-condition-okay { background: #ff9800; }
+.fm-condition-poor { background: #e53935; }
 
 /* --- Content grid: positions + attributes --- */
 

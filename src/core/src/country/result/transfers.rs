@@ -102,6 +102,12 @@ impl CountryResult {
             // Step 3: Assign scouts to pending requests
             PipelineProcessor::assign_scouts(country, current_date);
 
+            // Step 3.5: Assign scouts to youth/reserve team matches
+            PipelineProcessor::assign_scouts_to_matches(country, current_date);
+
+            // Step 3.75: Process match-day scouting observations
+            PipelineProcessor::process_match_scouting(country, current_date);
+
             // Step 4: Process scouting observations (replaces random scouting)
             PipelineProcessor::process_scouting(country, current_date);
 

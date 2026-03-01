@@ -6,10 +6,10 @@ use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
     ClubTransferPlan, DetailedScoutingReport, LoanOutCandidate, LoanOutReason, LoanOutStatus,
-    RecommendationSource, RecommendationType, ScoutingAssignment, ScoutingRecommendation,
-    ShortlistCandidate, ShortlistCandidateStatus, StaffRecommendation, TransferApproach,
-    TransferNeedPriority, TransferNeedReason, TransferRequest, TransferRequestStatus,
-    TransferShortlist,
+    RecommendationSource, RecommendationType, ScoutMatchAssignment, ScoutingAssignment,
+    ScoutingRecommendation, ShortlistCandidate, ShortlistCandidateStatus, StaffRecommendation,
+    TransferApproach, TransferNeedPriority, TransferNeedReason, TransferRequest,
+    TransferRequestStatus, TransferShortlist,
 };
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
@@ -17,7 +17,7 @@ use crate::utils::IntegerUtils;
 use crate::{
     Club, ClubTransferStrategy, Country, MatchTacticType, Person, Player,
     PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType, ReputationLevel,
-    TacticsSelector, TACTICS_POSITIONS,
+    TacticsSelector, TeamType, TACTICS_POSITIONS,
 };
 
 /// PipelineProcessor handles all daily transfer pipeline logic.
@@ -70,6 +70,21 @@ struct NegotiationAction {
     offer: crate::transfers::offer::TransferOffer,
     is_loan: bool,
     shortlist_request_id: u32,
+}
+
+struct MatchScoutAssignmentAction {
+    club_id: u32,
+    assignment: ScoutMatchAssignment,
+}
+
+struct MatchScoutingObservationResult {
+    club_id: u32,
+    assignment_id: u32,
+    player_id: u32,
+    assessed_ability: u8,
+    assessed_potential: u8,
+    match_rating: f32,
+    is_new: bool,
 }
 
 // ============================================================
@@ -1100,6 +1115,393 @@ impl PipelineProcessor {
                 plan.scouting_assignments.push(action.assignment);
             }
         }
+    }
+
+    // ============================================================
+    // Step 3.5: Assign Scouts to Youth/Reserve Matches
+    // ============================================================
+
+    pub fn assign_scouts_to_matches(country: &mut Country, current_date: NaiveDate) {
+        let mut actions: Vec<MatchScoutAssignmentAction> = Vec::new();
+
+        // Pass 1: Immutable reads - determine which scouts to assign where
+        for club in &country.clubs {
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            // Get active scouting assignments to know what positions/ages we're looking for
+            let active_assignments: Vec<&ScoutingAssignment> = plan
+                .scouting_assignments
+                .iter()
+                .filter(|a| !a.completed)
+                .collect();
+
+            if active_assignments.is_empty() {
+                continue;
+            }
+
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+
+            let resolved = StaffResolver::resolve(&club.teams.teams[0].staffs);
+            if resolved.scouts.is_empty() {
+                continue;
+            }
+
+            // Check existing match assignments - don't re-assign scouts already watching a team
+            let already_assigned_scout_ids: Vec<u32> = plan
+                .scout_match_assignments
+                .iter()
+                .filter(|a| {
+                    a.last_attended
+                        .map(|d| (current_date - d).num_days() < 7)
+                        .unwrap_or(false)
+                })
+                .map(|a| a.scout_staff_id)
+                .collect();
+
+            let available_scouts: Vec<u32> = resolved
+                .scouts
+                .iter()
+                .map(|s| s.id)
+                .filter(|id| !already_assigned_scout_ids.contains(id))
+                .collect();
+
+            if available_scouts.is_empty() {
+                continue;
+            }
+
+            let max_assignments = available_scouts.len().min(3);
+
+            // Score each youth/reserve team from other clubs by how many matching players it has
+            let mut team_scores: Vec<(u32, u32, u32, usize)> = Vec::new(); // (team_id, club_id, team_idx_for_ref, score)
+
+            for other_club in &country.clubs {
+                if other_club.id == club.id {
+                    continue;
+                }
+
+                for team in &other_club.teams.teams {
+                    // Only consider non-Main teams
+                    if matches!(team.team_type, TeamType::Main) {
+                        continue;
+                    }
+
+                    // Skip teams already being watched (within 7 days)
+                    let already_watching = plan.scout_match_assignments.iter().any(|a| {
+                        a.target_team_id == team.id
+                            && a.last_attended
+                                .map(|d| (current_date - d).num_days() < 7)
+                                .unwrap_or(false)
+                    });
+                    if already_watching {
+                        continue;
+                    }
+
+                    // Score: count how many players match any active scouting assignment criteria
+                    let mut score = 0usize;
+                    for player in &team.players.players {
+                        let player_pos_group = player.position().position_group();
+                        let player_age = player.age(current_date);
+
+                        for assignment in &active_assignments {
+                            let target_group = assignment.target_position.position_group();
+                            if player_pos_group == target_group
+                                && player_age >= assignment.preferred_age_min
+                                && player_age <= assignment.preferred_age_max
+                            {
+                                score += 1;
+                                break;
+                            }
+                        }
+                    }
+
+                    if score > 0 {
+                        team_scores.push((team.id, other_club.id, 0, score));
+                    }
+                }
+            }
+
+            // Sort by score descending
+            team_scores.sort_by(|a, b| b.3.cmp(&a.3));
+
+            // Assign scouts to the best-scoring teams
+            let assignments_to_make = team_scores.len().min(max_assignments);
+            for i in 0..assignments_to_make {
+                let (target_team_id, target_club_id, _, _) = team_scores[i];
+                let scout_id = available_scouts[i];
+
+                // Link to relevant scouting assignment IDs
+                let linked_ids: Vec<u32> = active_assignments
+                    .iter()
+                    .map(|a| a.id)
+                    .collect();
+
+                actions.push(MatchScoutAssignmentAction {
+                    club_id: club.id,
+                    assignment: ScoutMatchAssignment {
+                        scout_staff_id: scout_id,
+                        target_team_id,
+                        target_club_id,
+                        linked_assignment_ids: linked_ids,
+                        last_attended: None,
+                    },
+                });
+            }
+        }
+
+        // Pass 2: Apply assignments
+        for action in actions {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
+                // Check if we already have an assignment for this team, update it
+                if let Some(existing) = club
+                    .transfer_plan
+                    .scout_match_assignments
+                    .iter_mut()
+                    .find(|a| a.target_team_id == action.assignment.target_team_id)
+                {
+                    existing.scout_staff_id = action.assignment.scout_staff_id;
+                    existing.linked_assignment_ids = action.assignment.linked_assignment_ids;
+                } else {
+                    club.transfer_plan
+                        .scout_match_assignments
+                        .push(action.assignment);
+                }
+            }
+        }
+
+        debug!("assign_scouts_to_matches: completed scout-to-match assignments");
+    }
+
+    // ============================================================
+    // Step 3.75: Process Match-Day Scouting Observations
+    // ============================================================
+
+    pub fn process_match_scouting(country: &mut Country, current_date: NaiveDate) {
+        let mut observations: Vec<MatchScoutingObservationResult> = Vec::new();
+        let mut reports: Vec<ScoutingReportResult> = Vec::new();
+        let mut attended_updates: Vec<(u32, u32, NaiveDate)> = Vec::new(); // (club_id, team_id, date)
+
+        // Pass 1: Immutable reads
+        for club in &country.clubs {
+            let plan = &club.transfer_plan;
+
+            for match_assignment in &plan.scout_match_assignments {
+                // Find the target team and check if it played today
+                let target_team = country.clubs.iter()
+                    .find(|c| c.id == match_assignment.target_club_id)
+                    .and_then(|c| c.teams.teams.iter().find(|t| t.id == match_assignment.target_team_id));
+
+                let target_team = match target_team {
+                    Some(t) => t,
+                    None => continue,
+                };
+
+                // Check if this team played today
+                let played_today = target_team
+                    .match_history
+                    .items()
+                    .last()
+                    .map(|m| m.date.date() == current_date)
+                    .unwrap_or(false);
+
+                if !played_today {
+                    continue;
+                }
+
+                // Get scout skills
+                let (judging_ability, judging_potential) =
+                    Self::get_scout_skills(club, match_assignment.scout_staff_id);
+
+                // Mark attendance
+                attended_updates.push((club.id, match_assignment.target_team_id, current_date));
+
+                // Observe all players on the target team
+                for player in &target_team.players.players {
+                    let player_pos_group = player.position().position_group();
+                    let player_age = player.age(current_date);
+                    let match_rating = player.statistics.average_rating;
+
+                    // Check if this player matches any linked scouting assignment
+                    let matching_assignment = plan.scouting_assignments.iter().find(|a| {
+                        !a.completed
+                            && match_assignment.linked_assignment_ids.contains(&a.id)
+                            && a.target_position.position_group() == player_pos_group
+                            && player_age >= a.preferred_age_min
+                            && player_age <= a.preferred_age_max
+                    });
+
+                    let assignment = match matching_assignment {
+                        Some(a) => a,
+                        None => continue,
+                    };
+
+                    // Calculate assessed ability/potential with 40% less error than pool scanning
+                    let existing_obs = assignment.observations.iter()
+                        .find(|o| o.player_id == player.id);
+                    let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
+                    let sqrt_count = ((obs_count + 1) as f32).sqrt();
+
+                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32;
+                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32;
+                    // 40% less error for match-context observations
+                    let ability_error = ((base_ability_error * 0.6) / sqrt_count) as i32;
+                    let potential_error = ((base_potential_error * 0.6) / sqrt_count) as i32;
+
+                    let assessed_ability = (player.player_attributes.current_ability as i32
+                        + IntegerUtils::random(-ability_error, ability_error))
+                        .clamp(1, 100) as u8;
+                    let assessed_potential = (player.player_attributes.potential_ability as i32
+                        + IntegerUtils::random(-potential_error, potential_error))
+                        .clamp(1, 100) as u8;
+
+                    let is_new = !assignment.has_observation_for(player.id);
+
+                    observations.push(MatchScoutingObservationResult {
+                        club_id: club.id,
+                        assignment_id: assignment.id,
+                        player_id: player.id,
+                        assessed_ability,
+                        assessed_potential,
+                        match_rating,
+                        is_new,
+                    });
+
+                    // Generate report at 2+ observations
+                    let final_obs_count = obs_count + 1;
+                    if final_obs_count >= 2 {
+                        let confidence = (1.0 - (0.5 / (final_obs_count as f32 + 1.0))).min(1.0);
+
+                        // Match rating influences recommendation tier
+                        let rating_boost = match_rating > 7.0;
+                        let rating_penalty = match_rating < 5.5;
+
+                        let recommendation = if rating_penalty {
+                            // Low match rating downgrades
+                            if assessed_ability >= assignment.min_ability {
+                                ScoutingRecommendation::Consider
+                            } else {
+                                ScoutingRecommendation::Pass
+                            }
+                        } else if rating_boost
+                            && assessed_ability as i16 >= assignment.min_ability as i16 + 5
+                            && assessed_potential > assessed_ability
+                        {
+                            ScoutingRecommendation::StrongBuy
+                        } else if assessed_ability as i16 >= assignment.min_ability as i16 + 10
+                            && assessed_potential > assessed_ability + 5
+                        {
+                            ScoutingRecommendation::StrongBuy
+                        } else if assessed_ability >= assignment.min_ability
+                            && assessed_potential >= assessed_ability
+                        {
+                            ScoutingRecommendation::Buy
+                        } else if assessed_ability >= assignment.min_ability.saturating_sub(5) {
+                            ScoutingRecommendation::Consider
+                        } else {
+                            ScoutingRecommendation::Pass
+                        };
+
+                        if recommendation != ScoutingRecommendation::Pass {
+                            let estimated_value = PlayerValuationCalculator::calculate_value_with_price_level(
+                                player,
+                                current_date,
+                                country.settings.pricing.price_level,
+                            );
+
+                            reports.push(ScoutingReportResult {
+                                club_id: club.id,
+                                report: DetailedScoutingReport {
+                                    player_id: player.id,
+                                    assignment_id: assignment.id,
+                                    assessed_ability,
+                                    assessed_potential,
+                                    confidence,
+                                    estimated_value: estimated_value.amount,
+                                    recommendation,
+                                },
+                                assignment_id: assignment.id,
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: Apply observations, reports, and attendance updates
+        for obs in observations {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == obs.club_id) {
+                if let Some(assignment) = club
+                    .transfer_plan
+                    .scouting_assignments
+                    .iter_mut()
+                    .find(|a| a.id == obs.assignment_id)
+                {
+                    if obs.is_new {
+                        let mut new_obs = crate::transfers::pipeline::PlayerObservation::new(
+                            obs.player_id,
+                            obs.assessed_ability,
+                            obs.assessed_potential,
+                            current_date,
+                        );
+                        // Start match observations at higher confidence
+                        new_obs.confidence = 0.5;
+                        assignment.observations.push(new_obs);
+                    } else if let Some(existing) = assignment.find_observation_mut(obs.player_id) {
+                        existing.add_match_observation(
+                            obs.assessed_ability,
+                            obs.assessed_potential,
+                            obs.match_rating,
+                            current_date,
+                        );
+                    }
+                }
+            }
+        }
+
+        for report in reports {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == report.club_id) {
+                if !club
+                    .transfer_plan
+                    .scouting_reports
+                    .iter()
+                    .any(|r| r.player_id == report.report.player_id && r.assignment_id == report.assignment_id)
+                {
+                    club.transfer_plan.scouting_reports.push(report.report);
+
+                    if let Some(assignment) = club
+                        .transfer_plan
+                        .scouting_assignments
+                        .iter_mut()
+                        .find(|a| a.id == report.assignment_id)
+                    {
+                        assignment.reports_produced += 1;
+                        if assignment.reports_produced >= 3 {
+                            assignment.completed = true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Update last_attended dates
+        for (club_id, team_id, date) in attended_updates {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                if let Some(match_assign) = club
+                    .transfer_plan
+                    .scout_match_assignments
+                    .iter_mut()
+                    .find(|a| a.target_team_id == team_id)
+                {
+                    match_assign.last_attended = Some(date);
+                }
+            }
+        }
+
+        debug!("process_match_scouting: completed match-day observations");
     }
 
     // ============================================================
