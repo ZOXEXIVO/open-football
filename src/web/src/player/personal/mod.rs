@@ -167,14 +167,14 @@ fn get_personality(player: &Player) -> PersonalityDto {
     let attrs = &player.attributes;
 
     let values: [u8; 8] = [
-        (attrs.adaptability * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.ambition * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.controversy * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.loyalty * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.pressure * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.professionalism * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.sportsmanship * 20.0).round().clamp(1.0, 20.0) as u8,
-        (attrs.temperament * 20.0).round().clamp(1.0, 20.0) as u8,
+        attrs.adaptability.round().clamp(1.0, 20.0) as u8,
+        attrs.ambition.round().clamp(1.0, 20.0) as u8,
+        attrs.controversy.round().clamp(1.0, 20.0) as u8,
+        attrs.loyalty.round().clamp(1.0, 20.0) as u8,
+        attrs.pressure.round().clamp(1.0, 20.0) as u8,
+        attrs.professionalism.round().clamp(1.0, 20.0) as u8,
+        attrs.sportsmanship.round().clamp(1.0, 20.0) as u8,
+        attrs.temperament.round().clamp(1.0, 20.0) as u8,
     ];
     let names = ["adaptability", "ambition", "controversy", "loyalty", "pressure", "professionalism", "sportsmanship", "temperament"];
 
@@ -253,9 +253,9 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
     };
 
     let mental = &player.skills.mental;
-    let leadership = (mental.leadership * 20.0).round().clamp(1.0, 20.0) as u8;
-    let determination = (mental.determination * 20.0).round().clamp(1.0, 20.0) as u8;
-    let work_rate = (mental.work_rate * 20.0).round().clamp(1.0, 20.0) as u8;
+    let leadership = mental.leadership.round().clamp(1.0, 20.0) as u8;
+    let determination = mental.determination.round().clamp(1.0, 20.0) as u8;
+    let work_rate = mental.work_rate.round().clamp(1.0, 20.0) as u8;
 
     let pa = &player.player_attributes;
     let condition = (pa.condition as f32 / 100.0).round().clamp(0.0, 100.0) as u8;

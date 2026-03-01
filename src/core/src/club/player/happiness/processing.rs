@@ -156,26 +156,30 @@ impl Player {
     }
 
     fn calculate_ambition_fit(&self) -> f32 {
-        // Compare player ambition against their current reputation as proxy for club level
-        // High ambition (>15) at a low-rep situation creates unhappiness
+        // Compare player ambition against their club's reputation
+        // High ambition (>15) at a low-rep club creates unhappiness
         let ambition = self.attributes.ambition;
-        let rep = self.player_attributes.current_reputation as f32;
+
+        // Use club reputation from latest statistics history entry
+        let club_rep = self.statistics_history.items.last()
+            .map(|h| h.team_reputation as f32)
+            .unwrap_or(0.0);
 
         if ambition <= 10.0 {
             return 0.0; // Low ambition players don't care much
         }
 
-        // Ambition expects a certain reputation level
+        // Ambition expects a certain club reputation level
         // ambition 20 expects rep ~8000+, ambition 15 expects ~4000+
         let expected_rep = (ambition - 10.0) * 800.0;
 
-        if rep >= expected_rep {
+        if club_rep >= expected_rep {
             // At or above expected level
-            let excess = ((rep - expected_rep) / 2000.0).min(1.0);
+            let excess = ((club_rep - expected_rep) / 2000.0).min(1.0);
             excess * 5.0
         } else {
             // Below expected level
-            let deficit = ((expected_rep - rep) / expected_rep).min(1.0);
+            let deficit = ((expected_rep - club_rep) / expected_rep).min(1.0);
             -deficit * 10.0
         }
         .clamp(-10.0, 10.0)
