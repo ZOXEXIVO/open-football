@@ -3,7 +3,7 @@ use crate::Team;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use super::{execute_moves, record_player_decisions, record_moves};
+use super::{execute_moves, record_player_decisions, record_moves, MIN_FIRST_TEAM_SQUAD};
 
 // ─── AI prompt data types ──────────────────────────────────────────
 
@@ -205,6 +205,13 @@ impl SquadComposition {
         for m in &advice.moves {
             if !Self::is_valid_move(teams, &valid_indices, m) {
                 continue;
+            }
+
+            // Guard: block demotions from main team if squad is at minimum
+            if m.from_team_index == main_idx && m.to_team_index != main_idx {
+                if teams[main_idx].players.players.len() <= MIN_FIRST_TEAM_SQUAD {
+                    continue;
+                }
             }
 
             execute_moves(teams, m.from_team_index, m.to_team_index, &[m.player_id]);

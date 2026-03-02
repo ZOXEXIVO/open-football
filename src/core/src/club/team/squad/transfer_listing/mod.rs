@@ -1,4 +1,5 @@
 use crate::club::player::player::Player;
+use crate::club::team::squad::MIN_FIRST_TEAM_SQUAD;
 use crate::shared::{Currency, CurrencyValue};
 use crate::{PlayerStatusType, Team, TransferItem};
 use chrono::NaiveDate;
@@ -258,11 +259,20 @@ impl TransferListManager {
         let transfer_ids: Vec<u32> = advice.transfer_list.iter().map(|d| d.player_id).collect();
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();
 
+        // Count non-listed first team players to enforce minimum squad size
+        let available_main = teams[main_idx].players.players.iter()
+            .filter(|p| {
+                let s = p.statuses.get();
+                !s.contains(&PlayerStatusType::Lst) && !s.contains(&PlayerStatusType::Loa)
+            })
+            .count();
+        let mut listing_budget = available_main.saturating_sub(MIN_FIRST_TEAM_SQUAD);
+
         // Collect all IDs being listed this tick to prevent contradictory delist
         let mut just_listed: Vec<u32> = Vec::new();
 
-        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date, &mut just_listed);
-        Self::execute_loan_listings(teams, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date, &mut just_listed);
+        Self::execute_transfer_listings(teams, main_idx, team_indices, &advice.transfer_list, &loan_ids, &coach_name, date, &mut just_listed, &mut listing_budget);
+        Self::execute_loan_listings(teams, main_idx, team_indices, &advice.loan_list, &transfer_ids, &coach_name, date, &mut just_listed, &mut listing_budget);
         Self::execute_delistings(teams, main_idx, team_indices, &advice.delist, &just_listed, &coach_name, date);
     }
 
@@ -275,6 +285,7 @@ impl TransferListManager {
         coach_name: &str,
         date: NaiveDate,
         just_listed: &mut Vec<u32>,
+        listing_budget: &mut usize,
     ) {
         for decision in decisions {
             if loan_ids.contains(&decision.player_id) {
@@ -286,6 +297,13 @@ impl TransferListManager {
             if teams[main_idx].transfer_list.contains(decision.player_id) {
                 continue;
             }
+
+            // Guard: skip listing main team players when budget exhausted
+            let is_main_team_player = teams[main_idx].players.players.iter().any(|p| p.id == decision.player_id);
+            if is_main_team_player && *listing_budget == 0 {
+                continue;
+            }
+
             let asking_price = find_player_in_teams(teams, team_indices, decision.player_id)
                 .map(|p| p.value(date))
                 .unwrap_or(0.0);
@@ -301,17 +319,23 @@ impl TransferListManager {
             record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
                 &format!("Transfer listed: {}", decision.reason));
             just_listed.push(decision.player_id);
+
+            if is_main_team_player {
+                *listing_budget = listing_budget.saturating_sub(1);
+            }
         }
     }
 
     fn execute_loan_listings(
         teams: &mut [Team],
+        main_idx: usize,
         team_indices: &[(usize, &str)],
         decisions: &[AiListingDecision],
         transfer_ids: &[u32],
         coach_name: &str,
         date: NaiveDate,
         just_listed: &mut Vec<u32>,
+        listing_budget: &mut usize,
     ) {
         for decision in decisions {
             if transfer_ids.contains(&decision.player_id) {
@@ -324,10 +348,20 @@ impl TransferListManager {
                 continue;
             }
 
+            // Guard: skip listing main team players when budget exhausted
+            let is_main_team_player = teams[main_idx].players.players.iter().any(|p| p.id == decision.player_id);
+            if is_main_team_player && *listing_budget == 0 {
+                continue;
+            }
+
             set_player_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa, date);
             record_listing_decision(teams, team_indices, decision.player_id, date, coach_name,
                 &format!("Loan listed: {}", decision.reason));
             just_listed.push(decision.player_id);
+
+            if is_main_team_player {
+                *listing_budget = listing_budget.saturating_sub(1);
+            }
         }
     }
 

@@ -14,6 +14,8 @@ use chrono::NaiveDate;
 
 pub struct SquadManager;
 
+pub const MIN_FIRST_TEAM_SQUAD: usize = 25;
+
 impl SquadManager {
     /// Daily: only mandatory administrative demotions (Lst, Loa).
     /// All other squad decisions (recalls, swaps, performance demotions)
@@ -28,7 +30,16 @@ impl SquadManager {
         let coach_name = teams[main_idx].staffs.head_coach().full_name.to_string();
         let demotions = Self::identify_administrative_demotions(&teams[main_idx]);
         let max_age = teams[reserve_idx].team_type.max_age();
-        let demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
+        let mut demotions = filter_by_age(demotions, &teams[main_idx], max_age, date);
+
+        // Guard: never let the first team drop below minimum squad size
+        let current_size = teams[main_idx].players.players.len();
+        if current_size <= MIN_FIRST_TEAM_SQUAD {
+            demotions.clear();
+        } else if demotions.len() > current_size - MIN_FIRST_TEAM_SQUAD {
+            demotions.truncate(current_size - MIN_FIRST_TEAM_SQUAD);
+        }
+
         if !demotions.is_empty() {
             execute_moves(teams, main_idx, reserve_idx, &demotions);
             record_player_decisions(teams, main_idx, reserve_idx, &demotions, date, &coach_name, "Administrative demotion");
