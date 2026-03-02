@@ -976,7 +976,7 @@ impl CountryResult {
                 .unwrap_or(date);
 
             let salary = (loan_fee / 50.0).max(200.0) as u32;
-            player.contract = Some(PlayerClubContract::new_loan(salary, loan_end));
+            player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id));
 
             if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
                 buying_club.finance.spend_from_transfer_budget(loan_fee);

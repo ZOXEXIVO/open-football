@@ -49,14 +49,26 @@ impl ClubResult {
     }
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData) {
-        if result.contract.no_contract || result.contract.want_improve_contract {
+        if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
             let player = data.player(result.player_id).expect(&format!("player {} not found", result.player_id));
 
+            // Don't auto-renew loan contracts — those expire and the player returns
+            if let Some(ref contract) = player.contract {
+                if contract.contract_type == crate::ContractType::Loan {
+                    return;
+                }
+            }
+
+            let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
             let player_growth_potential = player.growth_potential(data.date.date());
+            let base_salary = get_contract_salary(player_growth_potential);
+
+            // For renewals, offer at least their current salary
+            let offered_salary = base_salary.max(current_salary);
 
             player.mailbox.push(PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
-                    salary: get_contract_salary(player_growth_potential),
+                    salary: offered_salary,
                     years: 3,
                 }),
             })

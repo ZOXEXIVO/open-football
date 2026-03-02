@@ -38,8 +38,54 @@ impl CountryResult {
         debug!("Processing season awards");
     }
 
-    fn process_contract_expirations(_country: &mut Country) {
+    fn process_contract_expirations(country: &mut Country) {
         debug!("Processing contract expirations");
+
+        // Phase 1: Collect expired loan returns (player_id, from_club_idx, to_club_id)
+        let mut loan_returns: Vec<(u32, usize, u32)> = Vec::new();
+
+        for (club_idx, club) in country.clubs.iter().enumerate() {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    if let Some(ref contract) = player.contract {
+                        if contract.contract_type == crate::ContractType::Loan {
+                            if let Some(parent_club_id) = contract.loan_from_club_id {
+                                loan_returns.push((player.id, club_idx, parent_club_id));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Phase 2: Execute loan returns
+        for (player_id, borrowing_club_idx, parent_club_id) in loan_returns {
+            // Take player from borrowing club
+            let mut player_opt = None;
+            for team in &mut country.clubs[borrowing_club_idx].teams.teams {
+                if let Some(p) = team.players.take_player(&player_id) {
+                    player_opt = Some(p);
+                    break;
+                }
+            }
+
+            if let Some(mut player) = player_opt {
+                // Clear loan contract — parent club's original contract was lost during
+                // loan creation, so set no contract; the renewal system will offer a new one
+                player.contract = None;
+                player.statistics = crate::PlayerStatistics::default();
+                player.happiness = crate::PlayerHappiness::new();
+                player.statuses.statuses.clear();
+
+                // Return to parent club's first team
+                if let Some(parent_club) = country.clubs.iter_mut().find(|c| c.id == parent_club_id) {
+                    if !parent_club.teams.teams.is_empty() {
+                        info!("Loan return: player {} returns to club {}", player_id, parent_club_id);
+                        parent_club.teams.teams[0].players.add(player);
+                    }
+                }
+            }
+        }
     }
 
     fn process_player_retirements(_country: &mut Country, _date: NaiveDate) {

@@ -5,15 +5,25 @@ pub struct AcceptContractHandler;
 
 impl AcceptContractHandler {
     pub fn process(player: &mut Player, proposal: PlayerContractProposal, now: NaiveDate) {
+        let expiration = now
+            .checked_add_signed(chrono::Duration::days(365 * proposal.years as i64))
+            .unwrap_or(now);
+
+        // Preserve existing shirt number and squad status when renewing
+        let (shirt_number, squad_status) = player.contract.as_ref()
+            .map(|c| (c.shirt_number, c.squad_status.clone()))
+            .unwrap_or((None, PlayerSquadStatus::FirstTeamRegular));
+
         player.contract = Some(PlayerClubContract {
-            shirt_number: None,
+            shirt_number,
             salary: proposal.salary,
             contract_type: ContractType::FullTime,
-            squad_status: PlayerSquadStatus::FirstTeamRegular,
+            squad_status,
             is_transfer_listed: false,
             transfer_status: Option::None,
-            started: Option::None,
-            expiration: now, //TODO ADD YEARS
+            started: Some(now),
+            expiration,
+            loan_from_club_id: None,
             bonuses: vec![],
             clauses: vec![],
         });

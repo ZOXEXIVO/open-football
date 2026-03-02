@@ -28,7 +28,7 @@ pub struct DatabaseGenerator;
 impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
         let current_date = NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(2026, 7, 1).unwrap(),
+            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
             NaiveTime::default(),
         );
 
