@@ -1,7 +1,7 @@
 use crate::utils::TimeEstimation;
-use log::{debug, warn};
+use log::{debug, info};
 
-const MAX_DURATION_THRESHOLD_MS: u32 = 100;
+const MAX_DURATION_THRESHOLD_MS: u32 = 1000;
 
 pub struct Logging;
 
@@ -16,7 +16,7 @@ impl Logging {
         let (result, duration_ms) = TimeEstimation::estimate(action);
 
         if duration_ms > MAX_DURATION_THRESHOLD_MS {
-            warn!("{}, {}ms", message, duration_ms);
+            info!("{}, {}ms", message, duration_ms);
         }
 
         result
@@ -24,14 +24,14 @@ impl Logging {
 
     pub async fn estimate_result_async<T, Fut>(action: Fut, message: &str) -> T
     where
-        Fut: std::future::Future<Output = T>,
+        Fut: Future<Output = T>,
     {
         let now = std::time::Instant::now();
         let result = action.await;
         let duration_ms = now.elapsed().as_millis() as u32;
 
         if duration_ms > MAX_DURATION_THRESHOLD_MS {
-            warn!("{}, {}ms", message, duration_ms);
+            info!("{}, {}ms", message, duration_ms);
         }
 
         result

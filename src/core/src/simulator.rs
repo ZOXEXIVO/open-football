@@ -52,7 +52,7 @@ impl FootballSimulator {
 
         data.next_date();
 
-        log::debug!("simulate date {}, {}ms", current_data, now.elapsed().as_millis());
+        log::info!("simulate date {}, {}ms", current_data, now.elapsed().as_millis());
 
         result
     }

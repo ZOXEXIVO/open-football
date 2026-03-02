@@ -18,8 +18,6 @@ Currently available nation for simulation - **Italy**
 ---
 **[Live Demo](https://open-football.org)**
 
-*The simulation is quite resource-intensive, so I disabled the continue button (top-rigth corner) after first simulation*
-
 ---
 
 [Player page example (click on any player)](https://open-football.org/en/teams/napoli)
