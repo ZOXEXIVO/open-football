@@ -224,6 +224,34 @@ impl LeagueResult {
         // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
 
+        // Update player reputations based on match performance
+        let league_reputation = data.league(result.league_id)
+            .map(|l| l.reputation)
+            .unwrap_or(500) as f32;
+        let league_weight = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
+
+        for (player_id, stats_data) in &details.player_stats {
+            let rating_delta = (stats_data.match_rating - 6.0) * 20.0;
+            let goal_bonus = stats_data.goals.min(3) as f32 * 15.0;
+            let assist_bonus = stats_data.assists.min(3) as f32 * 8.0;
+            let motm_bonus = if best_player_id == Some(*player_id) { 25.0 } else { 0.0 };
+            let raw_delta = rating_delta + goal_bonus + assist_bonus + motm_bonus;
+
+            if is_friendly {
+                let home_delta = (raw_delta * 0.4 * league_weight) as i16;
+                if let Some(player) = data.player_mut(*player_id) {
+                    player.player_attributes.update_reputation(0, home_delta, 0);
+                }
+            } else {
+                let current_delta = (raw_delta * league_weight) as i16;
+                let home_delta = (raw_delta * 0.6 * league_weight) as i16;
+                let world_delta = (raw_delta * 0.2 * league_weight) as i16;
+                if let Some(player) = data.player_mut(*player_id) {
+                    player.player_attributes.update_reputation(current_delta, home_delta, world_delta);
+                }
+            }
+        }
+
         // Save PoM to match result
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;

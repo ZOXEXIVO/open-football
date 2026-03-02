@@ -426,7 +426,16 @@ impl CoachDecisionState {
             .unwrap_or(0);
         let familiarity_bonus = (weeks_in as f32 / 52.0).min(0.15);
 
-        (base + recency_bonus + familiarity_bonus).clamp(0.1, 1.0)
+        let appearances = player.statistics.played + player.statistics.played_subs;
+        let performance_bonus = if appearances >= 3 {
+            let rating_visibility = ((player.statistics.average_rating - 6.5) * 0.06).clamp(0.0, 0.12);
+            let motm_visibility = (player.statistics.player_of_the_match as f32 * 0.04).min(0.08);
+            rating_visibility + motm_visibility
+        } else {
+            0.0
+        };
+
+        (base + recency_bonus + familiarity_bonus + performance_bonus).clamp(0.1, 1.0)
     }
 
     /// Perceived quality: lens-weighted, bias-shifted, sticky noise, attitude bleed

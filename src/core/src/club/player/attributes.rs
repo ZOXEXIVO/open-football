@@ -110,6 +110,12 @@ impl PlayerAttributes {
     pub fn is_injury_serious(&self) -> bool {
         self.is_injured && self.injury_days_remaining > 30
     }
+
+    pub fn update_reputation(&mut self, current_delta: i16, home_delta: i16, world_delta: i16) {
+        self.current_reputation = (self.current_reputation + current_delta).clamp(0, 10000);
+        self.home_reputation = (self.home_reputation + home_delta).clamp(0, 10000);
+        self.world_reputation = (self.world_reputation + world_delta).clamp(0, 10000);
+    }
 }
 
 #[cfg(test)]
@@ -257,5 +263,41 @@ mod tests {
         attrs.is_injured = false;
         attrs.injury_days_remaining = 50;
         assert!(!attrs.is_injury_serious());
+    }
+
+    #[test]
+    fn test_update_reputation_normal() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 500;
+        attrs.home_reputation = 600;
+        attrs.world_reputation = 700;
+        attrs.update_reputation(100, 50, 25);
+        assert_eq!(attrs.current_reputation, 600);
+        assert_eq!(attrs.home_reputation, 650);
+        assert_eq!(attrs.world_reputation, 725);
+    }
+
+    #[test]
+    fn test_update_reputation_clamps_upper() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 9950;
+        attrs.home_reputation = 9990;
+        attrs.world_reputation = 10000;
+        attrs.update_reputation(100, 50, 25);
+        assert_eq!(attrs.current_reputation, 10000);
+        assert_eq!(attrs.home_reputation, 10000);
+        assert_eq!(attrs.world_reputation, 10000);
+    }
+
+    #[test]
+    fn test_update_reputation_clamps_lower() {
+        let mut attrs = default_attrs();
+        attrs.current_reputation = 30;
+        attrs.home_reputation = 10;
+        attrs.world_reputation = 0;
+        attrs.update_reputation(-50, -20, -10);
+        assert_eq!(attrs.current_reputation, 0);
+        assert_eq!(attrs.home_reputation, 0);
+        assert_eq!(attrs.world_reputation, 0);
     }
 }
