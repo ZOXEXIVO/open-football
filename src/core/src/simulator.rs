@@ -44,6 +44,12 @@ impl FootballSimulator {
         // Global competitions
         crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
 
+        // Refresh player indexes after transfers may have moved players between clubs
+        if let Some(mut indexes) = data.indexes.take() {
+            indexes.refresh_player_indexes(data);
+            data.indexes = Some(indexes);
+        }
+
         data.next_date();
 
         log::debug!("simulate date {}, {}ms", current_data, now.elapsed().as_millis());

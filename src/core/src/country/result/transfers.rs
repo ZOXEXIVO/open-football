@@ -12,6 +12,7 @@ use crate::{
 use crate::shared::CurrencyValue;
 use crate::transfers::{TransferListing, TransferListingType, TransferListingStatus, TransferWindowManager};
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
+use crate::transfers::pipeline::TransferRequest;
 use crate::transfers::pipeline_processor::PipelineProcessor;
 
 #[allow(dead_code)]
@@ -90,38 +91,38 @@ impl CountryResult {
             // Step 1: Resolve pending negotiations from previous days [EXISTING - kept]
             Self::resolve_pending_negotiations(country, current_date, &mut summary);
 
-            // Step 2: Evaluate squads (periodic - not daily)
+            // Step 2: List players for transfer (must run before shortlists so market has candidates)
+            Self::list_players_from_pipeline(country, current_date, &mut summary);
+
+            // Step 3: Evaluate squads (periodic - not daily)
             PipelineProcessor::evaluate_squads(country, current_date);
 
-            // Step 2.5: Staff proactively recommend players (weekly)
+            // Step 3.5: Staff proactively recommend players (weekly)
             PipelineProcessor::generate_staff_recommendations(country, current_date);
 
-            // Step 2.75: Process staff recommendations into pipeline actions (weekly)
+            // Step 3.75: Process staff recommendations into pipeline actions (weekly)
             PipelineProcessor::process_staff_recommendations(country, current_date);
 
-            // Step 3: Assign scouts to pending requests
+            // Step 4: Assign scouts to pending requests
             PipelineProcessor::assign_scouts(country, current_date);
 
-            // Step 3.5: Assign scouts to youth/reserve team matches
+            // Step 4.5: Assign scouts to youth/reserve team matches
             PipelineProcessor::assign_scouts_to_matches(country, current_date);
 
-            // Step 3.75: Process match-day scouting observations
+            // Step 4.75: Process match-day scouting observations
             PipelineProcessor::process_match_scouting(country, current_date);
 
-            // Step 4: Process scouting observations (replaces random scouting)
+            // Step 5: Process scouting observations
             PipelineProcessor::process_scouting(country, current_date);
 
-            // Step 5: Build shortlists from completed scouting
+            // Step 6: Build shortlists from scouting + market listings
             PipelineProcessor::build_shortlists(country, current_date);
 
-            // Step 6: Initiate negotiations from shortlists (replaces bulk negotiate_transfers)
+            // Step 7: Initiate negotiations from shortlists
             PipelineProcessor::initiate_negotiations(country, current_date);
 
-            // Step 6.5: Small clubs proactively scan the loan market
+            // Step 7.5: Small clubs proactively scan the loan market
             PipelineProcessor::scan_loan_market(country, current_date);
-
-            // Step 7: List players from pipeline decisions (loan-outs, surplus)
-            Self::list_players_from_pipeline(country, current_date, &mut summary);
 
             // Step 8: Free agents and contract expirations [EXISTING - kept]
             Self::handle_free_agents(country, current_date, &mut summary);
@@ -156,7 +157,7 @@ impl CountryResult {
 
             for player in &club.teams.teams[0].players.players {
                 // Use existing should_list_player logic for non-pipeline listings
-                if Self::should_list_player(player, &squad_analysis, club) {
+                if Self::should_list_player(player, &squad_analysis, club, date) {
                     let age = player.age(date);
 
                     if age < 16 {
@@ -181,6 +182,10 @@ impl CountryResult {
                     }
                 }
             }
+        }
+
+        if !listings_to_add.is_empty() {
+            debug!("Transfer market: listing {} players for transfer/loan", listings_to_add.len());
         }
 
         // Apply listings
@@ -269,11 +274,11 @@ impl CountryResult {
                 // === Phase 1: Initial Approach ===
                 NegotiationPhase::InitialApproach { .. } => {
                     let mut chance: f32 = if neg_data.is_listed {
-                        70.0
+                        75.0
                     } else if neg_data.is_unsolicited {
-                        25.0
+                        45.0
                     } else {
-                        50.0
+                        55.0
                     };
 
                     if neg_data.asking_price > 0.0 {
@@ -319,14 +324,14 @@ impl CountryResult {
                 NegotiationPhase::ClubNegotiation { round, .. } => {
                     let mut chance: f32 = if neg_data.asking_price > 0.0 {
                         let ratio = neg_data.offer_amount / neg_data.asking_price;
-                        if ratio >= 1.2 { 70.0 }
-                        else if ratio >= 1.0 { 55.0 }
-                        else if ratio >= 0.9 { 40.0 }
-                        else if ratio >= 0.8 { 25.0 }
-                        else if ratio >= 0.7 { 10.0 }
-                        else { 5.0 }
+                        if ratio >= 1.2 { 80.0 }
+                        else if ratio >= 1.0 { 65.0 }
+                        else if ratio >= 0.9 { 50.0 }
+                        else if ratio >= 0.8 { 35.0 }
+                        else if ratio >= 0.7 { 20.0 }
+                        else { 10.0 }
                     } else {
-                        40.0
+                        50.0
                     };
 
                     let importance = Self::calculate_player_importance(
@@ -458,6 +463,30 @@ impl CountryResult {
 
                 // === Phase 4: Medical & Finalization ===
                 NegotiationPhase::MedicalAndFinalization { .. } => {
+                    // Verify the player is still at the selling club before finalizing.
+                    // A player may have already moved (e.g., loaned elsewhere) since
+                    // negotiations started — abort if they're no longer available.
+                    let player_at_selling_club = country.clubs.iter()
+                        .find(|c| c.id == neg_data.selling_club_id)
+                        .map(|c| c.teams.teams.iter().any(|t|
+                            t.players.players.iter().any(|p| p.id == neg_data.player_id)
+                        ))
+                        .unwrap_or(false);
+
+                    if !player_at_selling_club {
+                        if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                            negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                        }
+                        Self::reopen_listing_for_player(country, neg_data.player_id);
+                        PipelineProcessor::on_negotiation_resolved(
+                            country,
+                            neg_data.buying_club_id,
+                            neg_data.player_id,
+                            false,
+                        );
+                        continue;
+                    }
+
                     let is_injured = Self::find_player_in_country(country, neg_data.player_id)
                         .map(|p| p.player_attributes.is_injured)
                         .unwrap_or(false);
@@ -602,10 +631,19 @@ impl CountryResult {
     fn should_list_player(
         player: &crate::Player,
         analysis: &SquadAnalysis,
-        _club: &Club,
+        club: &Club,
+        date: NaiveDate,
     ) -> bool {
+        // Loan players belong to another club — cannot be listed by the loan club
+        if let Some(ref contract) = player.contract {
+            if contract.contract_type == crate::ContractType::Loan {
+                return false;
+            }
+        }
+
         let statuses = player.statuses.get();
 
+        // Already listed
         if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Loa) || statuses.contains(&PlayerStatusType::Frt) {
             return false;
         }
@@ -619,25 +657,50 @@ impl CountryResult {
             }
         }
 
-        if player.statuses.get().contains(&PlayerStatusType::Req) {
+        if statuses.contains(&PlayerStatusType::Req) {
             return true;
         }
 
-        if player.statuses.get().contains(&PlayerStatusType::Unh) {
+        if statuses.contains(&PlayerStatusType::Unh) {
             return true;
         }
 
+        // Well below squad average — club would accept offers
         if analysis.quality_level > 15 &&
             (player.player_attributes.current_ability as i16) < (analysis.quality_level as i16 - 15) {
             return true;
         }
 
+        // Surplus position and below average
         let player_group = player.position().position_group();
         for surplus_pos in &analysis.surplus_positions {
             if surplus_pos.position_group() == player_group {
                 if (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 {
                     return true;
                 }
+            }
+        }
+
+        let age = player.age(date);
+
+        // Aging players past their prime — clubs willing to sell
+        if age >= 32 && (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 + 5 {
+            return true;
+        }
+
+        // Below-average players in large squads — natural transfer candidates
+        let squad_size = club.teams.teams.first().map(|t| t.players.players.len()).unwrap_or(0);
+        if squad_size > 23
+            && (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 - 5
+        {
+            return true;
+        }
+
+        // Contract expiring within 6 months — club prefers selling to losing for free
+        if let Some(ref contract) = player.contract {
+            let days_remaining = (contract.expiration - date).num_days();
+            if days_remaining < 180 && days_remaining > 0 {
+                return true;
             }
         }
 
@@ -761,8 +824,17 @@ impl CountryResult {
                 (date.year() - 1) as u16
             };
 
+            // If the team's league is friendly (reserves etc.), use the club's main league instead
             let (selling_league_name, selling_league_slug) = selling_league_id
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .and_then(|l| {
+                    if l.friendly {
+                        // Fall back to first non-friendly league in the country
+                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                    } else {
+                        Some(l)
+                    }
+                })
                 .map(|l| (l.name.clone(), l.slug.clone()))
                 .unwrap_or_default();
 
@@ -788,6 +860,9 @@ impl CountryResult {
             player.statuses.remove(PlayerStatusType::Bid);
             player.statuses.remove(PlayerStatusType::Wnt);
             player.statuses.remove(PlayerStatusType::Sct);
+
+            // Fresh start at new club — reset happiness to neutral
+            player.happiness = crate::PlayerHappiness::new();
 
             let contract_years = if player.age(date) < 24 { 5 }
             else if player.age(date) < 28 { 4 }
@@ -854,8 +929,16 @@ impl CountryResult {
                 (date.year() - 1) as u16
             };
 
+            // If the team's league is friendly (reserves etc.), use the club's main league instead
             let (selling_league_name, selling_league_slug) = selling_league_id
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .and_then(|l| {
+                    if l.friendly {
+                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                    } else {
+                        Some(l)
+                    }
+                })
                 .map(|l| (l.name.clone(), l.slug.clone()))
                 .unwrap_or_default();
 
@@ -872,42 +955,21 @@ impl CountryResult {
                 created_at: date,
             });
 
-            let mut buying_club_name = String::new();
-            let mut buying_team_slug = String::new();
-            let mut buying_team_reputation: u16 = 0;
-            let mut buying_league_id = None;
-            if let Some(buying_club) = country.clubs.iter().find(|c| c.id == buying_club_id) {
-                buying_club_name = buying_club.name.clone();
-                if let Some(first_team) = buying_club.teams.teams.first() {
-                    buying_team_slug = first_team.slug.clone();
-                    buying_team_reputation = first_team.reputation.world;
-                    buying_league_id = first_team.league_id;
-                }
-            }
-
-            let (buying_league_name, buying_league_slug) = buying_league_id
-                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-                .map(|l| (l.name.clone(), l.slug.clone()))
-                .unwrap_or_default();
-
-            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: Season::new(season_year),
-                team_name: buying_club_name,
-                team_slug: buying_team_slug,
-                team_reputation: buying_team_reputation,
-                league_name: buying_league_name,
-                league_slug: buying_league_slug,
-                is_loan: true,
-                statistics: PlayerStatistics::default(),
-                created_at: date,
-            });
-
+            // Reset current stats for the new club — history entry for the loan spell
+            // will be created when the player moves again or the season ends
             player.statistics = PlayerStatistics::default();
 
             player.statuses.remove(PlayerStatusType::Loa);
             player.statuses.remove(PlayerStatusType::Lst);
+            player.statuses.remove(PlayerStatusType::Req);
+            player.statuses.remove(PlayerStatusType::Unh);
+            player.statuses.remove(PlayerStatusType::Trn);
+            player.statuses.remove(PlayerStatusType::Bid);
             player.statuses.remove(PlayerStatusType::Wnt);
             player.statuses.remove(PlayerStatusType::Sct);
+
+            // Fresh start at new club — reset happiness to neutral
+            player.happiness = crate::PlayerHappiness::new();
 
             let loan_end = date
                 .checked_add_signed(chrono::Duration::days(180))
@@ -931,7 +993,158 @@ impl CountryResult {
         }
     }
 
-    fn handle_free_agents(_country: &mut Country, _date: NaiveDate, _summary: &mut TransferActivitySummary) {
-        debug!("Handling free agents");
+    /// Handle expiring contracts and free agent signings.
+    /// Clubs with squad needs sign players whose contracts expire within 6 months.
+    fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
+        struct FreeAgentCandidate {
+            player_id: u32,
+            club_id: u32,
+            ability: u8,
+            potential: u8,
+            age: u8,
+            position_group: PlayerFieldPositionGroup,
+            days_to_expiry: i64,
+        }
+
+        // Pass 1: Find players with expiring contracts (< 180 days)
+        let mut candidates: Vec<FreeAgentCandidate> = Vec::new();
+
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    let contract = match &player.contract {
+                        Some(c) => c,
+                        None => continue,
+                    };
+
+                    // Skip loan players
+                    if contract.contract_type == crate::club::player::contract::ContractType::Loan {
+                        continue;
+                    }
+
+                    let days_left = (contract.expiration - date).num_days();
+
+                    // Contract expiring within 6 months
+                    if days_left > 0 && days_left <= 180 {
+                        // Skip if already listed or in negotiation
+                        let statuses = player.statuses.get();
+                        if statuses.contains(&PlayerStatusType::Lst)
+                            || statuses.contains(&PlayerStatusType::Trn)
+                            || statuses.contains(&PlayerStatusType::Bid)
+                        {
+                            continue;
+                        }
+
+                        candidates.push(FreeAgentCandidate {
+                            player_id: player.id,
+                            club_id: club.id,
+                            ability: player.player_attributes.current_ability,
+                            potential: player.player_attributes.potential_ability,
+                            age: player.age(date),
+                            position_group: player.position().position_group(),
+                            days_to_expiry: days_left,
+                        });
+                    }
+                }
+            }
+        }
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Pass 2: Match candidates to clubs with needs
+        struct FreeAgentSigning {
+            player_id: u32,
+            from_club_id: u32,
+            to_club_id: u32,
+        }
+
+        let mut signings: Vec<FreeAgentSigning> = Vec::new();
+        let max_signings_per_day = 3; // Don't overwhelm with too many per day
+
+        for club in &country.clubs {
+            if signings.len() >= max_signings_per_day {
+                break;
+            }
+
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            let team = &club.teams.teams[0];
+            let avg_ability: u8 = if !team.players.players.is_empty() {
+                let total: u32 = team
+                    .players
+                    .players
+                    .iter()
+                    .map(|p| p.player_attributes.current_ability as u32)
+                    .sum();
+                (total / team.players.players.len() as u32) as u8
+            } else {
+                50
+            };
+
+            // Check unfulfilled transfer requests
+            let unfulfilled: Vec<&TransferRequest> = plan
+                .transfer_requests
+                .iter()
+                .filter(|r| {
+                    r.status != crate::transfers::pipeline::TransferRequestStatus::Fulfilled
+                        && r.status != crate::transfers::pipeline::TransferRequestStatus::Abandoned
+                })
+                .collect();
+
+            for request in &unfulfilled {
+                if signings.len() >= max_signings_per_day {
+                    break;
+                }
+
+                // Find a matching free agent candidate
+                if let Some(best) = candidates
+                    .iter()
+                    .filter(|c| {
+                        c.club_id != club.id
+                            && c.position_group == request.position.position_group()
+                            && c.ability >= request.min_ability.saturating_sub(5)
+                            && c.age <= 33
+                            // Don't poach from same-quality clubs actively
+                            && c.days_to_expiry <= 90
+                            // Not already being signed by another club this round
+                            && !signings.iter().any(|s| s.player_id == c.player_id)
+                    })
+                    .max_by_key(|c| c.ability as u16 + c.potential as u16)
+                {
+                    signings.push(FreeAgentSigning {
+                        player_id: best.player_id,
+                        from_club_id: best.club_id,
+                        to_club_id: club.id,
+                    });
+                }
+            }
+        }
+
+        // Pass 3: Execute signings as free transfers
+        for signing in signings {
+            Self::execute_player_transfer(
+                country,
+                signing.player_id,
+                signing.from_club_id,
+                signing.to_club_id,
+                0.0, // Free transfer
+                date,
+            );
+            summary.completed_transfers += 1;
+
+            info!(
+                "Free agent signing: player {} from club {} to club {}",
+                signing.player_id, signing.from_club_id, signing.to_club_id
+            );
+        }
     }
 }

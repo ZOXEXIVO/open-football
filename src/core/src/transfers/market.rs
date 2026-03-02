@@ -161,27 +161,33 @@ impl TransferMarket {
                 listing.status = TransferListingStatus::Completed;
             }
 
-            let transfer_type = match self.listings.get(listing_idx).unwrap().listing_type {
-                TransferListingType::Loan => {
-                    let loan_end = negotiation.current_offer.contract_length
-                        .map(|months| {
-                            current_date.checked_add_signed(chrono::Duration::days(months as i64 * 30))
-                                .unwrap_or(current_date)
-                        })
-                        .unwrap_or_else(|| {
-                            current_date.checked_add_signed(chrono::Duration::days(180))
-                                .unwrap_or(current_date)
-                        });
-                    TransferType::Loan(loan_end)
-                }
-                TransferListingType::EndOfContract => TransferType::Free,
-                _ => TransferType::Permanent,
+            let listing = self.listings.get(listing_idx).unwrap();
+            let from_team_id = listing.team_id;
+
+            // Use negotiation's is_loan flag (not listing type) since a buying club
+            // may approach a Transfer-listed player as a loan or vice versa
+            let transfer_type = if negotiation.is_loan {
+                let loan_end = negotiation.current_offer.contract_length
+                    .map(|months| {
+                        current_date.checked_add_signed(chrono::Duration::days(months as i64 * 30))
+                            .unwrap_or(current_date)
+                    })
+                    .unwrap_or_else(|| {
+                        current_date.checked_add_signed(chrono::Duration::days(180))
+                            .unwrap_or(current_date)
+                    });
+                TransferType::Loan(loan_end)
+            } else if listing.listing_type == TransferListingType::EndOfContract {
+                TransferType::Free
+            } else {
+                TransferType::Permanent
             };
 
             let completed = CompletedTransfer::new(
                 negotiation.player_id,
                 player_name,
                 negotiation.selling_club_id,
+                from_team_id,
                 from_team_name,
                 negotiation.buying_club_id,
                 to_team_name,

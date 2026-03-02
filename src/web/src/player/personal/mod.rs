@@ -380,7 +380,7 @@ fn get_recent_events(player: &Player, i18n: &crate::I18n) -> Vec<RecentEventDto>
         })
         .collect();
 
-    events.sort_by(|a, b| b.days_ago.cmp(&a.days_ago));
+    events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
 
     events
 }
@@ -469,7 +469,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 

@@ -88,6 +88,7 @@ pub use staff::{
     StaffResult, StaffCollectionResult, StaffContractResult, StaffTrainingResult,
     StaffWarning, StaffMoraleEvent, ResignationReason, HealthIssue,
     RelationshipEvent, StaffLicenseType, StaffTrainingSession,
+    StaffEvent, StaffEventType,
     ScoutingReport, ScoutRecommendation,
 };
 // Also export context module for those who want to import from it

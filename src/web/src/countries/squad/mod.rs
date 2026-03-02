@@ -89,17 +89,21 @@ pub async fn country_squad_action(
         .squad
         .iter()
         .filter_map(|squad_player| {
-            // Find the player in clubs
-            let club = country.clubs.iter().find(|c| c.id == squad_player.club_id)?;
-            let (player, team) = club.teams.teams.iter()
-                .find_map(|t| {
-                    t.players.players.iter()
-                        .find(|p| p.id == squad_player.player_id)
-                        .map(|p| (p, t))
-                })?;
+            // Find the player globally — they may play for a club in another country
+            let player = simulator_data.player(squad_player.player_id)?;
+            let club = simulator_data.club(squad_player.club_id);
+            let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
 
             let position = player.positions.display_positions().join(", ");
-            let head_coach = team.staffs.head_coach();
+
+            // Use the player's team's head coach for ability assessment
+            let (judging, coach_id) = simulator_data
+                .player_with_team(squad_player.player_id)
+                .map(|(_, t)| {
+                    let hc = t.staffs.head_coach();
+                    (hc.staff_attributes.knowledge.judging_player_potential, hc.id)
+                })
+                .unwrap_or((10, 0));
 
             Some(NationalSquadPlayerDto {
                 id: player.id,
@@ -107,13 +111,13 @@ pub async fn country_squad_action(
                 last_name: player.full_name.display_last_name().to_string(),
                 position,
                 position_sort: player.position(),
-                club_name: club.name.clone(),
+                club_name,
                 age: DateUtils::age(player.birth_date, now),
                 current_ability: get_current_ability_stars(player),
                 potential_ability: get_potential_ability_stars_by_staff(
                     player,
-                    head_coach.staff_attributes.knowledge.judging_player_potential,
-                    head_coach.id,
+                    judging,
+                    coach_id,
                 ),
                 conditions: get_conditions(player),
                 international_apps: player.player_attributes.international_apps,

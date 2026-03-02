@@ -88,6 +88,7 @@ pub use club::{
     StaffResult, StaffCollectionResult, StaffContractResult, StaffTrainingResult,
     StaffWarning, StaffMoraleEvent, ResignationReason, HealthIssue,
     RelationshipEvent, StaffLicenseType, StaffTrainingSession,
+    StaffEvent, StaffEventType,
     ScoutingReport, ScoutRecommendation,
     staff_context, staff_attributes_mod, staff_contract_mod,
     // Team exports

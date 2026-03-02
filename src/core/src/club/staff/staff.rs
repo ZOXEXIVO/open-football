@@ -10,6 +10,30 @@ use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relatio
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 #[derive(Debug, Clone)]
+pub struct StaffEvent {
+    pub event_type: StaffEventType,
+    pub days_ago: u16,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StaffEventType {
+    TrainingConducted,
+    MatchObserved,
+    PlayerScouted,
+    PositiveInteraction,
+    Conflict,
+    MentorshipStarted,
+    TrustBuilt,
+    PerformanceExcellent,
+    PerformanceDeclined,
+    LicenseUpgrade,
+    ProfessionalDevelopment,
+    Birthday,
+    HighFatigue,
+    ContractNegotiation,
+}
+
+#[derive(Debug, Clone)]
 pub struct Staff {
     pub id: u32,
     pub full_name: FullName,
@@ -29,6 +53,7 @@ pub struct Staff {
     pub recent_performance: StaffPerformance,
     pub coaching_style: CoachingStyle,
     pub training_schedule: Vec<StaffTrainingSession>,
+    pub recent_events: Vec<StaffEvent>,
 }
 
 #[derive(Debug, Clone)]
@@ -193,18 +218,42 @@ impl Staff {
             recent_performance: StaffPerformance::default(),
             coaching_style: CoachingStyle::default(),
             training_schedule: Vec::new(),
+            recent_events: Vec::new(),
         }
+    }
+
+    pub fn add_event(&mut self, event_type: StaffEventType) {
+        self.recent_events.push(StaffEvent {
+            event_type,
+            days_ago: 0,
+        });
+        if self.recent_events.len() > 10 {
+            self.recent_events.remove(0);
+        }
+    }
+
+    pub fn decay_events(&mut self) {
+        for event in &mut self.recent_events {
+            event.days_ago += 7;
+        }
+        self.recent_events.retain(|e| e.days_ago <= 60);
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> StaffResult {
         let now = ctx.simulation.date;
         let mut result = StaffResult::new(self.id);
 
+        // Weekly event decay
+        if ctx.simulation.is_week_beginning() {
+            self.decay_events();
+        }
+
         // Birthday handling - improves mood
         if DateUtils::is_birthday(self.birth_date, now.date()) {
             self.behaviour.try_increase();
             self.job_satisfaction = (self.job_satisfaction + 5.0).min(100.0);
             result.add_event(StaffMoraleEvent::Birthday);
+            self.add_event(StaffEventType::Birthday);
         }
 
         // Process contract status and negotiations
@@ -240,6 +289,8 @@ impl Staff {
     }
 
     fn process_contract(&mut self, result: &mut StaffResult, now: NaiveDateTime) {
+        let mut negotiation_started = false;
+
         if let Some(ref mut contract) = self.contract {
             const THREE_MONTHS_DAYS: i64 = 90;
             const SIX_MONTHS_DAYS: i64 = 180;
@@ -265,6 +316,7 @@ impl Staff {
                     // Urgent renewal needed
                     result.contract.negotiating = true;
                     result.contract.urgent = true;
+                    negotiation_started = true;
 
                     if self.job_satisfaction < 40.0 {
                         // Unhappy - likely to leave
@@ -287,6 +339,10 @@ impl Staff {
                 result.contract.deserves_contract = true;
             }
         }
+
+        if negotiation_started {
+            self.add_event(StaffEventType::ContractNegotiation);
+        }
     }
 
     fn update_fatigue(&mut self, ctx: &GlobalContext<'_>, result: &mut StaffResult) {
@@ -294,11 +350,16 @@ impl Staff {
         let workload = self.calculate_workload(ctx);
 
         // Increase fatigue based on workload
-        self.fatigue += workload * 2.0;
+        self.fatigue += workload;
+
+        // Daily natural recovery
+        self.fatigue -= 2.0;
 
         // Recovery on weekends
-        if ctx.simulation.date.weekday() == chrono::Weekday::Sun {
-            self.fatigue = (self.fatigue - 15.0).max(0.0);
+        if ctx.simulation.date.weekday() == chrono::Weekday::Sun
+            || ctx.simulation.date.weekday() == chrono::Weekday::Sat
+        {
+            self.fatigue -= 5.0;
         }
 
         // Vacation periods provide significant recovery
@@ -306,14 +367,15 @@ impl Staff {
             self.fatigue = (self.fatigue - 30.0).max(0.0);
         }
 
-        // Cap fatigue at 100
-        self.fatigue = self.fatigue.min(100.0);
+        // Clamp fatigue to 0-100
+        self.fatigue = self.fatigue.clamp(0.0, 100.0);
 
         // High fatigue affects performance and morale
         if self.fatigue > 80.0 {
             result.add_warning(StaffWarning::HighFatigue);
             self.recent_performance.training_effectiveness *= 0.8;
             self.job_satisfaction -= 2.0;
+            self.add_event(StaffEventType::HighFatigue);
         }
 
         // Extreme fatigue can lead to health issues
@@ -338,13 +400,17 @@ impl Staff {
         }
 
         // Execute today's training if scheduled
-        if let Some(session) = self.get_todays_training(ctx.simulation.date) {
+        let today_session = self.get_todays_training(ctx.simulation.date)
+            .map(|s| (s.session_type.clone(), s.intensity.clone()));
+
+        if let Some((session_type, intensity)) = today_session {
             // Training effectiveness based on various factors
             let effectiveness = self.calculate_training_effectiveness();
 
             result.training.session_conducted = true;
             result.training.effectiveness = effectiveness;
-            result.training.session_type = session.session_type.clone();
+            result.training.session_type = session_type;
+            self.add_event(StaffEventType::TrainingConducted);
 
             // Track which players attended
             if let Some(team_id) = ctx.team.as_ref().map(|t| t.id) {
@@ -352,7 +418,7 @@ impl Staff {
             }
 
             // Fatigue from conducting training
-            self.fatigue += match session.intensity {
+            self.fatigue += match intensity {
                 TrainingIntensity::VeryLight => 1.0,
                 TrainingIntensity::Light => 2.0,
                 TrainingIntensity::Moderate => 3.0,
@@ -425,10 +491,13 @@ impl Staff {
             // Small random relationship events
             if rand::random::<f32>() < 0.1 {
                 result.relationship_event = Some(RelationshipEvent::PositiveInteraction);
+                self.add_event(StaffEventType::PositiveInteraction);
             } else if rand::random::<f32>() < 0.05 && self.job_satisfaction < 40.0 {
                 result.relationship_event = Some(RelationshipEvent::Conflict);
+                self.add_event(StaffEventType::Conflict);
             } else if rand::random::<f32>() < 0.02 && self.job_satisfaction > 70.0 {
                 result.relationship_event = Some(RelationshipEvent::TrustBuilt);
+                self.add_event(StaffEventType::TrustBuilt);
             }
         }
     }
@@ -446,6 +515,7 @@ impl Staff {
             result.performance_improved = true;
         } else if self.recent_performance.training_effectiveness < prev_effectiveness - 0.1 {
             result.performance_declined = true;
+            self.add_event(StaffEventType::PerformanceDeclined);
         }
 
         // Board/management reaction to performance
@@ -454,6 +524,7 @@ impl Staff {
         } else if self.recent_performance.training_effectiveness > 0.8 {
             result.add_event(StaffMoraleEvent::ExcellentPerformance);
             self.job_satisfaction += 5.0;
+            self.add_event(StaffEventType::PerformanceExcellent);
         }
     }
 
@@ -462,6 +533,7 @@ impl Staff {
         if self.should_upgrade_license() {
             if rand::random::<f32>() < 0.01 {  // Small daily chance
                 result.license_upgrade_available = true;
+                self.add_event(StaffEventType::LicenseUpgrade);
 
                 if self.attributes.ambition > 15.0 {
                     result.wants_license_upgrade = true;
@@ -478,6 +550,7 @@ impl Staff {
         if self.is_on_course(ctx.simulation.date.date()) {
             result.on_professional_development = true;
             self.fatigue = (self.fatigue - 5.0).max(0.0);  // Courses are refreshing
+            self.add_event(StaffEventType::ProfessionalDevelopment);
         }
     }
 
@@ -504,18 +577,18 @@ impl Staff {
     fn calculate_workload(&self, _ctx: &GlobalContext<'_>) -> f32 {
         // Base workload from position
         let position_load = match self.contract.as_ref().map(|c| &c.position) {
-            Some(StaffPosition::Manager) => 8.0,
-            Some(StaffPosition::AssistantManager) => 6.0,
-            Some(StaffPosition::Coach) => 5.0,
-            Some(StaffPosition::FitnessCoach) => 4.0,
-            Some(StaffPosition::GoalkeeperCoach) => 3.0,
-            Some(StaffPosition::Scout) => 4.0,
-            Some(StaffPosition::Physio) => 5.0,
-            _ => 3.0,
+            Some(StaffPosition::Manager) => 5.0,
+            Some(StaffPosition::AssistantManager) => 4.0,
+            Some(StaffPosition::Coach) => 3.0,
+            Some(StaffPosition::FitnessCoach) => 2.5,
+            Some(StaffPosition::GoalkeeperCoach) => 2.0,
+            Some(StaffPosition::Scout) | Some(StaffPosition::ChiefScout) => 2.0,
+            Some(StaffPosition::Physio) => 3.0,
+            _ => 2.0,
         };
 
         // Additional load from training sessions
-        let training_load = self.training_schedule.len() as f32 * 0.5;
+        let training_load = self.training_schedule.len() as f32 * 0.3;
 
         position_load + training_load
     }

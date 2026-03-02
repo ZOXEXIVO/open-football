@@ -86,6 +86,7 @@ impl StaffStub {
             recent_performance: Default::default(),
             coaching_style: Default::default(),
             training_schedule: vec![],
+            recent_events: Vec::new(),
         };
         staff
     }

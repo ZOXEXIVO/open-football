@@ -3,14 +3,25 @@ use crate::club::{PlayerStatusType, CONDITION_MAX_VALUE};
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
+/// Minimum condition floor for injured players (15%)
+const INJURY_CONDITION_FLOOR: i16 = 1500;
+
+/// Minimum fitness floor for injured players (20%)
+const INJURY_FITNESS_FLOOR: i16 = 2000;
+
 impl Player {
-    /// Non-injured players slowly recover condition each day, with age and jadedness awareness
+    /// Daily condition processing.
+    /// Injured players lose condition, fitness, and match readiness (like FM).
+    /// Healthy players recover condition naturally.
     pub(crate) fn process_condition_recovery(&mut self, now: NaiveDate) {
+        let natural_fitness = self.skills.physical.natural_fitness;
+
         if self.player_attributes.is_injured {
+            self.process_injury_condition_decay(natural_fitness);
+            self.player_attributes.days_since_last_match += 1;
             return;
         }
 
-        let natural_fitness = self.skills.physical.natural_fitness;
         let age = DateUtils::age(self.birth_date, now);
         let jadedness = self.player_attributes.jadedness;
 
@@ -51,8 +62,34 @@ impl Player {
         self.player_attributes.days_since_last_match += 1;
     }
 
+    /// Injured players lose condition, fitness, and match readiness daily.
+    /// Higher natural_fitness slows the decay (like FM's Natural Fitness attribute).
+    fn process_injury_condition_decay(&mut self, natural_fitness: f32) {
+        let nf_factor = 1.0 - (natural_fitness / 20.0) * 0.7; // 0.3..1.0
+
+        // Condition decay: ~50-150/day depending on natural_fitness
+        // At nf=20: ~50/day, at nf=1: ~147/day
+        let condition_decay = (150.0 * nf_factor) as i16;
+        self.player_attributes.condition =
+            (self.player_attributes.condition - condition_decay).max(INJURY_CONDITION_FLOOR);
+
+        // Fitness decay: ~15-50/day depending on natural_fitness
+        let fitness_decay = (50.0 * nf_factor) as i16;
+        self.player_attributes.fitness =
+            (self.player_attributes.fitness - fitness_decay).max(INJURY_FITNESS_FLOOR);
+
+        // Match readiness decays faster during injury (not training or playing)
+        self.skills.physical.match_readiness =
+            (self.skills.physical.match_readiness - 0.2).max(0.0);
+    }
+
     /// Players not playing lose match sharpness over time
     pub(crate) fn process_match_readiness_decay(&mut self) {
+        if self.player_attributes.is_injured {
+            // Already handled in process_injury_condition_decay
+            return;
+        }
+
         if self.player_attributes.days_since_last_match > 7 {
             // Accelerated decay after a week without matches
             self.skills.physical.match_readiness =

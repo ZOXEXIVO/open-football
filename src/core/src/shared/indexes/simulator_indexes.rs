@@ -142,6 +142,29 @@ impl SimulatorDataIndexes {
         }
     }
 
+    /// Rebuild only the player indexes (after transfers move players between clubs)
+    pub fn refresh_player_indexes(&mut self, data: &SimulatorData) {
+        self.player_indexes.clear();
+
+        for continent in &data.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        for player in &team.players.players {
+                            self.add_player_location(
+                                player.id,
+                                continent.id,
+                                country.id,
+                                club.id,
+                                team.id,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     //player indexes
 
     pub fn add_player_location(

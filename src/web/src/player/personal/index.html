@@ -66,12 +66,12 @@
                     </div>
                 </div>
                 <div class="fm-personal-section">
-                    <div class="fm-personal-detail">
+                    <div class="fm-personal-detail fm-bar-row">
                         <span class="fm-detail-label">{{ i18n.t("condition") }}</span>
                         <div class="fm-mini-bar"><div class="fm-mini-fill{% if player_info.condition >= 70 %} fm-condition-good{% elif player_info.condition >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ player_info.condition }}%"></div></div>
                         <span class="fm-detail-value-sm">{{ player_info.condition }}%</span>
                     </div>
-                    <div class="fm-personal-detail">
+                    <div class="fm-personal-detail fm-bar-row">
                         <span class="fm-detail-label">{{ i18n.t("natural_fitness") }}</span>
                         <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ player_info.fitness }}%"></div></div>
                         <span class="fm-detail-value-sm">{{ player_info.fitness }}%</span>
@@ -160,11 +160,11 @@
                             <span class="fm-detail-label">{{ i18n.t("relationship") }}</span>
                             <span class="fm-detail-value{% if rel.level > 20 %} fm-rel-good{% elif rel.level < -20 %} fm-rel-poor{% endif %}">{{ rel.label }}</span>
                         </div>
-                        <div class="fm-personal-detail">
+                        <div class="fm-personal-detail fm-bar-row">
                             <span class="fm-detail-label">{{ i18n.t("trust") }}</span>
                             <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.trust }}%"></div></div>
                         </div>
-                        <div class="fm-personal-detail">
+                        <div class="fm-personal-detail fm-bar-row">
                             <span class="fm-detail-label">{{ i18n.t("respect") }}</span>
                             <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.respect }}%"></div></div>
                         </div>

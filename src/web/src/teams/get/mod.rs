@@ -188,26 +188,17 @@ pub async fn team_get_action(
             .transfer_history
             .iter()
             .filter(|t| {
-                t.from_club_id == club_id
+                t.from_team_id == team_id
                     && matches!(&t.transfer_type, TransferType::Loan(_))
                     && !current_player_ids.contains(&t.player_id)
             })
             .collect();
 
         for t in loan_records {
-            // Search for the player directly in destination club's teams
-            let dest_club = country.clubs.iter().find(|c| c.id == t.to_club_id);
+            // Search globally — the player may have been loaned to a club in another country
+            let found = simulator_data.player(t.player_id);
 
-            let found = dest_club.and_then(|club| {
-                for dest_team in &club.teams.teams {
-                    if let Some(player) = dest_team.players.players.iter().find(|p| p.id == t.player_id) {
-                        return Some((player, dest_team.slug.clone()));
-                    }
-                }
-                None
-            });
-
-            if let Some((player, _)) = found {
+            if let Some(player) = found {
                 let player_country = simulator_data.country(player.country_id);
                 let position = player.positions.display_positions().join(", ");
 
@@ -297,7 +288,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 

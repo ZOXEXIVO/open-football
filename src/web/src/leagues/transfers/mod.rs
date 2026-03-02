@@ -194,13 +194,9 @@ pub async fn league_transfers_action(
             let selling_club = country.clubs.iter().find(|c| c.id == n.selling_club_id)?;
             let buying_club = country.clubs.iter().find(|c| c.id == n.buying_club_id)?;
 
-            // Find the player name
-            let player_name = selling_club
-                .teams
-                .teams
-                .iter()
-                .flat_map(|t| &t.players.players)
-                .find(|p| p.id == n.player_id)
+            // Find the player name globally — the player may have moved to another country/continent
+            let player_name = simulator_data
+                .player(n.player_id)
                 .map(|p| p.full_name.to_string())
                 .unwrap_or_else(|| format!("Player #{}", n.player_id));
 

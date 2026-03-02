@@ -476,9 +476,12 @@ impl DatabaseGenerator {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {
-            // Only main team gets directors
+            // Only main team gets directors and scouts
             staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
             staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
+            staffs.push(staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation));
+            staffs.push(staff_generator.generate(country_id, StaffPosition::Scout, team_reputation));
+            staffs.push(staff_generator.generate(country_id, StaffPosition::Scout, team_reputation));
         }
 
         staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager, team_reputation));

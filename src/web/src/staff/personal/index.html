@@ -1,0 +1,163 @@
+{% extends "layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("personal") }}{% endblock %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/staff/{{ staff_id }}">{{ i18n.t("overview") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/staff/{{ staff_id }}/personal">{{ i18n.t("personal") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <!-- Row 1: Personality + Staff Profile -->
+    <div class="fm-personal-grid">
+        <div class="fm-personal-col">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("personality") }}</h3>
+                </div>
+                <div class="fm-personal-section">
+                    <div class="fm-radar-wrap">
+                        <svg viewBox="0 0 400 280" class="fm-radar-svg">
+                            <polygon class="fm-radar-grid fm-radar-grid-4" points="{{ personality.radar_grid_4 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-3" points="{{ personality.radar_grid_3 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-2" points="{{ personality.radar_grid_2 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-1" points="{{ personality.radar_grid_1 }}"/>
+                            {% for axis in personality.radar_axes %}
+                            <line class="fm-radar-axis" x1="200" y1="140" x2="{{ axis.x2 }}" y2="{{ axis.y2 }}"/>
+                            {% endfor %}
+                            <polygon class="fm-radar-area" points="{{ personality.radar_points }}"/>
+                            {% for item in personality.radar_items %}
+                            <text class="fm-radar-label" x="{{ item.x }}" y="{{ item.y }}" text-anchor="{{ item.anchor }}">{{ i18n.t(&item.name) }} ({{ item.value }})</text>
+                            {% endfor %}
+                        </svg>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <div class="fm-personal-col">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("staff_profile") }}</h3>
+                </div>
+                <div class="fm-personal-section">
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_coaching_style") }}</span>
+                        <span class="fm-detail-value">{{ staff_info.coaching_style }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_license") }}</span>
+                        <span class="fm-detail-value">{{ staff_info.license }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("determination") }}</span>
+                        <span class="fm-detail-value td_{{ staff_info.determination }}">{{ staff_info.determination }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_man_management") }}</span>
+                        <span class="fm-detail-value td_{{ staff_info.man_management }}">{{ staff_info.man_management }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_motivating") }}</span>
+                        <span class="fm-detail-value td_{{ staff_info.motivating }}">{{ staff_info.motivating }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_discipline") }}</span>
+                        <span class="fm-detail-value td_{{ staff_info.discipline }}">{{ staff_info.discipline }}</span>
+                    </div>
+                </div>
+                <div class="fm-personal-section">
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("job_satisfaction") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if staff_info.job_satisfaction >= 70 %} fm-condition-good{% elif staff_info.job_satisfaction >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ staff_info.job_satisfaction }}%"></div></div>
+                        <span class="fm-detail-value-sm">{{ staff_info.job_satisfaction }}%</span>
+                    </div>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("fatigue") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if staff_info.fatigue <= 30 %} fm-condition-good{% elif staff_info.fatigue <= 60 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ staff_info.fatigue }}%"></div></div>
+                        <span class="fm-detail-value-sm">{{ staff_info.fatigue }}%</span>
+                    </div>
+                </div>
+                {% if !staff_info.salary.is_empty() %}
+                <div class="fm-personal-section">
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("staff_role") }}</span>
+                        <span class="fm-detail-value">{{ staff_info.role }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("wage") }}</span>
+                        <span class="fm-detail-value">{{ staff_info.salary }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("contract") }}</span>
+                        <span class="fm-detail-value">{{ staff_info.contract_expiry }}</span>
+                    </div>
+                </div>
+                {% endif %}
+            </section>
+        </div>
+    </div>
+
+    <!-- Row 2: Behaviour & Performance -->
+    <div class="fm-personal-fullrow">
+        <section class="fm-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("performance") }}</h3>
+            </div>
+            <div class="fm-personal-section">
+                <div class="fm-happiness-grid">
+                    <div class="fm-happiness-col">
+                        <div class="fm-personal-detail">
+                            <span class="fm-detail-label">{{ i18n.t("behaviour") }}</span>
+                            <span class="fm-detail-value">{{ staff_info.behaviour }}</span>
+                        </div>
+                        <div class="fm-personal-detail fm-bar-row">
+                            <span class="fm-detail-label">{{ i18n.t("training_effectiveness") }}</span>
+                            <div class="fm-mini-bar"><div class="fm-mini-fill{% if performance.training_effectiveness >= 70 %} fm-condition-good{% elif performance.training_effectiveness >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ performance.training_effectiveness }}%"></div></div>
+                            <span class="fm-detail-value-sm">{{ performance.training_effectiveness }}%</span>
+                        </div>
+                        <div class="fm-personal-detail fm-bar-row">
+                            <span class="fm-detail-label">{{ i18n.t("player_development") }}</span>
+                            <div class="fm-mini-bar"><div class="fm-mini-fill{% if performance.player_development >= 70 %} fm-condition-good{% elif performance.player_development >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ performance.player_development }}%"></div></div>
+                            <span class="fm-detail-value-sm">{{ performance.player_development }}%</span>
+                        </div>
+                    </div>
+                    <div class="fm-happiness-col">
+                        <div class="fm-personal-detail fm-bar-row">
+                            <span class="fm-detail-label">{{ i18n.t("injury_prevention") }}</span>
+                            <div class="fm-mini-bar"><div class="fm-mini-fill{% if performance.injury_prevention >= 70 %} fm-condition-good{% elif performance.injury_prevention >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ performance.injury_prevention }}%"></div></div>
+                            <span class="fm-detail-value-sm">{{ performance.injury_prevention }}%</span>
+                        </div>
+                        <div class="fm-personal-detail fm-bar-row">
+                            <span class="fm-detail-label">{{ i18n.t("tactical_implementation") }}</span>
+                            <div class="fm-mini-bar"><div class="fm-mini-fill{% if performance.tactical_implementation >= 70 %} fm-condition-good{% elif performance.tactical_implementation >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ performance.tactical_implementation }}%"></div></div>
+                            <span class="fm-detail-value-sm">{{ performance.tactical_implementation }}%</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        {% if !recent_events.is_empty() %}
+        <section class="fm-panel mt-3">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("staff_recent_events") }}</h3>
+            </div>
+            <div class="fm-personal-section">
+                <table class="fm-personal-table">
+                    {% for event in recent_events %}
+                    <tr>
+                        <td class="fm-event-desc{% if event.is_positive %} fm-event-pos{% else %} fm-event-neg{% endif %}">{{ event.description }}</td>
+                        <td class="fm-event-ago">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</td>
+                    </tr>
+                    {% endfor %}
+                </table>
+            </div>
+        </section>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

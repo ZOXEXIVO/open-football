@@ -17,7 +17,7 @@ use crate::utils::IntegerUtils;
 use crate::{
     Club, ClubTransferStrategy, Country, MatchTacticType, Person, Player,
     PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType, ReputationLevel,
-    TacticsSelector, TeamType, TACTICS_POSITIONS,
+    StaffEventType, TacticsSelector, TeamType, TACTICS_POSITIONS,
 };
 
 /// PipelineProcessor handles all daily transfer pipeline logic.
@@ -145,8 +145,19 @@ impl PipelineProcessor {
             evaluations.push(eval);
         }
 
+        if !evaluations.is_empty() {
+            debug!("Transfer pipeline: evaluated {} clubs", evaluations.len());
+        }
+
         // Pass 2: Apply evaluations (mutable writes)
         for eval in evaluations {
+            if !eval.requests.is_empty() {
+                debug!(
+                    "Transfer pipeline: Club {} has {} requests, {} loan-outs, budget={:.0}",
+                    eval.club_id, eval.requests.len(), eval.loan_outs.len(), eval.total_budget
+                );
+            }
+
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == eval.club_id) {
                 let plan = &mut club.transfer_plan;
 
@@ -186,9 +197,19 @@ impl PipelineProcessor {
         (month == 5 && day == 31) || (month == 6 && day == 1) || (month == 1 && day == 1)
     }
 
-    /// Re-evaluate weekly during transfer windows to pick up new needs
+    /// Re-evaluate during transfer windows.
+    /// Daily during the first week of each window for fast pipeline startup,
+    /// then weekly (Monday) for the rest of the window.
     fn should_evaluate(date: NaiveDate) -> bool {
         let month = date.month();
+        let day = date.day();
+
+        // First week of summer window (June 1-7) or winter window (Jan 1-7): daily
+        if (month == 6 && day <= 7) || (month == 1 && day <= 7) {
+            return true;
+        }
+
+        // Rest of window: weekly on Monday
         ((month >= 6 && month <= 8) || month == 1)
             && date.weekday() == chrono::Weekday::Mon
     }
@@ -835,6 +856,14 @@ impl PipelineProcessor {
                 None => continue,
             };
 
+            // Skip players already on loan from another club
+            let is_on_loan = player.contract.as_ref()
+                .map(|c| c.contract_type == crate::ContractType::Loan)
+                .unwrap_or(false);
+            if is_on_loan {
+                continue;
+            }
+
             let statuses = player.statuses.get();
             if statuses.contains(&PlayerStatusType::Lst)
                 || statuses.contains(&PlayerStatusType::Loa)
@@ -1295,6 +1324,7 @@ impl PipelineProcessor {
         let mut observations: Vec<MatchScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut attended_updates: Vec<(u32, u32, NaiveDate)> = Vec::new(); // (club_id, team_id, date)
+        let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new(); // (club_id, staff_id, event)
 
         // Pass 1: Immutable reads
         for club in &country.clubs {
@@ -1329,6 +1359,7 @@ impl PipelineProcessor {
 
                 // Mark attendance
                 attended_updates.push((club.id, match_assignment.target_team_id, current_date));
+                staff_events.push((club.id, match_assignment.scout_staff_id, StaffEventType::MatchObserved));
 
                 // Observe all players on the target team
                 for player in &target_team.players.players {
@@ -1490,7 +1521,7 @@ impl PipelineProcessor {
                         .find(|a| a.id == report.assignment_id)
                     {
                         assignment.reports_produced += 1;
-                        if assignment.reports_produced >= 3 {
+                        if assignment.reports_produced >= 2 {
                             assignment.completed = true;
                         }
                     }
@@ -1512,6 +1543,18 @@ impl PipelineProcessor {
             }
         }
 
+        // Push staff events for scouts
+        for (club_id, staff_id, event_type) in staff_events {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                for team in &mut club.teams.teams {
+                    if let Some(staff) = team.staffs.staffs.iter_mut().find(|s| s.id == staff_id) {
+                        staff.add_event(event_type);
+                        break;
+                    }
+                }
+            }
+        }
+
         debug!("process_match_scouting: completed match-day observations");
     }
 
@@ -1527,6 +1570,14 @@ impl PipelineProcessor {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 for player in &team.players.players {
+                    // Skip loan players — they belong to another club and can't be bought
+                    let is_on_loan = player.contract.as_ref()
+                        .map(|c| c.contract_type == crate::ContractType::Loan)
+                        .unwrap_or(false);
+                    if is_on_loan {
+                        continue;
+                    }
+
                     let value = PlayerValuationCalculator::calculate_value_with_price_level(
                         player,
                         date,
@@ -1551,6 +1602,7 @@ impl PipelineProcessor {
 
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
+        let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
@@ -1571,8 +1623,14 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                if let Some(scout_id) = assignment.scout_staff_id {
+                    staff_events.push((club.id, scout_id, StaffEventType::PlayerScouted));
+                }
+
                 // Find matching players from OTHER clubs
                 // Scouts look at position GROUP match, not just exact position
+                // Value filter is intentionally loose — scouts assess talent broadly,
+                // the shortlist/negotiation phase handles affordability
                 let target_group = assignment.target_position.position_group();
                 let matching: Vec<&PlayerSummary> = all_players
                     .iter()
@@ -1582,7 +1640,6 @@ impl PipelineProcessor {
                             && p.age >= assignment.preferred_age_min
                             && p.age <= assignment.preferred_age_max
                             && p.current_ability >= assignment.min_ability
-                            && p.estimated_value <= assignment.max_budget * 3.0
                     })
                     .collect();
 
@@ -1590,55 +1647,105 @@ impl PipelineProcessor {
                     continue;
                 }
 
-                let idx = (IntegerUtils::random(0, matching.len() as i32) as usize)
-                    .min(matching.len() - 1);
-                let target = matching[idx];
+                // Scouts observe 2-3 players per day (not just 1)
+                let obs_per_day = 2 + (judging_ability as usize / 10); // 2-3
 
-                let existing_obs = assignment.observations.iter()
-                    .find(|o| o.player_id == target.player_id);
-                let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
-                let sqrt_count = ((obs_count + 1) as f32).sqrt();
+                for _obs_round in 0..obs_per_day.min(matching.len()) {
+                    // 60% chance to re-observe a previously seen player (deepen knowledge)
+                    // 40% chance to discover a new player
+                    let already_observed_ids: Vec<u32> = assignment
+                        .observations
+                        .iter()
+                        .map(|o| o.player_id)
+                        .collect();
 
-                let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32;
-                let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32;
-                let ability_error = (base_ability_error / sqrt_count) as i32;
-                let potential_error = (base_potential_error / sqrt_count) as i32;
-
-                let assessed_ability = (target.current_ability as i32
-                    + IntegerUtils::random(-ability_error, ability_error))
-                    .clamp(1, 100) as u8;
-                let assessed_potential = (target.potential_ability as i32
-                    + IntegerUtils::random(-potential_error, potential_error))
-                    .clamp(1, 100) as u8;
-
-                let is_new = !assignment.has_observation_for(target.player_id);
-
-                observations.push(ScoutingObservationResult {
-                    club_id: club.id,
-                    assignment_id: assignment.id,
-                    player_id: target.player_id,
-                    assessed_ability,
-                    assessed_potential,
-                    is_new,
-                });
-
-                let final_obs_count = obs_count + 1;
-                if final_obs_count >= 2 {
-                    let confidence = 1.0 - (1.0 / (final_obs_count as f32 + 1.0));
-
-                    let recommendation = if assessed_ability as i16 >= assignment.min_ability as i16 + 10
-                        && assessed_potential > assessed_ability + 5
+                    let target = if !already_observed_ids.is_empty()
+                        && IntegerUtils::random(0, 100) < 60
                     {
-                        ScoutingRecommendation::StrongBuy
-                    } else if assessed_ability >= assignment.min_ability
-                        && assessed_potential >= assessed_ability
-                    {
-                        ScoutingRecommendation::Buy
-                    } else if assessed_ability >= assignment.min_ability.saturating_sub(5) {
-                        ScoutingRecommendation::Consider
+                        // Prefer re-observing a known player
+                        matching
+                            .iter()
+                            .find(|p| already_observed_ids.contains(&p.player_id))
+                            .or_else(|| matching.first())
+                            .unwrap()
                     } else {
-                        ScoutingRecommendation::Pass
+                        // Discover new player
+                        let new_players: Vec<&&PlayerSummary> = matching
+                            .iter()
+                            .filter(|p| !already_observed_ids.contains(&p.player_id))
+                            .collect();
+                        if !new_players.is_empty() {
+                            let idx = (IntegerUtils::random(0, new_players.len() as i32) as usize)
+                                .min(new_players.len() - 1);
+                            new_players[idx]
+                        } else {
+                            let idx = (IntegerUtils::random(0, matching.len() as i32) as usize)
+                                .min(matching.len() - 1);
+                            matching[idx]
+                        }
                     };
+
+                    let existing_obs = assignment
+                        .observations
+                        .iter()
+                        .find(|o| o.player_id == target.player_id);
+                    let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
+                    let sqrt_count = ((obs_count + 1) as f32).sqrt();
+
+                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32;
+                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32;
+                    let ability_error = (base_ability_error / sqrt_count) as i32;
+                    let potential_error = (base_potential_error / sqrt_count) as i32;
+
+                    let assessed_ability = (target.current_ability as i32
+                        + IntegerUtils::random(-ability_error, ability_error))
+                        .clamp(1, 100) as u8;
+                    let assessed_potential = (target.potential_ability as i32
+                        + IntegerUtils::random(-potential_error, potential_error))
+                        .clamp(1, 100) as u8;
+
+                    let is_new = !assignment.has_observation_for(target.player_id);
+
+                    // Skip if we already queued an observation for this player this round
+                    if observations.iter().any(|o| {
+                        o.club_id == club.id
+                            && o.assignment_id == assignment.id
+                            && o.player_id == target.player_id
+                    }) {
+                        continue;
+                    }
+
+                    observations.push(ScoutingObservationResult {
+                        club_id: club.id,
+                        assignment_id: assignment.id,
+                        player_id: target.player_id,
+                        assessed_ability,
+                        assessed_potential,
+                        is_new,
+                    });
+
+                    // Generate report after just 1 observation (with lower confidence)
+                    let final_obs_count = obs_count + 1;
+                    let confidence = if final_obs_count == 1 {
+                        0.4
+                    } else {
+                        1.0 - (1.0 / (final_obs_count as f32 + 1.0))
+                    };
+
+                    let recommendation =
+                        if assessed_ability as i16 >= assignment.min_ability as i16 + 10
+                            && assessed_potential > assessed_ability + 5
+                        {
+                            ScoutingRecommendation::StrongBuy
+                        } else if assessed_ability >= assignment.min_ability
+                            && assessed_potential >= assessed_ability
+                        {
+                            ScoutingRecommendation::Buy
+                        } else if assessed_ability >= assignment.min_ability.saturating_sub(5) {
+                            ScoutingRecommendation::Consider
+                        } else {
+                            ScoutingRecommendation::Pass
+                        };
 
                     if recommendation != ScoutingRecommendation::Pass {
                         reports.push(ScoutingReportResult {
@@ -1701,9 +1808,21 @@ impl PipelineProcessor {
                         .find(|a| a.id == report.assignment_id)
                     {
                         assignment.reports_produced += 1;
-                        if assignment.reports_produced >= 3 {
+                        if assignment.reports_produced >= 2 {
                             assignment.completed = true;
                         }
+                    }
+                }
+            }
+        }
+
+        // Push staff events for scouts
+        for (club_id, staff_id, event_type) in staff_events {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                for team in &mut club.teams.teams {
+                    if let Some(staff) = team.staffs.staffs.iter_mut().find(|s| s.id == staff_id) {
+                        staff.add_event(event_type);
+                        break;
                     }
                 }
             }
@@ -1755,7 +1874,7 @@ impl PipelineProcessor {
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
-                    .filter(|r| r.estimated_value <= budget_alloc * 2.0)
+                    .filter(|r| r.estimated_value <= budget_alloc * 5.0)
                     .map(|r| {
                         let ability_score = r.assessed_ability as f32 / 100.0;
                         let potential_score = r.assessed_potential as f32 / 100.0;
@@ -1802,70 +1921,66 @@ impl PipelineProcessor {
                 }
             }
 
-            // No-scout fallback
-            if club.teams.teams.is_empty() {
-                continue;
-            }
-            let resolved = StaffResolver::resolve(&club.teams.teams[0].staffs);
+            // Market shortlist: for any request without a shortlist, also try building
+            // one directly from market listings. This keeps transfers flowing while
+            // scouts work on deeper evaluations in parallel.
+            for request in &plan.transfer_requests {
+                if request.status != TransferRequestStatus::Pending
+                    && request.status != TransferRequestStatus::ScoutingActive
+                {
+                    continue;
+                }
+                if existing_shortlist_request_ids.contains(&request.id) {
+                    continue;
+                }
+                // Skip if we already built a shortlist from scouting reports above
+                if results.iter().any(|r| r.club_id == club.id && r.request_id == request.id) {
+                    continue;
+                }
 
-            if !resolved.has_dedicated_scouts() {
-                for request in &plan.transfer_requests {
-                    if request.status != TransferRequestStatus::Pending
-                        && request.status != TransferRequestStatus::ScoutingActive
-                    {
-                        continue;
-                    }
-                    if existing_shortlist_request_ids.contains(&request.id) {
-                        continue;
-                    }
-                    let has_assignment = plan
-                        .scouting_assignments
-                        .iter()
-                        .any(|a| a.transfer_request_id == request.id);
-                    if has_assignment {
-                        continue;
-                    }
+                let market_candidates: Vec<ShortlistCandidate> = country
+                    .transfer_market
+                    .get_available_listings()
+                    .iter()
+                    .filter(|l| l.club_id != club.id)
+                    .filter_map(|l| {
+                        Self::find_player_summary_in_country(country, l.player_id, date).and_then(
+                            |p| {
+                                if p.position_group == request.position.position_group()
+                                    && p.current_ability >= request.min_ability
+                                    && p.estimated_value <= request.budget_allocation * 5.0
+                                {
+                                    Some(ShortlistCandidate {
+                                        player_id: p.player_id,
+                                        score: p.current_ability as f32 / 100.0,
+                                        estimated_fee: p.estimated_value,
+                                        status: ShortlistCandidateStatus::Available,
+                                    })
+                                } else {
+                                    None
+                                }
+                            },
+                        )
+                    })
+                    .take(5)
+                    .collect();
 
-                    let market_candidates: Vec<ShortlistCandidate> = country
-                        .transfer_market
-                        .get_available_listings()
-                        .iter()
-                        .filter(|l| l.club_id != club.id)
-                        .filter_map(|l| {
-                            Self::find_player_summary_in_country(country, l.player_id, date).and_then(
-                                |p| {
-                                    if p.position_group == request.position.position_group()
-                                        && p.current_ability >= request.min_ability
-                                        && p.estimated_value <= request.budget_allocation * 1.5
-                                    {
-                                        Some(ShortlistCandidate {
-                                            player_id: p.player_id,
-                                            score: p.current_ability as f32 / 100.0,
-                                            estimated_fee: p.estimated_value,
-                                            status: ShortlistCandidateStatus::Available,
-                                        })
-                                    } else {
-                                        None
-                                    }
-                                },
-                            )
-                        })
-                        .take(5)
-                        .collect();
+                if !market_candidates.is_empty() {
+                    let mut shortlist =
+                        TransferShortlist::new(request.id, request.budget_allocation);
+                    shortlist.candidates = market_candidates;
 
-                    if !market_candidates.is_empty() {
-                        let mut shortlist =
-                            TransferShortlist::new(request.id, request.budget_allocation);
-                        shortlist.candidates = market_candidates;
-
-                        results.push(ShortlistResult {
-                            club_id: club.id,
-                            shortlist,
-                            request_id: request.id,
-                        });
-                    }
+                    results.push(ShortlistResult {
+                        club_id: club.id,
+                        shortlist,
+                        request_id: request.id,
+                    });
                 }
             }
+        }
+
+        if !results.is_empty() {
+            debug!("Transfer pipeline: built {} shortlists", results.len());
         }
 
         for result in results {
@@ -1912,7 +2027,7 @@ impl PipelineProcessor {
                 .transfer_budget
                 .as_ref()
                 .map(|b| b.amount)
-                .unwrap_or(0.0);
+                .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
 
             if club.teams.teams.is_empty() {
                 continue;
@@ -1969,6 +2084,15 @@ impl PipelineProcessor {
                     .transfer_market
                     .has_active_negotiation_for(player_id, club.id)
                 {
+                    continue;
+                }
+
+                // Skip players on loan contracts — they belong to another club
+                let is_on_loan = Self::find_player_in_country(country, player_id)
+                    .and_then(|p| p.contract.as_ref())
+                    .map(|c| c.contract_type == crate::ContractType::Loan)
+                    .unwrap_or(false);
+                if is_on_loan {
                     continue;
                 }
 
