@@ -1,17 +1,14 @@
-use crate::club::Player;
 use crate::club::player::injury::InjuryType;
 use crate::simulator::SimulatorData;
 
 pub struct PlayerCollectionResult {
     pub players: Vec<PlayerResult>,
-    pub outgoing_players: Vec<Player>,
 }
 
 impl PlayerCollectionResult {
-    pub fn new(players: Vec<PlayerResult>, outgoing_players: Vec<Player>) -> Self {
+    pub fn new(players: Vec<PlayerResult>) -> Self {
         PlayerCollectionResult {
             players,
-            outgoing_players,
         }
     }
 

@@ -4,8 +4,8 @@ use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::PlayerPositionType;
 use std::ops::Index;
-
-pub const DEFAULT_PLAYER_TRANSFER_BUFFER_SIZE: usize = 10;
+use rayon::iter::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 
 #[derive(Debug, Clone)]
 pub struct PlayerCollection {
@@ -20,7 +20,7 @@ impl PlayerCollection {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
         let player_results: Vec<PlayerResult> = self
             .players
-            .iter_mut()
+            .par_iter_mut()
             .map(|player| {
                 let message = &format!("simulate player: id: {}", player.id);
                 Logging::estimate_result(
@@ -30,15 +30,17 @@ impl PlayerCollection {
             })
             .collect();
 
-        let mut outgoing_players = Vec::with_capacity(DEFAULT_PLAYER_TRANSFER_BUFFER_SIZE);
-
+        // Mark transfer-requested players as transfer-listed instead of removing them.
+        // The transfer market will handle the actual move later.
         for transfer_request_player_id in player_results.iter().flat_map(|p| &p.transfer_requests) {
-            if let Some(player) = self.take_player(transfer_request_player_id) {
-                outgoing_players.push(player)
+            if let Some(player) = self.players.iter_mut().find(|p| p.id == *transfer_request_player_id) {
+                if let Some(ref mut contract) = player.contract {
+                    contract.is_transfer_listed = true;
+                }
             }
         }
 
-        PlayerCollectionResult::new(player_results, outgoing_players)
+        PlayerCollectionResult::new(player_results)
     }
 
     pub fn by_position(&self, position: &PlayerPositionType) -> Vec<&Player> {

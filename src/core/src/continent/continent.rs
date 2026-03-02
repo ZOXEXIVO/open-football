@@ -4,10 +4,12 @@ use crate::continent::ContinentResult;
 use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
-use crate::country::CountryResult;
+use crate::country::{CallUpCandidate, CountryResult};
 use crate::utils::Logging;
 use crate::{Country, NationalTeam};
 use log::{debug, info};
+use rayon::prelude::IntoParallelRefMutIterator;
+use rayon::iter::ParallelIterator;
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -62,6 +64,8 @@ impl Continent {
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
+        use rayon::iter::{IntoParallelIterator, IndexedParallelIterator};
+
         let country_ids: Vec<(u32, String)> = self.countries.iter().map(|c| (c.id, c.name.clone())).collect();
         let date = ctx.simulation.date.date();
 
@@ -74,10 +78,14 @@ impl Continent {
             HashMap::new()
         };
 
+        // Pre-extract candidates per country for parallel-safe access
+        let candidates_vec: Vec<Option<Vec<CallUpCandidate>>> =
+            self.countries.iter().map(|c| candidates_by_country.remove(&c.id)).collect();
+
         self.countries
-            .iter_mut()
-            .map(|country| {
-                let candidates = candidates_by_country.remove(&country.id);
+            .par_iter_mut()
+            .zip(candidates_vec.into_par_iter())
+            .map(|(country, candidates)| {
                 let message = &format!("simulate country: {} (Continental)", &country.name);
                 Logging::estimate_result(
                     || country.simulate(ctx.with_country(country.id), &country_ids, candidates),

@@ -84,6 +84,7 @@ impl Club {
             // Weekly: coach state, impressions, salaries
             self.teams.ensure_coach_state(date);
             self.teams.update_all_impressions(date);
+            
             self.process_salaries(ctx.clone());
         } else {
             // Daily: only immediate demotions + ability swaps
