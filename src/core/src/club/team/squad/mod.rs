@@ -1,4 +1,5 @@
 mod composition;
+mod match_squad;
 mod satisfaction;
 mod transfer_listing;
 

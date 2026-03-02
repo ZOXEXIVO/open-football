@@ -1,3 +1,6 @@
+
+![OpenFootball logo](.docs/images/logo.jpg)
+
 # Open Football
 
 Attempt to implement Sigames Football Manager simulation engine without manual control.
@@ -19,13 +22,6 @@ Currently available nation for simulation - **Italy**
 
 ---
 
-
-[Match example (click on any goals)](https://open-football.org/en/leagues/italian-serie-a)
-
-![alt text](.docs/images/match.jpg "Match page")
-
-![alt text](.docs/images/match.avif "Match page")
-
 [Player page example (click on any player)](https://open-football.org/en/teams/napoli)
 ![alt text](.docs/images/player.jpg "Player page")
 
@@ -33,9 +29,17 @@ Currently available nation for simulation - **Italy**
 
 ![alt text](.docs/images/club.jpg "Club page")
 
+![alt text](.docs/images/player_personal.jpg "Player Personal page")
+
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
 ![alt text](.docs/images/league.jpg "League page")
+
+[Match example (click on any goals)](https://open-football.org/en/leagues/italian-serie-a)
+
+![alt text](.docs/images/match.jpg "Match page")
+
+![alt text](.docs/images/match.avif "Match page")
 
 #### Project structure
 

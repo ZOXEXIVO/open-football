@@ -1,3 +1,4 @@
+mod adaptation;
 pub mod tactics;
 pub mod decision;
 

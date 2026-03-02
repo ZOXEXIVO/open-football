@@ -7,6 +7,12 @@ pub struct Transfers {
     items: Vec<TransferItem>,
 }
 
+impl Default for Transfers {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Transfers {
     pub fn new() -> Self {
         Transfers {
