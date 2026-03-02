@@ -16,7 +16,8 @@ impl CountryResult {
 
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_season_awards(country, club_results);
-                Self::process_contract_expirations(country);
+                // NOTE: loan returns are handled in a separate phase (process_loan_returns)
+                // that runs AFTER club results, so ClubResult references remain valid
                 Self::process_player_retirements(country, date);
             }
         }
@@ -36,6 +37,22 @@ impl CountryResult {
 
     fn process_season_awards(_country: &mut Country, _club_results: &[ClubResult]) {
         debug!("Processing season awards");
+    }
+
+    /// Process loan returns — must run AFTER club_result.process() so that
+    /// ClubResult player references remain valid during contract processing.
+    pub(super) fn process_loan_returns(
+        data: &mut SimulatorData,
+        country_id: u32,
+        date: NaiveDate,
+    ) {
+        if !(date.month() == 5 && date.day() == 31) {
+            return;
+        }
+
+        if let Some(country) = data.country_mut(country_id) {
+            Self::process_contract_expirations(country);
+        }
     }
 
     fn process_contract_expirations(country: &mut Country) {
@@ -58,8 +75,17 @@ impl CountryResult {
             }
         }
 
-        // Phase 2: Execute loan returns
+        // Phase 2: Execute loan returns — only if parent club exists in this country
         for (player_id, borrowing_club_idx, parent_club_id) in loan_returns {
+            // Verify parent club exists in this country before removing the player
+            let parent_exists = country.clubs.iter().any(|c| c.id == parent_club_id)
+                && country.clubs.iter().any(|c| c.id == parent_club_id && !c.teams.teams.is_empty());
+
+            if !parent_exists {
+                info!("Loan return skipped: parent club {} not found in country for player {}", parent_club_id, player_id);
+                continue;
+            }
+
             // Take player from borrowing club
             let mut player_opt = None;
             for team in &mut country.clubs[borrowing_club_idx].teams.teams {

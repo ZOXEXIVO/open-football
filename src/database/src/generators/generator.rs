@@ -2,7 +2,7 @@ use crate::generators::{PlayerGenerator, PositionType, StaffGenerator};
 use crate::loaders::ContinentEntity;
 use crate::{DatabaseEntity, ForeignPlayerEntry};
 use core::PeopleNameGeneratorData;
-use chrono::{NaiveDate, NaiveDateTime};
+use chrono::{Datelike, Local, NaiveDate, NaiveDateTime};
 use core::club::academy::ClubAcademy;
 use core::context::NaiveTime;
 use core::continent::Continent;
@@ -28,7 +28,7 @@ pub struct DatabaseGenerator;
 impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
         let current_date = NaiveDateTime::new(
-            NaiveDate::from_ymd_opt(2026, 8, 1).unwrap(),
+            NaiveDate::from_ymd_opt(Local::now().year(), 8, 1).unwrap(),
             NaiveTime::default(),
         );
 

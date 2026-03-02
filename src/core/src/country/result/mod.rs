@@ -46,6 +46,11 @@ impl CountryResult {
             club_result.process(data, result);
         }
 
+        // Phase 2.5: Process loan returns — runs AFTER club results so that
+        // ClubResult player references (contract proposals etc.) are fully processed
+        // before players are moved between clubs
+        Self::process_loan_returns(data, country_id, current_date);
+
         // Phase 3: Pre-season activities (if applicable)
         if Self::is_preseason(current_date) {
             Self::simulate_preseason_activities(data, country_id, current_date);

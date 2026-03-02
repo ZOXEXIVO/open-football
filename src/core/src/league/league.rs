@@ -1177,13 +1177,13 @@ impl LeagueMilestones {
         // Check for points records
         if let Some(leader) = table.rows.first() {
             if leader.points > self.all_time_records.most_points_in_season.1 {
-                info!("📊 NEW RECORD! Team {} has {} points!", leader.team_id, leader.points);
+                debug!("📊 NEW RECORD! Team {} has {} points!", leader.team_id, leader.points);
                 self.all_time_records.most_points_in_season = (leader.team_id, leader.points);
             }
 
             // Goals scored record
             if leader.goal_scored > self.all_time_records.most_goals_in_season.1 {
-                info!("⚽ NEW RECORD! Team {} has scored {} goals!",
+                debug!("⚽ NEW RECORD! Team {} has scored {} goals!",
                       leader.team_id, leader.goal_scored);
                 self.all_time_records.most_goals_in_season =
                     (leader.team_id, leader.goal_scored);
@@ -1193,7 +1193,7 @@ impl LeagueMilestones {
         // Check for individual records
         if let Some((player_id, goals)) = stats.top_scorer {
             if goals > self.all_time_records.most_goals_by_player.1 {
-                info!("🎯 NEW RECORD! Player {} has scored {} goals!", player_id, goals);
+                debug!("🎯 NEW RECORD! Player {} has scored {} goals!", player_id, goals);
                 self.all_time_records.most_goals_by_player = (player_id, goals);
             }
         }
