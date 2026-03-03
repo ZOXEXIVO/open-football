@@ -80,32 +80,32 @@ impl InjuryType {
     /// Returns (min_days, max_days) for this injury type
     pub fn duration_range(&self) -> (u16, u16) {
         match self {
-            // Minor: 3-10 days
-            InjuryType::Bruise => (3, 7),
-            InjuryType::MinorKnock => (3, 8),
-            InjuryType::Cramp => (3, 6),
-            InjuryType::DeadLeg => (4, 10),
-            InjuryType::MinorConcussion => (5, 10),
-            // Moderate: 14-42 days
-            InjuryType::HamstringStrain => (14, 35),
-            InjuryType::CalfStrain => (14, 28),
-            InjuryType::AnkleSprain => (14, 42),
-            InjuryType::GroinStrain => (14, 35),
-            InjuryType::HipFlexorStrain => (14, 28),
-            InjuryType::QuadStrain => (14, 35),
-            InjuryType::BackSpasm => (14, 28),
-            // Severe: 60-180 days
-            InjuryType::TornMeniscus => (60, 120),
-            InjuryType::ShoulderDislocation => (60, 90),
-            InjuryType::StressFracture => (60, 150),
-            InjuryType::MCLSprain => (60, 120),
-            InjuryType::LateralLigament => (60, 150),
-            InjuryType::HerniatedDisc => (90, 180),
-            // Critical: 180-300 days
-            InjuryType::ACLTear => (180, 300),
-            InjuryType::BrokenLeg => (180, 270),
-            InjuryType::AchillesRupture => (180, 300),
-            InjuryType::PCLTear => (200, 300),
+            // Minor: 2-7 days
+            InjuryType::Bruise => (2, 5),
+            InjuryType::MinorKnock => (2, 6),
+            InjuryType::Cramp => (2, 4),
+            InjuryType::DeadLeg => (3, 7),
+            InjuryType::MinorConcussion => (3, 7),
+            // Moderate: 7-21 days
+            InjuryType::HamstringStrain => (7, 18),
+            InjuryType::CalfStrain => (7, 14),
+            InjuryType::AnkleSprain => (7, 21),
+            InjuryType::GroinStrain => (7, 18),
+            InjuryType::HipFlexorStrain => (7, 14),
+            InjuryType::QuadStrain => (7, 18),
+            InjuryType::BackSpasm => (7, 14),
+            // Severe: 30-75 days
+            InjuryType::TornMeniscus => (30, 60),
+            InjuryType::ShoulderDislocation => (30, 45),
+            InjuryType::StressFracture => (30, 75),
+            InjuryType::MCLSprain => (30, 60),
+            InjuryType::LateralLigament => (30, 75),
+            InjuryType::HerniatedDisc => (45, 75),
+            // Critical: 90-150 days
+            InjuryType::ACLTear => (90, 150),
+            InjuryType::BrokenLeg => (90, 135),
+            InjuryType::AchillesRupture => (90, 150),
+            InjuryType::PCLTear => (100, 150),
         }
     }
 
@@ -169,10 +169,10 @@ impl InjuryType {
     /// Recovery days after injury heals (low match fitness phase)
     pub fn recovery_days(&self) -> u16 {
         let (min, max) = match self.severity() {
-            InjurySeverity::Minor => (3, 5),
-            InjurySeverity::Moderate => (7, 14),
-            InjurySeverity::Severe => (14, 30),
-            InjurySeverity::Critical => (21, 30),
+            InjurySeverity::Minor => (2, 4),
+            InjurySeverity::Moderate => (5, 10),
+            InjurySeverity::Severe => (10, 18),
+            InjurySeverity::Critical => (14, 21),
         };
         let range = max - min + 1;
         min + (rand::random::<u16>() % range)
@@ -377,16 +377,16 @@ mod tests {
 
     #[test]
     fn test_injury_duration_ranges() {
-        assert_eq!(InjuryType::Bruise.duration_range(), (3, 7));
-        assert_eq!(InjuryType::MinorKnock.duration_range(), (3, 8));
-        assert_eq!(InjuryType::Cramp.duration_range(), (3, 6));
-        assert_eq!(InjuryType::DeadLeg.duration_range(), (4, 10));
-        assert_eq!(InjuryType::MinorConcussion.duration_range(), (5, 10));
-        assert_eq!(InjuryType::HamstringStrain.duration_range(), (14, 35));
-        assert_eq!(InjuryType::ACLTear.duration_range(), (180, 300));
-        assert_eq!(InjuryType::BrokenLeg.duration_range(), (180, 270));
-        assert_eq!(InjuryType::AchillesRupture.duration_range(), (180, 300));
-        assert_eq!(InjuryType::PCLTear.duration_range(), (200, 300));
+        assert_eq!(InjuryType::Bruise.duration_range(), (2, 5));
+        assert_eq!(InjuryType::MinorKnock.duration_range(), (2, 6));
+        assert_eq!(InjuryType::Cramp.duration_range(), (2, 4));
+        assert_eq!(InjuryType::DeadLeg.duration_range(), (3, 7));
+        assert_eq!(InjuryType::MinorConcussion.duration_range(), (3, 7));
+        assert_eq!(InjuryType::HamstringStrain.duration_range(), (7, 18));
+        assert_eq!(InjuryType::ACLTear.duration_range(), (90, 150));
+        assert_eq!(InjuryType::BrokenLeg.duration_range(), (90, 135));
+        assert_eq!(InjuryType::AchillesRupture.duration_range(), (90, 150));
+        assert_eq!(InjuryType::PCLTear.duration_range(), (100, 150));
     }
 
     #[test]
@@ -425,11 +425,11 @@ mod tests {
     fn test_random_duration_in_range() {
         for _ in 0..100 {
             let duration = InjuryType::Bruise.random_duration();
-            assert!(duration >= 3 && duration <= 7);
+            assert!(duration >= 2 && duration <= 5);
         }
         for _ in 0..100 {
             let duration = InjuryType::ACLTear.random_duration();
-            assert!(duration >= 180 && duration <= 300);
+            assert!(duration >= 90 && duration <= 150);
         }
     }
 
@@ -437,15 +437,15 @@ mod tests {
     fn test_recovery_days_in_range() {
         for _ in 0..100 {
             let days = InjuryType::Cramp.recovery_days();
-            assert!(days >= 3 && days <= 5, "Minor recovery {} not in 3-5", days);
+            assert!(days >= 2 && days <= 4, "Minor recovery {} not in 2-4", days);
         }
         for _ in 0..100 {
             let days = InjuryType::HamstringStrain.recovery_days();
-            assert!(days >= 7 && days <= 14, "Moderate recovery {} not in 7-14", days);
+            assert!(days >= 5 && days <= 10, "Moderate recovery {} not in 5-10", days);
         }
         for _ in 0..100 {
             let days = InjuryType::ACLTear.recovery_days();
-            assert!(days >= 21 && days <= 30, "Critical recovery {} not in 21-30", days);
+            assert!(days >= 14 && days <= 21, "Critical recovery {} not in 14-21", days);
         }
     }
 
@@ -464,8 +464,8 @@ mod tests {
         for _ in 0..100 {
             let injury = InjuryType::random_match_injury(90.0, 25, 80, 12.0, 10);
             let (min, max) = injury.duration_range();
-            assert!(min >= 3);
-            assert!(max <= 300);
+            assert!(min >= 2);
+            assert!(max <= 150);
         }
     }
 
@@ -473,7 +473,7 @@ mod tests {
     fn test_injury_recovery_countdown() {
         let injury = InjuryType::MinorKnock;
         let mut days = injury.random_duration();
-        assert!(days >= 3 && days <= 8);
+        assert!(days >= 2 && days <= 6);
 
         while days > 0 {
             days -= 1;

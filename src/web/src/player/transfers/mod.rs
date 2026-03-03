@@ -3,9 +3,8 @@ pub mod routes;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
-use axum::extract::{Path, Query, State};
+use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use chrono::Datelike;
 use core::transfers::{
     NegotiationPhase, NegotiationStatus, TransferListingStatus, TransferListingType,
 };
@@ -17,17 +16,6 @@ use serde::Deserialize;
 pub struct PlayerTransfersRequest {
     pub lang: String,
     pub player_id: u32,
-}
-
-#[derive(Deserialize)]
-pub struct SeasonQuery {
-    pub season: Option<u16>,
-}
-
-pub struct SeasonOption {
-    pub year: u16,
-    pub display: String,
-    pub selected: bool,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -50,7 +38,6 @@ pub struct PlayerTransfersTemplate {
     pub listing: Option<PlayerListingDto>,
     pub negotiations: Vec<PlayerNegotiationDto>,
     pub completed: Vec<PlayerCompletedTransferDto>,
-    pub seasons: Vec<SeasonOption>,
 }
 
 pub struct PlayerTransferStatusDto {
@@ -148,7 +135,6 @@ fn listing_status_to_key(status: &TransferListingStatus) -> &'static str {
 pub async fn player_transfers_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerTransfersRequest>,
-    Query(query): Query<SeasonQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
@@ -157,14 +143,21 @@ pub async fn player_transfers_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let (player, team) = simulator_data
-        .player_with_team(route_params.player_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id))
-        })?;
+    let active = simulator_data.player_with_team(route_params.player_id);
+    let player = if let Some((p, _)) = active {
+        p
+    } else if let Some(p) = simulator_data.retired_player(route_params.player_id) {
+        p
+    } else {
+        return Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)));
+    };
+    let team_opt = active.map(|(_, t)| t);
 
-    let (neighbor_teams, country_leagues) =
-        get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
+        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams
         .iter()
         .map(|(n, s)| (n.as_str(), s.as_str()))
@@ -217,7 +210,7 @@ pub async fn player_transfers_action(
     };
 
     // Get transfer listing for this player
-    let country = simulator_data.country_by_club(team.club_id);
+    let country = team_opt.and_then(|t| simulator_data.country_by_club(t.club_id));
 
     let listing = country.and_then(|c| {
         c.transfer_market
@@ -265,43 +258,13 @@ pub async fn player_transfers_action(
         })
         .unwrap_or_default();
 
-    // Compute season options
-    let sim_date = simulator_data.date.date();
-    let current_season_year = if sim_date.month() >= 7 {
-        sim_date.year() as u16
-    } else {
-        (sim_date.year() - 1) as u16
-    };
-
-    let selected_season = query.season.unwrap_or(current_season_year);
-
-    let min_season_year = country
-        .and_then(|c| {
-            c.transfer_market
+    // Get completed transfers for this player (all seasons)
+    let completed: Vec<PlayerCompletedTransferDto> = country
+        .map(|c| {
+            let mut transfers: Vec<_> = c.transfer_market
                 .transfer_history
                 .iter()
                 .filter(|t| t.player_id == player.id)
-                .map(|t| t.season_year)
-                .min()
-        })
-        .unwrap_or(current_season_year);
-
-    let seasons: Vec<SeasonOption> = (min_season_year..=current_season_year)
-        .rev()
-        .map(|y| SeasonOption {
-            year: y,
-            display: format!("{}/{}", y, (y + 1) % 100),
-            selected: y == selected_season,
-        })
-        .collect();
-
-    // Get completed transfers for this player
-    let completed: Vec<PlayerCompletedTransferDto> = country
-        .map(|c| {
-            c.transfer_market
-                .transfer_history
-                .iter()
-                .filter(|t| t.player_id == player.id && t.season_year == selected_season)
                 .map(|t| {
                     let from_slug = simulator_data
                         .club(t.from_club_id)
@@ -320,7 +283,7 @@ pub async fn player_transfers_action(
                         core::transfers::TransferType::Free => "transfer_type_free",
                     };
 
-                    PlayerCompletedTransferDto {
+                    (t.transfer_date, PlayerCompletedTransferDto {
                         from_club_name: t.from_team_name.clone(),
                         from_club_slug: from_slug,
                         to_club_name: t.to_team_name.clone(),
@@ -328,13 +291,15 @@ pub async fn player_transfers_action(
                         fee: if t.fee.amount > 0.0 {
                             FormattingUtils::format_money(t.fee.amount)
                         } else {
-                            String::new()
+                            "Free".to_string()
                         },
                         date: t.transfer_date.format("%d.%m.%Y").to_string(),
                         transfer_type_key: transfer_type_key.to_string(),
-                    }
+                    })
                 })
-                .collect()
+                .collect();
+            transfers.sort_by(|a, b| b.0.cmp(&a.0));
+            transfers.into_iter().map(|(_, dto)| dto).collect()
         })
         .unwrap_or_default();
 
@@ -348,25 +313,23 @@ pub async fn player_transfers_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| "Retired".to_string()),
+        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_default(),
-        foreground_color: simulator_data
-            .club(team.club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_default(),
-        menu_sections: views::player_menu(
-            &i18n,
-            &route_params.lang,
-            &neighbor_refs,
-            &team.slug,
-            &format!("/{}/teams/{}", &route_params.lang, &team.slug),
-            &league_refs,
-        ),
+        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        menu_sections: if let Some(team) = team_opt {
+            views::player_menu(
+                &i18n,
+                &route_params.lang,
+                &neighbor_refs,
+                &team.slug,
+                &format!("/{}/teams/{}", &route_params.lang, &team.slug),
+                &league_refs,
+            )
+        } else {
+            Vec::new()
+        },
         i18n,
         lang: route_params.lang.clone(),
         player_id: route_params.player_id,
@@ -374,7 +337,6 @@ pub async fn player_transfers_action(
         listing,
         negotiations,
         completed,
-        seasons,
     })
 }
 

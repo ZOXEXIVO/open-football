@@ -189,8 +189,8 @@ mod tests {
         attrs.set_injury(InjuryType::Bruise);
         assert!(attrs.is_injured);
         assert_eq!(attrs.injury_type, Some(InjuryType::Bruise));
-        assert!(attrs.injury_days_remaining >= 3 && attrs.injury_days_remaining <= 7);
-        assert!(attrs.recovery_days_remaining >= 3 && attrs.recovery_days_remaining <= 5);
+        assert!(attrs.injury_days_remaining >= 2 && attrs.injury_days_remaining <= 5);
+        assert!(attrs.recovery_days_remaining >= 2 && attrs.recovery_days_remaining <= 4);
         assert_eq!(attrs.injury_count, 1);
         assert!(attrs.last_injury_body_part > 0);
     }

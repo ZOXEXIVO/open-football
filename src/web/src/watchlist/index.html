@@ -35,6 +35,9 @@
                     <td class="wl-pos">{{ player.position }}</td>
                     <td class="wl-status">
                         <div class="fm-badge-deck">
+                            {% if player.retired %}
+                            <span class="fm-badge fm-badge-ret">{{ i18n.t("ret") }}</span>
+                            {% endif %}
                             {% if player.injured %}
                             <span class="fm-badge fm-badge-inj">{{ i18n.t("inj") }}</span>
                             {% endif %}
@@ -58,7 +61,11 @@
                     </td>
                     <td class="wl-age">{{ player.age }}</td>
                     <td class="wl-team">
+                        {% if player.retired %}
+                        <span style="color:#808080">{{ player.team_name }}</span>
+                        {% else %}
                         <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a>
+                        {% endif %}
                     </td>
                     <td class="wl-league">
                         {% if !player.league_slug.is_empty() %}

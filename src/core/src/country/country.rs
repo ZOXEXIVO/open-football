@@ -4,7 +4,7 @@ use crate::country::national_team::{NationalTeam, CallUpCandidate};
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
 use crate::utils::Logging;
-use crate::{Club, ClubResult};
+use crate::{Club, ClubResult, Player};
 use log::{debug};
 use rayon::prelude::IntoParallelRefMutIterator;
 use crate::country::builder::CountryBuilder;
@@ -37,6 +37,8 @@ pub struct Country {
     pub international_competitions: Vec<InternationalCompetition>,
     pub media_coverage: MediaCoverage,
     pub regulations: CountryRegulations,
+
+    pub retired_players: Vec<Player>,
 }
 
 impl Country {

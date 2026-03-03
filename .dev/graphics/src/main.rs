@@ -416,6 +416,7 @@ fn get_player(id: u32, position: PlayerPositionType) -> Player {
         NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
         position,
         20,
+        None,
     );
 
     player.id = id;

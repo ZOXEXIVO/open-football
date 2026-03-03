@@ -163,10 +163,7 @@ impl PipelineProcessor {
 
                 // Only fully reset plans at window start or first initialization
                 if !plan.initialized || is_window_start {
-                    plan.transfer_requests.clear();
-                    plan.scouting_assignments.clear();
-                    plan.scouting_reports.clear();
-                    plan.shortlists.clear();
+                    plan.reset_for_window();
                 } else {
                     // On re-evaluation: remove completed assignments and exhausted shortlists
                     // so new requests can be scouted fresh
@@ -2171,7 +2168,7 @@ impl PipelineProcessor {
 
                     let actual_asking = if is_loan {
                         CurrencyValue {
-                            amount: asking_price.amount * 0.1,
+                            amount: crate::utils::FormattingUtils::round_fee(asking_price.amount * 0.1),
                             currency: asking_price.currency.clone(),
                         }
                     } else {
@@ -2224,7 +2221,7 @@ impl PipelineProcessor {
                     .unwrap_or(0);
 
                 let asking = CurrencyValue {
-                    amount: action.offer.base_fee.amount * 1.2,
+                    amount: crate::utils::FormattingUtils::round_fee(action.offer.base_fee.amount * 1.2),
                     currency: Currency::Usd,
                 };
 
@@ -2567,7 +2564,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: best.player_id,
                         selling_club_id: best.club_id,
-                        offer_amount: best.asking_price * 0.8,
+                        offer_amount: crate::utils::FormattingUtils::round_fee(best.asking_price * 0.8),
                     });
                     scans_this_club += 1;
                 }
@@ -2603,7 +2600,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
-                        offer_amount: opp.asking_price * 0.8,
+                        offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
                     });
                     scans_this_club += 1;
                 }
@@ -2630,7 +2627,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
-                        offer_amount: opp.asking_price * 0.8,
+                        offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
                     });
                 }
             }
@@ -3584,7 +3581,7 @@ impl PipelineProcessor {
         };
 
         CurrencyValue {
-            amount: base_value.amount * multiplier,
+            amount: crate::utils::FormattingUtils::round_fee(base_value.amount * multiplier),
             currency: base_value.currency,
         }
     }

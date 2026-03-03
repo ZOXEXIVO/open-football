@@ -168,7 +168,7 @@
         function startProcess(event) {
             var btn = document.getElementById('process-btn');
             if (!btn || btn.classList.contains('fm-processing')) return;
-            var url = event.shiftKey ? '/api/game/process?days=180' : '/api/game/process';
+            var url = event.shiftKey ? '/api/game/process?days=30' : '/api/game/process';
             setProcessing(true);
             fetch(url, { method: 'POST' }).catch(function() {});
         }

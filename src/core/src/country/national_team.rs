@@ -943,6 +943,7 @@ impl NationalTeam {
             friendly_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
+            last_transfer_date: None,
         }
     }
 

@@ -180,7 +180,7 @@ pub async fn team_transfers_action(
                 player_name: t.player_name.clone(),
                 other_team: t.from_team_name.clone(),
                 other_team_slug,
-                fee: FormattingUtils::format_money(t.fee.amount),
+                fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
             }
         })
@@ -199,7 +199,7 @@ pub async fn team_transfers_action(
                 player_name: t.player_name.clone(),
                 other_team: t.to_team_name.clone(),
                 other_team_slug,
-                fee: FormattingUtils::format_money(t.fee.amount),
+                fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
                 date: t.transfer_date.format("%d.%m.%Y").to_string(),
             }
         })

@@ -1,6 +1,7 @@
+use crate::league::Season;
 use crate::shared::CurrencyValue;
 use crate::Player;
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 
 pub struct PlayerTransfer {
     pub player: Player,
@@ -48,11 +49,7 @@ impl CompletedTransfer {
         fee: CurrencyValue,
         transfer_type: TransferType,
     ) -> Self {
-        let season_year = if transfer_date.month() >= 8 {
-            transfer_date.year() as u16
-        } else {
-            (transfer_date.year() - 1) as u16
-        };
+        let season_year = Season::from_date(transfer_date).start_year;
 
         CompletedTransfer {
             player_id,

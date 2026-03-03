@@ -1,3 +1,4 @@
+pub mod free_agents;
 pub mod get;
 pub mod list;
 pub mod schedule;
@@ -14,4 +15,5 @@ pub fn country_routes() -> Router<GameAppData> {
         .merge(squad::routes::routes())
         .merge(staff::routes::routes())
         .merge(schedule::routes::routes())
+        .merge(free_agents::routes::routes())
 }

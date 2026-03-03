@@ -4,7 +4,7 @@ use crate::r#match::player::MatchPlayer;
 use crate::utils::DateUtils;
 use crate::{Player, PlayerStatusType, Tactics, Team};
 use chrono::NaiveDate;
-use log::{debug, warn};
+use log::debug;
 use std::borrow::Borrow;
 
 pub struct SquadSelector;
@@ -586,7 +586,7 @@ impl SquadSelector {
         let gk_count = available.len() - outfield_count;
 
         if available.len() < DEFAULT_SQUAD_SIZE {
-            warn!(
+            debug!(
                 "Squad selection for team {}: only {} available ({} outfield, {} GK, {} reserves offered)",
                 team.name, available.len(), outfield_count, gk_count, reserve_players.len()
             );
@@ -630,7 +630,7 @@ impl SquadSelector {
 
         // Guarantee: never leave bench empty when players exist
         if substitutes.is_empty() && !remaining.is_empty() {
-            warn!(
+            debug!(
                 "Substitute selection produced empty bench with {} remaining players — force-populating",
                 remaining.len()
             );
@@ -690,7 +690,7 @@ impl SquadSelector {
             used_ids.push(gk.id);
             selected_players.push(gk);
         } else {
-            warn!("No goalkeeper found at all — picking any player as GK");
+            debug!("No goalkeeper found at all — picking any player as GK");
             if let Some(any) = Self::pick_best_unused(available, &used_ids) {
                 squad.push(MatchPlayer::from_player(
                     team_id,
@@ -786,7 +786,7 @@ impl SquadSelector {
             match best {
                 Some(player) => {
                     let pos = Self::best_tactical_position(player, tactics);
-                    warn!(
+                    debug!(
                         "Emergency fill: using {} (GK) as outfield player",
                         player.full_name
                     );
@@ -798,7 +798,7 @@ impl SquadSelector {
         }
 
         if squad.len() < DEFAULT_SQUAD_SIZE {
-            warn!(
+            debug!(
                 "Could only select {} of 11 starting players",
                 squad.len()
             );
@@ -1134,7 +1134,7 @@ impl SquadSelector {
             }
 
             if available.len() < DEFAULT_SQUAD_SIZE {
-                warn!(
+                debug!(
                     "Rotation selection for team {}: only {} available after borrowing ({} reserves offered)",
                     team.name, available.len(), reserve_players.len()
                 );
@@ -1157,7 +1157,7 @@ impl SquadSelector {
 
         // Guarantee: never leave bench empty when players exist
         if substitutes.is_empty() && !remaining.is_empty() {
-            warn!(
+            debug!(
                 "Rotation substitute selection produced empty bench with {} remaining — force-populating",
                 remaining.len()
             );
@@ -1542,7 +1542,7 @@ mod tests {
             for _ in 0..3 {
                 let level = IntegerUtils::random(15, 20) as u8;
                 let player =
-                    PlayerGenerator::generate(1, Utc::now().date_naive(), position, level);
+                    PlayerGenerator::generate(1, Utc::now().date_naive(), position, level, None);
                 players.push(player);
             }
         }
@@ -1556,6 +1556,7 @@ mod tests {
             Utc::now().date_naive(),
             PlayerPositionType::DefenderCenter,
             18,
+            None,
         )
     }
 }

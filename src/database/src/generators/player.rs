@@ -113,36 +113,43 @@ fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
     let mut w = [0.8f32; SKILL_COUNT];
     match position {
         PositionType::Goalkeeper => {
-            // Key
-            w[SK_POSITIONING] = 1.3;
-            w[SK_CONCENTRATION] = 1.3;
-            w[SK_AGILITY] = 1.3;
-            w[SK_ANTICIPATION] = 1.2;
-            w[SK_COMPOSURE] = 1.2;
-            w[SK_JUMPING] = 1.2;
-            w[SK_BRAVERY] = 1.2;
+            // Key GK skills — high weights for clear differentiation
+            w[SK_POSITIONING] = 1.6;
+            w[SK_CONCENTRATION] = 1.5;
+            w[SK_AGILITY] = 1.5;
+            w[SK_ANTICIPATION] = 1.4;
+            w[SK_COMPOSURE] = 1.4;
+            w[SK_JUMPING] = 1.4;
+            w[SK_BRAVERY] = 1.3;
+            w[SK_DECISIONS] = 1.2;
             // Relevant
-            w[SK_FIRST_TOUCH] = 1.0;
-            w[SK_PASSING] = 1.0;
+            w[SK_STRENGTH] = 1.1;
+            w[SK_FIRST_TOUCH] = 1.1;
+            w[SK_PASSING] = 1.1;
             w[SK_TECHNIQUE] = 1.0;
-            w[SK_PENALTY_TAKING] = 1.0;
-            w[SK_DECISIONS] = 1.0;
-            w[SK_STRENGTH] = 1.0;
-            w[SK_PACE] = 1.0;
             w[SK_NATURAL_FITNESS] = 1.0;
+            w[SK_PACE] = 0.9;
+            w[SK_STAMINA] = 0.9;
             w[SK_LEADERSHIP] = 1.0;
             w[SK_BALANCE] = 1.0;
-            w[SK_STAMINA] = 1.0;
             w[SK_DETERMINATION] = 1.0;
             w[SK_TEAMWORK] = 1.0;
-            // Irrelevant
-            w[SK_FINISHING] = 0.4;
-            w[SK_LONG_SHOTS] = 0.4;
-            w[SK_CROSSING] = 0.4;
-            w[SK_OFF_THE_BALL] = 0.5;
-            w[SK_DRIBBLING] = 0.6;
-            w[SK_TACKLING] = 0.6;
-            w[SK_MARKING] = 0.6;
+            w[SK_PENALTY_TAKING] = 0.5;
+            // Irrelevant outfield skills — low weights
+            w[SK_FINISHING] = 0.2;
+            w[SK_LONG_SHOTS] = 0.2;
+            w[SK_CROSSING] = 0.2;
+            w[SK_CORNERS] = 0.2;
+            w[SK_FREE_KICKS] = 0.3;
+            w[SK_HEADING] = 0.3;
+            w[SK_OFF_THE_BALL] = 0.3;
+            w[SK_DRIBBLING] = 0.4;
+            w[SK_LONG_THROWS] = 0.5;
+            w[SK_TACKLING] = 0.3;
+            w[SK_MARKING] = 0.3;
+            w[SK_WORK_RATE] = 0.5;
+            w[SK_FLAIR] = 0.4;
+            w[SK_ACCELERATION] = 0.7;
         }
         PositionType::Defender => {
             // Key
@@ -410,19 +417,14 @@ impl PlayerGenerator {
             None => FullName::new(first_name, last_name),
         };
 
-        // Skills generated BEFORE attributes (CA now derives from skills)
+        // Generate PA first so skills can target the right ability level
         let positions = Self::generate_positions(position);
-        let mut skills = Self::generate_skills(&position, age, rep_factor);
-        let player_attributes =
-            Self::generate_player_attributes(rep_factor, age, &skills, &positions);
+        let potential_ability = Self::generate_potential_ability(rep_factor, age);
 
-        // High-potential youth players should not have very low skills
-        if is_youth && player_attributes.potential_ability >= 120 {
-            let min_skill = 5.0;
-            skills.technical.raise_floor(min_skill);
-            skills.mental.raise_floor(min_skill);
-            skills.physical.raise_floor(min_skill);
-        }
+        // Skills target a CA appropriate for this PA and age, not just team rep
+        let mut skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
+        let player_attributes =
+            Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
@@ -440,9 +442,24 @@ impl PlayerGenerator {
 
     // ── Skill generation pipeline ───────────────────────────────────────
 
-    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32) -> PlayerSkills {
-        // Floor of 5.0 so even low-rep youth teams get playable skills (5-8 range)
-        let mean_skill = 5.0 + rep_factor * 13.0;
+    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8) -> PlayerSkills {
+        // PA-implied skill level: what average skill should a player with this PA have at this age?
+        // Young players have CA below PA; peak-age players are near PA.
+        let age_ratio = match age {
+            0..=17 =>  0.45,
+            18..=19 => 0.55,
+            20..=22 => 0.65,
+            23..=26 => 0.80,
+            27..=29 => 0.90,
+            30..=32 => 0.95,
+            _ =>       0.88, // slight decline for 33+
+        };
+        let target_ca = (potential_ability as f32 * age_ratio).clamp(1.0, 200.0);
+        // Reverse skill_to_ability: avg = (CA - 1) / 199 * 19 + 1
+        let pa_mean = (target_ca - 1.0) / 199.0 * 19.0 + 1.0;
+        let rep_mean = 5.0 + rep_factor * 13.0;
+        // Blend: PA drives 60%, team context 40% (better teams develop skills better)
+        let mean_skill = pa_mean * 0.6 + rep_mean * 0.4;
         let max_possible = 20.0 * lerp(0.7, 1.0, rep_factor);
         // Higher rep = wider spread between skills (more distinct profiles)
         let noise_std = 2.0 + rep_factor * 1.0;
@@ -618,11 +635,33 @@ impl PlayerGenerator {
         }
     }
 
-    // ── Player attributes (CA from skills, PA with gem mechanic) ────────
+    // ── Potential ability (generated before skills) ─────────────────────
+
+    fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
+        let gem_roll = rand::random::<f32>();
+        let gem_chance = 0.08 + rep_factor * 0.15; // 8-23% chance per player
+        let is_gem = gem_roll < gem_chance;
+
+        if is_gem {
+            // High-potential player
+            let gem_min = (100.0 + rep_factor * 40.0) as i32;
+            let gem_max = (160 + (rep_factor * 40.0) as i32).min(200);
+            IntegerUtils::random(gem_min, gem_max).min(200) as u8
+        } else {
+            // Normal player: PA based on rep with age-dependent variance
+            let base = 40.0 + rep_factor * 120.0; // rep 0.0 → 40, rep 1.0 → 160
+            let youth_bonus = if age <= 21 { 15.0 } else if age <= 25 { 8.0 } else { 0.0 };
+            let pa = base + youth_bonus + random_normal() * 15.0;
+            pa.clamp(30.0, 200.0) as u8
+        }
+    }
+
+    // ── Player attributes (CA from skills, PA already determined) ─────
 
     fn generate_player_attributes(
         rep_factor: f32,
         age: u32,
+        potential_ability: u8,
         skills: &PlayerSkills,
         positions: &PlayerPositions,
     ) -> PlayerAttributes {
@@ -633,29 +672,6 @@ impl PlayerGenerator {
             .map(|p| p.position)
             .unwrap_or(PlayerPositionType::MidfielderCenter);
         let current_ability = skills.calculate_ability_for_position(primary_position);
-
-        // Potential ability: reputation-driven distribution with gem mechanic
-        let gem_roll = rand::random::<f32>();
-        let gem_chance = 0.08 + rep_factor * 0.15; // 8-23% chance per player
-        let is_gem = gem_roll < gem_chance;
-
-        let potential_ability = if is_gem {
-            // High-potential player
-            let gem_min = 140i32.min(current_ability as i32 + 30);
-            let gem_max = (160 + (rep_factor * 40.0) as i32).min(200);
-            IntegerUtils::random(gem_min, gem_max).min(200) as u8
-        } else {
-            // Normal player: PA = CA + small headroom scaled by youth and rep
-            let youth_bonus = if age <= 21 {
-                30
-            } else if age <= 25 {
-                15
-            } else {
-                5
-            };
-            let headroom = (youth_bonus as f32 * (0.5 + rep_factor * 0.5)) as i32;
-            (current_ability as i32 + IntegerUtils::random(0, headroom.max(1))).min(200) as u8
-        };
 
         let rep_base = (rep_factor * 3000.0) as i32;
 

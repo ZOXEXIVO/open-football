@@ -208,88 +208,144 @@ pub async fn player_get_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let (player, team) = simulator_data
-        .player_with_team(route_params.player_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id))
-        })?;
-
-    let country = simulator_data
-        .country(player.country_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Country with ID {} not found", player.country_id))
-        })?;
-
     let now = simulator_data.date.date();
 
-    let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
-    let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
-    let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+    // Try active player first
+    if let Some((player, team)) = simulator_data.player_with_team(route_params.player_id) {
+        let country = simulator_data
+            .country(player.country_id)
+            .ok_or_else(|| {
+                ApiError::NotFound(format!("Country with ID {} not found", player.country_id))
+            })?;
 
-    let contract = player.contract.as_ref().map(|c| PlayerContractDto {
-        salary: c.salary / 1000,
-        expiration: c.expiration.format("%d.%m.%Y").to_string(),
-        squad_status: format_squad_status(&c.squad_status),
-    });
+        let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+        let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
+        let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
-    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+        let contract = player.contract.as_ref().map(|c| PlayerContractDto {
+            salary: c.salary / 1000,
+            expiration: c.expiration.format("%d.%m.%Y").to_string(),
+            squad_status: format_squad_status(&c.squad_status),
+        });
 
-    let loan_status = get_loan_status(player, team, simulator_data);
+        let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+        let loan_status = get_loan_status(player, team, simulator_data);
 
-    let head_coach = team.staffs.head_coach();
-    let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
-    let staff_id = head_coach.id;
+        let head_coach = team.staffs.head_coach();
+        let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
+        let staff_id = head_coach.id;
 
-    let player_vm = PlayerViewModel {
-        id: player.id,
-        first_name: player.full_name.display_first_name().to_string(),
-        last_name: player.full_name.display_last_name().to_string(),
-        position: player.position().get_short_name().to_string(),
-        contract,
-        birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
-        age: player.age(simulator_data.date.date()),
-        team_slug: team.slug.clone(),
-        team_name: team.name.clone(),
-        country_slug: country.slug.clone(),
-        country_code: country.code.clone(),
-        country_name: country.name.clone(),
-        skills: get_skills(player),
-        conditions: get_conditions(player),
-        current_ability: get_current_ability_stars(player),
-        potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
-        value: FormattingUtils::format_money(player.value(now)),
-        preferred_foot: player.preferred_foot_str().to_string(),
-        player_attributes: get_attributes(player),
-        statistics: get_statistics(player),
-        friendly_statistics: get_friendly_statistics(player),
-        status: PlayerStatusDto::new(player.statuses.get()),
-        position_map: get_position_map(player),
-        loan_status,
-        injury_days: if player.player_attributes.is_injured {
-            Some(player.player_attributes.injury_days_remaining)
-        } else {
-            None
-        },
-    };
+        let player_vm = PlayerViewModel {
+            id: player.id,
+            first_name: player.full_name.display_first_name().to_string(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.position().get_short_name().to_string(),
+            contract,
+            birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
+            age: player.age(now),
+            team_slug: team.slug.clone(),
+            team_name: team.name.clone(),
+            country_slug: country.slug.clone(),
+            country_code: country.code.clone(),
+            country_name: country.name.clone(),
+            skills: get_skills(player),
+            conditions: get_conditions(player),
+            current_ability: get_current_ability_stars(player),
+            potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
+            value: FormattingUtils::format_money(player.value(now)),
+            preferred_foot: player.preferred_foot_str().to_string(),
+            player_attributes: get_attributes(player),
+            statistics: get_statistics(player),
+            friendly_statistics: get_friendly_statistics(player),
+            status: PlayerStatusDto::new(player.statuses.get()),
+            position_map: get_position_map(player),
+            loan_status,
+            injury_days: if player.player_attributes.is_injured {
+                Some(player.player_attributes.injury_days_remaining)
+            } else {
+                None
+            },
+        };
 
-    let is_goalkeeper = player.position().is_goalkeeper();
+        let is_goalkeeper = player.position().is_goalkeeper();
 
-    Ok(PlayerGetTemplate {
-        css_version: crate::common::default_handler::CSS_VERSION,
-        title,
-        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-        sub_title_suffix: String::new(),
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
-        sub_title_country_code: String::new(),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
-        menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs),
-        i18n,
-        lang: route_params.lang.clone(),
-        player: player_vm,
-        is_goalkeeper,
-    })
+        return Ok(PlayerGetTemplate {
+            css_version: crate::common::default_handler::CSS_VERSION,
+            title,
+            sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
+            sub_title_suffix: String::new(),
+            sub_title: team.name.clone(),
+            sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+            sub_title_country_code: String::new(),
+            header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
+            foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
+            menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs),
+            i18n,
+            lang: route_params.lang.clone(),
+            player: player_vm,
+            is_goalkeeper,
+        });
+    }
+
+    // Try retired player
+    if let Some(player) = simulator_data.retired_player(route_params.player_id) {
+        let country = simulator_data.country(player.country_id);
+        let country_slug = country.map(|c| c.slug.clone()).unwrap_or_default();
+        let country_code = country.map(|c| c.code.clone()).unwrap_or_default();
+        let country_name = country.map(|c| c.name.clone()).unwrap_or_default();
+
+        let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+
+        let player_vm = PlayerViewModel {
+            id: player.id,
+            first_name: player.full_name.display_first_name().to_string(),
+            last_name: player.full_name.display_last_name().to_string(),
+            position: player.position().get_short_name().to_string(),
+            contract: None,
+            birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
+            age: player.age(now),
+            team_slug: String::new(),
+            team_name: String::new(),
+            country_slug,
+            country_code,
+            country_name,
+            skills: get_skills(player),
+            conditions: get_conditions(player),
+            current_ability: get_current_ability_stars(player),
+            potential_ability: get_potential_ability_stars(player),
+            value: String::from("-"),
+            preferred_foot: player.preferred_foot_str().to_string(),
+            player_attributes: get_attributes(player),
+            statistics: get_statistics(player),
+            friendly_statistics: get_friendly_statistics(player),
+            status: PlayerStatusDto::new(player.statuses.get()),
+            position_map: get_position_map(player),
+            loan_status: None,
+            injury_days: None,
+        };
+
+        let is_goalkeeper = player.position().is_goalkeeper();
+        let sub_title = i18n.t("player_status_retired").to_string();
+
+        return Ok(PlayerGetTemplate {
+            css_version: crate::common::default_handler::CSS_VERSION,
+            title,
+            sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
+            sub_title_suffix: String::new(),
+            sub_title,
+            sub_title_link: String::new(),
+            sub_title_country_code: String::new(),
+            header_color: "#808080".to_string(),
+            foreground_color: "#ffffff".to_string(),
+            menu_sections: Vec::new(),
+            i18n,
+            lang: route_params.lang.clone(),
+            player: player_vm,
+            is_goalkeeper,
+        });
+    }
+
+    Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)))
 }
 
 fn get_attributes(player: &Player) -> PlayerAttributesDto {
@@ -397,7 +453,7 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
         shots_on_target: player.statistics.shots_on_target,
         tackling: player.statistics.tackling,
         passes: player.statistics.passes,
-        average_rating: format!("{:.2}", player.statistics.average_rating),
+        average_rating: player.statistics.average_rating_str(),
         conceded: player.statistics.conceded,
         clean_sheets: player.statistics.clean_sheets,
     }
@@ -420,7 +476,7 @@ fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
         shots_on_target: fs.shots_on_target,
         tackling: fs.tackling,
         passes: fs.passes,
-        average_rating: format!("{:.2}", fs.average_rating),
+        average_rating: fs.average_rating_str(),
         conceded: fs.conceded,
         clean_sheets: fs.clean_sheets,
     })
@@ -432,6 +488,10 @@ pub fn get_conditions(player: &Player) -> u8 {
 
 pub fn get_current_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
+}
+
+pub fn get_potential_ability_stars(player: &Player) -> u8 {
+    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
 }
 
 pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, staff_id: u32) -> u8 {

@@ -105,7 +105,8 @@ pub async fn team_get_action(
 
     let club_id = team.club_id;
 
-    // Build a set of player IDs loaned IN to this club from transfer history
+    // Build a set of player IDs currently loaned IN to this club
+    // Only include loans that haven't expired yet
     let loaned_in_player_ids: Vec<u32> = simulator_data
         .country_by_club(club_id)
         .map(|country| {
@@ -115,7 +116,10 @@ pub async fn team_get_action(
                 .iter()
                 .filter(|t| {
                     t.to_club_id == club_id
-                        && matches!(&t.transfer_type, TransferType::Loan(_))
+                        && match &t.transfer_type {
+                            TransferType::Loan(end_date) => *end_date >= now,
+                            _ => false,
+                        }
                 })
                 .map(|t| t.player_id)
                 .collect()
@@ -129,6 +133,7 @@ pub async fn team_get_action(
     let mut players: Vec<TeamPlayer> = team
         .players()
         .iter()
+        .filter(|p| !p.statuses.get().contains(&PlayerStatusType::Ret))
         .filter_map(|p| {
             let country = simulator_data.country(p.country_id)?;
             let position = p.positions.display_positions().join(", ");
@@ -169,7 +174,7 @@ pub async fn team_get_action(
                 played: p.statistics.played + p.friendly_statistics.played,
                 played_subs: p.statistics.played_subs + p.friendly_statistics.played_subs,
                 goals: p.statistics.goals + p.friendly_statistics.goals,
-                average_rating: format_combined_rating(&p.statistics, &p.friendly_statistics),
+                average_rating: p.statistics.combined_rating_str(&p.friendly_statistics),
                 has_recent_decision,
                 status: PlayerStatusDto::new(p.statuses.get()),
             })
@@ -179,9 +184,8 @@ pub async fn team_get_action(
     // Collect current player IDs to avoid duplicates
     let current_player_ids: Vec<u32> = players.iter().map(|p| p.id).collect();
 
-    // Find loaned-out players from transfer history
-    // Note: simulator_data.player() won't work here because indexes are stale after transfers.
-    // We search directly in the country's clubs instead.
+    // Find currently loaned-out players from transfer history
+    // Only include loans that haven't expired yet
     if let Some(country) = simulator_data.country_by_club(club_id) {
         let loan_records: Vec<_> = country
             .transfer_market
@@ -189,16 +193,20 @@ pub async fn team_get_action(
             .iter()
             .filter(|t| {
                 t.from_team_id == team_id
-                    && matches!(&t.transfer_type, TransferType::Loan(_))
+                    && match &t.transfer_type {
+                        TransferType::Loan(end_date) => *end_date >= now,
+                        _ => false,
+                    }
                     && !current_player_ids.contains(&t.player_id)
             })
             .collect();
 
         for t in loan_records {
             // Search globally — the player may have been loaned to a club in another country
-            let found = simulator_data.player(t.player_id);
+            // Use player_with_team to ensure the player is still active (not retired)
+            let found = simulator_data.player_with_team(t.player_id);
 
-            if let Some(player) = found {
+            if let Some((player, _)) = found {
                 let player_country = simulator_data.country(player.country_id);
                 let position = player.positions.display_positions().join(", ");
 
@@ -227,7 +235,7 @@ pub async fn team_get_action(
                     played: player.statistics.played + player.friendly_statistics.played,
                     played_subs: player.statistics.played_subs + player.friendly_statistics.played_subs,
                     goals: player.statistics.goals + player.friendly_statistics.goals,
-                    average_rating: format_combined_rating(&player.statistics, &player.friendly_statistics),
+                    average_rating: player.statistics.combined_rating_str(&player.friendly_statistics),
                     has_recent_decision: has_decision_within_days(player, now, 7),
                     status: PlayerStatusDto::new(player.statuses.get()),
                 });
@@ -336,19 +344,6 @@ pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, 
     let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
 
     (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
-}
-
-fn format_combined_rating(stats: &core::PlayerStatistics, friendly: &core::PlayerStatistics) -> String {
-    let games_official = stats.played + stats.played_subs;
-    let games_friendly = friendly.played + friendly.played_subs;
-    let total = games_official + games_friendly;
-    if total == 0 {
-        return "-".to_string();
-    }
-    let combined = (stats.average_rating * games_official as f32
-        + friendly.average_rating * games_friendly as f32)
-        / total as f32;
-    format!("{:.2}", combined)
 }
 
 fn has_decision_within_days(player: &Player, now: NaiveDate, days: i64) -> bool {

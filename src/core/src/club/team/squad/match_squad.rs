@@ -98,7 +98,7 @@ impl Team {
         let formation_positions = tactics.positions();
 
         if squad_result.main_squad.len() != formation_positions.len() {
-            log::warn!(
+            log::debug!(
                 "Squad size mismatch: got {} players for {} positions",
                 squad_result.main_squad.len(),
                 formation_positions.len()
@@ -113,7 +113,7 @@ impl Team {
 
         for &required_pos in formation_positions {
             if !position_coverage.contains_key(&required_pos) {
-                log::warn!(
+                log::debug!(
                     "No player selected for required position: {}",
                     required_pos.get_short_name()
                 );

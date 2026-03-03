@@ -115,13 +115,21 @@ pub async fn player_personal_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let (player, team) = simulator_data
-        .player_with_team(route_params.player_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id))
-        })?;
+    let active = simulator_data.player_with_team(route_params.player_id);
+    let player = if let Some((p, _)) = active {
+        p
+    } else if let Some(p) = simulator_data.retired_player(route_params.player_id) {
+        p
+    } else {
+        return Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)));
+    };
+    let team_opt = active.map(|(_, t)| t);
 
-    let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
+        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
     let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
@@ -134,8 +142,12 @@ pub async fn player_personal_action(
     let concerns = get_concerns(player, &i18n);
     let behaviour = i18n.t(&format!("behaviour_{}", player.behaviour.as_str().to_lowercase())).to_string();
 
-    let head_coach = team.staffs.head_coach();
-    let manager_relationship = get_manager_relationship(player, head_coach, &i18n);
+    let manager_relationship = team_opt
+        .map(|team| {
+            let head_coach = team.staffs.head_coach();
+            get_manager_relationship(player, head_coach, &i18n)
+        })
+        .flatten();
     let player_info = get_player_info(player, &i18n);
 
     Ok(PlayerPersonalTemplate {
@@ -143,12 +155,16 @@ pub async fn player_personal_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| "Retired".to_string()),
+        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
-        menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs),
+        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        menu_sections: if let Some(team) = team_opt {
+            views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs)
+        } else {
+            Vec::new()
+        },
         i18n,
         lang: route_params.lang.clone(),
         player_id: player.id,

@@ -1,4 +1,4 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use log::{debug, info};
 use std::collections::HashMap;
 use super::CountryResult;
@@ -359,7 +359,9 @@ impl CountryResult {
                         }
                     } else if round < 3 {
                         if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                            let new_amount = negotiation.current_offer.base_fee.amount * 1.10;
+                            let new_amount = crate::utils::FormattingUtils::round_fee(
+                                negotiation.current_offer.base_fee.amount * 1.10
+                            );
                             negotiation.current_offer.base_fee.amount = new_amount;
                             negotiation.advance_club_negotiation_round(date);
                         }
@@ -818,11 +820,7 @@ impl CountryResult {
         }
 
         if let Some(mut player) = player {
-            let season_year = if date.month() >= 8 {
-                date.year() as u16
-            } else {
-                (date.year() - 1) as u16
-            };
+            let season = Season::from_date(date);
 
             // If the team's league is friendly (reserves etc.), use the club's main league instead
             let (selling_league_name, selling_league_slug) = selling_league_id
@@ -840,18 +838,49 @@ impl CountryResult {
 
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: Season::new(season_year),
+                season: season.clone(),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
                 team_reputation: selling_team_reputation,
                 league_name: selling_league_name,
                 league_slug: selling_league_slug,
                 is_loan: false,
+                transfer_fee: None,
                 statistics: old_stats,
                 created_at: date,
             });
 
             player.statistics = PlayerStatistics::default();
+
+            let buying_info = country.clubs.iter()
+                .find(|c| c.id == buying_club_id)
+                .and_then(|c| {
+                    let main_team = c.teams.teams.iter()
+                        .find(|t| t.team_type == crate::TeamType::Main)
+                        .or(c.teams.teams.first())?;
+                    let league = main_team.league_id
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| (l.name.clone(), l.slug.clone()))
+                        .unwrap_or_default();
+                    Some((main_team.name.clone(), main_team.slug.clone(), main_team.reputation.world, league.0, league.1))
+                });
+
+            if let Some((buy_team_name, buy_team_slug, buy_team_rep, buy_league_name, buy_league_slug)) = buying_info {
+                player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
+                    season: season.clone(),
+                    team_name: buy_team_name,
+                    team_slug: buy_team_slug,
+                    team_reputation: buy_team_rep,
+                    league_name: buy_league_name,
+                    league_slug: buy_league_slug,
+                    is_loan: false,
+                    transfer_fee: Some(fee),
+                    statistics: PlayerStatistics::default(),
+                    created_at: date,
+                });
+            }
+
+            player.last_transfer_date = Some(date);
 
             player.statuses.remove(PlayerStatusType::Lst);
             player.statuses.remove(PlayerStatusType::Req);
@@ -923,11 +952,7 @@ impl CountryResult {
         }
 
         if let Some(mut player) = player {
-            let season_year = if date.month() >= 8 {
-                date.year() as u16
-            } else {
-                (date.year() - 1) as u16
-            };
+            let season = Season::from_date(date);
 
             // If the team's league is friendly (reserves etc.), use the club's main league instead
             let (selling_league_name, selling_league_slug) = selling_league_id
@@ -944,13 +969,14 @@ impl CountryResult {
 
             let old_stats = std::mem::take(&mut player.statistics);
             player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: Season::new(season_year),
+                season: season.clone(),
                 team_name: selling_team_name,
                 team_slug: selling_team_slug,
                 team_reputation: selling_team_reputation,
                 league_name: selling_league_name,
                 league_slug: selling_league_slug,
                 is_loan: false,
+                transfer_fee: None,
                 statistics: old_stats,
                 created_at: date,
             });
@@ -958,6 +984,36 @@ impl CountryResult {
             // Reset current stats for the new club — history entry for the loan spell
             // will be created when the player moves again or the season ends
             player.statistics = PlayerStatistics::default();
+
+            let buying_info = country.clubs.iter()
+                .find(|c| c.id == buying_club_id)
+                .and_then(|c| {
+                    let main_team = c.teams.teams.iter()
+                        .find(|t| t.team_type == crate::TeamType::Main)
+                        .or(c.teams.teams.first())?;
+                    let league = main_team.league_id
+                        .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                        .map(|l| (l.name.clone(), l.slug.clone()))
+                        .unwrap_or_default();
+                    Some((main_team.name.clone(), main_team.slug.clone(), main_team.reputation.world, league.0, league.1))
+                });
+
+            if let Some((buy_team_name, buy_team_slug, buy_team_rep, buy_league_name, buy_league_slug)) = buying_info {
+                player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
+                    season: season.clone(),
+                    team_name: buy_team_name,
+                    team_slug: buy_team_slug,
+                    team_reputation: buy_team_rep,
+                    league_name: buy_league_name,
+                    league_slug: buy_league_slug,
+                    is_loan: true,
+                    transfer_fee: Some(loan_fee),
+                    statistics: PlayerStatistics::default(),
+                    created_at: date,
+                });
+            }
+
+            player.last_transfer_date = Some(date);
 
             player.statuses.remove(PlayerStatusType::Loa);
             player.statuses.remove(PlayerStatusType::Lst);
@@ -994,11 +1050,13 @@ impl CountryResult {
     }
 
     /// Handle expiring contracts and free agent signings.
-    /// Clubs with squad needs sign players whose contracts expire within 6 months.
+    /// Releases players with expired contracts and matches soon-to-expire players to clubs.
     fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
         struct FreeAgentCandidate {
             player_id: u32,
+            player_name: String,
             club_id: u32,
+            club_name: String,
             ability: u8,
             potential: u8,
             age: u8,
@@ -1007,7 +1065,9 @@ impl CountryResult {
         }
 
         // Pass 1: Find players with expiring contracts (< 180 days)
+        // and release players whose contracts have already expired
         let mut candidates: Vec<FreeAgentCandidate> = Vec::new();
+        let mut expired_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
             for team in &club.teams.teams {
@@ -1024,8 +1084,14 @@ impl CountryResult {
 
                     let days_left = (contract.expiration - date).num_days();
 
+                    // Contract already expired — release player
+                    if days_left <= 0 {
+                        expired_player_ids.push(player.id);
+                        continue;
+                    }
+
                     // Contract expiring within 6 months
-                    if days_left > 0 && days_left <= 180 {
+                    if days_left <= 180 {
                         // Skip if already listed or in negotiation
                         let statuses = player.statuses.get();
                         if statuses.contains(&PlayerStatusType::Lst)
@@ -1037,13 +1103,29 @@ impl CountryResult {
 
                         candidates.push(FreeAgentCandidate {
                             player_id: player.id,
+                            player_name: player.full_name.to_string(),
                             club_id: club.id,
+                            club_name: club.name.clone(),
                             ability: player.player_attributes.current_ability,
                             potential: player.player_attributes.potential_ability,
                             age: player.age(date),
                             position_group: player.position().position_group(),
                             days_to_expiry: days_left,
                         });
+                    }
+                }
+            }
+        }
+
+        // Release players with expired contracts
+        for player_id in expired_player_ids {
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                        info!("Contract expired: player {} ({}) released from {}",
+                              player.full_name, player_id, club.name);
+                        player.contract = None;
+                        break;
                     }
                 }
             }
@@ -1056,7 +1138,9 @@ impl CountryResult {
         // Pass 2: Match candidates to clubs with needs
         struct FreeAgentSigning {
             player_id: u32,
+            player_name: String,
             from_club_id: u32,
+            from_club_name: String,
             to_club_id: u32,
         }
 
@@ -1122,7 +1206,9 @@ impl CountryResult {
                 {
                     signings.push(FreeAgentSigning {
                         player_id: best.player_id,
+                        player_name: best.player_name.clone(),
                         from_club_id: best.club_id,
+                        from_club_name: best.club_name.clone(),
                         to_club_id: club.id,
                     });
                 }
@@ -1131,6 +1217,27 @@ impl CountryResult {
 
         // Pass 3: Execute signings as free transfers
         for signing in signings {
+            let to_club_name = country.clubs.iter()
+                .find(|c| c.id == signing.to_club_id)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+
+            // Create transfer history record
+            country.transfer_market.transfer_history.push(
+                crate::transfers::CompletedTransfer::new(
+                    signing.player_id,
+                    signing.player_name,
+                    signing.from_club_id,
+                    0,
+                    signing.from_club_name,
+                    signing.to_club_id,
+                    to_club_name,
+                    date,
+                    crate::shared::CurrencyValue::new(0.0, crate::shared::Currency::Usd),
+                    crate::transfers::TransferType::Free,
+                ),
+            );
+
             Self::execute_player_transfer(
                 country,
                 signing.player_id,

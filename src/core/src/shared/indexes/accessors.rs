@@ -233,6 +233,22 @@ impl SimulatorData {
                         }
                     }
                 }
+                // Also check retired players
+                if let Some(player) = country.retired_players.iter().find(|p| p.id == id) {
+                    return Some(player);
+                }
+            }
+        }
+        None
+    }
+
+    /// Find a retired player by ID across all countries.
+    pub fn retired_player(&self, id: u32) -> Option<&Player> {
+        for continent in &self.continents {
+            for country in &continent.countries {
+                if let Some(player) = country.retired_players.iter().find(|p| p.id == id) {
+                    return Some(player);
+                }
             }
         }
         None

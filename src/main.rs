@@ -23,10 +23,10 @@ async fn main() {
 
     let ai_registry = Arc::new(AiProviderRegistry::new());
 
-    ai_registry.add(
-        "Local Ollama",
-        Box::new(OllamaRequest::new("http://localhost", 11434, "qwen3:8b")),
-    ).await;
+    // ai_registry.add(
+    //     "Local Ollama",
+    //     Box::new(OllamaRequest::new("http://localhost", 11434, "qwen3:8b")),
+    // ).await;
 
     // Register service so core can use it via trait — no tokio in core
     core::ai::set_ai_service(Box::new(RegistryAiService {

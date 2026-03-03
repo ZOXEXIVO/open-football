@@ -1,6 +1,7 @@
 use crate::shared::CurrencyValue;
 use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::utils::FormattingUtils;
 use crate::{Person, Player, PlayerPositionType};
 use chrono::NaiveDate;
 
@@ -88,6 +89,9 @@ impl ClubTransferStrategy {
             offer_amount = budget_cap;
         }
 
+        // Round to a clean negotiation number
+        offer_amount = FormattingUtils::round_fee(offer_amount);
+
         // Create the base offer
         let mut offer = TransferOffer::new(
             CurrencyValue {
@@ -113,7 +117,7 @@ impl ClubTransferStrategy {
 
         // 2. Add appearance bonuses for older players to reduce risk
         if age > 28 {
-            let appearance_amount = offer_amount * 0.1; // 10% of transfer fee
+            let appearance_amount = FormattingUtils::round_fee(offer_amount * 0.1);
             offer = offer.with_clause(TransferClause::AppearanceFee(
                 CurrencyValue {
                     amount: appearance_amount,
@@ -125,7 +129,7 @@ impl ClubTransferStrategy {
 
         // 3. Add goal bonus for attackers
         if player.position().is_forward() && player.statistics.goals > 5 {
-            let goals_bonus = offer_amount * 0.15; // 15% of transfer fee
+            let goals_bonus = FormattingUtils::round_fee(offer_amount * 0.15);
             offer = offer.with_clause(TransferClause::GoalBonus(
                 CurrencyValue {
                     amount: goals_bonus,
@@ -137,7 +141,7 @@ impl ClubTransferStrategy {
 
         // 4. Add promotion bonus for lower reputation clubs
         if self.reputation_level < 60 {
-            let promotion_bonus = offer_amount * 0.2; // 20% of transfer fee
+            let promotion_bonus = FormattingUtils::round_fee(offer_amount * 0.2);
             offer = offer.with_clause(TransferClause::PromotionBonus(
                 CurrencyValue {
                     amount: promotion_bonus,

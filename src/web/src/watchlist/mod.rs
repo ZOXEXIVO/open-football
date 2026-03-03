@@ -38,6 +38,7 @@ pub struct WatchlistPlayerDto {
     pub injured: bool,
     pub unhappy: bool,
     pub transfer_listed: bool,
+    pub retired: bool,
 }
 
 #[derive(Deserialize)]
@@ -81,39 +82,72 @@ pub async fn watchlist_page_action(
         .watchlist
         .iter()
         .filter_map(|&player_id| {
-            let (player, team) = simulator_data.player_with_team(player_id)?;
-            let country = simulator_data.country(player.country_id)?;
-            let position = player.positions.display_positions().join(", ");
-            let league = team.league_id.and_then(|id| simulator_data.league(id));
-            let head_coach = team.staffs.head_coach();
+            // Try active player first, then retired
+            if let Some((player, team)) = simulator_data.player_with_team(player_id) {
+                let country = simulator_data.country(player.country_id)?;
+                let position = player.positions.display_positions().join(", ");
+                let league = team.league_id.and_then(|id| simulator_data.league(id));
+                let head_coach = team.staffs.head_coach();
 
-            Some(WatchlistPlayerDto {
-                id: player.id,
-                first_name: player.full_name.display_first_name().to_string(),
-                last_name: player.full_name.display_last_name().to_string(),
-                position,
-                country_code: country.code.clone(),
-                country_name: country.name.clone(),
-                country_slug: country.slug.clone(),
-                age: DateUtils::age(player.birth_date, now),
-                current_ability: get_current_ability_stars(player),
-                potential_ability: get_potential_ability_stars_by_staff(
-                    player,
-                    head_coach.staff_attributes.knowledge.judging_player_potential,
-                    head_coach.id,
-                ),
-                conditions: get_conditions(player),
-                team_name: team.name.clone(),
-                team_slug: team.slug.clone(),
-                league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
-                played: player.statistics.played,
-                played_subs: player.statistics.played_subs,
-                value: FormattingUtils::format_money(player.value(now)),
-                injured: player.player_attributes.is_injured,
-                unhappy: !player.happiness.is_happy(),
-                transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
-            })
+                Some(WatchlistPlayerDto {
+                    id: player.id,
+                    first_name: player.full_name.display_first_name().to_string(),
+                    last_name: player.full_name.display_last_name().to_string(),
+                    position,
+                    country_code: country.code.clone(),
+                    country_name: country.name.clone(),
+                    country_slug: country.slug.clone(),
+                    age: DateUtils::age(player.birth_date, now),
+                    current_ability: get_current_ability_stars(player),
+                    potential_ability: get_potential_ability_stars_by_staff(
+                        player,
+                        head_coach.staff_attributes.knowledge.judging_player_potential,
+                        head_coach.id,
+                    ),
+                    conditions: get_conditions(player),
+                    team_name: team.name.clone(),
+                    team_slug: team.slug.clone(),
+                    league_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+                    league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
+                    played: player.statistics.played,
+                    played_subs: player.statistics.played_subs,
+                    value: FormattingUtils::format_money(player.value(now)),
+                    injured: player.player_attributes.is_injured,
+                    unhappy: !player.happiness.is_happy(),
+                    transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
+                    retired: false,
+                })
+            } else if let Some(player) = simulator_data.retired_player(player_id) {
+                let country = simulator_data.country(player.country_id)?;
+                let position = player.positions.display_positions().join(", ");
+
+                Some(WatchlistPlayerDto {
+                    id: player.id,
+                    first_name: player.full_name.display_first_name().to_string(),
+                    last_name: player.full_name.display_last_name().to_string(),
+                    position,
+                    country_code: country.code.clone(),
+                    country_name: country.name.clone(),
+                    country_slug: country.slug.clone(),
+                    age: DateUtils::age(player.birth_date, now),
+                    current_ability: get_current_ability_stars(player),
+                    potential_ability: get_potential_ability_stars(player),
+                    conditions: 0,
+                    team_name: "Retired".to_string(),
+                    team_slug: String::new(),
+                    league_name: String::new(),
+                    league_slug: String::new(),
+                    played: player.statistics.played,
+                    played_subs: player.statistics.played_subs,
+                    value: "-".to_string(),
+                    injured: false,
+                    unhappy: false,
+                    transfer_listed: false,
+                    retired: true,
+                })
+            } else {
+                None
+            }
         })
         .collect();
 
@@ -180,6 +214,10 @@ fn get_conditions(player: &Player) -> u8 {
 
 fn get_current_ability_stars(player: &Player) -> u8 {
     (5.0f32 * ((player.player_attributes.current_ability as f32) / 200.0)).round() as u8
+}
+
+fn get_potential_ability_stars(player: &Player) -> u8 {
+    (5.0f32 * ((player.player_attributes.potential_ability as f32) / 200.0)).round() as u8
 }
 
 fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, staff_id: u32) -> u8 {

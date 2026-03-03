@@ -52,6 +52,12 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    pub fn with_country_and_names(&self, country_id: u32, people_names: crate::PeopleNameGeneratorData) -> Self {
+        let mut ctx = GlobalContext::clone(self);
+        ctx.country = Some(CountryContext::with_people_names(country_id, people_names));
+        ctx
+    }
+
     pub fn with_league(&self, league_id: u32, league_slug: String, team_ids: &'gc [u32]) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.league = Some(LeagueContext::new(league_id, league_slug, team_ids));
@@ -119,12 +125,17 @@ impl SimulationContext {
 
     #[inline]
     pub fn is_month_beginning(&self) -> bool {
-        self.day == 1u8
+        self.day == 1u8 && self.hour == 0
     }
 
     #[inline]
     pub fn is_year_beginning(&self) -> bool {
-        self.day == 1u8 && self.date.month() == 1
+        self.day == 1u8 && self.date.month() == 1 && self.hour == 0
+    }
+
+    #[inline]
+    pub fn is_season_start(&self) -> bool {
+        self.day == 1u8 && self.date.month() == 7 && self.hour == 0
     }
 
     #[inline]
@@ -170,10 +181,10 @@ mod tests {
         // Test if the week beginning is detected correctly
         assert!(monday_sim_ctx.is_week_beginning());
 
-        // Create a new simulation context at the beginning of the month
+        // Create a new simulation context at the beginning of the month (midnight)
         let first_of_month_date = NaiveDate::from_ymd_opt(2024, 3, 1)
             .unwrap()
-            .and_hms_opt(12, 30, 0)
+            .and_hms_opt(0, 0, 0)
             .unwrap();
 
         let first_of_month_sim_ctx = SimulationContext::new(first_of_month_date);
@@ -181,10 +192,17 @@ mod tests {
         // Test if the month beginning is detected correctly
         assert!(first_of_month_sim_ctx.is_month_beginning());
 
-        // Create a new simulation context at the beginning of the year
+        // Non-midnight on 1st should NOT be month beginning
+        let first_noon = NaiveDate::from_ymd_opt(2024, 3, 1)
+            .unwrap()
+            .and_hms_opt(12, 0, 0)
+            .unwrap();
+        assert!(!SimulationContext::new(first_noon).is_month_beginning());
+
+        // Create a new simulation context at the beginning of the year (midnight)
         let first_of_year_date = NaiveDate::from_ymd_opt(2024, 1, 1)
             .unwrap()
-            .and_hms_opt(12, 30, 0)
+            .and_hms_opt(0, 0, 0)
             .unwrap();
 
         let first_of_year_sim_ctx = SimulationContext::new(first_of_year_date);

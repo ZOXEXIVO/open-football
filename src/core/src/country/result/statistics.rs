@@ -1,9 +1,7 @@
-use chrono::Datelike;
 use log::info;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use super::CountryResult;
 use crate::league::Season;
-use crate::PlayerStatistics;
 use crate::simulator::SimulatorData;
 
 impl CountryResult {
@@ -13,11 +11,13 @@ impl CountryResult {
     pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
         let date = data.date.date();
 
-        // Season that just ended: if we're in Aug+, the season was the previous year
-        let season_year = date.year() as u16 - 1;
-        let season = Season::new(season_year);
+        // Season that just ended — use the canonical Season::from_date calculation.
+        // The snapshot fires when the NEW season starts (Aug+), so we need the
+        // PREVIOUS season: subtract one year from the from_date result.
+        let current_season = Season::from_date(date);
+        let ended_season = Season::new(current_season.start_year.saturating_sub(1));
 
-        info!("📋 New season snapshot: saving player statistics for season {} (country {})", season_year, country_id);
+        info!("📋 New season snapshot: saving player statistics for season {} (country {})", ended_season.start_year, country_id);
 
         let country = match data.country_mut(country_id) {
             Some(c) => c,
@@ -27,12 +27,6 @@ impl CountryResult {
         // Build league lookup so we can resolve team.league_id -> (name, slug)
         let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
-            .collect();
-
-        // Build friendly league lookup — friendly leagues don't archive to history
-        let friendly_leagues: HashSet<u32> = country.leagues.leagues.iter()
-            .filter(|l| l.friendly)
-            .map(|l| l.id)
             .collect();
 
         for club in &mut country.clubs {
@@ -50,19 +44,6 @@ impl CountryResult {
                 .unwrap_or_default();
 
             for team in &mut club.teams.teams {
-                let is_friendly = team.league_id
-                    .map(|lid| friendly_leagues.contains(&lid))
-                    .unwrap_or(false);
-
-                if is_friendly {
-                    // Friendly league: reset stats but don't archive to history
-                    for player in &mut team.players.players {
-                        player.statistics = PlayerStatistics::default();
-                        player.friendly_statistics = PlayerStatistics::default();
-                    }
-                    continue;
-                }
-
                 // Always use main team info in history (show club name, not sub-team)
                 let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
                     (crate::TeamType::Main, _) | (_, None) => {
@@ -78,7 +59,7 @@ impl CountryResult {
 
                 for player in &mut team.players.players {
                     player.snapshot_season_statistics(
-                        season.clone(),
+                        ended_season.clone(),
                         &team_name,
                         &team_slug,
                         team_reputation,

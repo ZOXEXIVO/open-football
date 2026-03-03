@@ -160,6 +160,7 @@ impl PlayerBuilder {
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             statistics_history: self.statistics_history.unwrap_or_else(PlayerStatisticsHistory::new),
             decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
+            last_transfer_date: None,
         })
     }
 }

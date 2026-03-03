@@ -7,7 +7,7 @@ use crate::continent::{
 use crate::country::{CallUpCandidate, CountryResult};
 use crate::utils::Logging;
 use crate::{Country, NationalTeam};
-use log::{debug, info};
+use log::{debug};
 use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
 use std::collections::HashMap;
@@ -88,7 +88,7 @@ impl Continent {
             .map(|(country, candidates)| {
                 let message = &format!("simulate country: {} (Continental)", &country.name);
                 Logging::estimate_result(
-                    || country.simulate(ctx.with_country(country.id), &country_ids, candidates),
+                    || country.simulate(ctx.with_country_and_names(country.id, country.generator_data.people_names.clone()), &country_ids, candidates),
                     message,
                 )
             })

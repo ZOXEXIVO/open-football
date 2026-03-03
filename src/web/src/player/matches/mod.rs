@@ -61,65 +61,78 @@ pub async fn player_matches_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let (player, team) = simulator_data
-        .player_with_team(route_params.player_id)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id))
-        })?;
+    let active = simulator_data.player_with_team(route_params.player_id);
+    let player = if let Some((p, _)) = active {
+        p
+    } else if let Some(p) = simulator_data.retired_player(route_params.player_id) {
+        p
+    } else {
+        return Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)));
+    };
+    let team_opt = active.map(|(_, t)| t);
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+    let league = team_opt.and_then(|t| t.league_id.and_then(|id| simulator_data.league(id)));
 
-    let schedule = league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default();
+    let schedule = team_opt.map(|team| {
+        league.map(|l| l.schedule.get_matches_for_team(team.id)).unwrap_or_default()
+    }).unwrap_or_default();
 
-    let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
+    let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
+        get_neighbor_teams(team.club_id, simulator_data, &i18n)?
+    } else {
+        (Vec::new(), Vec::new())
+    };
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
     let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
-    let items: Vec<PlayerMatchItem> = schedule
-        .iter()
-        .filter(|schedule_item| {
-            // Only show matches where the player actually participated
-            if schedule_item.result.is_none() {
-                return false;
-            }
-            if let Some(l) = league {
-                if let Some(match_result) = l.matches.get(&schedule_item.id) {
-                    if let Some(details) = &match_result.details {
-                        return details.player_stats.contains_key(&player.id);
+    let items: Vec<PlayerMatchItem> = if let Some(team) = team_opt {
+        schedule
+            .iter()
+            .filter(|schedule_item| {
+                if schedule_item.result.is_none() {
+                    return false;
+                }
+                if let Some(l) = league {
+                    if let Some(match_result) = l.matches.get(&schedule_item.id) {
+                        if let Some(details) = &match_result.details {
+                            return details.player_stats.contains_key(&player.id);
+                        }
                     }
                 }
-            }
-            false
-        })
-        .map(|schedule_item| {
-            let is_home = schedule_item.home_team_id == team.id;
+                false
+            })
+            .map(|schedule_item| {
+                let is_home = schedule_item.home_team_id == team.id;
 
-            let home_team_data = simulator_data.team_data(schedule_item.home_team_id).unwrap();
-            let away_team_data = simulator_data.team_data(schedule_item.away_team_id).unwrap();
+                let home_team_data = simulator_data.team_data(schedule_item.home_team_id).unwrap();
+                let away_team_data = simulator_data.team_data(schedule_item.away_team_id).unwrap();
 
-            PlayerMatchItem {
-                date: schedule_item.date.format("%d.%m.%Y").to_string(),
-                time: schedule_item.date.format("%H:%M").to_string(),
-                opponent_slug: if is_home {
-                    away_team_data.slug.clone()
-                } else {
-                    home_team_data.slug.clone()
-                },
-                opponent_name: if is_home {
-                    away_team_data.name.clone()
-                } else {
-                    home_team_data.name.clone()
-                },
-                is_home,
-                competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
-                result: schedule_item.result.as_ref().map(|res| PlayerMatchResult {
-                    match_id: schedule_item.id.clone(),
-                    home_goals: res.home_team.get(),
-                    away_goals: res.away_team.get(),
-                }),
-            }
-        })
-        .collect();
+                PlayerMatchItem {
+                    date: schedule_item.date.format("%d.%m.%Y").to_string(),
+                    time: schedule_item.date.format("%H:%M").to_string(),
+                    opponent_slug: if is_home {
+                        away_team_data.slug.clone()
+                    } else {
+                        home_team_data.slug.clone()
+                    },
+                    opponent_name: if is_home {
+                        away_team_data.name.clone()
+                    } else {
+                        home_team_data.name.clone()
+                    },
+                    is_home,
+                    competition_name: league.map(|l| l.name.clone()).unwrap_or_default(),
+                    result: schedule_item.result.as_ref().map(|res| PlayerMatchResult {
+                        match_id: schedule_item.id.clone(),
+                        home_goals: res.home_team.get(),
+                        away_goals: res.away_team.get(),
+                    }),
+                }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
 
     let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
@@ -128,12 +141,16 @@ pub async fn player_matches_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team.name.clone(),
-        sub_title_link: format!("/{}/teams/{}", &route_params.lang, &team.slug),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| "Retired".to_string()),
+        sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
-        header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
-        foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
-        menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs),
+        header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),
+        foreground_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.foreground.clone())).unwrap_or_else(|| "#ffffff".to_string()),
+        menu_sections: if let Some(team) = team_opt {
+            views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs)
+        } else {
+            Vec::new()
+        },
         i18n,
         lang: route_params.lang.clone(),
         player_id: route_params.player_id,

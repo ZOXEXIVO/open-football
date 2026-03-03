@@ -25,7 +25,7 @@ impl ProcessContractHandler {
                 }
                 PersonBehaviourState::Normal => {}
                 PersonBehaviourState::Good => {
-                    Self::process(player, proposal, now, result);
+                    AcceptContractHandler::process(player, proposal, now);
                 }
             },
         }

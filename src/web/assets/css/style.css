@@ -588,6 +588,11 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #c8f0d0;
 }
 
+.fm-badge-ret {
+  background: #808080;
+  color: #fff;
+}
+
 .fm-badge-lst {
   background: #2a7a3f;
   color: #c8f0d0;

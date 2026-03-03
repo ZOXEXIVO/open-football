@@ -43,6 +43,10 @@ pub struct Player {
     pub friendly_statistics: PlayerStatistics,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
+
+    /// Set when a player transfers/loans to a new club. Used by season snapshot
+    /// to detect recently transferred players and avoid phantom history entries.
+    pub last_transfer_date: Option<NaiveDate>,
 }
 
 impl Player {
@@ -72,6 +76,8 @@ impl Player {
         // Player happiness & morale evaluation (weekly)
         if ctx.simulation.is_week_beginning() {
             self.process_happiness(&mut result, now.date());
+            // Natural skill development (weekly)
+            self.process_development(now.date());
         }
 
         // Contract processing

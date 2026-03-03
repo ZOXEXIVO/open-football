@@ -108,7 +108,7 @@ pub async fn team_stats_action(
             shots_on_target: p.statistics.shots_on_target,
             passes: p.statistics.passes,
             tackling: p.statistics.tackling,
-            average_rating: format!("{:.2}", p.statistics.average_rating),
+            average_rating: p.statistics.average_rating_str(),
         })
         .collect();
 
