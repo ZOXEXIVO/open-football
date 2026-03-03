@@ -102,14 +102,20 @@ impl PlayerStatisticsHistory {
 
         if let Some(idx) = zero_games_idx {
             // Replace 0-game placeholder only if new entry has actual games;
-            // preserve original created_at and transfer info so sort order
-            // and transfer markers stay correct
+            // preserve original created_at, transfer info, and loan flag so sort order,
+            // transfer markers, and loan status stay correct
             if new_games > 0 {
                 let original_created_at = self.items[idx].created_at;
                 let transfer_fee = self.items[idx].transfer_fee;
+                let original_is_loan = self.items[idx].is_loan;
                 self.items[idx] = item;
                 self.items[idx].created_at = original_created_at;
                 self.items[idx].transfer_fee = transfer_fee;
+                // The 0-game placeholder was created by the transfer system,
+                // which is the authoritative source of loan status.
+                // Preserve it so loan spells aren't lost when the contract
+                // type changes before the season snapshot runs.
+                self.items[idx].is_loan = original_is_loan;
             }
         } else if new_games == 0 {
             // New 0-game entry — only push if no entry exists at all for this season + team;
