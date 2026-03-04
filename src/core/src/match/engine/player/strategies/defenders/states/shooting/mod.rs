@@ -14,6 +14,13 @@ pub struct DefenderShootingState {}
 
 impl StateProcessingHandler for DefenderShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Must have possession to shoot
+        if !ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         // Check shot cooldown
         let current_tick = ctx.current_tick();
         if !ctx.memory().can_shoot(current_tick) {

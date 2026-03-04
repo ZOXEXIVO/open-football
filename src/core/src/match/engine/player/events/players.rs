@@ -875,7 +875,7 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 3.2; // Maximum realistic shot velocity per tick (reduced 20%)
+        const MAX_SHOT_VELOCITY: f32 = 2.0; // Maximum realistic shot velocity per tick
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -944,38 +944,50 @@ impl PlayerEventDispatcher {
 
         // Add shooting error based on skills and distance
         // Error increases with distance and decreases with skill
-        let distance_error_factor = (horizontal_distance / 100.0).clamp(0.5, 2.5);
+        let distance_error_factor = (horizontal_distance / 80.0).clamp(0.8, 3.0);
 
         // Calculate positional error (how far from intended target)
-        // Elite players: ±2-5 units, Poor players: ±10-20 units
         // Distance penalty multiplier for base_accuracy
         let distance_penalty = if horizontal_distance > 200.0 {
-            0.4
+            0.25
         } else if horizontal_distance > 100.0 {
-            0.6
+            0.45
         } else if horizontal_distance > 50.0 {
-            0.8
+            0.65
         } else {
-            1.0
+            0.85
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        let base_position_error = 15.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let max_y_error = base_position_error.clamp(2.0, 60.0);
+        // Larger base error: elite players ±5-10 units, poor players ±25-50 units
+        let base_position_error = 40.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let max_y_error = base_position_error.clamp(5.0, 90.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
-        // Miskick chance for very low-technique players — shot goes off target
-        let miskick_chance = (1.0 - technique_skill).powi(3) * 0.2;
-        if rng.random_range(0.0f32..1.0) < miskick_chance {
-            actual_y_target += rng.random_range(-GOAL_WIDTH * 0.8..GOAL_WIDTH * 0.8);
+        // Wide miss chance: even decent players miss the frame sometimes
+        // In real football ~60-70% of shots miss the target
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + 0.15;
+        if rng.random_range(0.0f32..1.0) < wide_miss_chance {
+            // Shot goes wide — add large random offset
+            let wide_offset = rng.random_range(GOAL_WIDTH * 0.5..GOAL_WIDTH * 2.0);
+            if rng.random_range(0.0f32..1.0) < 0.5 {
+                actual_y_target += wide_offset;
+            } else {
+                actual_y_target -= wide_offset;
+            }
         }
 
-        // Clamp to reasonable bounds (can miss goal, but not by too much)
-        // Allow shots to miss by up to 150% of goal width on each side
-        let max_miss_distance = GOAL_WIDTH * 1.5;
+        // Miskick chance for very low-technique players — shot goes way off target
+        let miskick_chance = (1.0 - technique_skill).powi(3) * 0.3;
+        if rng.random_range(0.0f32..1.0) < miskick_chance {
+            actual_y_target += rng.random_range(-GOAL_WIDTH * 1.5..GOAL_WIDTH * 1.5);
+        }
+
+        // Clamp to reasonable bounds — allow shots to miss by up to 3x goal width
+        let max_miss_distance = GOAL_WIDTH * 3.0;
         let clamped_y_target = actual_y_target.clamp(
             goal_left_post - max_miss_distance,
             goal_right_post + max_miss_distance
@@ -1032,8 +1044,17 @@ impl PlayerEventDispatcher {
         };
 
         // Add spin/environmental variation to height
-        let vertical_spin_variation = rng.random_range(0.94..1.06);
-        let z_velocity = (base_z_velocity * height_variation * vertical_spin_variation).min(3.0);
+        let vertical_spin_variation = rng.random_range(0.90..1.10);
+
+        // Over-the-bar miss chance: shots can balloon over the crossbar
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.3 + 0.10;
+        let over_bar_boost = if rng.random_range(0.0f32..1.0) < over_bar_chance {
+            rng.random_range(1.5..4.0) // Shot goes high over bar
+        } else {
+            1.0
+        };
+
+        let z_velocity = (base_z_velocity * height_variation * vertical_spin_variation * over_bar_boost).min(5.0);
 
         // Calculate final velocity
         let mut final_velocity = Vector3::new(

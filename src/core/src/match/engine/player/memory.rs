@@ -129,8 +129,15 @@ impl PlayerMemory {
         }
     }
 
-    pub fn can_shoot(&self, _current_tick: u64) -> bool {
-        true
+    pub fn can_shoot(&self, current_tick: u64) -> bool {
+        // Enforce minimum cooldown between shots (150 ticks = ~1.5 seconds game time)
+        const SHOT_COOLDOWN_TICKS: u64 = 150;
+
+        if self.last_shot_tick == 0 {
+            return true;
+        }
+
+        current_tick.saturating_sub(self.last_shot_tick) >= SHOT_COOLDOWN_TICKS
     }
 
     pub fn record_shot(&mut self, tick: u64, on_target: bool) {

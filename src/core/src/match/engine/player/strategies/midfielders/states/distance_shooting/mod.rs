@@ -34,6 +34,13 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
+        // Check shot cooldown
+        if !ctx.memory().can_shoot(ctx.current_tick()) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
+        }
+
         // Evaluate shooting opportunity
         if self.is_favorable_shooting_opportunity(ctx) {
             // Transition to shooting state
