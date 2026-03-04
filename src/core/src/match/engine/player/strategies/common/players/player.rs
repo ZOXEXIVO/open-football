@@ -442,6 +442,11 @@ impl<'p> PlayerOperationsImpl<'p> {
 
     /// Check if the player should attempt a shot based on cooldown and xG
     pub fn should_attempt_shot(&self) -> bool {
+        // Check global post-goal cooldown (kickoff protection)
+        if !self.ctx.context.can_shoot_after_goal() {
+            return false;
+        }
+
         let current_tick = self.ctx.current_tick();
 
         // Check shot cooldown

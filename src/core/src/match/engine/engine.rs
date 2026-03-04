@@ -196,7 +196,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         if field.ball.goal_scored {
             field.reset_players_positions();
             field.ball.reset();
+
             field.ball.goal_scored = false;
+
+            context.record_goal_tick();
         }
 
         // Use total cumulative match time for positions
@@ -497,7 +500,7 @@ impl From<&MatchFieldSize> for GoalPosition {
     }
 }
 
-pub const GOAL_WIDTH: f32 = 60.0;
+pub const GOAL_WIDTH: f32 = 29.0; // ~3.66m half-width = 7.32m full goal (real size)
 pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
 
 impl GoalPosition {

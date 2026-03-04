@@ -18,32 +18,35 @@ impl StateProcessingHandler for ForwardDribblingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
+        let can_shoot_now = ctx.context.can_shoot_after_goal()
+            && ctx.memory().can_shoot(ctx.current_tick());
+
         // PRIORITY 0: Near opponent goalkeeper - shoot with cooldown check
-        if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
-            let distance_to_gk = (ctx.player.position - gk.position).magnitude();
-            if distance_to_gk < 25.0 && distance_to_goal < 120.0
-                && ctx.memory().can_shoot(ctx.current_tick())
-            {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+        if can_shoot_now {
+            if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
+                let distance_to_gk = (ctx.player.position - gk.position).magnitude();
+                if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+                }
             }
         }
 
         // PRIORITY 1: In shooting range — shoot
-        if ctx.player().shooting().in_shooting_range() {
+        if can_shoot_now && ctx.player().shooting().in_shooting_range() {
             if ctx.player().has_clear_shot() || distance_to_goal < 60.0 {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
             }
         }
 
-        // PRIORITY 1b: xG-based fallback
+        // PRIORITY 1b: xG-based fallback (should_attempt_shot already checks both cooldowns)
         if ctx.player().should_attempt_shot() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
         // Prevent infinite dribbling - timeout after 40 ticks to reassess
         if ctx.in_state_time > 40 {
-            // Prefer shooting when close to goal
-            if distance_to_goal < 300.0 {
+            // Prefer shooting when close to goal, but only if allowed
+            if can_shoot_now && distance_to_goal < 300.0 {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
             }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));

@@ -30,6 +30,10 @@ pub struct MatchContext {
 
     pub substitutions: Vec<SubstitutionRecord>,
     pub max_substitutions_per_team: usize,
+
+    // Global goal cooldown: tick when last goal was scored
+    // Prevents immediate scoring after kickoff restart
+    pub last_goal_tick: u64,
 }
 
 impl MatchContext {
@@ -48,6 +52,7 @@ impl MatchContext {
             total_match_time: 0,
             substitutions: Vec::new(),
             max_substitutions_per_team: if is_friendly { usize::MAX } else { 3 },
+            last_goal_tick: 0,
         }
     }
 
@@ -95,6 +100,20 @@ impl MatchContext {
 
     pub fn current_tick(&self) -> u64 {
         self.total_match_time / 10
+    }
+
+    /// Check if enough time has passed since the last goal for shooting to be allowed.
+    /// Simulates kickoff restart period (~5 seconds of game time).
+    pub fn can_shoot_after_goal(&self) -> bool {
+        const POST_GOAL_COOLDOWN_TICKS: u64 = 500;
+        if self.last_goal_tick == 0 {
+            return true;
+        }
+        self.current_tick().saturating_sub(self.last_goal_tick) >= POST_GOAL_COOLDOWN_TICKS
+    }
+
+    pub fn record_goal_tick(&mut self) {
+        self.last_goal_tick = self.current_tick();
     }
 
     pub fn enable_logging(&mut self) {

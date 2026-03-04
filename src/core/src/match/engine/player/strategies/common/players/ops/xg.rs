@@ -63,7 +63,7 @@ impl ShotQualityEvaluator {
 
     fn angle_factor(player_y: f32, goal_y: f32, distance: f32, ctx: &StateProcessingContext) -> f32 {
         let field_height = ctx.context.field_size.height as f32;
-        let goal_half_width = 36.5; // ~7.32m goal width scaled
+        let goal_half_width = 29.0; // ~3.66m half-width = 7.32m real goal width
 
         // Calculate angle to both posts
         let y_offset = (player_y - goal_y).abs();

@@ -21,6 +21,13 @@ impl StateProcessingHandler for ForwardShootingState {
             ));
         }
 
+        // Check global post-goal cooldown (kickoff protection)
+        if !ctx.context.can_shoot_after_goal() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Passing,
+            ));
+        }
+
         // Check shot cooldown
         let current_tick = ctx.current_tick();
         if !ctx.memory().can_shoot(current_tick) {

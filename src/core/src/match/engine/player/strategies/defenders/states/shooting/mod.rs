@@ -21,6 +21,13 @@ impl StateProcessingHandler for DefenderShootingState {
             ));
         }
 
+        // Check global post-goal cooldown (kickoff protection)
+        if !ctx.context.can_shoot_after_goal() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         // Check shot cooldown
         let current_tick = ctx.current_tick();
         if !ctx.memory().can_shoot(current_tick) {

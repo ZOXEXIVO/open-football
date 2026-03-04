@@ -54,7 +54,7 @@ fn source_code_section() -> MenuSection {
         items: vec![MenuItem {
             active: false,
             title: "Source code".to_string(),
-            url: "https://github.com/ZOXEXIVO".to_string(),
+            url: "https://github.com/ZOXEXIVO/open-football".to_string(),
             icon: "fa-brands fa-github".to_string(),
         }],
     }

@@ -872,7 +872,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
-        const GOAL_WIDTH: f32 = 60.0; // Half-width of goal (full width is 120.0)
+        const GOAL_WIDTH: f32 = 29.0; // Half-width of goal (~3.66m, full width ~7.32m real size)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
         const MAX_SHOT_VELOCITY: f32 = 2.0; // Maximum realistic shot velocity per tick

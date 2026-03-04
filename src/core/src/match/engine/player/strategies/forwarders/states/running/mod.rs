@@ -40,21 +40,24 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
+            let can_shoot_now = ctx.context.can_shoot_after_goal()
+                && ctx.memory().can_shoot(ctx.current_tick());
+
             // Priority 0: Near opponent goalkeeper - MUST shoot immediately (with cooldown check)
-            if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
-                let distance_to_gk = ctx.player.position.distance_to(&gk.position);
-                if distance_to_gk < 25.0 && distance_to_goal < 120.0
-                    && ctx.memory().can_shoot(ctx.current_tick())
-                {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
+            if can_shoot_now {
+                if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
+                    let distance_to_gk = ctx.player.position.distance_to(&gk.position);
+                    if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::Shooting,
+                        ));
+                    }
                 }
             }
 
             // Priority 0b: Point-blank range - MUST shoot (with cooldown check)
-            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
-                && ctx.memory().can_shoot(ctx.current_tick())
+            if can_shoot_now
+                && distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
             {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
@@ -62,7 +65,7 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // Priority 0c: Empty goal — no goalkeeper between player and goal
-            if distance_to_goal < 120.0 && ctx.memory().can_shoot(ctx.current_tick()) {
+            if can_shoot_now && distance_to_goal < 120.0 {
                 let has_gk_in_path = ctx.players().opponents().goalkeeper().next().map_or(false, |gk| {
                     let gk_to_goal = (ctx.player().opponent_goal_position() - gk.position).magnitude();
                     let player_to_goal = distance_to_goal;
