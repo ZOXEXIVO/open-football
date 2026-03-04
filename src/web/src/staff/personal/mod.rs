@@ -5,7 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::utils::{DateUtils, FormattingUtils};
+use core::utils::{FormattingUtils};
 use core::{CoachingStyle, SimulatorData, Staff, StaffEventType, StaffLicenseType, StaffPosition};
 use serde::Deserialize;
 

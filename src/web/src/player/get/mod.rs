@@ -540,16 +540,30 @@ fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option
                 && matches!(&t.transfer_type, TransferType::Loan(end) if *end >= now)
         });
 
-        if is_loan_contract || loan_in_record.is_some() {
-            if let Some(record) = loan_in_record {
-                let club_slug = data.club(record.from_club_id)
+        if let Some(record) = loan_in_record {
+            let club_slug = data.club(record.from_club_id)
+                .and_then(|c| c.teams.teams.first())
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
+
+            return Some(PlayerLoanDto {
+                is_loan_in: true,
+                club_name: record.from_team_name.clone(),
+                club_slug,
+            });
+        }
+
+        // Fallback: contract says Loan but no transfer record found
+        if is_loan_contract {
+            if let Some(from_club_id) = player.contract.as_ref().and_then(|c| c.loan_from_club_id) {
+                let (club_name, club_slug) = data.club(from_club_id)
                     .and_then(|c| c.teams.teams.first())
-                    .map(|t| t.slug.clone())
+                    .map(|t| (t.name.clone(), t.slug.clone()))
                     .unwrap_or_default();
 
                 return Some(PlayerLoanDto {
                     is_loan_in: true,
-                    club_name: record.from_team_name.clone(),
+                    club_name,
                     club_slug,
                 });
             }

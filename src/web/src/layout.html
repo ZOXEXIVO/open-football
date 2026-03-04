@@ -16,8 +16,9 @@
         <div class="row">
             {% if !menu_sections.is_empty() %}
             <div class="col-2 fm-sidebar">
-                <nav class="fm-sidebar-nav">
+                <nav class="fm-sidebar-scroll">
                     {% for section in menu_sections %}
+                    {% if !loop.last %}
                     <ul class="fm-nav-section">
                         {% for item in section.items %}
                         <li{% if item.active %} class="active"{% endif %}>
@@ -28,8 +29,21 @@
                         </li>
                         {% endfor %}
                     </ul>
+                    {% endif %}
                     {% endfor %}
                 </nav>
+                {% if let Some(last) = menu_sections.last() %}
+                <ul class="fm-nav-section fm-nav-section-bottom">
+                    {% for item in last.items %}
+                    <li>
+                        <a href="{{ item.url }}"{% if item.url.starts_with("http") %} target="_blank" rel="noopener"{% endif %}>
+                            <i class="{% if item.icon.starts_with("fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon }}{% endif %}"></i>
+                            <span>{{ item.title }}</span>
+                        </a>
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% endif %}
             </div>
             <div class="fm-sidebar-overlay" onclick="document.body.classList.remove('fm-sidebar-open')"></div>
             {% endif %}

@@ -1,4 +1,4 @@
-use log::{debug, error};
+use log::{debug};
 use ollama_rs::generation::completion::request::GenerationRequest;
 use ollama_rs::Ollama;
 use super::AiProvider;

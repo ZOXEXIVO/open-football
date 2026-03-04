@@ -3,7 +3,7 @@ use crate::continent::{CompetitionTier, ContinentalMatchResult};
 use crate::simulator::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
-use log::{debug, info};
+use log::{debug};
 use std::collections::HashMap;
 
 impl ContinentResult {

@@ -20,14 +20,26 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 .fm-sidebar {
   background: #151c22;
   padding: 0 !important;
-  min-height: 100vh;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
   border-right: 1px solid #1f2a32;
   flex: 0 0 14%;
   max-width: 14%;
 }
 
-.fm-sidebar-nav {
+.fm-sidebar-scroll {
   padding: 8px 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+}
+
+.fm-nav-section-bottom {
+  flex-shrink: 0;
+  border-bottom: none;
+  border-top: 1px solid #1f2a32;
 }
 
 .fm-nav-section {

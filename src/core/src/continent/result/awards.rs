@@ -2,7 +2,7 @@ use super::ContinentResult;
 use crate::continent::Continent;
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
-use log::{debug, info};
+use log::{debug};
 
 impl ContinentResult {
     pub(crate) fn process_continental_awards(&self, data: &mut SimulatorData, _country_results: &[CountryResult]) {

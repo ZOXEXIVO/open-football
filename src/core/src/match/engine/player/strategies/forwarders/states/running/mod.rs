@@ -1,5 +1,7 @@
+use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
+use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -81,6 +83,47 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
+            // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
+            if ctx.ball().has_stable_possession() {
+                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+                if ownership_ticks >= 2 && ownership_ticks <= 10
+                    && distance_to_goal > POINT_BLANK_DISTANCE
+                {
+                    if let Some(return_target) = self.find_one_two_return(ctx) {
+                        return Some(StateChangeResult::with_forward_state_and_event(
+                            ForwardState::Running,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(return_target.id)
+                                    .with_reason("FWD_RUNNING_ONE_TWO_RETURN")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                }
+            }
+
+            // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
+            // draw defenders and lay off to a supporting teammate
+            if ctx.ball().has_stable_possession()
+                && distance_to_goal > CLOSE_RANGE_DISTANCE
+                && ctx.in_state_time > 15
+            {
+                if let Some(layoff_target) = self.find_hold_up_layoff(ctx) {
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(layoff_target.id)
+                                .with_reason("FWD_RUNNING_HOLD_UP_LAYOFF")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
+
             // Priority 1: In shooting range — SHOOT. Forwards should always prefer shooting.
             if ctx.player().shooting().in_shooting_range() {
                 if ctx.player().has_clear_shot() || distance_to_goal < CLOSE_RANGE_DISTANCE {
@@ -103,6 +146,26 @@ impl StateProcessingHandler for ForwardRunningState {
                     if let Some(_) = ctx.players().teammates().all().next() {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                     }
+                }
+            }
+
+            // DRAW AND RELEASE: When an opponent is committing to tackle, draw them in
+            // then pass to space they vacated
+            if ctx.ball().has_stable_possession()
+                && ctx.in_state_time > 10
+                && distance_to_goal > CLOSE_RANGE_DISTANCE
+            {
+                if let Some(release_target) = self.find_draw_and_release_pass(ctx) {
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(release_target.id)
+                                .with_reason("FWD_RUNNING_DRAW_AND_RELEASE")
+                                .build(ctx),
+                        )),
+                    ));
                 }
             }
 
@@ -1194,6 +1257,137 @@ impl ForwardRunningState {
         let target_y = ctx.player.start_position.y;
 
         Vector3::new(forward_line, target_y, 0.0)
+    }
+
+    /// ONE-TWO COMBINATION: Check if the player who just passed to us has run
+    /// ahead into space — return the ball for a wall-pass / give-and-go
+    fn find_one_two_return<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let recent_passers = &ctx.tick_context.ball.recent_passers;
+        let passer_id = *recent_passers.last()?;
+
+        // Passer must be a teammate
+        let passer = ctx.context.players.by_id(passer_id)?;
+        if passer.team_id != ctx.player.team_id {
+            return None;
+        }
+
+        let passer_lite = ctx.players().teammates().all()
+            .find(|t| t.id == passer_id)?;
+
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let passer_pos = passer_lite.position;
+
+        // Passer must now be closer to goal than us (continued their run)
+        let our_goal_dist = (goal_pos - player_pos).magnitude();
+        let passer_goal_dist = (goal_pos - passer_pos).magnitude();
+        if passer_goal_dist >= our_goal_dist * 0.85 {
+            return None;
+        }
+
+        // Passer must be in open space
+        let opponents_near_passer = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - passer_pos).magnitude() < 12.0)
+            .count();
+        if opponents_near_passer >= 2 {
+            return None;
+        }
+
+        // Clear passing lane and reasonable distance
+        if !ctx.player().has_clear_pass(passer_id) {
+            return None;
+        }
+        let pass_distance = (passer_pos - player_pos).magnitude();
+        if pass_distance > 180.0 || pass_distance < 8.0 {
+            return None;
+        }
+
+        Some(passer_lite)
+    }
+
+    /// HOLD-UP PLAY: When forward is under pressure from behind and a supporting
+    /// midfielder/teammate is arriving behind them, lay the ball off.
+    fn find_hold_up_layoff<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+
+        // Need at least one opponent pressing from behind or close
+        let under_pressure = ctx.players().opponents().nearby(20.0).count() >= 1;
+        if !under_pressure {
+            return None;
+        }
+
+        // Find a supporting teammate who is behind us (closer to own goal)
+        // and in space — this is the classic target man layoff
+        let our_goal_dist = (goal_pos - player_pos).magnitude();
+
+        ctx.players().teammates().nearby(150.0)
+            .filter(|t| {
+                let t_goal_dist = (goal_pos - t.position).magnitude();
+                // Teammate must be further from opponent goal (behind us)
+                let is_behind = t_goal_dist > our_goal_dist * 1.1;
+                // Teammate must be in space
+                let in_space = ctx.players().opponents().all()
+                    .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
+                    .count() < 2;
+                // Prefer midfielders who can carry forward
+                let is_midfielder_or_attacker = t.tactical_positions.is_midfielder()
+                    || t.tactical_positions.is_forward();
+                // Clear passing lane
+                let clear_pass = ctx.player().has_clear_pass(t.id);
+
+                is_behind && in_space && is_midfielder_or_attacker && clear_pass
+            })
+            .min_by(|a, b| {
+                let da = (a.position - player_pos).magnitude();
+                let db = (b.position - player_pos).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    /// DRAW AND RELEASE: Detect an opponent committing to a tackle and find
+    /// a teammate in the space they're vacating
+    fn find_draw_and_release_pass<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+
+        // Find closest approaching opponent (within 15-35 units, closing in)
+        let approaching_opponent = ctx.players().opponents().nearby(35.0)
+            .filter(|opp| {
+                let dist = (opp.position - player_pos).magnitude();
+                if dist < 15.0 || dist > 35.0 { return false; }
+
+                let opp_velocity = ctx.tick_context.positions.players.velocity(opp.id);
+                if opp_velocity.magnitude() < 1.0 { return false; }
+
+                let to_us = (player_pos - opp.position).normalize();
+                let opp_dir = opp_velocity.normalize();
+                opp_dir.dot(&to_us) > 0.6
+            })
+            .min_by(|a, b| {
+                let da = (a.position - player_pos).magnitude();
+                let db = (b.position - player_pos).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+
+        // Space the opponent is vacating
+        let opp_velocity = ctx.tick_context.positions.players.velocity(approaching_opponent.id);
+        let vacated_zone = approaching_opponent.position - opp_velocity.normalize() * 30.0;
+
+        // Find teammate near vacated space
+        ctx.players().teammates().nearby(200.0)
+            .filter(|t| {
+                let t_dist_to_vacated = (t.position - vacated_zone).magnitude();
+                t_dist_to_vacated < 60.0
+                    && ctx.player().has_clear_pass(t.id)
+                    && ctx.players().opponents().all()
+                        .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
+                        .count() < 2
+            })
+            .min_by(|a, b| {
+                let da = (a.position - vacated_zone).magnitude();
+                let db = (b.position - vacated_zone).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around

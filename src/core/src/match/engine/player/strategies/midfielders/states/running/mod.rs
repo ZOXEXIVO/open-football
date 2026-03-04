@@ -95,6 +95,43 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            // ONE-TWO COMBINATION: After just receiving ball, check if passer has run ahead
+            // into space — return the ball immediately for a wall-pass / give-and-go
+            if ctx.ball().has_stable_possession() {
+                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+                if ownership_ticks >= 2 && ownership_ticks <= 12 {
+                    if let Some(return_target) = self.find_one_two_return(ctx) {
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Running,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(return_target.id)
+                                    .with_reason("MID_RUNNING_ONE_TWO_RETURN")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                }
+            }
+
+            // DRAW AND RELEASE: If opponent is committing to tackle, draw them in
+            // then pass to space they vacated
+            if ctx.ball().has_stable_possession() && ctx.in_state_time > 10 {
+                if let Some(release_target) = self.find_draw_and_release_pass(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(release_target.id)
+                                .with_reason("MID_RUNNING_DRAW_AND_RELEASE")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
+
             // Enhanced passing decision based on skills and pressing
             // Require stable possession before allowing passes (prevents instant pass after claiming ball)
             if ctx.ball().has_stable_possession() && self.should_pass(ctx) {
@@ -157,7 +194,9 @@ impl StateProcessingHandler for MidfielderRunningState {
         }
 
         // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-        if ctx.player.has_ball(ctx) && ctx.in_state_time > 150 {
+        // POSSESSION RETENTION: Allow longer holding when team is comfortable
+        let anti_oscillation_threshold = if self.should_retain_possession(ctx) { 250 } else { 150 };
+        if ctx.player.has_ball(ctx) && ctx.in_state_time > anti_oscillation_threshold {
             // Prefer passing first
             if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
@@ -240,7 +279,13 @@ impl StateProcessingHandler for MidfielderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
-            Some(self.calculate_simple_ball_movement(ctx))
+            // POSSESSION RETENTION: When in control mode, move slower with more lateral sway
+            // to keep ball and tire opponents instead of always charging forward
+            if self.should_retain_possession(ctx) {
+                Some(self.calculate_possession_retention_movement(ctx))
+            } else {
+                Some(self.calculate_simple_ball_movement(ctx))
+            }
         } else {
             // Use ball distance as a smooth blend factor instead of binary is_control_ball()
             // which flickers and causes twitching.
@@ -557,6 +602,169 @@ impl MidfielderRunningState {
 
                 is_attacker && in_attacking_third && (in_free_space || making_run) && has_clear_pass
             })
+    }
+
+    /// ONE-TWO COMBINATION: Check if the player who just passed to us has run into
+    /// a better forward position with space. If so, return the ball for a wall-pass.
+    fn find_one_two_return<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let recent_passers = &ctx.tick_context.ball.recent_passers;
+        // Get the most recent passer (last element in the ring buffer vec)
+        let passer_id = *recent_passers.last()?;
+
+        // Passer must be a teammate
+        let passer = ctx.context.players.by_id(passer_id)?;
+        if passer.team_id != ctx.player.team_id {
+            return None;
+        }
+
+        // Find passer in nearby players
+        let passer_lite = ctx.players().teammates().all()
+            .find(|t| t.id == passer_id)?;
+
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let passer_pos = passer_lite.position;
+
+        // Passer must now be closer to opponent goal than us (they continued their run)
+        let our_goal_dist = (goal_pos - player_pos).magnitude();
+        let passer_goal_dist = (goal_pos - passer_pos).magnitude();
+        if passer_goal_dist >= our_goal_dist * 0.9 {
+            return None; // Passer didn't run ahead enough
+        }
+
+        // Passer must be in open space (fewer than 2 opponents within 12 units)
+        let opponents_near_passer = ctx.players().opponents().all()
+            .filter(|opp| (opp.position - passer_pos).magnitude() < 12.0)
+            .count();
+        if opponents_near_passer >= 2 {
+            return None;
+        }
+
+        // Must have clear passing lane back to passer
+        if !ctx.player().has_clear_pass(passer_id) {
+            return None;
+        }
+
+        // Passer must be within reasonable passing distance
+        let pass_distance = (passer_pos - player_pos).magnitude();
+        if pass_distance > 200.0 || pass_distance < 10.0 {
+            return None;
+        }
+
+        Some(passer_lite)
+    }
+
+    /// DRAW AND RELEASE: Detect an opponent committing to a tackle (approaching fast
+    /// within 15-35 units). Find a teammate in the space the opponent is vacating.
+    fn find_draw_and_release_pass<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+
+        // Find the closest approaching opponent (within 15-35 units, closing in)
+        let approaching_opponent = ctx.players().opponents().nearby(35.0)
+            .filter(|opp| {
+                let dist = (opp.position - player_pos).magnitude();
+                if dist < 15.0 || dist > 35.0 { return false; }
+
+                // Check if opponent is moving toward us
+                let opp_velocity = ctx.tick_context.positions.players.velocity(opp.id);
+                if opp_velocity.magnitude() < 1.0 { return false; }
+
+                let to_us = (player_pos - opp.position).normalize();
+                let opp_dir = opp_velocity.normalize();
+                opp_dir.dot(&to_us) > 0.6 // Moving toward us
+            })
+            .min_by(|a, b| {
+                let da = (a.position - player_pos).magnitude();
+                let db = (b.position - player_pos).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+
+        // The space the opponent is vacating is roughly behind them (opposite of their movement)
+        let opp_velocity = ctx.tick_context.positions.players.velocity(approaching_opponent.id);
+        let vacated_zone = approaching_opponent.position - opp_velocity.normalize() * 30.0;
+
+        // Find a teammate near the vacated space (or in the channel the opponent left)
+        let best_teammate = ctx.players().teammates().nearby(200.0)
+            .filter(|t| {
+                let t_dist_to_vacated = (t.position - vacated_zone).magnitude();
+                // Teammate should be near the vacated space or generally in that direction
+                t_dist_to_vacated < 60.0
+                    && ctx.player().has_clear_pass(t.id)
+                    && ctx.players().opponents().all()
+                        .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
+                        .count() < 2
+            })
+            .min_by(|a, b| {
+                let da = (a.position - vacated_zone).magnitude();
+                let db = (b.position - vacated_zone).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            })?;
+
+        Some(best_teammate)
+    }
+
+    /// POSSESSION RETENTION: Determine if team should retain possession rather than
+    /// attack directly. True when team is comfortable (not losing), in own/mid third,
+    /// and not under heavy pressure.
+    fn should_retain_possession(&self, ctx: &StateProcessingContext) -> bool {
+        // Never retain if losing
+        if ctx.team().is_loosing() {
+            return false;
+        }
+
+        // Don't retain in attacking third - keep pressing forward
+        let goal_dist = ctx.ball().distance_to_opponent_goal();
+        let field_width = ctx.context.field_size.width as f32;
+        if goal_dist < field_width * 0.35 {
+            return false;
+        }
+
+        // Don't retain under heavy pressure
+        let pressing = self.calculate_pressing_intensity(ctx);
+        if pressing > 0.5 {
+            return false;
+        }
+
+        // Retain possession when team is in control
+        ctx.team().is_control_ball()
+    }
+
+    /// Movement for possession retention mode: slower, more lateral, controlled tempo
+    fn calculate_possession_retention_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let goal_pos = ctx.player().opponent_goal_position();
+        let player_pos = ctx.player.position;
+        let field_height = ctx.context.field_size.height as f32;
+
+        // Move laterally rather than directly toward goal
+        // Wider sinusoidal sway with slower forward progress
+        let to_goal = (goal_pos - player_pos).normalize();
+        let phase = (ctx.in_state_time as f32) * std::f32::consts::TAU / 100.0; // Slower period
+        let sway = phase.sin() * 0.5; // Wider lateral sway
+        let lateral = Vector3::new(-to_goal.y * sway, to_goal.x * sway, 0.0);
+
+        // Move toward a midfield position rather than directly at goal
+        // Blend between lateral movement and slight forward progress
+        let mid_y = if player_pos.y < field_height / 2.0 {
+            field_height * 0.35
+        } else {
+            field_height * 0.65
+        };
+        let retention_target = Vector3::new(
+            player_pos.x + to_goal.x * 15.0, // Slow forward drift
+            mid_y,
+            0.0,
+        );
+
+        let blended_target = player_pos + (retention_target - player_pos).normalize() * 20.0
+            + lateral * 10.0;
+
+        SteeringBehavior::Arrive {
+            target: blended_target,
+            slowing_distance: 30.0,
+        }
+        .calculate(ctx.player)
+        .velocity * 0.6 // Slower overall speed in retention mode
+            + ctx.player().separation_velocity()
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around

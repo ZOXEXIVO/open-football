@@ -1,6 +1,6 @@
 use async_compression::tokio::write::GzipEncoder;
 use core::r#match::{MatchResult, ResultMatchPositionData};
-use log::{debug, info};
+use log::{debug};
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};

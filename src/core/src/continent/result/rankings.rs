@@ -2,7 +2,7 @@ use super::ContinentResult;
 use crate::continent::{ContinentalCompetitions, ContinentalRankings};
 use crate::simulator::SimulatorData;
 use crate::{Club, Country, SimulationResult};
-use log::{debug, info};
+use log::{debug};
 
 impl ContinentResult {
     pub(crate) fn update_continental_rankings(&self, data: &mut SimulatorData, _result: &mut SimulationResult) {

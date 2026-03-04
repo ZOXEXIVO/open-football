@@ -30,6 +30,7 @@ pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> 
                 icon: "fa-robot".to_string(),
             }],
         },
+        source_code_section(),
     ]
 }
 
@@ -44,7 +45,19 @@ pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSe
             }],
         },
         watchlist_section(i18n, lang, current_path),
+        source_code_section(),
     ]
+}
+
+fn source_code_section() -> MenuSection {
+    MenuSection {
+        items: vec![MenuItem {
+            active: false,
+            title: "Source code".to_string(),
+            url: "https://github.com/ZOXEXIVO".to_string(),
+            icon: "fa-brands fa-github".to_string(),
+        }],
+    }
 }
 
 fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
@@ -103,6 +116,7 @@ pub fn league_menu(i18n: &I18n, lang: &str, country_name: &str, country_slug: &s
         },
     ];
     sections.push(watchlist_section(i18n, lang, current_path));
+    sections.push(source_code_section());
     sections
 }
 
@@ -212,6 +226,7 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
     sections.push(MenuSection { items });
 
     sections.push(watchlist_section(i18n, lang, current_path));
+    sections.push(source_code_section());
 
     sections
 }
@@ -322,6 +337,7 @@ pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], tea
     sections.push(MenuSection { items });
 
     sections.push(watchlist_section(i18n, lang, current_path));
+    sections.push(source_code_section());
 
     sections
 }
@@ -372,6 +388,7 @@ pub fn country_menu(i18n: &I18n, lang: &str, _country_slug: &str, current_path: 
     }
 
     sections.push(watchlist_section(i18n, lang, current_path));
+    sections.push(source_code_section());
 
     sections
 }
@@ -387,5 +404,6 @@ pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSectio
         }],
     }];
     sections.push(watchlist_section(i18n, lang, current_path));
+    sections.push(source_code_section());
     sections
 }

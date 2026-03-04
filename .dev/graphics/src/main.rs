@@ -135,7 +135,7 @@ async fn main() {
 
     let score = Score::new(1, 2);
 
-    let mut context = MatchContext::new(&field, players, score);
+    let mut context = MatchContext::new(&field, players, score, false);
 
     context.enable_logging();
 

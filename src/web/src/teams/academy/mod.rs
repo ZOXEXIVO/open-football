@@ -39,7 +39,7 @@ pub struct TeamAcademyTemplate {
 }
 
 pub struct AcademyPlayer {
-    pub id: u32,
+    pub _id: u32,
     pub first_name: String,
     pub last_name: String,
     pub position: String,
@@ -106,7 +106,7 @@ pub async fn team_academy_action(
             let position = p.positions.display_positions().join(", ");
 
             Some(AcademyPlayer {
-                id: p.id,
+                _id: p.id,
                 first_name: p.full_name.display_first_name().to_string(),
                 last_name: p.full_name.display_last_name().to_string(),
                 position,

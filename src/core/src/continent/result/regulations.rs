@@ -1,7 +1,7 @@
 use super::ContinentResult;
 use crate::simulator::SimulatorData;
 use chrono::{Datelike, NaiveDate};
-use log::{debug, info};
+use log::{debug};
 
 impl ContinentResult {
     pub(crate) fn update_continental_regulations(&self, data: &mut SimulatorData, date: NaiveDate) {

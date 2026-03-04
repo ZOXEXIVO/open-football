@@ -422,7 +422,7 @@ impl PlayerGenerator {
         let potential_ability = Self::generate_potential_ability(rep_factor, age);
 
         // Skills target a CA appropriate for this PA and age, not just team rep
-        let mut skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
+        let skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
