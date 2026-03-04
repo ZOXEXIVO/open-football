@@ -226,6 +226,17 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
+            // Priority 0.5: Aerial ball approaching — head it
+            if ctx.tick_context.positions.ball.position.z >= 1.5
+                && ctx.ball().is_towards_player_with_angle(0.5)
+                && ctx.ball().distance() < 40.0
+                && ctx.ball().distance_to_opponent_goal() < 200.0
+            {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Heading,
+                ));
+            }
+
             // Priority 1: Ball interception opportunity
             if self.can_intercept_ball(ctx) {
                 return Some(StateChangeResult::with_forward_state(

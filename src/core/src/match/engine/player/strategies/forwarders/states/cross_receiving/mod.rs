@@ -20,7 +20,17 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         }
 
         if ball_ops.distance() <= 10.0 {
-            return Some(StateChangeResult::with_event(Event::PlayerEvent(PlayerEvent::RequestBallReceive(ctx.player.id))));
+            // Aerial ball — head it
+            if ctx.tick_context.positions.ball.position.z >= 1.5 {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Heading,
+                ));
+            }
+
+            // Ground ball — control it
+            return Some(StateChangeResult::with_event(Event::PlayerEvent(
+                PlayerEvent::RequestBallReceive(ctx.player.id),
+            )));
         }
 
         None
@@ -34,9 +44,23 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
 
+        // For aerial balls, pursue the estimated landing position
+        let target = if ball_position.z >= 1.5 && ball_velocity.z < 0.0 {
+            // Estimate where the ball will land (simple ballistic: t = -vz/g, then x += vx*t)
+            let gravity = 9.81;
+            let time_to_land = (-ball_velocity.z / gravity).max(0.0);
+            Vector3::new(
+                ball_position.x + ball_velocity.x * time_to_land,
+                ball_position.y + ball_velocity.y * time_to_land,
+                0.0,
+            )
+        } else {
+            ball_position
+        };
+
         Some(
             SteeringBehavior::Pursuit {
-                target: ball_position,
+                target,
                 target_velocity: ball_velocity,
             }
             .calculate(ctx.player)

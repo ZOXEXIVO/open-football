@@ -40,7 +40,6 @@ pub struct TeamTacticsTemplate {
 pub struct FormationPlayer {
     pub id: u32,
     pub last_name: String,
-    pub position_short: String,
     pub css_class: String,
 }
 
@@ -98,7 +97,6 @@ pub async fn team_tactics_get_action(
             formation_players.push(FormationPlayer {
                 id: player.id,
                 last_name: player.full_name.display_last_name().to_string(),
-                position_short: required_pos.get_short_name().to_string(),
                 css_class: position_to_css_class(required_pos),
             });
         }

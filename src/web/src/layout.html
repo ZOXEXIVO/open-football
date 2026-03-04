@@ -34,6 +34,27 @@
                 </nav>
                 {% if let Some(last) = menu_sections.last() %}
                 <ul class="fm-nav-section fm-nav-section-bottom">
+                    <li class="fm-sidebar-lang">
+                        <div class="fm-sidebar-lang-toggle">
+                            <span class="flag flag-{% if lang == "es" %}es{% else if lang == "ru" %}ru{% else %}us{% endif %}"></span>
+                            <span>{% if lang == "es" %}Español{% else if lang == "ru" %}Русский{% else %}English{% endif %}</span>
+                        </div>
+                        <div class="fm-sidebar-lang-menu">
+                            <a class="fm-lang-option" data-lang="en">
+                                <span class="flag flag-us"></span>
+                                <span>English</span>
+                            </a>
+                            <a class="fm-lang-option" data-lang="es">
+                                <span class="flag flag-es"></span>
+                                <span>Español</span>
+                            </a>
+                            <a class="fm-lang-option" data-lang="ru">
+                                <span class="flag flag-ru"></span>
+                                <span>Русский</span>
+                            </a>
+                        </div>
+                    </li>
+                    <li class="fm-nav-divider"></li>
                     {% for item in last.items %}
                     <li>
                         <a href="{{ item.url }}"{% if item.url.starts_with("http") %} target="_blank" rel="noopener"{% endif %}>
@@ -65,26 +86,6 @@
                                     <a class="fm-ai-icon" href="/{{ lang }}/ai" title="AI">
                                         <i class="fa fa-robot"></i>
                                     </a>
-                                    <div class="fm-lang-dropdown">
-                                        <div class="fm-lang-current">
-                                            <span class="fm-date-compact" id="date-up-compact"></span>
-                                            <span class="flag flag-{% if lang == "es" %}es{% else if lang == "ru" %}ru{% else %}us{% endif %}"></span>
-                                        </div>
-                                        <div class="fm-lang-menu">
-                                            <a class="fm-lang-option" data-lang="en">
-                                                <span class="flag flag-us"></span>
-                                                <span>English</span>
-                                            </a>
-                                            <a class="fm-lang-option" data-lang="es">
-                                                <span class="flag flag-es"></span>
-                                                <span>Español</span>
-                                            </a>
-                                            <a class="fm-lang-option" data-lang="ru">
-                                                <span class="flag flag-ru"></span>
-                                                <span>Русский</span>
-                                            </a>
-                                        </div>
-                                    </div>
                                     <div class="fm-date">
                                         <div class="fm-date-main" id="date-up"></div>
                                         <div class="fm-date-sub" id="date-down"></div>
@@ -116,11 +117,10 @@
                 var lang = document.documentElement.lang || 'en';
                 var d = new Date(data.iso);
                 var dateStr = d.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric' });
-                var timeStr = d.toLocaleDateString(lang, { weekday: 'short' }) + ' ' + data.time.split(' ').pop();
+                var timeStr = d.toLocaleDateString(lang, { weekday: 'long' });
                 document.getElementById('date-up').textContent = dateStr;
                 document.getElementById('date-down').textContent = timeStr;
-                var compact = document.getElementById('date-up-compact');
-                if (compact) compact.textContent = dateStr;
+
             } catch(e) {
                 if (retries < 3) {
                     setTimeout(function() { updateDate(retries + 1); }, 300);
@@ -137,12 +137,14 @@
         });
 
         (function() {
-            var dd = document.querySelector('.fm-lang-dropdown');
+            var dd = document.querySelector('.fm-sidebar-lang');
             if (!dd) return;
-            dd.addEventListener('click', function(e) {
-                if (e.target.closest('.fm-lang-option')) return;
-                dd.classList.toggle('fm-lang-open');
-            });
+            var toggle = dd.querySelector('.fm-sidebar-lang-toggle');
+            if (toggle) {
+                toggle.addEventListener('click', function() {
+                    dd.classList.toggle('fm-lang-open');
+                });
+            }
             document.addEventListener('click', function(e) {
                 if (!dd.contains(e.target)) dd.classList.remove('fm-lang-open');
             });

@@ -37,7 +37,7 @@ impl BallEventDispatcher {
 
         if context.logging_enabled {
             match event {
-                BallEvent::TakeMe(_) => {},
+                BallEvent::TakeMe(_) | BallEvent::Claimed(_) => {},
                 _ => debug!("Ball event: {:?}", event)
             }
         }

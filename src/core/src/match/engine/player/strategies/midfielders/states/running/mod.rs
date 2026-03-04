@@ -148,6 +148,13 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
+            // CROSSING: Wide midfielder in attacking third with teammates in the box
+            if ctx.ball().has_stable_possession() && self.should_cross(ctx) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Crossing,
+                ));
+            }
+
             // Enhanced passing decision based on skills and pressing
             // Require stable possession before allowing passes (prevents instant pass after claiming ball)
             if ctx.ball().has_stable_possession() && self.should_pass(ctx) {
@@ -896,5 +903,37 @@ impl MidfielderRunningState {
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3
+    }
+
+    /// Check if wide midfielder should deliver a cross into the box
+    fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let y = ctx.player.position.y;
+        let wide_margin = field_height * 0.2;
+
+        // Must be in a wide channel (top or bottom 20%)
+        let is_wide = y < wide_margin || y > field_height - wide_margin;
+        if !is_wide {
+            return false;
+        }
+
+        // Must be in attacking third
+        let goal_dist = ctx.ball().distance_to_opponent_goal();
+        let field_width = ctx.context.field_size.width as f32;
+        if goal_dist > field_width * 0.35 {
+            return false;
+        }
+
+        // Must have at least 1 teammate within 150 units of opponent goal
+        let goal_pos = ctx.player().opponent_goal_position();
+        let teammates_in_box = ctx.players().teammates().all()
+            .filter(|t| (t.position - goal_pos).magnitude() < 150.0)
+            .count();
+        if teammates_in_box < 1 {
+            return false;
+        }
+
+        // Crossing skill must be decent (> 8.0 on 0-20 scale)
+        ctx.player.skills.technical.crossing > 8.0
     }
 }
