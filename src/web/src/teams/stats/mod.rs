@@ -30,6 +30,8 @@ pub struct TeamStatsTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub show_finances_tab: bool,
+    pub show_academy_tab: bool,
     pub players: Vec<TeamPlayerStats>,
 }
 
@@ -129,6 +131,8 @@ pub async fn team_stats_action(
         foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        show_finances_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::B,
+        show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         players,
     })
 }
@@ -149,7 +153,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 

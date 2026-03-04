@@ -27,6 +27,7 @@ pub struct CompletedTransfer {
     pub fee: CurrencyValue,
     pub transfer_type: TransferType,
     pub season_year: u16,
+    pub reason: String,
 }
 
 #[derive(Debug, Clone)]
@@ -63,6 +64,12 @@ impl CompletedTransfer {
             fee,
             transfer_type,
             season_year,
+            reason: String::new(),
         }
+    }
+
+    pub fn with_reason(mut self, reason: String) -> Self {
+        self.reason = reason;
+        self
     }
 }

@@ -489,12 +489,22 @@ impl PlayerGenerator {
             skills[i] = raw.min(max_possible).clamp(1.0, 20.0);
         }
 
-        // 5. apply affinities
+        // 5. position-based minimums: key skills must not be 1-4
+        let key_floor = (mean_skill * 0.5).clamp(3.0, 8.0);
+        for i in 0..SKILL_COUNT {
+            if pos_w[i] >= 1.0 {
+                skills[i] = skills[i].max(key_floor);
+            }
+            // No professional player should have 1 in any skill
+            skills[i] = skills[i].max(2.0);
+        }
+
+        // 6. apply affinities
         apply_affinities(&mut skills);
 
-        // 6. final clamp
+        // 7. final clamp
         for v in skills.iter_mut() {
-            *v = v.clamp(1.0, 20.0);
+            *v = v.clamp(2.0, 20.0);
         }
 
         skills_from_array(&skills)

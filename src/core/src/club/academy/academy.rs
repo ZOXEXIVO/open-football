@@ -30,16 +30,45 @@ impl ClubAcademy {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubAcademyResult {
         let players_result = self.players.simulate(ctx.with_player(None));
 
-        let produce_result = self.produce_youth_players(ctx);
+        let produce_result = self.produce_youth_players(ctx.clone());
 
         for player in produce_result.players {
             self.players.add(player);
         }
 
+        // Ensure academy always has minimum players from settings
+        self.ensure_minimum_players(ctx);
+
         ClubAcademyResult::new(players_result)
     }
 
-    /// Graduate the best academy players aged 16+ for promotion to U18 team.
+    fn ensure_minimum_players(&mut self, ctx: GlobalContext<'_>) {
+        let min_players = self.settings.players_count_range.start as usize;
+        let current_count = self.players.players.len();
+        if current_count >= min_players {
+            return;
+        }
+
+        let needed = min_players - current_count;
+        let country_ctx = ctx.country.as_ref();
+        let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
+        let people_names = country_ctx.and_then(|c| c.people_names.as_ref());
+        let date = ctx.simulation.date.date();
+
+        for i in 0..needed {
+            let position = self.select_position_for_youth_player(i, needed);
+            let player = PlayerGenerator::generate(
+                country_id,
+                date,
+                position,
+                self.level,
+                people_names,
+            );
+            self.players.add(player);
+        }
+    }
+
+    /// Graduate the best academy players aged 14+ for promotion to U18 team.
     /// Returns up to `count` players sorted by ability (best first).
     pub fn graduate_to_u18(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
         if count == 0 {
@@ -47,7 +76,7 @@ impl ClubAcademy {
         }
 
         let mut candidates: Vec<(u32, u8)> = self.players.players.iter()
-            .filter(|p| p.age(date) >= 16)
+            .filter(|p| p.age(date) >= 14)
             .map(|p| (p.id, p.player_attributes.current_ability))
             .collect();
 
@@ -58,14 +87,14 @@ impl ClubAcademy {
         let mut graduated = Vec::new();
         for (player_id, _) in candidates {
             if let Some(mut player) = self.players.take_player(&player_id) {
-                // Give a youth-to-pro contract (3 years)
+                // Give a youth contract (3 years) — registered with main team, plays in U18
                 let expiration = NaiveDate::from_ymd_opt(
                     date.year() + 3,
                     date.month(),
                     date.day().min(28),
                 ).unwrap_or(date);
                 let salary = graduation_salary(player.player_attributes.current_ability);
-                player.contract = Some(PlayerClubContract::new(salary, expiration));
+                player.contract = Some(PlayerClubContract::new_youth(salary, expiration));
 
                 debug!("academy graduation -> U18: {} (CA={}, age={})",
                     player.full_name, player.player_attributes.current_ability, player.age(date));
@@ -79,7 +108,7 @@ impl ClubAcademy {
     /// Remove academy players who are too old. They simply disappear.
     pub fn release_aged_out(&mut self, date: NaiveDate) -> usize {
         let to_release: Vec<u32> = self.players.players.iter()
-            .filter(|p| p.age(date) >= 18)
+            .filter(|p| p.age(date) >= 16)
             .map(|p| p.id)
             .collect();
 

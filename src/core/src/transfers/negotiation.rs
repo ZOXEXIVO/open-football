@@ -59,6 +59,11 @@ pub struct TransferNegotiation {
     pub player_age: u8,
     pub player_ambition: f32,
     pub rejection_reason: Option<NegotiationRejectionReason>,
+
+    /// Staff member responsible for negotiating this transfer
+    pub negotiator_staff_id: Option<u32>,
+    /// Reason for signing (from scout report / transfer request)
+    pub reason: String,
 }
 
 impl TransferNegotiation {
@@ -109,6 +114,8 @@ impl TransferNegotiation {
             player_age,
             player_ambition,
             rejection_reason: None,
+            negotiator_staff_id: None,
+            reason: String::new(),
         }
     }
 

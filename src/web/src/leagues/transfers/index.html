@@ -18,32 +18,78 @@
                 {% endfor %}
             </select>
         </div>
-        {% if completed_transfers.is_empty() %}
-        <div class="fm-empty">{{ i18n.t("no_completed_transfers") }}</div>
-        {% else %}
-        <table class="fm-squad fm-squad-center">
-            <thead>
-                <tr>
-                    <th>{{ i18n.t("player") }}</th>
-                    <th>{{ i18n.t("from") }}</th>
-                    <th>{{ i18n.t("to") }}</th>
-                    <th>{{ i18n.t("fee") }}</th>
-                    <th>{{ i18n.t("date") }}</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for item in completed_transfers %}
-                <tr>
-                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
-                    <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
-                    <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
-                    <td>{% if item.is_loan %}<span class="fm-loan-badge">{{ i18n.t("loan") }}</span>{% else %}<span class="fm-transfer-fee">{{ item.fee }}</span>{% endif %}</td>
-                    <td>{{ item.date }}</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-        {% endif %}
+        <div class="fm-transfer-tabs">
+            <button class="fm-ttab active" onclick="switchTransferTab(this, 'permanent')">{{ i18n.t("transfers") }}</button>
+            <button class="fm-ttab" onclick="switchTransferTab(this, 'loans')">{{ i18n.t("loan") }}</button>
+        </div>
+        <div class="fm-ttab-content" id="tab-permanent">
+            {% if has_permanent_transfers %}
+            <table class="fm-squad fm-squad-center">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("from") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th>{{ i18n.t("fee") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in completed_transfers %}
+                    {% if !item.is_loan %}
+                    <tr>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
+                        <td><span class="fm-transfer-fee">{{ item.fee }}</span></td>
+                        <td>{{ item.date }}</td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="fm-empty">{{ i18n.t("no_completed_transfers") }}</div>
+            {% endif %}
+        </div>
+        <div class="fm-ttab-content" id="tab-loans" style="display:none">
+            {% if has_loan_transfers %}
+            <table class="fm-squad fm-squad-center">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("player") }}</th>
+                        <th>{{ i18n.t("from") }}</th>
+                        <th>{{ i18n.t("to") }}</th>
+                        <th>{{ i18n.t("fee") }}</th>
+                        <th>{{ i18n.t("date") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in completed_transfers %}
+                    {% if item.is_loan %}
+                    <tr>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
+                        <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
+                        <td><span class="fm-loan-badge">{{ item.fee }}</span></td>
+                        <td>{{ item.date }}</td>
+                    </tr>
+                    {% endif %}
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="fm-empty">{{ i18n.t("no_completed_transfers") }}</div>
+            {% endif %}
+        </div>
+        <script>
+        function switchTransferTab(btn, tab) {
+            document.querySelectorAll('.fm-ttab').forEach(b => b.classList.remove('active'));
+            document.querySelectorAll('.fm-ttab-content').forEach(c => c.style.display = 'none');
+            btn.classList.add('active');
+            document.getElementById('tab-' + tab).style.display = '';
+        }
+        </script>
     </section>
 
     <section class="fm-panel fm-staff-group">

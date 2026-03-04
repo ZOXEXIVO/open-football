@@ -49,6 +49,11 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   font-size: 14px;
   font-weight: 400;
   transition: color 0.12s, background 0.12s;
+  word-spacing: 0.15em;
+}
+
+.fm-nav-section li a span {
+  white-space: pre;
 }
 
 .fm-nav-section li a:hover {
@@ -557,6 +562,106 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
 .fm-pt-table .pt-club a { font-weight: 500; }
 
+/* Completed Transfers — card layout */
+.fm-ct-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.fm-ct-card {
+  padding: 10px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  transition: background 0.1s ease;
+}
+
+.fm-ct-card:nth-child(even) {
+  background: rgba(0, 0, 0, 0.1);
+}
+
+.fm-ct-card:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.fm-ct-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.fm-ct-clubs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fm-ct-club {
+  font-size: 13px;
+  color: #b0bac2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fm-ct-club a {
+  color: #d8dee4;
+  font-weight: 500;
+}
+
+.fm-ct-club a:hover {
+  color: #fff;
+  text-decoration: underline !important;
+}
+
+.fm-ct-arrow {
+  color: #3a4a54;
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.fm-ct-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.fm-ct-fee {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d0d6dc;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-ct-type {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: #1e282e;
+  background: #4e5a63;
+  padding: 2px 7px;
+  border-radius: 3px;
+}
+
+.fm-ct-date {
+  font-size: 12px;
+  color: #5a666e;
+  font-variant-numeric: tabular-nums;
+  min-width: 72px;
+  text-align: right;
+}
+
+.fm-ct-reason {
+  margin-top: 5px;
+  font-size: 12px;
+  color: #6a8a5a;
+  line-height: 1.4;
+  padding-left: 1px;
+}
+
 .fm-transfers-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -785,6 +890,69 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   color: #7a8c98;
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+/* ============================================
+   ACADEMY SQUAD TABLE
+   ============================================ */
+
+.fm-academy-squad .aq-name {
+  width: 22%;
+  font-size: 12px;
+  color: #98a4ae;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 180px;
+}
+
+.fm-academy-squad .aq-pos {
+  width: 12%;
+  font-size: 11px;
+  color: #7a868e;
+  text-align: center;
+}
+
+.fm-academy-squad .aq-nat {
+  width: 5%;
+  text-align: center;
+}
+
+.fm-academy-squad .aq-age {
+  width: 7%;
+  text-align: center;
+  font-size: 14px;
+  font-weight: 600;
+  color: #d0d6dc;
+  font-variant-numeric: tabular-nums;
+}
+
+.fm-academy-squad .aq-ca,
+.fm-academy-squad .aq-pa {
+  width: 16%;
+}
+
+.fm-academy-squad .aq-cond {
+  width: 22%;
+}
+
+.fm-academy-squad .aq-cond .fm-cond-bar {
+  min-width: 80px;
+}
+
+.fm-academy-squad .aq-cond .fm-cond-val {
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.fm-academy-squad thead th.aq-ca,
+.fm-academy-squad thead th.aq-pa {
+  text-align: center;
+}
+
+.fm-academy-squad td.aq-ca,
+.fm-academy-squad td.aq-pa {
+  text-align: center;
 }
 
 /* ============================================
@@ -1997,6 +2165,38 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   vertical-align: middle;
 }
 
+/* Transfer/Loan Tabs */
+.fm-transfer-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 12px;
+  border-bottom: 1px solid #2a353d;
+}
+
+.fm-ttab {
+  background: none;
+  border: none;
+  padding: 9px 18px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #5a666e;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+  font-family: inherit;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.fm-ttab:hover {
+  color: #b0bac2;
+}
+
+.fm-ttab.active {
+  color: #d0d6dc;
+  border-bottom-color: #4a9eff;
+}
+
 /* --- Player History Table --- */
 
 .fm-history-table thead th.sq-nat { white-space: nowrap; }
@@ -3202,6 +3402,295 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   z-index: 1040;
 }
 
+/* ============================================
+   FINANCES PAGE
+   ============================================ */
+
+/* ── Hero Row: Balance + Budget Cards ── */
+.fin-hero-row {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+.fin-balance-hero {
+  flex: 0 0 280px;
+  background: linear-gradient(135deg, #1a2e1a 0%, #1c2830 60%);
+  border: 1px solid #263340;
+  border-radius: 4px;
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.fin-hero-label {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 1.2px;
+  color: #546a78;
+  margin-bottom: 6px;
+}
+
+.fin-hero-amount {
+  font-size: 28px;
+  font-weight: 700;
+  color: #4a9d5b;
+  letter-spacing: -0.5px;
+  line-height: 1.1;
+}
+
+.fin-hero-amount.fin-negative {
+  color: #c44b4b;
+}
+
+.fin-hero-bar {
+  margin-top: 12px;
+  height: 4px;
+  background: #263340;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fin-hero-bar-fill {
+  height: 100%;
+  width: 65%;
+  background: linear-gradient(90deg, #3a7d4a, #4a9d5b);
+  border-radius: 2px;
+  transition: width 0.5s ease;
+}
+
+.fin-hero-bar-fill.fin-bar-negative {
+  background: linear-gradient(90deg, #a03a3a, #c44b4b);
+  width: 35%;
+}
+
+/* ── Budget Cards ── */
+.fin-budget-cards {
+  flex: 1;
+  display: flex;
+  gap: 12px;
+}
+
+.fin-budget-card {
+  flex: 1;
+  background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+  border: 1px solid #263340;
+  border-radius: 4px;
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.fin-budget-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  background: rgba(74, 157, 91, 0.12);
+  color: #4a9d5b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  flex-shrink: 0;
+}
+
+.fin-budget-icon.fin-icon-wages {
+  background: rgba(59, 130, 196, 0.12);
+  color: #3b82c4;
+}
+
+.fin-budget-icon.fin-icon-weekly {
+  background: rgba(196, 160, 59, 0.12);
+  color: #c4a03b;
+}
+
+.fin-budget-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #546a78;
+  margin-bottom: 2px;
+}
+
+.fin-budget-value {
+  font-size: 18px;
+  font-weight: 700;
+  color: #d0d6dc;
+  letter-spacing: -0.3px;
+}
+
+/* ── Income / Expenses Flow Cards ── */
+.fin-flow-row {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.fin-flow-card {
+  flex: 1;
+  background: linear-gradient(180deg, #1c2830 0%, #192228 100%);
+  border: 1px solid #263340;
+  border-radius: 4px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.fin-flow-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.fin-flow-income .fin-flow-icon {
+  background: rgba(74, 157, 91, 0.15);
+  color: #4a9d5b;
+}
+
+.fin-flow-expense .fin-flow-icon {
+  background: rgba(196, 75, 75, 0.15);
+  color: #c44b4b;
+}
+
+.fin-flow-net .fin-flow-icon {
+  background: rgba(59, 130, 196, 0.15);
+  color: #3b82c4;
+}
+
+.fin-flow-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #546a78;
+  margin-bottom: 1px;
+}
+
+.fin-flow-value {
+  font-size: 16px;
+  font-weight: 700;
+  color: #d0d6dc;
+}
+
+.fin-flow-value.fin-negative {
+  color: #c44b4b;
+}
+
+/* ── Chart Panel ── */
+.fin-chart-panel {
+  margin-bottom: 16px;
+}
+
+.fin-chart-container {
+  padding: 16px;
+  position: relative;
+  min-height: 220px;
+}
+
+.fin-chart-container canvas {
+  width: 100% !important;
+}
+
+.fin-no-data {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #546a78;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* ── Bottom Row: History + Sponsors ── */
+.fin-bottom-row {
+  display: flex;
+  gap: 16px;
+}
+
+.fin-history-panel {
+  flex: 2;
+}
+
+.fin-sponsor-panel {
+  flex: 1;
+}
+
+/* ── Finance Table ── */
+.fin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.fin-table thead th {
+  padding: 8px 12px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: #546a78;
+  border-bottom: 1px solid #263340;
+  text-align: left;
+}
+
+.fin-table tbody tr {
+  border-bottom: 1px solid #1f2a32;
+  transition: background 0.1s;
+}
+
+.fin-table tbody tr:hover {
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.fin-table tbody td {
+  padding: 7px 12px;
+  color: #a0aab2;
+}
+
+.fin-col-num {
+  text-align: right !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.fin-col-month {
+  font-weight: 500;
+  color: #d0d6dc;
+}
+
+.fin-income-text {
+  color: #4a9d5b !important;
+}
+
+.fin-expense-text {
+  color: #c44b4b !important;
+}
+
+.fin-balance-pos {
+  color: #4a9d5b !important;
+}
+
+.fin-negative {
+  color: #c44b4b !important;
+}
+
+.fin-empty {
+  padding: 24px;
+  text-align: center;
+  color: #546a78;
+  font-size: 12px;
+}
+
 /* Below xl breakpoint (< 1200px) */
 
 @media (max-width: 1199.98px) {
@@ -3258,6 +3747,32 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
 
   .fm-page {
     padding: 12px 12px;
+  }
+
+  /* Finance page: stack layouts */
+  .fin-hero-row {
+    flex-direction: column;
+  }
+
+  .fin-balance-hero {
+    flex: none;
+  }
+
+  .fin-budget-cards {
+    flex-wrap: wrap;
+  }
+
+  .fin-flow-row {
+    flex-wrap: wrap;
+  }
+
+  .fin-flow-card {
+    flex: 1 1 calc(50% - 6px);
+    min-width: 180px;
+  }
+
+  .fin-bottom-row {
+    flex-direction: column;
   }
 
   /* Player page: stack grid */

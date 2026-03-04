@@ -1,0 +1,314 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/staff">{{ i18n.t("staff") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/tactics">{{ i18n.t("tactics") }}</a>
+    <a class="fm-tab active" href="/{{ lang }}/teams/{{ team_slug }}/finances">{{ i18n.t("finances") }}</a>
+    {% if show_academy_tab %}<a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/academy">{{ i18n.t("academy") }}</a>{% endif %}
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/stats">{{ i18n.t("stats") }}</a>
+    <a class="fm-tab" href="/{{ lang }}/teams/{{ team_slug }}/transfers">{{ i18n.t("transfers") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+
+    <!-- ═══ TOP ROW: Balance Hero + Budget Cards ═══ -->
+    <div class="fin-hero-row">
+        <div class="fin-balance-hero">
+            <div class="fin-hero-label">{{ i18n.t("fin_balance") }}</div>
+            <div class="fin-hero-amount{% if !balance_positive %} fin-negative{% endif %}">{{ balance }}</div>
+            <div class="fin-hero-bar">
+                <div class="fin-hero-bar-fill{% if !balance_positive %} fin-bar-negative{% endif %}"></div>
+            </div>
+        </div>
+        <div class="fin-budget-cards">
+            <div class="fin-budget-card">
+                <div class="fin-budget-icon"><i class="fa fa-exchange"></i></div>
+                <div class="fin-budget-info">
+                    <div class="fin-budget-label">{{ i18n.t("fin_transfer_budget") }}</div>
+                    <div class="fin-budget-value">{{ transfer_budget }}</div>
+                </div>
+            </div>
+            <div class="fin-budget-card">
+                <div class="fin-budget-icon fin-icon-wages"><i class="fa fa-users"></i></div>
+                <div class="fin-budget-info">
+                    <div class="fin-budget-label">{{ i18n.t("fin_wage_budget") }}</div>
+                    <div class="fin-budget-value">{{ wage_budget }}</div>
+                </div>
+            </div>
+            <div class="fin-budget-card">
+                <div class="fin-budget-icon fin-icon-weekly"><i class="fa fa-calendar"></i></div>
+                <div class="fin-budget-info">
+                    <div class="fin-budget-label">{{ i18n.t("fin_annual_wages") }}</div>
+                    <div class="fin-budget-value">{{ annual_wages }}</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ INCOME & EXPENSES SUMMARY ═══ -->
+    <div class="fin-flow-row">
+        <div class="fin-flow-card fin-flow-income">
+            <div class="fin-flow-icon"><i class="fa fa-arrow-down"></i></div>
+            <div class="fin-flow-info">
+                <div class="fin-flow-label">{{ i18n.t("fin_monthly_income") }}</div>
+                <div class="fin-flow-value">{{ monthly_income }}</div>
+            </div>
+        </div>
+        <div class="fin-flow-card fin-flow-expense">
+            <div class="fin-flow-icon"><i class="fa fa-arrow-up"></i></div>
+            <div class="fin-flow-info">
+                <div class="fin-flow-label">{{ i18n.t("fin_monthly_expenses") }}</div>
+                <div class="fin-flow-value">{{ monthly_expenses }}</div>
+            </div>
+        </div>
+        <div class="fin-flow-card fin-flow-net">
+            <div class="fin-flow-icon"><i class="fa fa-chart-line"></i></div>
+            <div class="fin-flow-info">
+                <div class="fin-flow-label">{{ i18n.t("fin_net_monthly") }}</div>
+                <div class="fin-flow-value{% if !net_monthly_positive %} fin-negative{% endif %}">{{ net_monthly }}</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ═══ CHART: Balance History ═══ -->
+    <section class="fm-panel fin-chart-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("fin_balance_history") }}</h3>
+        </div>
+        <div class="fin-chart-container">
+            <canvas id="financeChart" height="220"></canvas>
+            {% if history_entries.is_empty() %}
+            <div class="fin-no-data">{{ i18n.t("fin_no_history") }}</div>
+            {% endif %}
+        </div>
+    </section>
+
+    <!-- ═══ BOTTOM ROW: History Table + Sponsorships ═══ -->
+    <div class="fin-bottom-row">
+        <!-- History Table -->
+        <section class="fm-panel fin-history-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("fin_income_expenses") }}</h3>
+            </div>
+            {% if history_entries.is_empty() %}
+            <div class="fin-empty">{{ i18n.t("fin_no_history") }}</div>
+            {% else %}
+            <table class="fin-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("fin_month") }}</th>
+                        <th class="fin-col-num">{{ i18n.t("fin_income") }}</th>
+                        <th class="fin-col-num">{{ i18n.t("fin_expenses") }}</th>
+                        <th class="fin-col-num">{{ i18n.t("fin_net_monthly") }}</th>
+                        <th class="fin-col-num">{{ i18n.t("fin_balance") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for entry in history_entries %}
+                    <tr>
+                        <td class="fin-col-month">{{ entry.month }}</td>
+                        <td class="fin-col-num fin-income-text">{{ entry.income }}</td>
+                        <td class="fin-col-num fin-expense-text">{{ entry.expenses }}</td>
+                        <td class="fin-col-num{% if entry.net_positive %} fin-income-text{% else %} fin-negative{% endif %}">{{ entry.net }}</td>
+                        <td class="fin-col-num{% if entry.balance_positive %} fin-balance-pos{% else %} fin-negative{% endif %}">{{ entry.balance }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+
+        <!-- Sponsorships -->
+        <section class="fm-panel fin-sponsor-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("fin_sponsorship") }}</h3>
+            </div>
+            {% if sponsors.is_empty() %}
+            <div class="fin-empty">{{ i18n.t("fin_no_sponsors") }}</div>
+            {% else %}
+            <table class="fin-table">
+                <thead>
+                    <tr>
+                        <th>{{ i18n.t("fin_sponsor") }}</th>
+                        <th class="fin-col-num">{{ i18n.t("fin_annual_income") }}</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for sponsor in sponsors %}
+                    <tr>
+                        <td>{{ sponsor.name }}</td>
+                        <td class="fin-col-num fin-income-text">{{ sponsor.annual_income }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
+        </section>
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var canvas = document.getElementById('financeChart');
+    if (!canvas) return;
+
+    var labels = {{ chart_labels|safe }};
+    var balances = {{ chart_balances|safe }};
+    var incomes = {{ chart_incomes|safe }};
+    var expenses = {{ chart_expenses|safe }};
+
+    if (labels.length === 0) return;
+
+    var ctx = canvas.getContext('2d');
+    var W = canvas.parentElement.clientWidth;
+    var H = 220;
+    canvas.width = W;
+    canvas.height = H;
+
+    var pad = { top: 30, right: 20, bottom: 35, left: 65 };
+    var cw = W - pad.left - pad.right;
+    var ch = H - pad.top - pad.bottom;
+
+    // Compute min/max across all series
+    var allVals = balances.concat(incomes).concat(expenses);
+    var minVal = Math.min.apply(null, allVals);
+    var maxVal = Math.max.apply(null, allVals);
+    var range = maxVal - minVal || 1;
+    minVal -= range * 0.1;
+    maxVal += range * 0.1;
+    range = maxVal - minVal;
+
+    function yPos(val) {
+        return pad.top + ch - ((val - minVal) / range) * ch;
+    }
+
+    function xPos(i) {
+        return pad.left + (i / (labels.length - 1 || 1)) * cw;
+    }
+
+    // Background
+    ctx.fillStyle = '#1c2830';
+    ctx.fillRect(0, 0, W, H);
+
+    // Grid lines
+    ctx.strokeStyle = '#263340';
+    ctx.lineWidth = 1;
+    var gridCount = 5;
+    for (var g = 0; g <= gridCount; g++) {
+        var gy = pad.top + (g / gridCount) * ch;
+        ctx.beginPath();
+        ctx.moveTo(pad.left, gy);
+        ctx.lineTo(W - pad.right, gy);
+        ctx.stroke();
+
+        // Label
+        var gVal = maxVal - (g / gridCount) * range;
+        ctx.fillStyle = '#546a78';
+        ctx.font = '10px Outfit, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(shortMoney(gVal), pad.left - 8, gy + 3);
+    }
+
+    // X labels
+    ctx.fillStyle = '#546a78';
+    ctx.font = '10px Outfit, sans-serif';
+    ctx.textAlign = 'center';
+    for (var xi = 0; xi < labels.length; xi++) {
+        ctx.fillText(labels[xi], xPos(xi), H - pad.bottom + 18);
+    }
+
+    // Zero line
+    if (minVal < 0 && maxVal > 0) {
+        ctx.strokeStyle = '#3a4a56';
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 4]);
+        ctx.beginPath();
+        ctx.moveTo(pad.left, yPos(0));
+        ctx.lineTo(W - pad.right, yPos(0));
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    // Draw balance area fill
+    if (balances.length > 1) {
+        ctx.beginPath();
+        ctx.moveTo(xPos(0), yPos(0));
+        for (var bi = 0; bi < balances.length; bi++) {
+            ctx.lineTo(xPos(bi), yPos(balances[bi]));
+        }
+        ctx.lineTo(xPos(balances.length - 1), yPos(0));
+        ctx.closePath();
+        var grad = ctx.createLinearGradient(0, pad.top, 0, pad.top + ch);
+        grad.addColorStop(0, 'rgba(74, 157, 91, 0.15)');
+        grad.addColorStop(1, 'rgba(74, 157, 91, 0.02)');
+        ctx.fillStyle = grad;
+        ctx.fill();
+    }
+
+    // Draw lines
+    drawLine(balances, '#4a9d5b', 2.5);
+    drawLine(incomes, '#3b82c4', 1.5);
+    drawLine(expenses, '#c44b4b', 1.5);
+
+    // Draw dots
+    drawDots(balances, '#4a9d5b');
+    drawDots(incomes, '#3b82c4');
+    drawDots(expenses, '#c44b4b');
+
+    // Legend
+    var legendY = 14;
+    var legendX = pad.left;
+    drawLegend(legendX, legendY, '#4a9d5b', 'Balance');
+    drawLegend(legendX + 80, legendY, '#3b82c4', 'Income');
+    drawLegend(legendX + 155, legendY, '#c44b4b', 'Expenses');
+
+    function drawLine(data, color, width) {
+        if (data.length < 2) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = width;
+        ctx.lineJoin = 'round';
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(xPos(0), yPos(data[0]));
+        for (var i = 1; i < data.length; i++) {
+            ctx.lineTo(xPos(i), yPos(data[i]));
+        }
+        ctx.stroke();
+    }
+
+    function drawDots(data, color) {
+        ctx.fillStyle = color;
+        for (var i = 0; i < data.length; i++) {
+            ctx.beginPath();
+            ctx.arc(xPos(i), yPos(data[i]), 3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function drawLegend(x, y, color, text) {
+        ctx.fillStyle = color;
+        ctx.fillRect(x, y - 5, 12, 3);
+        ctx.fillStyle = '#8a939b';
+        ctx.font = '10px Outfit, sans-serif';
+        ctx.textAlign = 'left';
+        ctx.fillText(text, x + 16, y);
+    }
+
+    function shortMoney(val) {
+        var abs = Math.abs(val);
+        var sign = val < 0 ? '-' : '';
+        if (abs >= 1000000) return sign + '$' + (abs / 1000000).toFixed(1) + 'M';
+        if (abs >= 1000) return sign + '$' + (abs / 1000).toFixed(0) + 'K';
+        return sign + '$' + abs;
+    }
+})();
+</script>
+{% endblock %}

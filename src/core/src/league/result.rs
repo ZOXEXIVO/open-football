@@ -327,21 +327,21 @@ impl LeagueResult {
             let natural_fitness = player.skills.physical.natural_fitness;
 
             // 1. Condition drop
-            let base_drop = minutes / 90.0 * 3000.0;
+            let base_drop = minutes / 90.0 * 1500.0;
             let age_factor = if age > 30 {
-                1.0 + (age as f32 - 30.0) * 0.08
+                1.0 + (age as f32 - 30.0) * 0.05
             } else if age < 23 {
                 0.9
             } else {
                 1.0
             };
-            let stamina_factor = 1.5 - (stamina / 20.0);
-            let fitness_factor = 1.3 - (natural_fitness / 20.0) * 0.6;
+            let stamina_factor = 1.3 - (stamina / 20.0) * 0.6;
+            let fitness_factor = 1.2 - (natural_fitness / 20.0) * 0.4;
 
             let mut total_drop = base_drop * age_factor * stamina_factor * fitness_factor;
-            // Clamp full-90 equivalent to 1500-4500
+            // Clamp full-90 equivalent to 800-2500
             let scale = minutes / 90.0;
-            total_drop = total_drop.clamp(1500.0 * scale, 4500.0 * scale);
+            total_drop = total_drop.clamp(800.0 * scale, 2500.0 * scale);
 
             player.player_attributes.condition =
                 (player.player_attributes.condition - total_drop as i16).max(0);

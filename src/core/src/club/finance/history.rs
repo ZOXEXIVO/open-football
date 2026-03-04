@@ -27,6 +27,10 @@ impl ClubFinancialBalanceHistory {
     pub fn add(&mut self, date: NaiveDate, balance: ClubFinancialBalance) {
         self.history.push_front((date, balance))
     }
+
+    pub fn iter(&self) -> impl Iterator<Item = &(NaiveDate, ClubFinancialBalance)> {
+        self.history.iter()
+    }
 }
 
 #[cfg(test)]

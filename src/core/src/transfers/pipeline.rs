@@ -369,6 +369,7 @@ pub struct LoanOutCandidate {
     pub player_id: u32,
     pub reason: LoanOutReason,
     pub status: LoanOutStatus,
+    pub loan_fee: f64,
 }
 
 // ============================================================

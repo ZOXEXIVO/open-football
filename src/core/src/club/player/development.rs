@@ -302,10 +302,38 @@ fn personality_multiplier(professionalism: f32, ambition: f32, determination: f3
 }
 
 // ── Match-experience multiplier ─────────────────────────────────────────
+//
+// Counts both official and friendly appearances. Official matches have full
+// weight; friendly appearances contribute at 30% because the competitive
+// intensity and development stimulus is lower.
 
-fn match_experience_multiplier(started: u16, sub_apps: u16) -> f32 {
-    let effective = started as f32 + sub_apps as f32 * 0.4;
+fn match_experience_multiplier(
+    started: u16,
+    sub_apps: u16,
+    friendly_started: u16,
+    friendly_subs: u16,
+) -> f32 {
+    let official = started as f32 + sub_apps as f32 * 0.4;
+    let friendly = (friendly_started as f32 + friendly_subs as f32 * 0.4) * 0.3;
+    let effective = official + friendly;
     (0.70 + effective * 0.020).min(1.40)
+}
+
+// ── Official match bonus ────────────────────────────────────────────────
+//
+// Competitive (official) matches develop players faster than friendlies due
+// to higher pressure, intensity, and stakes. This multiplier rewards players
+// who get regular official match time.
+//
+// Range: 0.90 (only friendlies) → 1.0 (no games) → 1.15 (only official)
+
+fn official_match_bonus(official_games: u16, friendly_games: u16) -> f32 {
+    let total = official_games + friendly_games;
+    if total == 0 {
+        return 1.0;
+    }
+    let official_ratio = official_games as f32 / total as f32;
+    0.90 + official_ratio * 0.25
 }
 
 // ── Average match rating bonus ──────────────────────────────────────────
@@ -433,13 +461,19 @@ impl Player {
             self.skills.mental.work_rate,
         );
 
-        let total_games = self.statistics.total_games();
+        let official_games = self.statistics.total_games();
+        let friendly_games = self.friendly_statistics.total_games();
+
         let match_exp = match_experience_multiplier(
             self.statistics.played,
             self.statistics.played_subs,
+            self.friendly_statistics.played,
+            self.friendly_statistics.played_subs,
         );
 
-        let rating_mult = rating_multiplier(self.statistics.average_rating, total_games);
+        let official_bonus = official_match_bonus(official_games, friendly_games);
+
+        let rating_mult = rating_multiplier(self.statistics.average_rating, official_games);
 
         let decline_prot = decline_protection(
             self.skills.physical.natural_fitness,
@@ -474,7 +508,7 @@ impl Player {
 
             let change = if base > 0.0 {
                 // Growth: scale by all positive multipliers + position relevance
-                base * personality * match_exp * rating_mult * gap * pos_rate_mult
+                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult
             } else {
                 // Decline: position-irrelevant skills decline slightly faster
                 // Key skills are more "maintained" by regular use

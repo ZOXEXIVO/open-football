@@ -82,6 +82,12 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    pub fn with_board_data(&self, board_ctx: BoardContext) -> Self {
+        let mut ctx = GlobalContext::clone(self);
+        ctx.board = Some(board_ctx);
+        ctx
+    }
+
     pub fn with_player(&self, player_id: Option<u32>) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.player = Some(PlayerContext::new(player_id));

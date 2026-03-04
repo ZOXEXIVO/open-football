@@ -42,7 +42,7 @@ pub use club::{
     // Person exports
     Person, PersonAttributes, PersonBehaviour, PersonBehaviourState,
     // Club itself
-    Club, ClubBoard, ClubColors, ClubResult,
+    Club, ClubBoard, ClubColors, ClubPhilosophy, ClubResult,
     ClubContext,
     // Finance exports
     ClubFinances, ClubFinancialBalance, ClubFinancialBalanceHistory,

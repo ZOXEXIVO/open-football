@@ -31,6 +31,8 @@ pub struct TeamStaffTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub show_finances_tab: bool,
+    pub show_academy_tab: bool,
     pub staff_groups: Vec<StaffGroup>,
 }
 
@@ -243,6 +245,8 @@ pub async fn team_staff_action(
             .unwrap_or_default(),
         menu_sections,
         team_slug: team.slug.clone(),
+        show_finances_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::B,
+        show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         staff_groups,
     })
 }
@@ -263,7 +267,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 

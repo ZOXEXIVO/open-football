@@ -38,6 +38,8 @@ pub struct LeagueTransfersTemplate {
     pub lang: String,
     pub league_slug: String,
     pub completed_transfers: Vec<CompletedTransferItem>,
+    pub has_permanent_transfers: bool,
+    pub has_loan_transfers: bool,
     pub current_listings: Vec<ListingItem>,
     pub active_negotiations: Vec<NegotiationItem>,
     pub seasons: Vec<SeasonOption>,
@@ -158,6 +160,7 @@ pub async fn league_transfers_action(
         .iter()
         .filter(|t| {
             t.season_year == selected_season
+                && t.from_club_id != 0
                 && (league_club_ids.contains(&t.from_club_id) || league_club_ids.contains(&t.to_club_id))
         })
         .map(|t| {
@@ -272,6 +275,8 @@ pub async fn league_transfers_action(
             views::league_menu(&i18n, &route_params.lang, &country.name, &country.slug, &league.slug, &format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug), &cl_refs)
         },
         league_slug: league.slug.clone(),
+        has_permanent_transfers: completed_transfers.iter().any(|t| !t.is_loan),
+        has_loan_transfers: completed_transfers.iter().any(|t| t.is_loan),
         completed_transfers,
         current_listings,
         active_negotiations,

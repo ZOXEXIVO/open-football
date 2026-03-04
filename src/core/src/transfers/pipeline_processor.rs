@@ -15,7 +15,7 @@ use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    Club, ClubTransferStrategy, Country, MatchTacticType, Person, Player,
+    Club, ClubPhilosophy, ClubTransferStrategy, Country, MatchTacticType, Person, Player,
     PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType, ReputationLevel,
     StaffEventType, TacticsSelector, TeamType, TACTICS_POSITIONS,
 };
@@ -70,6 +70,8 @@ struct NegotiationAction {
     offer: crate::transfers::offer::TransferOffer,
     is_loan: bool,
     shortlist_request_id: u32,
+    negotiator_staff_id: Option<u32>,
+    reason: String,
 }
 
 struct MatchScoutAssignmentAction {
@@ -545,6 +547,7 @@ impl PipelineProcessor {
             date,
             players,
             &mut loan_outs,
+            &club.philosophy,
         );
 
         // ──────────────────────────────────────────────────────────
@@ -836,6 +839,7 @@ impl PipelineProcessor {
         date: NaiveDate,
         players: &[Player],
         loan_outs: &mut Vec<LoanOutCandidate>,
+        philosophy: &ClubPhilosophy,
     ) {
         let is_january = Self::is_january_window(date);
 
@@ -880,6 +884,43 @@ impl PipelineProcessor {
             let potential = player_info.potential_ability;
             let apps = player_info.appearances;
 
+            // ── Philosophy-based loan-out overrides ──
+            match philosophy {
+                ClubPhilosophy::DevelopAndSell => {
+                    // Aggressively loan out young players not in starting XI
+                    if age < 21 && ability < avg_ability && !is_key_player {
+                        loan_outs.push(LoanOutCandidate {
+                            player_id: player_info.player_id,
+                            reason: LoanOutReason::NeedsGameTime,
+                            status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
+                        });
+                        continue;
+                    }
+                }
+                ClubPhilosophy::SignToCompete => {
+                    // Only loan out players clearly surplus — skip marginal cases
+                    if ability >= avg_ability.saturating_sub(10) {
+                        continue;
+                    }
+                }
+                ClubPhilosophy::LoanFocused => {
+                    // Loan out players to reduce wage bill
+                    if ability < avg_ability && !is_key_player {
+                        loan_outs.push(LoanOutCandidate {
+                            player_id: player_info.player_id,
+                            reason: LoanOutReason::Surplus,
+                            status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
+                        });
+                        continue;
+                    }
+                }
+                ClubPhilosophy::Balanced => {
+                    // No override — use existing logic
+                }
+            }
+
             // ── Pass A: Post-injury fitness loan (Elite/Continental/National) ──
             if matches!(
                 rep_level,
@@ -894,6 +935,7 @@ impl PipelineProcessor {
                     player_id: player_info.player_id,
                     reason: LoanOutReason::PostInjuryFitness,
                     status: LoanOutStatus::Identified,
+                    loan_fee: 0.0,
                 });
                 continue;
             }
@@ -912,6 +954,7 @@ impl PipelineProcessor {
                                 player_id: player_info.player_id,
                                 reason: LoanOutReason::LackOfPlayingTime,
                                 status: LoanOutStatus::Identified,
+                                loan_fee: 0.0,
                             });
                             continue;
                         }
@@ -926,6 +969,7 @@ impl PipelineProcessor {
                                 player_id: player_info.player_id,
                                 reason: LoanOutReason::LackOfPlayingTime,
                                 status: LoanOutStatus::Identified,
+                                loan_fee: 0.0,
                             });
                             continue;
                         }
@@ -940,6 +984,7 @@ impl PipelineProcessor {
                                 player_id: player_info.player_id,
                                 reason: LoanOutReason::LackOfPlayingTime,
                                 status: LoanOutStatus::Identified,
+                                loan_fee: 0.0,
                             });
                             continue;
                         }
@@ -957,6 +1002,7 @@ impl PipelineProcessor {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
                         });
                         continue;
                     }
@@ -984,6 +1030,7 @@ impl PipelineProcessor {
                                 player_id: player_info.player_id,
                                 reason: LoanOutReason::BlockedByBetterPlayer,
                                 status: LoanOutStatus::Identified,
+                                loan_fee: 0.0,
                             });
                             continue;
                         }
@@ -995,6 +1042,7 @@ impl PipelineProcessor {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
                         });
                         continue;
                     }
@@ -1008,6 +1056,7 @@ impl PipelineProcessor {
                             player_id: player_info.player_id,
                             reason: LoanOutReason::NeedsGameTime,
                             status: LoanOutStatus::Identified,
+                            loan_fee: 0.0,
                         });
                         continue;
                     }
@@ -1044,6 +1093,7 @@ impl PipelineProcessor {
                     player_id: player_info.player_id,
                     reason: LoanOutReason::Surplus,
                     status: LoanOutStatus::Identified,
+                    loan_fee: 0.0,
                 });
             }
         }
@@ -1056,6 +1106,49 @@ impl PipelineProcessor {
             .find(|(tactic, _)| *tactic == formation)
             .unwrap_or(&TACTICS_POSITIONS[0]);
         positions
+    }
+
+    /// Build a transfer reason string from the transfer request and optional scout report.
+    fn build_transfer_reason(
+        request: Option<&TransferRequest>,
+        report: Option<&DetailedScoutingReport>,
+    ) -> String {
+        let need_reason = request.map(|r| Self::transfer_need_reason_text(&r.reason));
+
+        let scout_reason = report.map(|r| {
+            let rec = match r.recommendation {
+                ScoutingRecommendation::StrongBuy => "Strong buy",
+                ScoutingRecommendation::Buy => "Buy",
+                ScoutingRecommendation::Consider => "Consider",
+                ScoutingRecommendation::Pass => "Pass",
+            };
+            format!("Scout: {} (CA:{}, PA:{}, confidence:{:.0}%)",
+                rec, r.assessed_ability, r.assessed_potential, r.confidence * 100.0)
+        });
+
+        match (need_reason, scout_reason) {
+            (Some(need), Some(scout)) => format!("{} — {}", need, scout),
+            (Some(need), None) => need.to_string(),
+            (None, Some(scout)) => scout,
+            (None, None) => String::new(),
+        }
+    }
+
+    pub fn transfer_need_reason_text(reason: &TransferNeedReason) -> &'static str {
+        match reason {
+            TransferNeedReason::FormationGap => "Formation gap — no player for required position",
+            TransferNeedReason::QualityUpgrade => "Quality upgrade — current player below squad level",
+            TransferNeedReason::DepthCover => "Squad depth — need backup for position group",
+            TransferNeedReason::SuccessionPlanning => "Succession planning — aging key player needs replacement",
+            TransferNeedReason::DevelopmentSigning => "Development signing — young prospect with high potential",
+            TransferNeedReason::StaffRecommendation => "Staff recommendation",
+            TransferNeedReason::LoanToFillSquad => "Loan to fill squad — cannot afford to buy",
+            TransferNeedReason::ExperiencedHead => "Experienced head — need senior player for leadership",
+            TransferNeedReason::SquadPadding => "Squad padding — too few players to compete",
+            TransferNeedReason::CheapReinforcement => "Cheap reinforcement — affordable quality improvement",
+            TransferNeedReason::InjuryCoverLoan => "Injury cover — loan to replace injured player",
+            TransferNeedReason::OpportunisticLoanUpgrade => "Opportunistic loan — player better than current options",
+        }
     }
 
     // ============================================================
@@ -2012,6 +2105,18 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Skip clubs that have reached their squad cap (main team only)
+            let max_squad = club.board.season_targets
+                .as_ref()
+                .map(|t| t.max_squad_size as usize)
+                .unwrap_or(50);
+            let main_squad = club.teams.teams.first()
+                .map(|t| t.players.players.len())
+                .unwrap_or(0);
+            if main_squad >= max_squad {
+                continue;
+            }
+
             let actual_active = country
                 .transfer_market
                 .active_negotiation_count_for_club(club.id);
@@ -2133,6 +2238,7 @@ impl PipelineProcessor {
                     player_id,
                     date,
                     club.finance.balance.balance,
+                    &club.philosophy,
                 );
 
                 let is_loan = matches!(
@@ -2175,8 +2281,44 @@ impl PipelineProcessor {
                         asking_price
                     };
 
-                    let offer =
+                    let mut offer =
                         strategy.calculate_initial_offer(player, &actual_asking, date);
+
+                    // Add appearance fee clause for loans from high-reputation sellers
+                    if is_loan {
+                        let selling_rep_level = Self::get_club_reputation_level(country, selling_club_id);
+                        match selling_rep_level {
+                            ReputationLevel::Elite => {
+                                offer.clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                                    CurrencyValue {
+                                        amount: crate::utils::FormattingUtils::round_fee(offer.base_fee.amount * 0.30),
+                                        currency: Currency::Usd,
+                                    },
+                                    10,
+                                ));
+                            }
+                            ReputationLevel::Continental => {
+                                offer.clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                                    CurrencyValue {
+                                        amount: crate::utils::FormattingUtils::round_fee(offer.base_fee.amount * 0.20),
+                                        currency: Currency::Usd,
+                                    },
+                                    15,
+                                ));
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Resolve negotiator staff and build reason
+                    let negotiator_staff_id = StaffResolver::resolve(&team.staffs)
+                        .negotiator
+                        .map(|s| s.id);
+
+                    let scout_report = plan.scouting_reports.iter()
+                        .find(|r| r.player_id == player_id);
+
+                    let reason = Self::build_transfer_reason(request, scout_report);
 
                     actions.push(NegotiationAction {
                         club_id: club.id,
@@ -2185,6 +2327,8 @@ impl PipelineProcessor {
                         offer,
                         is_loan,
                         shortlist_request_id: shortlist.transfer_request_id,
+                        negotiator_staff_id,
+                        reason,
                     });
 
                     negotiations_this_club += 1;
@@ -2249,6 +2393,8 @@ impl PipelineProcessor {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = action.is_loan;
                     negotiation.is_unsolicited = !has_listing;
+                    negotiation.negotiator_staff_id = action.negotiator_staff_id;
+                    negotiation.reason = action.reason.clone();
                 }
 
                 if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -2308,14 +2454,50 @@ impl PipelineProcessor {
         player_id: u32,
         date: NaiveDate,
         buying_club_balance: i32,
+        philosophy: &ClubPhilosophy,
     ) -> TransferApproach {
         let is_january = Self::is_january_window(date);
 
         // If the player is already loan-listed, pursue a loan
-        if let Some(player) = Self::find_player_in_country(country, player_id) {
-            let statuses = player.statuses.get();
-            if statuses.contains(&PlayerStatusType::Loa) {
-                return TransferApproach::Loan;
+        let player_age = Self::find_player_in_country(country, player_id)
+            .map(|p| {
+                let statuses = p.statuses.get();
+                if statuses.contains(&PlayerStatusType::Loa) {
+                    return (p.age(date), true);
+                }
+                (p.age(date), false)
+            });
+
+        if let Some((_, true)) = player_age {
+            return TransferApproach::Loan;
+        }
+
+        let age = player_age.map(|(a, _)| a).unwrap_or(25);
+
+        // Philosophy-based overrides
+        match philosophy {
+            ClubPhilosophy::DevelopAndSell => {
+                // Prefer loans for young players, never buy players > 28
+                if age > 28 {
+                    return TransferApproach::Loan;
+                }
+                if age < 23 {
+                    return TransferApproach::Loan;
+                }
+            }
+            ClubPhilosophy::SignToCompete => {
+                // Prefer permanent transfers even at lower affordability
+                // (handled below in affordability section with relaxed thresholds)
+            }
+            ClubPhilosophy::LoanFocused => {
+                // Always prefer loan unless fee < 50k
+                let affordability = if estimated_fee > 0.0 { budget / estimated_fee } else { 10.0 };
+                if estimated_fee >= 50_000.0 || affordability < 0.8 {
+                    return TransferApproach::Loan;
+                }
+            }
+            ClubPhilosophy::Balanced => {
+                // No override — use existing logic
             }
         }
 
@@ -2370,6 +2552,15 @@ impl PipelineProcessor {
             10.0 // Free agent, always affordable
         };
 
+        // SignToCompete: accept higher fees, lower affordability thresholds
+        if *philosophy == ClubPhilosophy::SignToCompete {
+            return if affordability >= 0.2 {
+                TransferApproach::PermanentTransfer
+            } else {
+                TransferApproach::LoanWithOption
+            };
+        }
+
         match rep_level {
             ReputationLevel::Elite => {
                 if affordability >= 0.3 {
@@ -2397,7 +2588,6 @@ impl PipelineProcessor {
                 }
             }
             ReputationLevel::Regional => {
-                // Relaxed: threshold from 1.0→0.7 for buy, add LoanWithOption tier at 0.3
                 if affordability >= 0.7 {
                     TransferApproach::PermanentTransfer
                 } else if affordability >= 0.3 {
@@ -2464,6 +2654,7 @@ impl PipelineProcessor {
             player_id: u32,
             selling_club_id: u32,
             offer_amount: f64,
+            reason: String,
         }
 
         let mut actions: Vec<LoanScanAction> = Vec::new();
@@ -2560,11 +2751,13 @@ impl PipelineProcessor {
                     })
                     .max_by_key(|l| l.ability)
                 {
+                    let reason = format!("Loan signing — {}", Self::transfer_need_reason_text(&request.reason));
                     actions.push(LoanScanAction {
                         club_id: club.id,
                         player_id: best.player_id,
                         selling_club_id: best.club_id,
                         offer_amount: crate::utils::FormattingUtils::round_fee(best.asking_price * 0.8),
+                        reason,
                     });
                     scans_this_club += 1;
                 }
@@ -2601,6 +2794,7 @@ impl PipelineProcessor {
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
                         offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
+                        reason: "Loan signing — opportunistic squad upgrade".to_string(),
                     });
                     scans_this_club += 1;
                 }
@@ -2628,6 +2822,7 @@ impl PipelineProcessor {
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
                         offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
+                        reason: "Loan signing — January window reinforcement".to_string(),
                     });
                 }
             }
@@ -2640,12 +2835,38 @@ impl PipelineProcessor {
             let (p_age, p_ambition) =
                 Self::get_player_negotiation_data(country, action.player_id, date);
 
+            let mut clauses = Vec::new();
+
+            // Add appearance fee clause for high-reputation selling clubs
+            let selling_rep_level = Self::get_club_reputation_level(country, action.selling_club_id);
+            match selling_rep_level {
+                ReputationLevel::Elite => {
+                    clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                        CurrencyValue {
+                            amount: crate::utils::FormattingUtils::round_fee(action.offer_amount * 0.30),
+                            currency: Currency::Usd,
+                        },
+                        10,
+                    ));
+                }
+                ReputationLevel::Continental => {
+                    clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                        CurrencyValue {
+                            amount: crate::utils::FormattingUtils::round_fee(action.offer_amount * 0.20),
+                            currency: Currency::Usd,
+                        },
+                        15,
+                    ));
+                }
+                _ => {}
+            }
+
             let offer = crate::transfers::offer::TransferOffer {
                 base_fee: CurrencyValue {
                     amount: action.offer_amount,
                     currency: Currency::Usd,
                 },
-                clauses: Vec::new(),
+                clauses,
                 salary_contribution: None,
                 contract_length: Some(1),
                 offering_club_id: action.club_id,
@@ -2665,6 +2886,7 @@ impl PipelineProcessor {
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = true;
                     negotiation.is_unsolicited = false;
+                    negotiation.reason = action.reason.clone();
                 }
 
                 debug!(
@@ -2702,11 +2924,23 @@ impl PipelineProcessor {
                         .map(|t| t.id)
                         .unwrap_or(0);
 
-                    let asking_price = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player,
-                        date,
-                        price_level,
-                    );
+                    let asking_price = if candidate.loan_fee > 0.0 {
+                        CurrencyValue {
+                            amount: candidate.loan_fee,
+                            currency: Currency::Usd,
+                        }
+                    } else {
+                        // Loan fee is ~10% of player value, not full value
+                        let full_value = PlayerValuationCalculator::calculate_value_with_price_level(
+                            player,
+                            date,
+                            price_level,
+                        );
+                        CurrencyValue {
+                            amount: crate::utils::FormattingUtils::round_fee(full_value.amount * 0.10),
+                            currency: full_value.currency,
+                        }
+                    };
 
                     let listing = TransferListing::new(
                         candidate.player_id,
@@ -3594,6 +3828,16 @@ impl PipelineProcessor {
             .and_then(|c| c.teams.teams.first())
             .map(|t| t.reputation.attractiveness_factor())
             .unwrap_or(0.3)
+    }
+
+    fn get_club_reputation_level(country: &Country, club_id: u32) -> ReputationLevel {
+        country
+            .clubs
+            .iter()
+            .find(|c| c.id == club_id)
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| t.reputation.level())
+            .unwrap_or(ReputationLevel::Amateur)
     }
 
     fn get_player_negotiation_data(

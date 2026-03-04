@@ -284,7 +284,7 @@ impl PlayerGenerator {
         level: u8,
         people_names: Option<&PeopleNameGeneratorData>,
     ) -> Player {
-        let year = IntegerUtils::random(now.year() - 16, now.year() - 14) as u32;
+        let year = IntegerUtils::random(now.year() - 14, now.year() - 12) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 28) as u32;
         let age = (now.year() as u32).saturating_sub(year);

@@ -15,8 +15,8 @@ use core::ClubStatus;
 use core::TeamCollection;
 use crate::generators::convert::convert_national_competition;
 use core::{
-    Club, ClubBoard, ClubColors, ClubFinances, Country, CountryGeneratorData, CountryPricing, CountrySettings, Player,
-    PlayerCollection, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
+    Club, ClubBoard, ClubColors, ClubFinances, ClubPhilosophy, Country, CountryGeneratorData, CountryPricing, CountrySettings, Player,
+    PlayerCollection, ReputationLevel, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
     CompetitionScope, NationalCompetitionConfig,
 };
@@ -317,7 +317,20 @@ impl DatabaseGenerator {
             .clubs
             .iter()
             .filter(|c| c.country_id == country_id)
-            .map(|club| Club {
+            .map(|club| {
+                // Determine philosophy from main team reputation
+                let main_rep = club.teams.iter()
+                    .find(|t| t.team_type == "main")
+                    .map(|t| t.reputation.world)
+                    .unwrap_or(0);
+                let philosophy = match TeamReputation::new(0, 0, main_rep).level() {
+                    ReputationLevel::Elite => ClubPhilosophy::SignToCompete,
+                    ReputationLevel::Continental => ClubPhilosophy::Balanced,
+                    ReputationLevel::National => ClubPhilosophy::Balanced,
+                    _ => ClubPhilosophy::LoanFocused,
+                };
+
+                Club {
                 id: club.id,
                 name: club.name.clone(),
                 location: Location {
@@ -332,6 +345,7 @@ impl DatabaseGenerator {
                     foreground: club.colors.foreground.clone(),
                 },
                 transfer_plan: ClubTransferPlan::new(),
+                philosophy,
                 teams: TeamCollection::new(
                     club.teams
                         .iter()
@@ -380,7 +394,7 @@ impl DatabaseGenerator {
                         })
                         .collect(),
                 ),
-            })
+            }})
             .collect()
     }
 

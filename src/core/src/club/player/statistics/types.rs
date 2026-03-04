@@ -132,3 +132,225 @@ impl PlayerStatisticsHistory {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_date(y: i32, m: u32, d: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, d).unwrap()
+    }
+
+    fn make_stats(played: u16, played_subs: u16, goals: u16, rating: f32) -> PlayerStatistics {
+        let mut s = PlayerStatistics::default();
+        s.played = played;
+        s.played_subs = played_subs;
+        s.goals = goals;
+        s.average_rating = rating;
+        s
+    }
+
+    fn make_history_item(
+        start_year: u16,
+        slug: &str,
+        is_loan: bool,
+        played: u16,
+    ) -> PlayerStatisticsHistoryItem {
+        let mut stats = PlayerStatistics::default();
+        stats.played = played;
+        PlayerStatisticsHistoryItem {
+            season: Season::new(start_year),
+            team_name: slug.to_string(),
+            team_slug: slug.to_string(),
+            team_reputation: 100,
+            league_name: "League".to_string(),
+            league_slug: "league".to_string(),
+            is_loan,
+            transfer_fee: None,
+            statistics: stats,
+            created_at: make_date(start_year as i32 + 1, 6, 1),
+        }
+    }
+
+    // === PlayerStatistics ===
+
+    #[test]
+    fn total_games_sums_played_and_subs() {
+        let s = make_stats(20, 5, 3, 7.0);
+        assert_eq!(s.total_games(), 25);
+    }
+
+    #[test]
+    fn total_games_zero_when_empty() {
+        let s = PlayerStatistics::default();
+        assert_eq!(s.total_games(), 0);
+    }
+
+    #[test]
+    fn format_rating_two_decimals() {
+        assert_eq!(PlayerStatistics::format_rating(6.5), "6.50");
+        assert_eq!(PlayerStatistics::format_rating(7.123), "7.12");
+        assert_eq!(PlayerStatistics::format_rating(0.0), "0.00");
+    }
+
+    #[test]
+    fn average_rating_str_delegates_to_format_rating() {
+        let s = make_stats(10, 0, 0, 6.75);
+        assert_eq!(s.average_rating_str(), "6.75");
+    }
+
+    #[test]
+    fn combined_rating_str_zero_games_returns_dash() {
+        let a = PlayerStatistics::default();
+        let b = PlayerStatistics::default();
+        assert_eq!(a.combined_rating_str(&b), "-");
+    }
+
+    #[test]
+    fn combined_rating_str_one_side_zero() {
+        let a = make_stats(10, 0, 0, 7.0);
+        let b = PlayerStatistics::default();
+        assert_eq!(a.combined_rating_str(&b), "7.00");
+    }
+
+    #[test]
+    fn combined_rating_str_weighted_average() {
+        let a = make_stats(10, 0, 0, 7.0);
+        let b = make_stats(10, 0, 0, 6.0);
+        // (7.0*10 + 6.0*10) / 20 = 6.5
+        assert_eq!(a.combined_rating_str(&b), "6.50");
+    }
+
+    #[test]
+    fn combined_rating_str_unequal_games() {
+        let a = make_stats(30, 0, 0, 7.0);
+        let b = make_stats(10, 0, 0, 6.0);
+        // (7.0*30 + 6.0*10) / 40 = 6.75
+        assert_eq!(a.combined_rating_str(&b), "6.75");
+    }
+
+    #[test]
+    fn combined_rating_str_includes_subs() {
+        let a = make_stats(8, 2, 0, 7.0); // 10 total
+        let b = make_stats(5, 5, 0, 6.0); // 10 total
+        assert_eq!(a.combined_rating_str(&b), "6.50");
+    }
+
+    // === PlayerStatisticsHistory ===
+
+    #[test]
+    fn new_history_is_empty() {
+        let h = PlayerStatisticsHistory::new();
+        assert!(h.items.is_empty());
+    }
+
+    #[test]
+    fn default_history_is_empty() {
+        let h = PlayerStatisticsHistory::default();
+        assert!(h.items.is_empty());
+    }
+
+    #[test]
+    fn push_or_replace_basic_push() {
+        let mut h = PlayerStatisticsHistory::new();
+        h.push_or_replace(make_history_item(2031, "inter", false, 25));
+        assert_eq!(h.items.len(), 1);
+        assert_eq!(h.items[0].statistics.played, 25);
+    }
+
+    #[test]
+    fn push_or_replace_zero_game_dedup() {
+        let mut h = PlayerStatisticsHistory::new();
+        h.push_or_replace(make_history_item(2031, "inter", false, 0));
+        h.push_or_replace(make_history_item(2031, "inter", false, 0));
+        assert_eq!(h.items.len(), 1);
+    }
+
+    #[test]
+    fn push_or_replace_replaces_zero_game_entry() {
+        let mut h = PlayerStatisticsHistory::new();
+
+        let mut placeholder = make_history_item(2031, "inter", true, 0);
+        placeholder.transfer_fee = Some(5_000_000.0);
+        placeholder.created_at = make_date(2031, 8, 1);
+        h.push_or_replace(placeholder);
+
+        let actual = make_history_item(2031, "inter", false, 25);
+        h.push_or_replace(actual);
+
+        assert_eq!(h.items.len(), 1);
+        assert_eq!(h.items[0].statistics.played, 25);
+        // Preserves original fields
+        assert_eq!(h.items[0].created_at, make_date(2031, 8, 1));
+        assert_eq!(h.items[0].transfer_fee, Some(5_000_000.0));
+        assert!(h.items[0].is_loan); // preserved from placeholder
+    }
+
+    #[test]
+    fn push_or_replace_different_teams_same_season() {
+        let mut h = PlayerStatisticsHistory::new();
+        h.push_or_replace(make_history_item(2031, "inter", false, 10));
+        h.push_or_replace(make_history_item(2031, "juventus", false, 15));
+        assert_eq!(h.items.len(), 2);
+    }
+
+    #[test]
+    fn push_or_replace_different_seasons_same_team() {
+        let mut h = PlayerStatisticsHistory::new();
+        h.push_or_replace(make_history_item(2030, "inter", false, 10));
+        h.push_or_replace(make_history_item(2031, "inter", false, 15));
+        assert_eq!(h.items.len(), 2);
+    }
+
+    #[test]
+    fn push_or_replace_both_with_games_keeps_both() {
+        let mut h = PlayerStatisticsHistory::new();
+        h.push_or_replace(make_history_item(2031, "inter", false, 10));
+        h.push_or_replace(make_history_item(2031, "inter", false, 5));
+        assert_eq!(h.items.len(), 2);
+    }
+
+    // === Season ===
+
+    #[test]
+    fn season_new_and_display() {
+        let s = Season::new(2031);
+        assert_eq!(s.start_year, 2031);
+        assert_eq!(s.display, "2031/32");
+    }
+
+    #[test]
+    fn season_century_wrap() {
+        let s = Season::new(2099);
+        // 2100 % 100 = 0, displayed as single digit
+        assert_eq!(s.display, "2099/0");
+    }
+
+    #[test]
+    fn season_from_date_after_august() {
+        // August 2032 → season 2032/33
+        let s = Season::from_date(make_date(2032, 8, 15));
+        assert_eq!(s.start_year, 2032);
+    }
+
+    #[test]
+    fn season_from_date_before_august() {
+        // March 2032 → season 2031/32
+        let s = Season::from_date(make_date(2032, 3, 15));
+        assert_eq!(s.start_year, 2031);
+    }
+
+    #[test]
+    fn season_from_date_august_boundary() {
+        // August 1 → new season starts
+        let s = Season::from_date(make_date(2032, 8, 1));
+        assert_eq!(s.start_year, 2032);
+    }
+
+    #[test]
+    fn season_from_date_july_boundary() {
+        // July 31 → previous season
+        let s = Season::from_date(make_date(2032, 7, 31));
+        assert_eq!(s.start_year, 2031);
+    }
+}

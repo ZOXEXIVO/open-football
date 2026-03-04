@@ -417,7 +417,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 
@@ -530,13 +530,14 @@ fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option
         .unwrap_or(false);
 
     let club_id = team.club_id;
+    let now = data.date.date();
 
     if let Some(country) = data.country_by_club(club_id) {
-        // Check if player is loaned IN (contract is Loan type, or transfer record says so)
+        // Check if player is loaned IN (contract is Loan type with active end date)
         let loan_in_record = country.transfer_market.transfer_history.iter().find(|t| {
             t.player_id == player.id
                 && t.to_club_id == club_id
-                && matches!(&t.transfer_type, TransferType::Loan(_))
+                && matches!(&t.transfer_type, TransferType::Loan(end) if *end >= now)
         });
 
         if is_loan_contract || loan_in_record.is_some() {
@@ -554,11 +555,11 @@ fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option
             }
         }
 
-        // Check if player is loaned OUT from this club
+        // Check if player is loaned OUT from this club (only active loans)
         let loan_out_record = country.transfer_market.transfer_history.iter().find(|t| {
             t.player_id == player.id
                 && t.from_club_id == club_id
-                && matches!(&t.transfer_type, TransferType::Loan(_))
+                && matches!(&t.transfer_type, TransferType::Loan(end) if *end >= now)
         });
 
         if let Some(record) = loan_out_record {

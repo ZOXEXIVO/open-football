@@ -1,6 +1,7 @@
 use crate::club::academy::result::ClubAcademyResult;
 use crate::club::{BoardResult, ClubFinanceResult};
 use crate::simulator::SimulatorData;
+use crate::transfers::CompletedTransfer;
 use crate::{
     PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult, SimulationResult,
     TeamResult,
@@ -12,6 +13,7 @@ pub struct ClubResult {
     pub teams: Vec<TeamResult>,
     pub board: BoardResult,
     pub academy: ClubAcademyResult,
+    pub academy_transfers: Vec<CompletedTransfer>,
 }
 
 impl ClubResult {
@@ -28,6 +30,7 @@ impl ClubResult {
             teams,
             board,
             academy,
+            academy_transfers: Vec::new(),
         }
     }
 

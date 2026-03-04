@@ -79,6 +79,7 @@ pub struct PlayerCompletedTransferDto {
     pub fee: String,
     pub date: String,
     pub transfer_type_key: String,
+    pub reason: String,
 }
 
 fn status_type_to_i18n_key(status: &PlayerStatusType) -> &'static str {
@@ -295,6 +296,7 @@ pub async fn player_transfers_action(
                         },
                         date: t.transfer_date.format("%d.%m.%Y").to_string(),
                         transfer_type_key: transfer_type_key.to_string(),
+                        reason: t.reason.clone(),
                     })
                 })
                 .collect();
@@ -356,7 +358,7 @@ fn get_neighbor_teams(
         .teams
         .iter()
         .map(|team| {
-            (format!("{} | {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
+            (format!("{}  |  {}", club_name, i18n.t(team.team_type.as_i18n_key())), team.slug.clone(), team.reputation.world)
         })
         .collect();
 

@@ -183,6 +183,8 @@ impl TransferMarket {
                 TransferType::Permanent
             };
 
+            let reason = negotiation.reason.clone();
+
             let completed = CompletedTransfer::new(
                 negotiation.player_id,
                 player_name,
@@ -194,7 +196,7 @@ impl TransferMarket {
                 current_date,
                 negotiation.current_offer.base_fee.clone(),
                 transfer_type,
-            );
+            ).with_reason(reason);
 
             self.transfer_history.push(completed.clone());
 

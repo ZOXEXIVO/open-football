@@ -167,6 +167,8 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
     });
 
     let tactics_url = format!("/{}/teams/{}/tactics", lang, team_slug);
+    let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
+    let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", lang, team_slug);
     let transfers_url = format!("/{}/teams/{}/transfers", lang, team_slug);
 
@@ -177,6 +179,18 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
                 title: i18n.t("tactics").to_string(),
                 url: tactics_url,
                 icon: "fa-chess".to_string(),
+            },
+            MenuItem {
+                active: current_path == finances_url,
+                title: i18n.t("finances").to_string(),
+                url: finances_url,
+                icon: "fa-coins".to_string(),
+            },
+            MenuItem {
+                active: current_path == academy_url,
+                title: i18n.t("academy").to_string(),
+                url: academy_url,
+                icon: "fa-graduation-cap".to_string(),
             },
             MenuItem {
                 active: current_path == schedule_url,
@@ -259,6 +273,8 @@ pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], tea
     });
 
     let tactics_url = format!("/{}/teams/{}/tactics", lang, team_slug);
+    let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
+    let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", lang, team_slug);
     let transfers_url = format!("/{}/teams/{}/transfers", lang, team_slug);
 
@@ -269,6 +285,18 @@ pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], tea
                 title: i18n.t("tactics").to_string(),
                 url: tactics_url,
                 icon: "fa-chess".to_string(),
+            },
+            MenuItem {
+                active: current_path == finances_url,
+                title: i18n.t("finances").to_string(),
+                url: finances_url,
+                icon: "fa-coins".to_string(),
+            },
+            MenuItem {
+                active: current_path == academy_url,
+                title: i18n.t("academy").to_string(),
+                url: academy_url,
+                icon: "fa-graduation-cap".to_string(),
             },
             MenuItem {
                 active: current_path == schedule_url,

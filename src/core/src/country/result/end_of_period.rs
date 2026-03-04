@@ -154,22 +154,37 @@ impl CountryResult {
             }
 
             if let Some(mut player) = player_opt {
-                // Snapshot loan spell statistics into history before resetting
+                // Merge remaining stats into the existing loan history entry
+                // (season-end snapshot may have already captured them)
                 let season = Season::from_date(date);
+                let remaining_stats = std::mem::take(&mut player.statistics);
 
-                let old_stats = std::mem::take(&mut player.statistics);
-                player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                    season,
-                    team_name: loan_return.team_name.clone(),
-                    team_slug: loan_return.team_slug.clone(),
-                    team_reputation: loan_return.team_reputation,
-                    league_name: loan_return.league_name.clone(),
-                    league_slug: loan_return.league_slug.clone(),
-                    is_loan: true,
-                    transfer_fee: None,
-                    statistics: old_stats,
-                    created_at: date,
-                });
+                if let Some(existing) = player.statistics_history.items.iter_mut().find(|e| {
+                    e.season.start_year == season.start_year
+                        && e.team_slug == loan_return.team_slug
+                        && e.is_loan
+                }) {
+                    // Only overwrite if existing has 0 games and remaining has stats
+                    let existing_games = existing.statistics.played + existing.statistics.played_subs;
+                    let new_games = remaining_stats.played + remaining_stats.played_subs;
+                    if existing_games == 0 && new_games > 0 {
+                        existing.statistics = remaining_stats;
+                    }
+                } else {
+                    // No existing entry — create one
+                    player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
+                        season,
+                        team_name: loan_return.team_name.clone(),
+                        team_slug: loan_return.team_slug.clone(),
+                        team_reputation: loan_return.team_reputation,
+                        league_name: loan_return.league_name.clone(),
+                        league_slug: loan_return.league_slug.clone(),
+                        is_loan: true,
+                        transfer_fee: None,
+                        statistics: remaining_stats,
+                        created_at: date,
+                    });
+                }
 
                 // Clear loan contract — parent club's original contract was lost during
                 // loan creation, so set no contract; the renewal system will offer a new one
@@ -178,7 +193,8 @@ impl CountryResult {
                 player.statuses.statuses.clear();
                 player.last_transfer_date = Some(date);
 
-                // Return to parent club's first team
+                // Return to parent club's first team — weekly Club::simulate
+                // will move them to reserve via move_loan_returns_to_reserve()
                 if let Some(parent_club) = country.clubs.iter_mut().find(|c| c.id == loan_return.parent_club_id) {
                     if !parent_club.teams.teams.is_empty() {
                         info!("Loan return: player {} returns to club {}", loan_return.player_id, loan_return.parent_club_id);

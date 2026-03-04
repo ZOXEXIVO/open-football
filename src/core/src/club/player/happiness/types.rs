@@ -102,9 +102,9 @@ impl PlayerHappiness {
         }
     }
 
-    /// Backward compatible: morale > 50 means happy
+    /// Backward compatible: morale >= 40 means happy (not visibly unhappy)
     pub fn is_happy(&self) -> bool {
-        self.morale > 50.0
+        self.morale >= 40.0
     }
 
     /// Backward compatible: push a positive event

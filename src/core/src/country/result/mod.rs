@@ -42,8 +42,25 @@ impl CountryResult {
         }
 
         // Phase 2: Process club results (morale, training use post-match state)
+        // Collect academy transfers before consuming club results
+        let mut academy_transfers = Vec::new();
+        for club in &self.clubs {
+            if !club.academy_transfers.is_empty() {
+                academy_transfers.extend(club.academy_transfers.iter().cloned());
+            }
+        }
+
         for club_result in self.clubs {
             club_result.process(data, result);
+        }
+
+        // Push academy graduation transfers to country transfer history
+        if !academy_transfers.is_empty() {
+            if let Some(country) = data.country_mut(self.country_id) {
+                for transfer in academy_transfers {
+                    country.transfer_market.transfer_history.push(transfer);
+                }
+            }
         }
 
         // Phase 2.5: Process loan returns — runs AFTER club results so that

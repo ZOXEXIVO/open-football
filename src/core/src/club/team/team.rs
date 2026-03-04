@@ -66,7 +66,7 @@ impl Team {
         })
     }
 
-    pub fn get_week_salary(&self) -> u32 {
+    pub fn get_annual_salary(&self) -> u32 {
         self.players
             .players
             .iter()

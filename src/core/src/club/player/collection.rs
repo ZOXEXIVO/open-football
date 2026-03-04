@@ -60,7 +60,7 @@ impl PlayerCollection {
         }
     }
 
-    pub fn get_week_salary(&self) -> u32 {
+    pub fn get_annual_salary(&self) -> u32 {
         self.players
             .iter()
             .filter_map(|p| p.contract.as_ref())
