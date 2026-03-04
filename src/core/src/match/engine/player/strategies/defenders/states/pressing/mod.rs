@@ -6,8 +6,10 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const TACKLING_DISTANCE_THRESHOLD: f32 = 6.0; // Increased from 5.0 - slightly earlier tackles
-const PRESSING_DISTANCE_THRESHOLD: f32 = 65.0; // Increased from 50.0 - more aggressive pressing
-const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 55.0; // Increased from 35.0 - tighter in defensive third
+const BASE_PRESSING_DISTANCE: f32 = 35.0;
+const MAX_PRESSING_BONUS: f32 = 30.0; // effective range: 35-65
+const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 30.0;
+const MAX_PRESSING_BONUS_DEFENSIVE_THIRD: f32 = 25.0; // effective range: 30-55
 const CLOSE_PRESSING_DISTANCE: f32 = 20.0; // Increased from 15.0 - wider close pressing zone
 const STAMINA_THRESHOLD: f32 = 35.0; // Reduced from 40.0 - press more aggressively
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
@@ -36,12 +38,13 @@ impl StateProcessingHandler for DefenderPressingState {
                 ));
             }
 
-            // Context-aware pressing distance: tighter in defensive third
+            // Scale pressing distance by tactical intensity
+            let intensity = ctx.team().tactics().pressing_intensity();
             let pressing_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {
-                PRESSING_DISTANCE_DEFENSIVE_THIRD
+                BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD + MAX_PRESSING_BONUS_DEFENSIVE_THIRD * intensity
             } else {
-                PRESSING_DISTANCE_THRESHOLD
+                BASE_PRESSING_DISTANCE + MAX_PRESSING_BONUS * intensity
             };
 
             // If the opponent is too far away, stop pressing

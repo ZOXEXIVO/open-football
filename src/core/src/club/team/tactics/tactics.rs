@@ -86,7 +86,22 @@ impl Tactics {
     }
 
     pub fn is_high_pressing(&self) -> bool {
-        true
+        matches!(
+            self.tactical_style(),
+            TacticalStyle::Attacking | TacticalStyle::Possession | TacticalStyle::Compact
+        )
+    }
+
+    /// Returns pressing intensity from 0.0 to 1.0 based on tactical style
+    pub fn pressing_intensity(&self) -> f32 {
+        match self.tactical_style() {
+            TacticalStyle::Attacking | TacticalStyle::Compact => 1.0,
+            TacticalStyle::Possession => 0.8,
+            TacticalStyle::Balanced | TacticalStyle::WingPlay | TacticalStyle::WidePlay => 0.6,
+            TacticalStyle::Counterattack => 0.4,
+            TacticalStyle::Defensive => 0.3,
+            TacticalStyle::Experimental => 0.5,
+        }
     }
 
     pub fn tactical_style(&self) -> TacticalStyle {

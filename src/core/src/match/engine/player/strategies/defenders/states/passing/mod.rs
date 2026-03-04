@@ -24,16 +24,23 @@ impl StateProcessingHandler for DefenderPassingState {
         // Under heavy pressure - make a quick decision
         if ctx.player().pressure().is_under_heavy_pressure() {
             return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
-                Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(safe_option.id)
-                            .with_reason("DEF_PASSING_UNDER_PRESSURE")
-                            .build(ctx),
-                    )),
-                ))
+                let dist = (safe_option.position - ctx.player.position).magnitude();
+                if dist >= 20.0 {
+                    Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe_option.id)
+                                .with_reason("DEF_PASSING_UNDER_PRESSURE")
+                                .build(ctx),
+                        )),
+                    ))
+                } else {
+                    Some(StateChangeResult::with_defender_state(
+                        DefenderState::Clearing,
+                    ))
+                }
             } else {
                 // No safe option, clear the ball
                 Some(StateChangeResult::with_defender_state(
@@ -45,32 +52,39 @@ impl StateProcessingHandler for DefenderPassingState {
         // If teammates are tired, prefer short pass to nearest teammate
         if self.are_teammates_tired(ctx) {
             if let Some(nearest) = ctx.player().passing().find_any_teammate_with_distance(100.0) {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(nearest.id)
-                            .with_reason("DEF_PASSING_TIRED_SHORT")
-                            .build(ctx),
-                    )),
-                ));
+                let dist = (nearest.position - ctx.player.position).magnitude();
+                if dist >= 20.0 {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(nearest.id)
+                                .with_reason("DEF_PASSING_TIRED_SHORT")
+                                .build(ctx),
+                        )),
+                    ));
+                }
             }
         }
 
         // Normal passing situation - evaluate options more carefully
         if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option() {
-            // Execute the pass
-            return Some(StateChangeResult::with_defender_state_and_event(
-                DefenderState::Standing,
-                Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
-                        .with_from_player_id(ctx.player.id)
-                        .with_to_player_id(best_target.id)
-                        .with_reason("DEF_PASSING_NORMAL")
-                        .build(ctx),
-                )),
-            ));
+            // ANTI-LOOP: Ensure pass target is far enough away for the ball to actually reach them.
+            // Very short passes (< 30 units) with low pass force create claim-pass-reclaim loops.
+            let pass_distance = (best_target.position - ctx.player.position).magnitude();
+            if pass_distance >= 30.0 {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(best_target.id)
+                            .with_reason("DEF_PASSING_NORMAL")
+                            .build(ctx),
+                    )),
+                ));
+            }
         }
 
         // If no good passing option and close to own goal, consider clearing

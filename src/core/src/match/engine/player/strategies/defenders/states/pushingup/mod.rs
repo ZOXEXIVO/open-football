@@ -68,6 +68,21 @@ impl StateProcessingHandler for DefenderPushingUpState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // OVERLAPPING RUN: If wide defender with teammate on ball on same flank,
+        // sprint ahead of ball carrier along touchline
+        if self.is_overlap_run(ctx) {
+            let target = self.calculate_overlap_target(ctx);
+            let acceleration = ctx.player.skills.physical.acceleration / 20.0;
+            return Some(
+                SteeringBehavior::Pursuit {
+                    target,
+                    target_velocity: Vector3::zeros(),
+                }
+                    .calculate(ctx.player)
+                    .velocity * (1.0 + acceleration * 0.3), // Sprint bonus
+            );
+        }
+
         let optimal_position = self.calculate_optimal_pushing_up_position(ctx);
 
         Some(
@@ -87,6 +102,50 @@ impl StateProcessingHandler for DefenderPushingUpState {
 }
 
 impl DefenderPushingUpState {
+    /// Check if this push-up is an overlapping run (wide defender, ball on same flank)
+    fn is_overlap_run(&self, ctx: &StateProcessingContext) -> bool {
+        let field_height = ctx.context.field_size.height as f32;
+        let start_y = ctx.player.start_position.y;
+        let is_wide = start_y < field_height * 0.25 || start_y > field_height * 0.75;
+        if !is_wide {
+            return false;
+        }
+
+        // Team must have ball on same flank
+        if !ctx.team().is_control_ball() {
+            return false;
+        }
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let player_on_left = start_y < field_height * 0.5;
+        let ball_on_left = ball_pos.y < field_height * 0.5;
+
+        player_on_left == ball_on_left
+    }
+
+    /// Calculate overlap target: ahead of ball carrier, wide on touchline
+    fn calculate_overlap_target(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let field_height = ctx.context.field_size.height as f32;
+        let field_width = ctx.context.field_size.width as f32;
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+
+        // Target is ahead of ball position, on the touchline
+        let wing_y = if ctx.player.start_position.y < field_height * 0.5 {
+            field_height * 0.08 // Left touchline
+        } else {
+            field_height * 0.92 // Right touchline
+        };
+
+        // Push ahead of ball carrier toward opponent goal
+        let ahead_x = if is_left {
+            (ball_pos.x + 60.0).clamp(0.0, field_width * 0.75)
+        } else {
+            (ball_pos.x - 60.0).clamp(field_width * 0.25, field_width)
+        };
+
+        Vector3::new(ahead_x, wing_y, 0.0)
+    }
+
     fn should_retreat(&self, ctx: &StateProcessingContext) -> bool {
         let field_width = ctx.context.field_size.width as f32;
         let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);

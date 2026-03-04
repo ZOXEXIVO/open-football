@@ -2,6 +2,7 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -457,7 +458,7 @@ impl ForwardRunningState {
         false
     }
 
-    /// Improved pressing decision
+    /// Improved pressing decision with smart triggers
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
         // Don't press if team has possession
         if ctx.team().is_control_ball() {
@@ -467,12 +468,43 @@ impl ForwardRunningState {
         let ball_distance = ctx.ball().distance();
         let stamina_level = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
         let work_rate = ctx.player.skills.mental.work_rate / 20.0;
+        let intensity = ctx.team().tactics().pressing_intensity();
 
-        // Adjust pressing distance based on stamina and work rate
-        let effective_press_distance = 150.0 * stamina_level * (0.5 + work_rate);
+        // Adjust pressing distance based on stamina, work rate, and tactical intensity
+        let effective_press_distance = 150.0 * stamina_level * (0.5 + work_rate) * (0.5 + intensity * 0.5);
 
         // Check tactical instruction (high press vs low block)
         let high_press = ctx.team().tactics().is_high_pressing();
+
+        // PRESSING TRAP: Opponent defender receiving ball facing own goal — press aggressively
+        if ball_distance < effective_press_distance * 1.5 {
+            if let Some(opponent) = ctx.players().opponents().nearby(effective_press_distance * 1.5).with_ball(ctx).next() {
+                let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
+                let goal_pos = ctx.player().opponent_goal_position();
+                let opp_goal = ctx.tick_context.positions.ball.position * 2.0 - goal_pos; // Approximate own goal
+
+                // Opponent facing own goal (velocity pointing away from us)
+                if opp_velocity.magnitude() > 0.5 {
+                    let to_own_goal = (opp_goal - opponent.position).normalize();
+                    if opp_velocity.normalize().dot(&to_own_goal) > 0.4 {
+                        return true; // Opponent in trouble — press!
+                    }
+                }
+
+                // WIDE ISOLATION: Opponent near touchline — trap them
+                let field_height = ctx.context.field_size.height as f32;
+                if opponent.position.y < field_height * 0.1 || opponent.position.y > field_height * 0.9 {
+                    return true;
+                }
+
+                // TIRED OPPONENT: Increase pressing range against fatigued players
+                if let Some(opp_player) = ctx.context.players.by_id(opponent.id) {
+                    if opp_player.player_attributes.condition_percentage() < 50 {
+                        return ball_distance < effective_press_distance * 1.4;
+                    }
+                }
+            }
+        }
 
         if high_press {
             ball_distance < effective_press_distance * 1.3
@@ -514,6 +546,28 @@ impl ForwardRunningState {
         !closest_to_ball
     }
 
+    /// Detect counter-attack opportunity (team just won possession, opponents high)
+    fn is_counter_attack_opportunity(&self, ctx: &StateProcessingContext) -> bool {
+        let ownership_duration = ctx.tick_context.ball.ownership_duration;
+        if ownership_duration >= 15 {
+            return false;
+        }
+
+        // Count opponents ahead of ball
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - ball_pos).normalize();
+
+        let opponents_ahead = ctx.players().opponents().all()
+            .filter(|opp| {
+                let to_opp = opp.position - ball_pos;
+                to_opp.normalize().dot(&to_goal) > 0.3
+            })
+            .count();
+
+        opponents_ahead < 3
+    }
+
     /// Check if should make run in behind defense
     fn should_make_run_in_behind(&self, ctx: &StateProcessingContext) -> bool {
         // Don't make runs on own half
@@ -526,9 +580,13 @@ impl ForwardRunningState {
         let off_ball = ctx.player.skills.mental.off_the_ball / 20.0;
         let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
 
+        // Counter-attack: lower skill threshold — be more aggressive
+        let is_counter = self.is_counter_attack_opportunity(ctx);
+        let skill_threshold = if is_counter { 0.25 } else { 0.4 };
+
         // Combined skill check - if player is good at any of these, allow the run
         let skill_score = pace * 0.4 + off_ball * 0.4 + stamina * 0.2;
-        if skill_score < 0.4 {
+        if skill_score < skill_threshold {
             return false;
         }
 
@@ -547,6 +605,11 @@ impl ForwardRunningState {
         // More aggressive: make runs even if space is limited, as long as teammate has ball
         // and we're in attacking third
         let in_attacking_third = self.is_in_good_attacking_position(ctx);
+
+        // During counter-attacks, be much more willing to run
+        if is_counter && teammate_has_ball {
+            return true;
+        }
 
         (space_behind || in_attacking_third) && teammate_has_ball
     }

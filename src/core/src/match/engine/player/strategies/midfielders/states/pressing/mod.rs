@@ -12,7 +12,10 @@ pub struct MidfielderPressingState {}
 
 impl StateProcessingHandler for MidfielderPressingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        if ctx.in_state_time > 60 {
+        // Scale max press time by tactical intensity (40-80 tick range)
+        let intensity = ctx.team().tactics().pressing_intensity();
+        let max_press_time = (40.0 + 40.0 * intensity) as u64;
+        if ctx.in_state_time > max_press_time {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

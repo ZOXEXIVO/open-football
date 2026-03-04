@@ -95,6 +95,22 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            // COUNTER-ATTACK: Quick transition when opportunity detected
+            if ctx.ball().has_stable_possession() && self.is_counter_attack_opportunity(ctx) {
+                if let Some(forward_target) = self.find_counter_attack_pass(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(forward_target.id)
+                                .with_reason("MID_RUNNING_COUNTER_ATTACK")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
+
             // ONE-TWO COMBINATION: After just receiving ball, check if passer has run ahead
             // into space — return the ball immediately for a wall-pass / give-and-go
             if ctx.ball().has_stable_possession() {
@@ -765,6 +781,96 @@ impl MidfielderRunningState {
         .calculate(ctx.player)
         .velocity * 0.6 // Slower overall speed in retention mode
             + ctx.player().separation_velocity()
+    }
+
+    /// COUNTER-ATTACK: Detect if a counter-attack opportunity exists.
+    /// True when team just won possession, opponents are high, and space ahead is open.
+    fn is_counter_attack_opportunity(&self, ctx: &StateProcessingContext) -> bool {
+        let ownership_duration = ctx.tick_context.ball.ownership_duration;
+
+        // Must have just won possession (< 15 ticks)
+        if ownership_duration >= 15 {
+            return false;
+        }
+
+        // Ball must be on own side or midfield (counter goes forward)
+        if !ctx.ball().on_own_side() {
+            // Allow early midfield counters too
+            let goal_dist = ctx.ball().distance_to_opponent_goal();
+            let field_width = ctx.context.field_size.width as f32;
+            if goal_dist < field_width * 0.4 {
+                return false; // Already in attacking third, no need for counter
+            }
+        }
+
+        // Count opponents ahead of ball (between ball and opponent goal)
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - ball_pos).normalize();
+
+        let opponents_ahead = ctx.players().opponents().all()
+            .filter(|opp| {
+                let to_opp = opp.position - ball_pos;
+                to_opp.normalize().dot(&to_goal) > 0.3 // Opponent is ahead of ball
+            })
+            .count();
+
+        // Counter-attack opportunity if few opponents ahead
+        opponents_ahead < 3
+    }
+
+    /// COUNTER-ATTACK: Find a forward pass target for quick transition.
+    /// Prefers forwards making runs toward goal with space around them.
+    fn find_counter_attack_pass<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        let mut best_target: Option<(MatchPlayerLite, f32)> = None;
+
+        for teammate in ctx.players().teammates().nearby(300.0) {
+            let to_teammate = teammate.position - player_pos;
+
+            // Must be ahead of us (toward opponent goal)
+            if to_teammate.normalize().dot(&to_goal) < 0.3 {
+                continue;
+            }
+
+            // Must have space (no opponent within 10 units)
+            let opponents_near = ctx.players().opponents().all()
+                .filter(|opp| (opp.position - teammate.position).magnitude() < 10.0)
+                .count();
+            if opponents_near >= 2 {
+                continue;
+            }
+
+            // Must have clear passing lane
+            if !ctx.player().has_clear_pass(teammate.id) {
+                continue;
+            }
+
+            // Score: prefer forwards, closer to goal, making runs
+            let is_forward = teammate.tactical_positions.is_forward();
+            let goal_dist = (goal_pos - teammate.position).magnitude();
+            let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
+            let making_run = teammate_velocity.magnitude() > 1.0
+                && teammate_velocity.normalize().dot(&to_goal) > 0.3;
+
+            let mut score = 1000.0 - goal_dist; // Closer to goal = better
+            if is_forward { score += 200.0; }
+            if making_run { score += 150.0; }
+            if opponents_near == 0 { score += 100.0; }
+
+            if let Some((_, best_score)) = &best_target {
+                if score > *best_score {
+                    best_target = Some((teammate, score));
+                }
+            } else {
+                best_target = Some((teammate, score));
+            }
+        }
+
+        best_target.map(|(t, _)| t)
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around
