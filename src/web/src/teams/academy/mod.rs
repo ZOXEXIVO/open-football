@@ -148,11 +148,7 @@ pub async fn team_academy_action(
         &league_refs,
     );
 
-    let title = if team.team_type == core::TeamType::Main {
-        team.name.clone()
-    } else {
-        format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key()))
-    };
+    let title = team.name.clone();
 
     Ok(TeamAcademyTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,

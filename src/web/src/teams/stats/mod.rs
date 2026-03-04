@@ -115,7 +115,7 @@ pub async fn team_stats_action(
         .collect();
 
     let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/stats", &route_params.lang, &team.slug), &league_refs);
-    let title = if team.team_type == core::TeamType::Main { team.name.clone() } else { format!("{} - {}", team.name, i18n.t(team.team_type.as_i18n_key())) };
+    let title = team.name.clone();
 
     Ok(TeamStatsTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
