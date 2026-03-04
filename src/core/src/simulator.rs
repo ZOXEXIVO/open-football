@@ -3,6 +3,7 @@ use crate::club::ai::apply_ai_responses;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::{Continent, ContinentResult};
 use crate::competitions::GlobalCompetitions;
+use crate::league::LeagueTable;
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
@@ -93,13 +94,38 @@ impl SimulatorData {
 
         data.indexes = Some(indexes);
 
+        data.init_league_tables();
+
         data
+    }
+
+    /// Initialize all league tables with their teams so tables are populated from the start.
+    fn init_league_tables(&mut self) {
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                let clubs = &country.clubs;
+
+                for league in &mut country.leagues.leagues {
+                    if !league.table.rows.is_empty() {
+                        continue;
+                    }
+
+                    let team_ids: Vec<u32> = clubs
+                        .iter()
+                        .flat_map(|c| c.teams.with_league(league.id))
+                        .collect();
+
+                    if !team_ids.is_empty() {
+                        league.table = LeagueTable::new(&team_ids);
+                    }
+                }
+            }
+        }
     }
 
     pub fn next_date(&mut self) {
         self.date += Duration::days(1);
     }
-
 }
 
 pub struct SimulationResult {
