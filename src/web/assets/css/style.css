@@ -3007,6 +3007,37 @@ a:link, a:visited, a:hover, a:active { text-decoration: none !important; }
   margin-right: 6px;
 }
 
+.fm-match-recording-disabled {
+  color: #8a9bb5;
+  font-size: 14px;
+  padding: 60px 24px;
+  text-align: center;
+  background: #1a2233;
+  border-radius: 6px;
+  margin-top: 8px;
+}
+
+.fm-match-recording-disabled i {
+  font-size: 32px;
+  display: block;
+  margin-bottom: 16px;
+  color: #5a6a80;
+}
+
+.fm-match-recording-disabled p {
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+
+.fm-match-recording-disabled a {
+  color: #4a9eff;
+  text-decoration: none;
+}
+
+.fm-match-recording-disabled a:hover {
+  text-decoration: underline;
+}
+
 /* ============================================
    TEAM TACTICS PAGE
    ============================================ */

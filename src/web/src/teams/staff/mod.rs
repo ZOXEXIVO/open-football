@@ -213,6 +213,7 @@ pub async fn team_staff_action(
         &team.slug,
         &format!("/{}/teams/{}/staff", &route_params.lang, &team.slug),
         &league_refs,
+        team.team_type == core::TeamType::Main,
     );
 
     let title = team.name.clone();

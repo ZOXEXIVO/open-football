@@ -73,6 +73,8 @@
     "league_table": "Clasificación",
     "leagues": "Ligas",
     "loading_match": "Cargando datos del partido...",
+    "match_recording_disabled": "La visualización del partido está desactivada ya que consume muchos recursos. Puedes ejecutarla localmente en tu propio hardware.",
+    "match_recording_disabled_link": "Obtener open-football en GitHub",
     "loan": "Cesión",
     "loan_from": "de",
     "loan_to": "a",

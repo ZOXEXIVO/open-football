@@ -106,7 +106,7 @@ pub fn league_menu(i18n: &I18n, lang: &str, country_name: &str, country_slug: &s
     sections
 }
 
-pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)]) -> Vec<MenuSection> {
+pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)], is_main_team: bool) -> Vec<MenuSection> {
     let mut sections = vec![
         MenuSection {
             items: vec![MenuItem {
@@ -167,52 +167,56 @@ pub fn team_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_
     });
 
     let tactics_url = format!("/{}/teams/{}/tactics", lang, team_slug);
-    let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
-    let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", lang, team_slug);
     let transfers_url = format!("/{}/teams/{}/transfers", lang, team_slug);
 
-    sections.push(MenuSection {
-        items: vec![
-            MenuItem {
-                active: current_path == tactics_url,
-                title: i18n.t("tactics").to_string(),
-                url: tactics_url,
-                icon: "fa-chess".to_string(),
-            },
-            MenuItem {
-                active: current_path == finances_url,
-                title: i18n.t("finances").to_string(),
-                url: finances_url,
-                icon: "fa-coins".to_string(),
-            },
-            MenuItem {
-                active: current_path == academy_url,
-                title: i18n.t("academy").to_string(),
-                url: academy_url,
-                icon: "fa-graduation-cap".to_string(),
-            },
-            MenuItem {
-                active: current_path == schedule_url,
-                title: i18n.t("schedule").to_string(),
-                url: schedule_url,
-                icon: "fa-calendar".to_string(),
-            },
-            MenuItem {
-                active: current_path == transfers_url,
-                title: i18n.t("transfers").to_string(),
-                url: transfers_url,
-                icon: "fa-exchange".to_string(),
-            },
-        ],
+    let mut items = vec![
+        MenuItem {
+            active: current_path == tactics_url,
+            title: i18n.t("tactics").to_string(),
+            url: tactics_url,
+            icon: "fa-chess".to_string(),
+        },
+    ];
+
+    if is_main_team {
+        let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
+        let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
+        items.push(MenuItem {
+            active: current_path == finances_url,
+            title: i18n.t("finances").to_string(),
+            url: finances_url,
+            icon: "fa-coins".to_string(),
+        });
+        items.push(MenuItem {
+            active: current_path == academy_url,
+            title: i18n.t("academy").to_string(),
+            url: academy_url,
+            icon: "fa-graduation-cap".to_string(),
+        });
+    }
+
+    items.push(MenuItem {
+        active: current_path == schedule_url,
+        title: i18n.t("schedule").to_string(),
+        url: schedule_url,
+        icon: "fa-calendar".to_string(),
     });
+    items.push(MenuItem {
+        active: current_path == transfers_url,
+        title: i18n.t("transfers").to_string(),
+        url: transfers_url,
+        icon: "fa-exchange".to_string(),
+    });
+
+    sections.push(MenuSection { items });
 
     sections.push(watchlist_section(i18n, lang, current_path));
 
     sections
 }
 
-pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)]) -> Vec<MenuSection> {
+pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)], is_main_team: bool) -> Vec<MenuSection> {
     let mut sections = vec![
         MenuSection {
             items: vec![MenuItem {
@@ -273,53 +277,57 @@ pub fn player_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], tea
     });
 
     let tactics_url = format!("/{}/teams/{}/tactics", lang, team_slug);
-    let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
-    let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
     let schedule_url = format!("/{}/teams/{}/schedule", lang, team_slug);
     let transfers_url = format!("/{}/teams/{}/transfers", lang, team_slug);
 
-    sections.push(MenuSection {
-        items: vec![
-            MenuItem {
-                active: current_path == tactics_url,
-                title: i18n.t("tactics").to_string(),
-                url: tactics_url,
-                icon: "fa-chess".to_string(),
-            },
-            MenuItem {
-                active: current_path == finances_url,
-                title: i18n.t("finances").to_string(),
-                url: finances_url,
-                icon: "fa-coins".to_string(),
-            },
-            MenuItem {
-                active: current_path == academy_url,
-                title: i18n.t("academy").to_string(),
-                url: academy_url,
-                icon: "fa-graduation-cap".to_string(),
-            },
-            MenuItem {
-                active: current_path == schedule_url,
-                title: i18n.t("schedule").to_string(),
-                url: schedule_url,
-                icon: "fa-calendar".to_string(),
-            },
-            MenuItem {
-                active: current_path == transfers_url,
-                title: i18n.t("transfers").to_string(),
-                url: transfers_url,
-                icon: "fa-exchange".to_string(),
-            },
-        ],
+    let mut items = vec![
+        MenuItem {
+            active: current_path == tactics_url,
+            title: i18n.t("tactics").to_string(),
+            url: tactics_url,
+            icon: "fa-chess".to_string(),
+        },
+    ];
+
+    if is_main_team {
+        let finances_url = format!("/{}/teams/{}/finances", lang, team_slug);
+        let academy_url = format!("/{}/teams/{}/academy", lang, team_slug);
+        items.push(MenuItem {
+            active: current_path == finances_url,
+            title: i18n.t("finances").to_string(),
+            url: finances_url,
+            icon: "fa-coins".to_string(),
+        });
+        items.push(MenuItem {
+            active: current_path == academy_url,
+            title: i18n.t("academy").to_string(),
+            url: academy_url,
+            icon: "fa-graduation-cap".to_string(),
+        });
+    }
+
+    items.push(MenuItem {
+        active: current_path == schedule_url,
+        title: i18n.t("schedule").to_string(),
+        url: schedule_url,
+        icon: "fa-calendar".to_string(),
     });
+    items.push(MenuItem {
+        active: current_path == transfers_url,
+        title: i18n.t("transfers").to_string(),
+        url: transfers_url,
+        icon: "fa-exchange".to_string(),
+    });
+
+    sections.push(MenuSection { items });
 
     sections.push(watchlist_section(i18n, lang, current_path));
 
     sections
 }
 
-pub fn staff_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)]) -> Vec<MenuSection> {
-    team_menu(i18n, lang, neighbor_teams, team_slug, current_path, leagues)
+pub fn staff_menu(i18n: &I18n, lang: &str, neighbor_teams: &[(&str, &str)], team_slug: &str, current_path: &str, leagues: &[(&str, &str)], is_main_team: bool) -> Vec<MenuSection> {
+    team_menu(i18n, lang, neighbor_teams, team_slug, current_path, leagues, is_main_team)
 }
 
 pub fn country_menu(i18n: &I18n, lang: &str, _country_slug: &str, current_path: &str, country_leagues: &[(&str, &str)]) -> Vec<MenuSection> {

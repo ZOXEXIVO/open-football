@@ -328,6 +328,7 @@ pub async fn player_transfers_action(
                 &team.slug,
                 &format!("/{}/teams/{}", &route_params.lang, &team.slug),
                 &league_refs,
+                team.team_type == core::TeamType::Main,
             )
         } else {
             Vec::new()

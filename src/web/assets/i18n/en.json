@@ -118,6 +118,8 @@
     "league_table": "League Table",
     "leagues": "Leagues",
     "loading_match": "Loading match data...",
+    "match_recording_disabled": "Match visualization is disabled as it is resource-intensive. You can run it locally on your own hardware.",
+    "match_recording_disabled_link": "Get open-football on GitHub",
     "loan": "Loan",
     "loan_from": "from",
     "loan_to": "to",

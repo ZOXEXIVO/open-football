@@ -235,6 +235,7 @@ pub async fn staff_get_action(
             &team.slug,
             &format!("/{}/teams/{}", &route_params.lang, &team.slug),
             &league_refs,
+            team.team_type == core::TeamType::Main,
         ),
         i18n,
         lang: route_params.lang.clone(),

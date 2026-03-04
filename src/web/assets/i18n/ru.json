@@ -73,6 +73,8 @@
     "league_table": "Турнирная таблица",
     "leagues": "Лиги",
     "loading_match": "Загрузка данных матча...",
+    "match_recording_disabled": "Визуализация матча отключена, так как она ресурсоёмкая. Вы можете запустить её локально на своём оборудовании.",
+    "match_recording_disabled_link": "Скачать open-football на GitHub",
     "loan": "Аренда",
     "loan_from": "из",
     "loan_to": "в",

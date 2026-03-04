@@ -79,6 +79,7 @@
                 </div>
             </div>
             <div class="col-lg-8">
+                {% if match_recordings_enabled %}
                 <div id="match-play-area">
                     <div class="time-scrollbar-wrapper" id="time-scrollbar-wrapper" style="display:none">
                         <div class="time-scrollbar-container">
@@ -107,6 +108,13 @@
                         <div id="pixi-container" class="match-container"></div>
                     </div>
                 </div>
+                {% else %}
+                <div class="fm-match-recording-disabled">
+                    <i class="fa fa-video-slash"></i>
+                    <p>{{ i18n.t("match_recording_disabled") }}</p>
+                    <a href="https://github.com/ZOXEXIVO/open-football" target="_blank" rel="noopener">{{ i18n.t("match_recording_disabled_link") }}</a>
+                </div>
+                {% endif %}
             </div>
             <div class="col-lg-2 d-none d-lg-block">
                 <div class="fm-match-squad fm-match-squad-away">
@@ -491,7 +499,7 @@
             metadata = await metaRes.json();
         } catch(e) {
             console.error('Failed to load metadata:', e);
-            document.getElementById('loading-spinner').innerHTML = '<div class="fm-match-not-ready"><i class="fa fa-clock-o"></i> Match data not ready</div>';
+            document.getElementById('loading-spinner').innerHTML = '<div class="fm-match-not-ready"><i class="fa fa-clock-o"></i> {{ i18n.t("loading_match") }}</div>';
             return;
         }
 

@@ -55,6 +55,7 @@ pub struct MatchGetTemplate {
     pub away_color_foreground: String,
     pub player_of_the_match_id: u32,
     pub player_of_the_match_name: String,
+    pub match_recordings_enabled: bool,
 }
 
 pub struct GoalEventDisplay {
@@ -381,6 +382,7 @@ pub async fn match_get_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_name: motm_name,
+        match_recordings_enabled: core::is_match_recordings_mode(),
     })
 }
 
