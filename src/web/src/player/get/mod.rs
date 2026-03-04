@@ -38,6 +38,8 @@ pub struct PlayerGetTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
+    pub player_id: u32,
     pub player: PlayerViewModel,
     pub is_goalkeeper: bool,
 }
@@ -282,6 +284,8 @@ pub async fn player_get_action(
             menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs, team.team_type == core::TeamType::Main),
             i18n,
             lang: route_params.lang.clone(),
+            active_tab: "overview",
+            player_id: player.id,
             player: player_vm,
             is_goalkeeper,
         });
@@ -340,6 +344,8 @@ pub async fn player_get_action(
             menu_sections: Vec::new(),
             i18n,
             lang: route_params.lang.clone(),
+            active_tab: "overview",
+            player_id: player.id,
             player: player_vm,
             is_goalkeeper,
         });

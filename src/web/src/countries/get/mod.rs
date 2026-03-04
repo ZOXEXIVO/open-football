@@ -29,6 +29,7 @@ pub struct CountryGetTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub country_slug: String,
     pub leagues: Vec<LeagueDto>,
 }
@@ -97,6 +98,7 @@ pub async fn country_get_action(
         menu_sections: views::country_menu(&i18n, &route_params.lang, &route_params.country_slug, &current_path, &cl),
         lang: route_params.lang,
         i18n,
+        active_tab: "leagues",
         country_slug: route_params.country_slug,
         leagues,
     })

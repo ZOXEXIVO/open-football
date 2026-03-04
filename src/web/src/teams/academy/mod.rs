@@ -33,6 +33,7 @@ pub struct TeamAcademyTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
     pub players: Vec<AcademyPlayer>,
@@ -167,6 +168,7 @@ pub async fn team_academy_action(
         foreground_color: club.colors.foreground.clone(),
         menu_sections,
         team_slug: team.slug.clone(),
+        active_tab: "academy",
         show_finances_tab: team.team_type == core::TeamType::Main
             || team.team_type == core::TeamType::B,
         show_academy_tab: true,

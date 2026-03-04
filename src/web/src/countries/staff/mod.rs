@@ -30,6 +30,7 @@ pub struct CountryStaffTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub country_slug: String,
     pub staff: Vec<NationalStaffDto>,
 }
@@ -114,6 +115,7 @@ pub async fn country_staff_action(
         menu_sections: views::country_menu(&i18n, &route_params.lang, &route_params.country_slug, &current_path, &cl),
         lang: route_params.lang,
         i18n,
+        active_tab: "staff",
         country_slug: route_params.country_slug,
         staff,
     })

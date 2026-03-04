@@ -31,6 +31,8 @@ pub struct TeamFinancesTemplate {
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
     pub team_slug: String,
+    pub active_tab: &'static str,
+    pub show_finances_tab: bool,
     pub show_academy_tab: bool,
     // Financial data
     pub balance: String,
@@ -193,6 +195,8 @@ pub async fn team_finances_get_action(
         foreground_color: club.colors.foreground.clone(),
         menu_sections,
         team_slug: team.slug.clone(),
+        active_tab: "finances",
+        show_finances_tab: true,
         show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
         balance,
         balance_positive,

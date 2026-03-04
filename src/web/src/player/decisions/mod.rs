@@ -29,6 +29,7 @@ pub struct PlayerDecisionsTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub player_id: u32,
     pub decisions: Vec<PlayerDecisionItem>,
 }
@@ -100,6 +101,7 @@ pub async fn player_decisions_action(
         },
         i18n,
         lang: route_params.lang.clone(),
+        active_tab: "decisions",
         player_id: route_params.player_id,
         decisions,
     })

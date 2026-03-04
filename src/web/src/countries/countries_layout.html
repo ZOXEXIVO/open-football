@@ -1,0 +1,15 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab{% if active_tab == "squad" %} active{% endif %}" href="/{{ lang }}/countries/{{ country_slug }}">{{ i18n.t("squad") }}</a>
+    <a class="fm-tab{% if active_tab == "schedule" %} active{% endif %}" href="/{{ lang }}/countries/{{ country_slug }}/schedule">{{ i18n.t("schedule") }}</a>
+    <a class="fm-tab{% if active_tab == "staff" %} active{% endif %}" href="/{{ lang }}/countries/{{ country_slug }}/staff">{{ i18n.t("staff") }}</a>
+    <a class="fm-tab{% if active_tab == "leagues" %} active{% endif %}" href="/{{ lang }}/countries/{{ country_slug }}/leagues">{{ i18n.t("leagues") }}</a>
+    <a class="fm-tab{% if active_tab == "free_agents" %} active{% endif %}" href="/{{ lang }}/countries/{{ country_slug }}/free-agents">{{ i18n.t("free_agents") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}{% endblock %}
+
+{% block scripts %}{% endblock %}

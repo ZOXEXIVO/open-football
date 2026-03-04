@@ -29,6 +29,7 @@ pub struct CountryFreeAgentsTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub country_slug: String,
     pub players: Vec<FreeAgentPlayerDto>,
 }
@@ -156,6 +157,7 @@ pub async fn country_free_agents_action(
         ),
         lang: route_params.lang,
         i18n,
+        active_tab: "free_agents",
         country_slug: route_params.country_slug,
         players,
     })

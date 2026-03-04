@@ -29,6 +29,7 @@ pub struct CountryScheduleTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub country_slug: String,
     pub items: Vec<CountryScheduleItem>,
 }
@@ -160,6 +161,7 @@ pub async fn country_schedule_action(
         ),
         lang: route_params.lang,
         i18n,
+        active_tab: "schedule",
         country_slug: route_params.country_slug,
         items,
     })

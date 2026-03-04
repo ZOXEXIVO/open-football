@@ -30,6 +30,7 @@ pub struct CountrySquadTemplate {
     pub menu_sections: Vec<MenuSection>,
     pub i18n: crate::I18n,
     pub lang: String,
+    pub active_tab: &'static str,
     pub country_slug: String,
     pub players: Vec<NationalSquadPlayerDto>,
 }
@@ -148,6 +149,7 @@ pub async fn country_squad_action(
         menu_sections: views::country_menu(&i18n, &route_params.lang, &route_params.country_slug, &current_path, &cl),
         lang: route_params.lang,
         i18n,
+        active_tab: "squad",
         country_slug: route_params.country_slug,
         players,
     })
