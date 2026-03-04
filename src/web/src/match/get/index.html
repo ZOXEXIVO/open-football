@@ -7,14 +7,14 @@
         <div class="fm-sb-main">
             <div class="fm-sb-team fm-sb-team-home">
                 <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-sb-team-name">{{ home_team_name }}</a>
-                <div class="fm-sb-goals{% if home_goal_events.len() <= 2 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
+                <div class="fm-sb-goals{% if home_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="home-goals">
                     {% for goal in home_goal_events %}
                     <a href="/{{ lang }}/players/{{ goal.player_id }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
                     {% endfor %}
                 </div>
-                {% if home_goal_events.len() > 2 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ home_goal_events.len() - 2 }}'">
-                    ···  +{{ home_goal_events.len() - 2 }}
+                {% if home_goal_events.len() > 5 %}
+                <button class="fm-sb-expander" onclick="var g=document.getElementById('home-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ home_goal_events.len() - 5 }}'">
+                    ···  +{{ home_goal_events.len() - 5 }}
                 </button>
                 {% endif %}
             </div>
@@ -25,14 +25,14 @@
             </div>
             <div class="fm-sb-team fm-sb-team-away">
                 <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-sb-team-name">{{ away_team_name }}</a>
-                <div class="fm-sb-goals{% if away_goal_events.len() <= 2 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
+                <div class="fm-sb-goals{% if away_goal_events.len() <= 5 %} fm-sb-goals-expanded{% endif %}" id="away-goals">
                     {% for goal in away_goal_events %}
                     <a href="/{{ lang }}/players/{{ goal.player_id }}" class="fm-sb-goal">{{ goal.player_name }} {{ goal.minute }}'{% if goal.is_auto_goal %} (OG){% endif %}</a>
                     {% endfor %}
                 </div>
-                {% if away_goal_events.len() > 2 %}
-                <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ away_goal_events.len() - 2 }}'">
-                    ···  +{{ away_goal_events.len() - 2 }}
+                {% if away_goal_events.len() > 5 %}
+                <button class="fm-sb-expander" onclick="var g=document.getElementById('away-goals');g.classList.toggle('fm-sb-goals-expanded');this.textContent=g.classList.contains('fm-sb-goals-expanded')?'−':'···  +{{ away_goal_events.len() - 5 }}'">
+                    ···  +{{ away_goal_events.len() - 5 }}
                 </button>
                 {% endif %}
             </div>
