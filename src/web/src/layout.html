@@ -116,33 +116,33 @@
 <script src="/js/bootstrap.bundle.min.js"></script>
 <script>
     document.addEventListener('click', function (e) {
-        var toggle = e.target.closest('.fm-sidebar-lang-toggle');
+        const toggle = e.target.closest('.fm-sidebar-lang-toggle');
         if (toggle) {
             toggle.closest('.fm-sidebar-lang').classList.toggle('fm-lang-open');
             return;
         }
-        var option = e.target.closest('.fm-lang-option');
+        const option = e.target.closest('.fm-lang-option');
         if (option) {
-            var lang = option.dataset.lang;
-            var path = window.location.pathname.replace(/^\/[a-z]{2}(\/|$)/, '/' + lang + '$1');
+            const lang = option.dataset.lang;
+            let path = window.location.pathname.replace(/^\/[a-z]{2}(\/|$)/, '/' + lang + '$1');
             if (path === '/' + lang) path = '/' + lang;
             window.location.href = path;
             return;
         }
-        var dd = document.querySelector('.fm-sidebar-lang');
+        const dd = document.querySelector('.fm-sidebar-lang');
         if (dd && !dd.contains(e.target)) dd.classList.remove('fm-lang-open');
     });
 
     // Refresh #page-content from server without full page reload
     async function refreshContent() {
         try {
-            var res = await fetch(window.location.href);
+            const res = await fetch(window.location.href);
             if (!res.ok) return;
-            var html = await res.text();
-            var parser = new DOMParser();
-            var doc = parser.parseFromString(html, 'text/html');
-            var newContent = doc.getElementById('page-content');
-            var oldContent = document.getElementById('page-content');
+            const html = await res.text();
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+            const newContent = doc.getElementById('page-content');
+            const oldContent = document.getElementById('page-content');
             if (newContent && oldContent) {
                 oldContent.innerHTML = newContent.innerHTML;
             }
@@ -150,10 +150,10 @@
         }
     }
 
-    var _pollTimer = null;
+    let _pollTimer = null;
 
     function setProcessing(active) {
-        var btn = document.getElementById('process-btn');
+        const btn = document.getElementById('process-btn');
         if (!btn) return;
         if (active) {
             btn.classList.add('fm-processing');
@@ -171,12 +171,12 @@
 
     // Flow 1: Click Process → wait for sync response → refresh content
     async function startProcess(event) {
-        var btn = document.getElementById('process-btn');
+        const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
-        var url = event.shiftKey ? '/api/game/process?days=180' : '/api/game/process';
+        const url = event.shiftKey ? '/api/game/process?days=180' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
-            var res = await fetch(url, {method: 'POST'});
+            const res = await fetch(url, {method: 'POST'});
             if (res.status === 504) {
                 setProcessing(true);
                 return;
@@ -192,8 +192,8 @@
     // Flow 2: Page load → check if already processing → poll 1s until done
     async function pollProcessing() {
         try {
-            var res = await fetch('/api/game/processing');
-            var data = await res.json();
+            const res = await fetch('/api/game/processing');
+            const data = await res.json();
             if (!data.processing) {
                 setProcessing(false);
                 await refreshContent();
@@ -217,7 +217,7 @@
 <!-- Google tag (gtag.js) -->
 <script>
     if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        var s = document.createElement('script');
+        const s = document.createElement('script');
         s.async = true;
         s.src = 'https://www.googletagmanager.com/gtag/js?id=G-2WTTN499YZ';
         document.head.appendChild(s);
