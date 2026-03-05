@@ -155,7 +155,7 @@ impl League {
 
     fn play_scheduled_matches(
         &mut self,
-        scheduled_matches: &mut Vec<LeagueMatch>,
+        scheduled_matches: &mut [LeagueMatch],
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
         friendly: bool,

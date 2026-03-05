@@ -50,10 +50,10 @@ impl Continent {
         );
         
         // Phase 0: National team competition matches (parallel engine runs)
-        self.simulate_national_competitions(date);
+        //self.simulate_national_competitions(date);
 
         // Phase 0.5: International friendly matches (parallel engine runs)
-        self.simulate_international_friendlies(date);
+        //self.simulate_international_friendlies(date);
 
         // Phase 1+: Simulate all child entities and accumulate results
         let country_results = self.simulate_countries(&ctx);
