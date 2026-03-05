@@ -58,6 +58,7 @@ mod tests {
             },
             home_team_id: 0,
             away_team_id: 0,
+            friendly: false,
         };
         match_storage.push(match_result.clone());
         assert_eq!(match_storage.results.len(), 1);
@@ -82,6 +83,7 @@ mod tests {
             },
             home_team_id: 0,
             away_team_id: 0,
+            friendly: false,
         };
 
         match_storage.push(match_result.clone());

@@ -251,6 +251,7 @@ pub struct MatchResult {
     pub away_team_id: u32,
     pub details: Option<MatchResultRaw>,
     pub score: Score,
+    pub friendly: bool,
 }
 
 impl MatchResult {
@@ -267,6 +268,7 @@ impl MatchResult {
                 None
             },
             score: self.score.clone(),
+            friendly: self.friendly,
         }
     }
 }
@@ -281,6 +283,7 @@ impl From<&LeagueMatch> for MatchResult {
             away_team_id: m.away_team_id,
             score: Score::new(m.home_team_id, m.away_team_id),
             details: None,
+            friendly: false,
         }
     }
 }

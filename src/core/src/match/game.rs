@@ -38,7 +38,8 @@ impl Match {
         let away_team_id = self.away_squad.team_id;
         let away_team_name = String::from(&self.away_squad.team_name);
 
-        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, crate::is_match_recordings_mode(), self.is_friendly);
+        let match_recordings = crate::is_match_recordings_mode() && !self.is_friendly;
+        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, match_recordings, self.is_friendly);
 
         let score = match_result.score.as_ref().expect("no score");
 
@@ -58,6 +59,7 @@ impl Match {
             away_team_id,
             score: score.clone(),
             details: Some(match_result),
+            friendly: self.is_friendly,
         }
     }
 }

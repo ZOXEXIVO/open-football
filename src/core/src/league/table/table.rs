@@ -183,6 +183,7 @@ mod tests {
                 details: vec![],
             },
             details: None,
+            friendly: false,
         }];
 
         table.update_from_results(&match_results);
@@ -234,6 +235,7 @@ mod tests {
                 details: vec![],
             },
             details: None,
+            friendly: false,
         }];
 
         table.update_from_results(&match_results);
@@ -293,6 +295,7 @@ mod tests {
                 details: vec![],
             },
             details: None,
+            friendly: false,
         }];
 
         table.update_from_results(&match_results);

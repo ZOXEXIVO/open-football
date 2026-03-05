@@ -382,7 +382,7 @@ pub async fn match_get_action(
             .unwrap_or_else(|| "#ffffff".to_string()),
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_name: motm_name,
-        match_recordings_enabled: core::is_match_recordings_mode(),
+        match_recordings_enabled: core::is_match_recordings_mode() && !league.friendly,
     })
 }
 

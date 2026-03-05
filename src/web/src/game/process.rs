@@ -87,6 +87,9 @@ async fn write_match_results(result: SimulationResult) {
     let mut tasks = JoinSet::new();
 
     for match_result in result.match_results {
+        if match_result.friendly {
+            continue;
+        }
         tasks.spawn(MatchStore::store(match_result));
     }
 
