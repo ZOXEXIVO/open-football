@@ -233,7 +233,8 @@ impl CountryResult {
         }
     }
 
-    /// Deterministic retirement: only for players past max age or with Ret status.
+    /// Deterministic retirement: only for players past absolute max age or with Ret status.
+    /// Players still getting games are given a +1 year grace period.
     fn must_retire(player: &crate::Player, date: NaiveDate) -> bool {
         if player.statuses.get().contains(&PlayerStatusType::Ret) {
             return true;
@@ -244,14 +245,27 @@ impl CountryResult {
         let is_gk = player.position().is_goalkeeper();
 
         let max_retire_age = match ca {
-            0..=79 => 35u8,
-            80..=119 => 37,
-            _ => 38,
+            0..=59 => 36u8,
+            60..=99 => 37,
+            100..=139 => 38,
+            140..=169 => 39,
+            _ => 40,
         };
 
         let max_age = if is_gk { max_retire_age + 2 } else { max_retire_age };
 
-        age >= max_age
+        // Players still getting games get a 1-year grace period
+        // At season start current stats are 0, so fall back to last season history;
+        // if no history exists at all, assume the player is active (benefit of the doubt)
+        let has_recent_games = player.statistics.total_games() >= 5
+            || player.statistics_history.items
+                .last()
+                .map(|h| h.statistics.total_games() >= 5)
+                .unwrap_or(true);
+
+        let effective_max = if has_recent_games { max_age + 1 } else { max_age };
+
+        age >= effective_max
     }
 
     fn process_player_retirements(country: &mut Country, date: NaiveDate) {
@@ -292,39 +306,90 @@ impl CountryResult {
             return true;
         }
 
-        // Goalkeepers retire later
         let is_gk = player.position().is_goalkeeper();
 
-        // Base retirement age ranges:
-        // Low ability (CA < 80): retire 33-35
-        // Medium ability (80-120): retire 34-37
-        // High ability (120+): retire 35-38
-        // Goalkeepers: +2 years
+        // Base retirement age window by ability
+        // Higher ability players have longer careers
         let (min_retire_age, max_retire_age) = match ca {
-            0..=79 => (33u8, 35u8),
-            80..=119 => (34, 37),
-            _ => (35, 38),
+            0..=59 => (32u8, 35u8),
+            60..=99 => (33, 36),
+            100..=139 => (34, 37),
+            140..=169 => (35, 38),
+            _ => (36, 39),
         };
 
+        // Goalkeepers retire ~2 years later
         let (min_age, max_age) = if is_gk {
             (min_retire_age + 2, max_retire_age + 2)
         } else {
             (min_retire_age, max_retire_age)
         };
 
+        // Too young to retire
         if age < min_age {
             return false;
         }
 
+        // Past max age — forced retirement
         if age >= max_age {
             return true;
         }
 
-        // Between min and max: probability increases with age
-        let range = (max_age - min_age) as i32;
+        // Still playing regularly? Don't retire.
+        // Check current season official appearances
+        let current_season_games = player.statistics.total_games();
+        if current_season_games >= 10 {
+            return false;
+        }
+
+        // Check last completed season from history
+        let last_season_games = player.statistics_history.items
+            .last()
+            .map(|h| h.statistics.total_games())
+            .unwrap_or(0);
+
+        // Players with significant recent game time are much less likely to retire
+        if last_season_games >= 15 {
+            return false;
+        }
+
+        // Base retirement probability: increases with age within the window
+        let range = (max_age - min_age).max(1) as i32;
         let years_over = (age - min_age) as i32;
-        // Chance: 20% at min_age, increasing to 80% at max_age-1
-        let chance = 20 + (years_over * 60 / range);
+        let mut chance: i32 = 15 + (years_over * 50 / range);
+
+        // Ambitious players want to keep playing
+        // ambition is 0.0-20.0
+        let ambition = player.attributes.ambition;
+        if ambition > 15.0 {
+            chance -= 20;
+        } else if ambition > 10.0 {
+            chance -= 10;
+        }
+
+        // High determination makes players persist
+        let determination = player.skills.mental.determination;
+        if determination > 15.0 {
+            chance -= 15;
+        } else if determination > 10.0 {
+            chance -= 5;
+        }
+
+        // Players with no games last season are more likely to retire
+        if last_season_games == 0 && current_season_games == 0 {
+            chance += 25;
+        } else if last_season_games < 5 {
+            chance += 10;
+        }
+
+        // Declining ability makes retirement more likely
+        // If CA is well below PA, player has declined
+        let pa = player.player_attributes.potential_ability;
+        if pa > 0 && ca < pa / 2 {
+            chance += 15;
+        }
+
+        chance = chance.clamp(5, 90);
         IntegerUtils::random(0, 100) < chance
     }
 

@@ -403,7 +403,6 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-processing {
     pointer-events: none;
-    opacity: 0.8;
 }
 
 .spinner {

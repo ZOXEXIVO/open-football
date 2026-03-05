@@ -1,6 +1,5 @@
 use nalgebra::Vector3;
 use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
-use crate::r#match::engine::player::statistics::MatchStatisticType;
 use crate::r#match::engine::result::PlayerMatchEndStats;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;

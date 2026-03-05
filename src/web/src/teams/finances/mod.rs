@@ -178,7 +178,10 @@ pub async fn team_finances_get_action(
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
     let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
-    let menu_sections = views::team_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}/finances", &route_params.lang, &team.slug), &league_refs, team.team_type == core::TeamType::Main);
+    let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
+    let current_path = format!("/{}/teams/{}/finances", &route_params.lang, &team.slug);
+    let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
+    let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
     let title = team.name.clone();
 
     Ok(TeamFinancesTemplate {

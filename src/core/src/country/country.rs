@@ -58,7 +58,7 @@ impl Country {
         debug!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
 
         // Phase 1: League Competitions
-        let league_results = self.simulate_leagues(&ctx);
+        let league_results = self.leagues.simulate(&self.clubs, &ctx);
 
         // Phase 2: National Team (international breaks)
         let date = ctx.simulation.date.date();
@@ -76,10 +76,6 @@ impl Country {
         debug!("✅ Country {} simulation complete", country_name);
 
         CountryResult::new(self.id, league_results, clubs_results)
-    }
-
-    fn simulate_leagues(&mut self, ctx: &GlobalContext<'_>) -> Vec<crate::league::LeagueResult> {
-        self.leagues.simulate(&self.clubs, ctx)
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {

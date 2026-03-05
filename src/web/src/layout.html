@@ -145,6 +145,7 @@
             const oldContent = document.getElementById('page-content');
             if (newContent && oldContent) {
                 oldContent.innerHTML = newContent.innerHTML;
+                document.dispatchEvent(new Event('content-refreshed'));
             }
         } catch (e) {
         }

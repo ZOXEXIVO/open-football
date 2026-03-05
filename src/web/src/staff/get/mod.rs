@@ -228,15 +228,12 @@ pub async fn staff_get_action(
             .club(team.club_id)
             .map(|c| c.colors.foreground.clone())
             .unwrap_or_default(),
-        menu_sections: views::staff_menu(
-            &i18n,
-            &route_params.lang,
-            &neighbor_refs,
-            &team.slug,
-            &format!("/{}/teams/{}", &route_params.lang, &team.slug),
-            &league_refs,
-            team.team_type == core::TeamType::Main,
-        ),
+        menu_sections: {
+            let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
+            let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
+            views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+        },
         i18n,
         lang: route_params.lang.clone(),
         staff: staff_vm,

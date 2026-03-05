@@ -148,13 +148,10 @@ pub async fn country_free_agents_action(
         sub_title_country_code: String::new(),
         header_color: country.background_color.clone(),
         foreground_color: country.foreground_color.clone(),
-        menu_sections: views::country_menu(
-            &i18n,
-            &route_params.lang,
-            &route_params.country_slug,
-            &current_path,
-            &cl,
-        ),
+        menu_sections: {
+            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &route_params.country_slug };
+            views::country_menu(&mp, &cl)
+        },
         lang: route_params.lang,
         i18n,
         active_tab: "free_agents",

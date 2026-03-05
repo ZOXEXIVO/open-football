@@ -272,7 +272,9 @@ pub async fn league_transfers_action(
             let mut cl: Vec<(u32, &str, &str)> = country.leagues.leagues.iter().filter(|l| !l.friendly).map(|l| (l.id, l.name.as_str(), l.slug.as_str())).collect();
             cl.sort_by_key(|(id, _, _)| *id);
             let cl_refs: Vec<(&str, &str)> = cl.iter().map(|(_, n, s)| (*n, *s)).collect();
-            views::league_menu(&i18n, &route_params.lang, &country.name, &country.slug, &league.slug, &format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug), &cl_refs)
+            let current_path = format!("/{}/leagues/{}/transfers", &route_params.lang, &league.slug);
+            let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: &country.name, country_slug: &country.slug };
+            views::league_menu(&mp, &league.slug, &cl_refs)
         },
         league_slug: league.slug.clone(),
         has_permanent_transfers: completed_transfers.iter().any(|t| !t.is_loan),

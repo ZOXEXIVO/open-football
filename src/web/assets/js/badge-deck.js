@@ -76,5 +76,6 @@
     }
 
     document.addEventListener('click', closeAll);
+    document.addEventListener('content-refreshed', initDecks);
     initDecks();
 })();

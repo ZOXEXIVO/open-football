@@ -451,7 +451,12 @@ pub async fn player_history_action(
             sub_title_country_code: String::new(),
             header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
             foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
-            menu_sections: views::player_menu(&i18n, &route_params.lang, &neighbor_refs, &team.slug, &format!("/{}/teams/{}", &route_params.lang, &team.slug), &league_refs, team.team_type == core::TeamType::Main),
+            menu_sections: {
+                let (cn, cs) = views::club_country_info(simulator_data, team.club_id);
+                let current_path = format!("/{}/teams/{}", &route_params.lang, &team.slug);
+                let mp = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
+                views::team_menu(&mp, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main)
+            },
             i18n,
             lang: route_params.lang.clone(),
             active_tab: "history",
