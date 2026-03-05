@@ -19,14 +19,7 @@ impl StateProcessingHandler for GoalkeeperShootingState {
             ));
         }
 
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Passing,
-            ));
-        }
-
-        // 4. Shoot the ball towards the opponent's goal
+        // Shoot the ball towards the opponent's goal
         let mut events = EventCollection::new();
 
         events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::new()

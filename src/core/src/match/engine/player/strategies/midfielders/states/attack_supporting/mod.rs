@@ -7,7 +7,6 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const TACKLE_RANGE: f32 = 30.0;
-const PRESS_RANGE: f32 = 100.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 
@@ -23,22 +22,32 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        // If team loses possession, switch to defensive duties
+        // If team loses possession, switch to defensive duties IMMEDIATELY
         if !ctx.team().is_control_ball() {
-            if ctx.ball().distance() < TACKLE_RANGE {
+            let ball_distance = ctx.ball().distance();
+
+            if ball_distance < TACKLE_RANGE {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
             }
 
-            if ctx.ball().distance() < PRESS_RANGE && ctx.ball().is_towards_player_with_angle(0.8) {
+            // Press any nearby opponent with the ball
+            if ball_distance < 150.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
             }
 
+            // Guard unmarked attackers instead of just returning
+            if ctx.ball().on_own_side() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Guarding,
+                ));
+            }
+
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
+                MidfielderState::Pressing,
             ));
         }
 

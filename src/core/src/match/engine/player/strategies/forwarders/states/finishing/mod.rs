@@ -2,8 +2,6 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::players::ShotQualityEvaluator;
-use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -23,22 +21,6 @@ impl StateProcessingHandler for ForwardFinishingState {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
             ));
-        }
-
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-        }
-
-        // Check shot cooldown
-        if !ctx.memory().can_shoot(ctx.current_tick()) {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-        }
-
-        // Evaluate xG - only shoot if above minimum threshold
-        let xg = ShotQualityEvaluator::evaluate(ctx);
-        if xg < MIN_XG_THRESHOLD {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
         // Calculate the shooting direction and power

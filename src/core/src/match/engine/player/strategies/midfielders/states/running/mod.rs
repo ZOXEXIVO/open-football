@@ -7,10 +7,10 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChan
 use nalgebra::Vector3;
 
 // Shooting distance constants for midfielders
-const MAX_SHOOTING_DISTANCE: f32 = 100.0; // Midfielders rarely shoot from beyond ~50m
-const STANDARD_SHOOTING_DISTANCE: f32 = 70.0; // Standard shooting range for midfielders
+const MAX_SHOOTING_DISTANCE: f32 = 80.0; // Midfielders rarely shoot from beyond ~40m
+const STANDARD_SHOOTING_DISTANCE: f32 = 55.0; // Standard shooting range for midfielders
 const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
-const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
+const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
 #[derive(Default, Clone)]
@@ -75,20 +75,22 @@ impl StateProcessingHandler for MidfielderRunningState {
             let long_shots = ctx.player.skills.technical.long_shots / 20.0;
             let finishing = ctx.player.skills.technical.finishing / 20.0;
 
-            // Standard shooting - close enough with clear shot
+            // Standard shooting - close enough with clear shot and good skill
+            // Also check that player is not heavily marked
             if goal_dist <= STANDARD_SHOOTING_DISTANCE
                 && ctx.player().has_clear_shot()
-                && finishing > 0.55 {
+                && finishing > 0.65
+                && ctx.players().opponents().nearby(8.0).count() < 2 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
             }
 
-            // Distance shooting - long range with good skills and minimal pressure
+            // Distance shooting - long range with excellent skills and no pressure
             if goal_dist <= MAX_SHOOTING_DISTANCE
                 && ctx.player().has_clear_shot()
-                && long_shots > 0.6
-                && finishing > 0.5
+                && long_shots > 0.65
+                && finishing > 0.55
                 && !ctx.players().opponents().exists(PRESSURE_CHECK_DISTANCE) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
@@ -174,31 +176,37 @@ impl StateProcessingHandler for MidfielderRunningState {
         } else {
             // Without ball - check for opponent with ball first (highest priority)
             // CRITICAL: Tackle opponent with ball if close enough
-            // Using new chaining syntax: nearby(100.0).with_ball(ctx)
-            if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
+            if let Some(opponent) = ctx.players().opponents().nearby(150.0).with_ball(ctx).next() {
                 let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-                // If opponent with ball is very close, tackle immediately
-                if opponent_distance < 30.0 {
+                // If opponent with ball is close, tackle immediately
+                if opponent_distance < 40.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));
                 }
 
-                // If opponent with ball is nearby, press them (already filtered by nearby(100.0))
+                // If opponent with ball is nearby, press them aggressively
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
             }
 
-            // Emergency: if ball is nearby, slow/stopped, and unowned, go for it immediately
+            // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
+            // But only if this player is the nearest teammate to prevent mass-chasing
             if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
                 if ball_velocity < 3.0 {
-                    // Ball is stopped or slow-moving - take it directly
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::TakeBall,
-                    ));
+                    let ball_pos = ctx.tick_context.positions.ball.position;
+                    let my_dist = ctx.ball().distance();
+                    let closer_teammate = ctx.players().teammates().all()
+                        .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
+
+                    if !closer_teammate {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::TakeBall,
+                        ));
+                    }
                 }
             }
 
@@ -212,6 +220,13 @@ impl StateProcessingHandler for MidfielderRunningState {
             if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
+                ));
+            }
+
+            // Guard unmarked attackers on our side when we can't press/intercept
+            if ctx.ball().on_own_side() && ctx.ball().distance() > 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Guarding,
                 ));
             }
         }
@@ -233,9 +248,9 @@ impl StateProcessingHandler for MidfielderRunningState {
                     )),
                 ));
             }
-            // Only shoot as fallback at very close range
+            // Only shoot as fallback at point-blank range with clear shot
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-            if distance_to_goal < 50.0 {
+            if distance_to_goal < 25.0 && ctx.player().has_clear_shot() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));

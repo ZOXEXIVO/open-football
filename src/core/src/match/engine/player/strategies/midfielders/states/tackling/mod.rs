@@ -9,8 +9,8 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 5.0; // Maximum distance to attempt a tackle (in meters)
-const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
+const TACKLE_DISTANCE_THRESHOLD: f32 = 15.0; // Increased — midfielders need to engage tackles earlier
+const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained midfielders foul less
 
 #[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}
@@ -31,20 +31,21 @@ impl StateProcessingHandler for MidfielderTacklingState {
 
         let ball_distance = ctx.ball().distance();
 
-        if ball_distance > 100.0 {
+        if ball_distance > 150.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
             ));
         }
 
-        if !ctx.ball().is_towards_player_with_angle(0.8) {
+        // If ball is moving away but opponent still nearby, keep pressing
+        if ball_distance > 80.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
             return if ctx.team().is_control_ball() {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::AttackSupporting,
                 ))
             } else {
                 Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Returning,
+                    MidfielderState::Pressing,
                 ))
             };
         }
@@ -128,8 +129,8 @@ impl MidfielderTacklingState {
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
         // Calculate success chance based on the skill difference
-        let success_chance = 0.5 + skill_difference * 0.3;
-        let clamped_success_chance = success_chance.clamp(0.1, 0.9);
+        let success_chance = 0.55 + skill_difference * 0.35;
+        let clamped_success_chance = success_chance.clamp(0.15, 0.92);
 
         // Simulate tackle success
         let tackle_success = rng.random::<f32>() < clamped_success_chance;

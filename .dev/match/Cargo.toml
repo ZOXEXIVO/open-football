@@ -1,0 +1,8 @@
+[package]
+name = "dev_match"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+core = { path = "../../src/core" }
+rayon = "1.11.0"

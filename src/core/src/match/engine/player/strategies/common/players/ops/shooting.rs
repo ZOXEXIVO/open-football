@@ -6,17 +6,17 @@ pub struct ShootingOperationsImpl<'p> {
 }
 
 // Realistic shooting distances (field is typically 840 units)
-const MAX_SHOOTING_DISTANCE: f32 = 150.0; // ~75m - absolute max for long shots
+const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 50.0; // ~20m - anyone can shoot
-const CLOSE_RANGE_DISTANCE: f32 = 70.0; // ~30m - close range shots
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 110.0; // ~40m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 150.0; // ~45m - medium range shots
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 30.0; // ~15m - anyone can shoot (penalty spot)
+const CLOSE_RANGE_DISTANCE: f32 = 50.0; // ~25m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 100.0; // ~50m - medium range shots
 
 // Shooting decision thresholds
-const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 60.0; // Always prefer shooting if closer than this
-const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 70.0; // Shoot over pass for decent finishers
-const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 130.0; // Distance for close-range excellent opportunity
+const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 40.0; // Always prefer shooting if closer than this
+const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 55.0; // Shoot over pass for decent finishers
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 80.0; // Distance for close-range excellent opportunity
 
 // Teammate advantage thresholds (multipliers)
 const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot
@@ -38,28 +38,28 @@ impl<'p> ShootingOperationsImpl<'p> {
             return true;
         }
 
-        // Close range shots (most common) - almost anyone can shoot from close range
+        // Close range shots — need reasonable finishing ability
         if distance_to_goal >= MIN_SHOOTING_DISTANCE && distance_to_goal <= CLOSE_RANGE_DISTANCE {
+            return shooting_skill > 0.45;
+        }
+
+        // Medium range shots - requires good finishing
+        if distance_to_goal <= OPTIMAL_SHOOTING_DISTANCE && shooting_skill > 0.6 {
             return true;
         }
 
-        // Medium range shots - requires decent finishing
-        if distance_to_goal <= OPTIMAL_SHOOTING_DISTANCE && shooting_skill > 0.5 {
-            return true;
-        }
-
-        // Medium-long range shots - moderate skill requirement (new tier)
+        // Medium-long range shots — need strong long shot ability
         if distance_to_goal <= MEDIUM_RANGE_DISTANCE
-            && long_shot_skill > 0.5
-            && shooting_skill > 0.45
+            && long_shot_skill > 0.65
+            && shooting_skill > 0.55
         {
             return true;
         }
 
-        // Long range shots - skilled players (reduced from 0.75/0.65 to 0.6/0.5)
+        // Long range shots — only elite players
         if distance_to_goal <= MAX_SHOOTING_DISTANCE
-            && long_shot_skill > 0.6
-            && shooting_skill > 0.5
+            && long_shot_skill > 0.75
+            && shooting_skill > 0.6
         {
             return true;
         }
@@ -104,36 +104,30 @@ impl<'p> ShootingOperationsImpl<'p> {
         let confidence = skills.mental.composure / 20.0;
         let finishing = skills.technical.finishing / 20.0;
         let long_shots = skills.technical.long_shots / 20.0;
+        let teamwork = skills.mental.teamwork / 20.0;
 
-        // Close range - almost always shoot if clear
-        if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && has_clear_shot {
-            return finishing > 0.5 || distance <= VERY_CLOSE_RANGE_DISTANCE;
+        // Must have clear shot for any shooting decision
+        if !has_clear_shot {
+            return false;
         }
 
-        // Medium range - shoot if decent skills
-        if distance <= SHOOT_OVER_PASS_MEDIUM_THRESHOLD && has_clear_shot && finishing > 0.55 {
+        // Check if heavily marked — prefer pass if 2+ opponents very close
+        let heavily_marked = self.ctx.players().opponents().nearby(8.0).count() >= 2;
+        if heavily_marked && distance > VERY_CLOSE_RANGE_DISTANCE {
+            return false;
+        }
+
+        // Very close range - almost always shoot
+        if distance <= VERY_CLOSE_RANGE_DISTANCE {
             return true;
         }
 
-        // Optimal distance with good overall ability
-        if distance <= OPTIMAL_SHOOTING_DISTANCE
-            && has_clear_shot
-            && (confidence + finishing) / 2.0 > 0.6
-        {
+        // Close range - shoot if decent finishing
+        if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && finishing > 0.5 {
             return true;
         }
 
-        // Medium-long range with good long shot skills
-        if distance <= MEDIUM_RANGE_DISTANCE
-            && has_clear_shot
-            && long_shots > 0.5
-            && finishing > 0.45
-            && !self.ctx.players().opponents().exists(10.0)
-        {
-            return true;
-        }
-
-        // Check if teammates are in MUCH better positions
+        // Check if teammates are in MUCH better positions first
         let opponent_goal_pos = self.ctx.player().opponent_goal_position();
         let better_positioned_teammate = self
             .ctx
@@ -145,8 +139,33 @@ impl<'p> ShootingOperationsImpl<'p> {
                 t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
             });
 
-        // Shoot if no better teammate and clear shot within medium range
-        !better_positioned_teammate && has_clear_shot && distance <= MEDIUM_RANGE_DISTANCE
+        // High teamwork players defer to better-positioned teammates
+        if better_positioned_teammate && teamwork > 0.5 {
+            return false;
+        }
+
+        // Medium range - shoot if good skills and no better option
+        if distance <= SHOOT_OVER_PASS_MEDIUM_THRESHOLD && finishing > 0.6 {
+            return true;
+        }
+
+        // Optimal distance with good overall ability
+        if distance <= OPTIMAL_SHOOTING_DISTANCE
+            && (confidence + finishing) / 2.0 > 0.65
+        {
+            return true;
+        }
+
+        // Medium-long range with excellent long shot skills and no pressure
+        if distance <= MEDIUM_RANGE_DISTANCE
+            && long_shots > 0.6
+            && finishing > 0.5
+            && !self.ctx.players().opponents().exists(10.0)
+        {
+            return true;
+        }
+
+        false
     }
 
     /// Check if in close range for finishing

@@ -30,6 +30,7 @@ pub async fn game_process_action(
     };
 
     let data = Arc::clone(&state.data);
+    let i18n = Arc::clone(&state.i18n);
 
     // Clone data under read lock (cheap Arc clone), then release lock immediately
     let data_arc = {
@@ -38,9 +39,10 @@ pub async fn game_process_action(
     };
 
     // Run CPU-bound simulation on the blocking thread pool so tokio worker
-    // threads stay free to serve HTTP requests while processing runs
+    // threads stay free to serve HTTP requests while processing runs.
+    // Await completion so the client knows when processing is done.
     let handle = tokio::runtime::Handle::current();
-    tokio::task::spawn_blocking(move || {
+    let _ = tokio::task::spawn_blocking(move || {
         let _guard = process_guard;
 
         // Deep clone outside any lock
@@ -57,12 +59,14 @@ pub async fn game_process_action(
             }
         }
 
+        i18n.set_date(simulator_data.date);
+
         // Write the simulated data back
         handle.block_on(async {
             let mut guard = data.write().await;
             *guard = Some(Arc::new(simulator_data));
         });
-    });
+    }).await;
 
     StatusCode::OK
 }

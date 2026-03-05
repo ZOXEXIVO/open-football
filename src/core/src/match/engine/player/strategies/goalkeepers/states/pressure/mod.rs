@@ -31,7 +31,7 @@ impl StateProcessingHandler for GoalkeeperPressureState {
 
         if ctx.player().distance_from_start_position() > PRESSURE_DISTANCE_THRESHOLD {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Standing,
+                GoalkeeperState::ReturningToGoal,
             ));
         }
 

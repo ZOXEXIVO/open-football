@@ -7,6 +7,21 @@ pub struct PlayerSkills {
     pub physical: Physical,
 }
 
+/// Goalkeeper activity intensity for speed calculation.
+/// GKs have low pace (60% of max_speed formula) but need explosive short-distance speed
+/// for diving, catching, and shot-stopping. Agility and acceleration matter more.
+#[derive(Debug, Clone, Copy)]
+pub enum GoalkeeperSpeedContext {
+    /// Diving, preparing for save, jumping — explosive reactions
+    Explosive,
+    /// Catching, coming out, under pressure — active pursuit
+    Active,
+    /// Attentive, standing, returning — positioning
+    Positioning,
+    /// Walking, holding, distributing — minimal
+    Casual,
+}
+
 impl PlayerSkills {
     /// Derive current_ability (1-200) from the average of all skills (1-20 each).
     /// Technical (14) + Mental (14) + Physical (8) averaged, then mapped to 1-200.
@@ -80,6 +95,24 @@ impl PlayerSkills {
             .clamp(0.10, 1.0);
 
         base_max_speed * condition_factor
+    }
+
+    /// Calculate maximum speed for a goalkeeper with state-dependent boost.
+    /// GKs need explosive speed from agility/acceleration rather than raw pace.
+    pub fn goalkeeper_max_speed(&self, condition: i16, speed_context: GoalkeeperSpeedContext) -> f32 {
+        let base = self.max_speed_with_condition(condition);
+
+        let agility = self.physical.agility / 20.0;
+        let acceleration = self.physical.acceleration / 20.0;
+
+        let boost = match speed_context {
+            GoalkeeperSpeedContext::Explosive => 1.8 + agility * 0.6 + acceleration * 0.4,
+            GoalkeeperSpeedContext::Active => 1.5 + agility * 0.4 + acceleration * 0.3,
+            GoalkeeperSpeedContext::Positioning => 1.3 + agility * 0.2,
+            GoalkeeperSpeedContext::Casual => 1.1,
+        };
+
+        base * boost
     }
 }
 

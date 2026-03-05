@@ -6,9 +6,9 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TRACKING_DISTANCE_THRESHOLD: f32 = 30.0; // Maximum distance to track the runner
-const STAMINA_THRESHOLD: f32 = 50.0; // Minimum stamina required to continue tracking
-const BALL_INTERCEPTION_DISTANCE: f32 = 15.0; // Distance to switch to intercepting ball
+const TRACKING_DISTANCE_THRESHOLD: f32 = 60.0; // Increased — track runners from further
+const STAMINA_THRESHOLD: f32 = 25.0; // Track until truly exhausted
+const BALL_INTERCEPTION_DISTANCE: f32 = 25.0; // Wider interception range
 
 #[derive(Default, Clone)]
 pub struct MidfielderTrackingRunnerState {}
@@ -26,11 +26,11 @@ impl StateProcessingHandler for MidfielderTrackingRunnerState {
         // Check if opponent with ball is nearby - switch to tackling
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
-            if distance < 5.0 {
+            if distance < 20.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
-            } else if distance < 20.0 {
+            } else if distance < 80.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));

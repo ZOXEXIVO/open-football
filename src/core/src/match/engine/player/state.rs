@@ -1,3 +1,4 @@
+use crate::club::player::skills::GoalkeeperSpeedContext;
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::events::EventCollection;
 use crate::r#match::forwarders::states::ForwardState;
@@ -67,10 +68,35 @@ impl PlayerMatchState {
         }
 
         if let Some(velocity) = state_change_result.velocity {
-            // Safety clamp: ensure velocity never exceeds player's max speed (factoring in condition)
-            let max_speed = player.skills.max_speed_with_condition(
-                player.player_attributes.condition,
-            );
+            let max_speed = if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
+                let speed_context = match player.state {
+                    PlayerState::Goalkeeper(GoalkeeperState::Diving)
+                    | PlayerState::Goalkeeper(GoalkeeperState::PreparingForSave)
+                    | PlayerState::Goalkeeper(GoalkeeperState::Jumping) => {
+                        GoalkeeperSpeedContext::Explosive
+                    }
+                    PlayerState::Goalkeeper(GoalkeeperState::Catching)
+                    | PlayerState::Goalkeeper(GoalkeeperState::ComingOut)
+                    | PlayerState::Goalkeeper(GoalkeeperState::UnderPressure) => {
+                        GoalkeeperSpeedContext::Active
+                    }
+                    PlayerState::Goalkeeper(GoalkeeperState::Attentive)
+                    | PlayerState::Goalkeeper(GoalkeeperState::Standing)
+                    | PlayerState::Goalkeeper(GoalkeeperState::ReturningToGoal) => {
+                        GoalkeeperSpeedContext::Positioning
+                    }
+                    _ => GoalkeeperSpeedContext::Casual,
+                };
+                player.skills.goalkeeper_max_speed(
+                    player.player_attributes.condition,
+                    speed_context,
+                )
+            } else {
+                player.skills.max_speed_with_condition(
+                    player.player_attributes.condition,
+                )
+            };
+
             let velocity_magnitude = velocity.norm();
 
             if velocity_magnitude > max_speed && velocity_magnitude > 0.0 {

@@ -22,6 +22,19 @@ impl Logging {
         result
     }
 
+    pub fn estimate_result_with<T, F: FnOnce() -> T, M: FnOnce(&T, u32) -> String>(
+        action: F,
+        message_fn: M,
+    ) -> T {
+        let (result, duration_ms) = TimeEstimation::estimate(action);
+
+        if duration_ms > MAX_DURATION_THRESHOLD_MS {
+            info!("{}", message_fn(&result, duration_ms));
+        }
+
+        result
+    }
+
     pub async fn estimate_result_async<T, Fut>(action: Fut, message: &str) -> T
     where
         Fut: Future<Output = T>,

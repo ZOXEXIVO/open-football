@@ -6,9 +6,9 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const DIVE_DISTANCE: f32 = 25.0; // Distance to attempt diving save
-const CATCH_DISTANCE: f32 = 25.0; // Distance to attempt catching
-const PUNCH_DISTANCE: f32 = 12.0; // Distance to attempt punching
+const DIVE_DISTANCE: f32 = 30.0; // Distance to attempt diving save
+const CATCH_DISTANCE: f32 = 30.0; // Distance to attempt catching
+const PUNCH_DISTANCE: f32 = 15.0; // Distance to attempt punching
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPreparingForSaveState {}
@@ -37,7 +37,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
         // This prevents catching balls at center field
         let distance_from_goal = ctx.player().distance_from_start_position();
-        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 120.0; // Allow catching within wider range of goal
+        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
 
         if ball_distance < CATCH_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -84,14 +84,46 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Far from position - sprint to get there
+        let ball_position = ctx.tick_context.positions.ball.position;
+        let ball_velocity = ctx.tick_context.positions.ball.velocity;
+        let ball_speed = ball_velocity.norm();
+        let ball_distance = ctx.ball().distance();
+
+        // GK should position between ball trajectory and goal, not just chase the ball
+        let goal_pos = ctx.ball().direction_to_own_goal();
+
+        // Predict where ball will be shortly
+        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let prediction_time = 0.2 + reflexes * 0.4;
+        let predicted_ball = ball_position + ball_velocity * prediction_time;
+
+        // Position on the line between goal and predicted ball position
+        let goal_to_predicted = predicted_ball - goal_pos;
+        let intercept_distance = if ball_speed > 1.2 {
+            // Shot-speed ball — stay closer to goal to narrow angle
+            8.0 + reflexes * 6.0
+        } else {
+            // Slow ball — come out more
+            15.0 + reflexes * 10.0
+        };
+
+        let target = if goal_to_predicted.norm() > 1.0 {
+            goal_pos + goal_to_predicted.normalize() * intercept_distance.min(ball_distance * 0.5)
+        } else {
+            goal_pos
+        };
+
+        // Sprint speed boost — GK must react explosively to shots
+        let agility = ctx.player.skills.physical.agility / 20.0;
+        let speed_boost = 1.6 + agility * 0.6; // 1.6x - 2.2x
+
         Some(
             SteeringBehavior::Pursuit {
-                target: ctx.tick_context.positions.ball.position,
-                target_velocity: ctx.tick_context.positions.ball.velocity,
+                target,
+                target_velocity: ball_velocity * 0.3, // Slight lead on ball trajectory
             }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity * speed_boost,
         )
     }
 
@@ -114,7 +146,6 @@ impl GoalkeeperPreparingForSaveState {
         }
 
         // Goalkeeper skills
-        // Use concentration as proxy for reflexes
         let reflexes = ctx.player.skills.mental.concentration / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         let bravery = ctx.player.skills.mental.bravery / 20.0;
@@ -125,24 +156,24 @@ impl GoalkeeperPreparingForSaveState {
             return false;
         }
 
-        // Ball must be moving with some speed
-        if ball_speed < 3.0 {
+        // Ball must be moving (shots have velocity ~1.0-2.0 per tick)
+        if ball_speed < 0.3 {
             return false;
         }
 
         // Calculate time to reach
-        let time_to_ball = ball_distance / ball_speed.max(1.0);
+        let time_to_ball = ball_distance / ball_speed.max(0.5);
 
-        // Decide based on speed, distance, and skills
-        if ball_speed > 12.0 {
-            // Fast shot - dive if close enough
-            ball_distance < (25.0 + reflexes * 8.0) && time_to_ball < (1.5 + reflexes * 0.5)
-        } else if ball_speed > 7.0 {
-            // Medium speed - consider agility
-            ball_distance < (20.0 + agility * 5.0) && bravery > 0.4
+        // Dive decisions calibrated for actual shot speeds (max ~2.0/tick)
+        if ball_speed > 1.5 {
+            // Strong shot — dive immediately if in range
+            ball_distance < (30.0 + reflexes * 10.0) && time_to_ball < (20.0 + reflexes * 10.0)
+        } else if ball_speed > 0.8 {
+            // Medium speed — dive if reasonably close
+            ball_distance < (25.0 + agility * 8.0) && bravery > 0.2
         } else {
-            // Slow shot - dive only if very close or excellent skills
-            ball_distance < 12.0 && (reflexes + agility) > 1.0
+            // Slow rolling ball — dive if close
+            ball_distance < 20.0 && (reflexes + agility) > 0.6
         }
     }
 

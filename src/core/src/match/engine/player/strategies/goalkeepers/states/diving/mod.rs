@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MAX_DIVE_TIME: f32 = 1.5; // Maximum time to stay in diving state (in seconds)
-const BALL_CLAIM_DISTANCE: f32 = 4.0;
+const BALL_CLAIM_DISTANCE: f32 = 8.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperDivingState {}
@@ -22,7 +22,7 @@ impl StateProcessingHandler for GoalkeeperDivingState {
         }
 
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
-        let ball_moving_away = ball_velocity.dot(&(ctx.player().opponent_goal_position() - ctx.player.position)) > 0.0;
+        let ball_moving_away = ball_velocity.dot(&(ctx.player.position - ctx.ball().direction_to_own_goal())) > 0.0;
 
         if ctx.ball().distance() > 100.0 && ball_moving_away {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -78,13 +78,17 @@ impl GoalkeeperDivingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
 
-        let future_ball_position = ball_position + ball_velocity * 0.5; // Predict ball position 0.5 seconds ahead
+        // Predict ball position based on reflexes (better GK = better prediction)
+        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let prediction_time = 0.3 + reflexes * 0.3; // 0.3-0.6 seconds ahead
+        let future_ball_position = ball_position + ball_velocity * prediction_time;
 
         let to_future_ball = future_ball_position - ctx.player.position;
         let mut dive_direction = to_future_ball.normalize();
 
-        // Add some randomness to dive direction
-        let random_angle = (rand::random::<f32>() - 0.5) * std::f32::consts::PI / 6.0; // Random angle between -30 and 30 degrees
+        // Small randomness based on skill — elite GKs barely deviate
+        let max_deviation = (1.0 - reflexes) * std::f32::consts::PI / 12.0; // 0-15 degrees max
+        let random_angle = (rand::random::<f32>() - 0.5) * max_deviation;
         dive_direction = nalgebra::Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
         dive_direction
@@ -92,42 +96,51 @@ impl GoalkeeperDivingState {
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
-        (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.2 * urgency
+        // Explosive dive speed — GKs need to cover 3-5m in under a second
+        (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5 * urgency
     }
 
     fn calculate_urgency(&self, ctx: &StateProcessingContext) -> f32 {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
 
-        let distance_to_goal = (ball_position - ctx.player().opponent_goal_position()).magnitude();
-        let velocity_towards_goal = ball_velocity.dot(&(ctx.player().opponent_goal_position() - ball_position)).max(0.0);
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let distance_to_goal = (ball_position - own_goal).magnitude();
+        let velocity_towards_goal = ball_velocity.dot(&(own_goal - ball_position).normalize()).max(0.0);
 
-        let urgency: f32 = (1.0 - distance_to_goal / 100.0) * (1.0 + velocity_towards_goal / 10.0);
-        urgency.clamp(1.0, 2.0)
+        // Scale for actual ball speeds (~1.0-2.0/tick)
+        let urgency: f32 = (1.0 - distance_to_goal / 100.0) * (1.0 + velocity_towards_goal / 2.0);
+        urgency.clamp(1.0, 2.5)
     }
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {
-        // CRITICAL: Goalkeeper can only catch balls that are flying TOWARDS them
-        // If the ball is flying away, they cannot catch it (e.g., their own pass/kick)
-        if !ctx.ball().is_towards_player_with_angle(0.8) {
-            return false; // Ball is flying away from goalkeeper - cannot catch
+        // Goalkeeper can only catch balls that are flying TOWARDS them or very close
+        let ball_distance = ctx.ball().distance();
+        if ball_distance > 5.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
+            return false;
         }
 
-        let ball_distance = ctx.ball().distance();
         let ball_speed = ctx.tick_context.positions.ball.velocity.magnitude();
 
-        let catch_probability = ctx.player.skills.technical.first_touch / 20.0 * (1.0 - ball_speed / 20.0); // Adjust for ball speed
+        // Catch distance based on GK reach (diving extends range significantly)
+        let handling = ctx.player.skills.technical.first_touch / 20.0;
+        let agility = ctx.player.skills.physical.agility / 20.0;
+        let catch_distance = 5.0 + agility * 4.0 + handling * 2.0; // 5-11 unit reach while diving
 
-        let goalkeeper_height = 1.9 + (ctx.player.player_attributes.height as f32 - 180.0) / 100.0; // Height in meters
-        let catch_distance = goalkeeper_height * 0.5; // Adjust for goalkeeper height
+        if ball_distance > catch_distance {
+            return false;
+        }
 
-        ball_distance < catch_distance && rand::random::<f32>() < catch_probability
+        // Catch probability: base from handling, small penalty for fast shots
+        // Shot speeds are ~1.0-2.0/tick, so scale accordingly
+        let speed_penalty = (ball_speed / 5.0).min(0.3); // Max 30% penalty
+        let base_catch = handling * 0.5 + agility * 0.3 + 0.3; // Base 30% + skill bonus
+        let catch_probability = base_catch * (1.0 - speed_penalty);
+
+        rand::random::<f32>() < catch_probability.clamp(0.25, 0.90)
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {
-        let goalkeeper_height = 1.9 + (ctx.player.player_attributes.height as f32 - 180.0) / 100.0;
-        let nearby_distance = BALL_CLAIM_DISTANCE + goalkeeper_height * 0.1; // Adjust for goalkeeper height
-
-        ctx.ball().distance() < nearby_distance
+        ctx.ball().distance() < BALL_CLAIM_DISTANCE
     }
 }

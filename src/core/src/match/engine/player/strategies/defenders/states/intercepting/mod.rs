@@ -30,13 +30,14 @@ impl StateProcessingHandler for DefenderInterceptingState {
         }
 
         // Loose ball nearby — go claim it directly
-        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
+        if !ctx.ball().is_owned() && ball_distance < 60.0 && ctx.ball().speed() < 4.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));
         }
 
-        if ball_distance < 20.0 {
+        // Opponent with ball close — switch to tackling
+        if ball_distance < 25.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Tackling,
             ));
@@ -45,8 +46,8 @@ impl StateProcessingHandler for DefenderInterceptingState {
         // Only abandon interception if ball is moving away AND is far
         // Stationary balls (speed < 0.5) should not trigger this exit
         if ctx.ball().speed() > 0.5
-            && !ctx.ball().is_towards_player_with_angle(0.8)
-            || ball_distance > 100.0
+            && !ctx.ball().is_towards_player_with_angle(0.7)
+            || ball_distance > 130.0
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,

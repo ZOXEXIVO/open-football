@@ -24,14 +24,21 @@ impl StateProcessingHandler for ForwardWalkingState {
             }
         }
         
-        // Emergency: if ball is nearby, slow/stopped, and unowned, go for it immediately
+        // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
+        // But only if this player is the nearest teammate to prevent mass-chasing
         if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
             let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
             if ball_velocity < 3.0 {
-                // Ball is stopped or slow-moving - take it directly
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::TakeBall,
-                ));
+                let ball_pos = ctx.tick_context.positions.ball.position;
+                let my_dist = ctx.ball().distance();
+                let closer_teammate = ctx.players().teammates().all()
+                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
+
+                if !closer_teammate {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::TakeBall,
+                    ));
+                }
             }
         }
 

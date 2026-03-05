@@ -47,6 +47,7 @@ pub async fn ai_page_action(
     Path(route_params): Path<AiPageRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
+
     let current_path = format!("/{}/ai", &route_params.lang);
 
     let providers = state.ai_registry.list().await;

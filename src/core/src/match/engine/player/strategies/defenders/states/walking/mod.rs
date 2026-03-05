@@ -9,7 +9,6 @@ const INTERCEPTION_DISTANCE: f32 = 150.0;
 const MARKING_DISTANCE: f32 = 50.0;
 const PRESSING_DISTANCE: f32 = 80.0;
 const TACKLE_DISTANCE: f32 = 25.0;
-const RUNNING_TO_THE_BALL_DISTANCE: f32 = 150.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderWalkingState {}
@@ -18,17 +17,6 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
-        // Emergency: if ball is nearby, slow-moving, and unowned, go for it immediately
-        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
-                // Ball is stopped or slow-moving - take it directly
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::TakeBall,
-                ));
-            }
-        }
-
         // Notification system: if ball system notified us to take the ball, act immediately
         if ctx.ball().should_take_ball_immediately() {
             return Some(StateChangeResult::with_defender_state(
@@ -36,11 +24,22 @@ impl StateProcessingHandler for DefenderWalkingState {
             ));
         }
 
-        // Only pursue ball within 150m if it's actually unowned (not teammate's ball)
-        if !ctx.ball().is_owned() && ctx.ball().distance() < RUNNING_TO_THE_BALL_DISTANCE {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall
-            ));
+        // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
+        // But only if this player is the nearest teammate to prevent mass-chasing
+        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
+            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
+            if ball_velocity < 3.0 {
+                let ball_pos = ctx.tick_context.positions.ball.position;
+                let my_dist = ctx.ball().distance();
+                let closer_teammate = ctx.players().teammates().all()
+                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
+
+                if !closer_teammate {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::TakeBall,
+                    ));
+                }
+            }
         }
 
         // Priority 1: Check for opponents with the ball nearby - be aggressive!

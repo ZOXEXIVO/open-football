@@ -45,7 +45,7 @@ Currently available nation for simulation - **Italy**
 
 /src/database - Simulation data source logic
 
-/src/dev/graphics - Dev utils for instant match development (src/core/src/match)
+/.dev/graphics - Dev utils for instant match development (src/core/src/match)
 
 Match dev looks like (cross-platform)
 

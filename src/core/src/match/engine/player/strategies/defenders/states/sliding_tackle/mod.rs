@@ -6,10 +6,10 @@ use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, State
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 8.0; // Maximum distance to attempt a sliding tackle (in meters)
-const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.6; // Base chance of successful tackle
-const FOUL_CHANCE_BASE: f32 = 0.2; // Base chance of committing a foul
-const STAMINA_THRESHOLD: f32 = 25.0; // Minimum stamina to attempt a sliding tackle
+const TACKLE_DISTANCE_THRESHOLD: f32 = 12.0; // Sliding tackles have longer reach
+const TACKLE_SUCCESS_BASE_CHANCE: f32 = 0.75; // Skilled defenders should win most slide tackles
+const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained defenders commit fewer fouls
+const STAMINA_THRESHOLD: f32 = 20.0; // Slide tackle even when tired — it's a commitment
 
 #[derive(Default, Clone)]
 pub struct DefenderSlidingTackleState {}

@@ -6,7 +6,7 @@ use crate::r#match::{
 use crate::{PlayerAttributes, PlayerSkills};
 use nalgebra::Vector3;
 use rand::RngExt;
-use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl, ShotQualityEvaluator, MIN_XG_THRESHOLD};
+use crate::r#match::player::strategies::players::{DefensiveOperationsImpl, MovementOperationsImpl, PassingOperationsImpl, PressureOperationsImpl, ShootingOperationsImpl, SkillOperationsImpl};
 
 pub struct PlayerOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
@@ -49,6 +49,34 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         self.ctx.player.side == Some(PlayerSide::Left)
             && self.ctx.player.position.x < field_half_width as f32
+    }
+
+    /// Clearing direction for defenders: aims AWAY from own goal with moderate randomness.
+    /// Unlike shooting_direction(), this doesn't target a specific goal - it just clears danger.
+    pub fn clearing_direction(&self) -> Vector3<f32> {
+        let own_goal = match self.ctx.player.side {
+            Some(PlayerSide::Left) => self.ctx.context.goal_positions.left,
+            Some(PlayerSide::Right) => self.ctx.context.goal_positions.right,
+            _ => self.ctx.player.position,
+        };
+
+        // Clear AWAY from own goal — direction from own goal through player position
+        let away_from_goal = (self.ctx.player.position - own_goal).normalize();
+
+        // Add moderate lateral randomness for realistic clearances (not laser-guided)
+        let heading_skill = (self.ctx.player.skills.technical.heading - 1.0) / 19.0;
+        let randomness = (1.0 - heading_skill) * 0.4; // 0.0-0.4 based on skill
+
+        let mut rng = rand::rng();
+        let lateral_offset = rng.random_range(-randomness..randomness);
+
+        // Perpendicular direction for lateral spread
+        let perp = Vector3::new(-away_from_goal.y, away_from_goal.x, 0.0);
+
+        let direction = (away_from_goal + perp * lateral_offset).normalize();
+
+        // Target point far in the clearing direction
+        self.ctx.player.position + direction * 200.0
     }
 
     pub fn shooting_direction(&self) -> Vector3<f32> {
@@ -330,6 +358,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let distance_to_goal = self.goal_distance();
 
+        // Original ray cast — direct line to goal center
         let ray_cast_result = self.ctx.tick_context.space.cast_ray(
             player_position,
             direction_to_goal,
@@ -337,7 +366,37 @@ impl<'p> PlayerOperationsImpl<'p> {
             false,
         );
 
-        ray_cast_result.is_none()
+        if ray_cast_result.is_some() {
+            return false; // Direct obstruction
+        }
+
+        // Wider corridor check: any opponent within ~12 units of the shooting lane
+        // blocks the shot (in real football, nearby defenders affect shooting decisions)
+        // Skip the last 15% of distance (goalkeeper area — GK is handled by save mechanics)
+        let check_distance = distance_to_goal * 0.85;
+        let corridor_half_width = 12.0;
+
+        let has_corridor_blocker = self.ctx.players().opponents().all()
+            .any(|opp| {
+                // Project opponent position onto the shooting line
+                let to_opp = opp.position - player_position;
+                let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
+
+                // Only check opponents between player and 85% of the way to goal
+                if projection < 5.0 || projection > check_distance {
+                    return false;
+                }
+
+                // Calculate perpendicular distance from opponent to shooting line
+                let closest_point = player_position + direction_to_goal * projection;
+                let perp_distance = ((opp.position.x - closest_point.x).powi(2)
+                    + (opp.position.y - closest_point.y).powi(2))
+                    .sqrt();
+
+                perp_distance < corridor_half_width
+            });
+
+        !has_corridor_blocker
     }
 
     pub fn separation_velocity(&self) -> Vector3<f32> {
@@ -440,42 +499,9 @@ impl<'p> PlayerOperationsImpl<'p> {
         SkillOperationsImpl::new(self.ctx)
     }
 
-    /// Check if the player should attempt a shot based on cooldown and xG
+    /// Check if the player should attempt a shot based on shooting range
     pub fn should_attempt_shot(&self) -> bool {
-        // Check global post-goal cooldown (kickoff protection)
-        if !self.ctx.context.can_shoot_after_goal() {
-            return false;
-        }
-
-        let current_tick = self.ctx.current_tick();
-
-        // Check shot cooldown
-        if !self.ctx.memory().can_shoot(current_tick) {
-            return false;
-        }
-
-        // Evaluate xG
-        let xg = ShotQualityEvaluator::evaluate(self.ctx);
-
-        // Adjust threshold based on confidence and intentions
-        let confidence = self.ctx.memory().confidence;
-        let has_shoot_intention = self.ctx.memory().has_intention(
-            &crate::r#match::player::memory::IntentionKind::LookingToShoot,
-        );
-
-        let mut threshold = MIN_XG_THRESHOLD;
-
-        // Lower threshold if player is confident
-        if confidence > 0.7 {
-            threshold *= 0.7;
-        }
-
-        // Lower threshold if player intends to shoot
-        if has_shoot_intention {
-            threshold *= 0.8;
-        }
-
-        xg >= threshold
+        self.shooting().in_shooting_range()
     }
 }
 

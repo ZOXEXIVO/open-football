@@ -1,10 +1,11 @@
 use crate::r#match::defenders::states::{
-    DefenderBlockingState, DefenderClearingState, DefenderCoveringState, DefenderHeadingState,
-    DefenderHoldingLineState, DefenderInterceptingState, DefenderMarkingState,
-    DefenderOffsideTrapState, DefenderPassingState, DefenderPressingState, DefenderPushingUpState,
-    DefenderRestingState, DefenderReturningState, DefenderRunningState, DefenderShootingState,
-    DefenderSlidingTackleState, DefenderStandingState, DefenderTacklingState,
-    DefenderTakeBallState, DefenderTrackingBackState, DefenderWalkingState,
+    DefenderBlockingState, DefenderClearingState, DefenderCoveringState, DefenderGuardingState,
+    DefenderHeadingState, DefenderHoldingLineState, DefenderInterceptingState,
+    DefenderMarkingState, DefenderOffsideTrapState, DefenderPassingState, DefenderPressingState,
+    DefenderPushingUpState, DefenderRestingState, DefenderReturningState, DefenderRunningState,
+    DefenderShootingState, DefenderSlidingTackleState, DefenderStandingState,
+    DefenderTacklingState, DefenderTakeBallState, DefenderTrackingBackState,
+    DefenderWalkingState,
 };
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
@@ -32,6 +33,7 @@ pub enum DefenderState {
     Walking,       // Walking around,
     TakeBall,      // Take the ball,
     Shooting,      // Shoting the ball,
+    Guarding,      // Guarding an attacker — denying space and preventing them from getting open
 }
 
 pub struct DefenderStrategies {}
@@ -76,6 +78,7 @@ impl DefenderStrategies {
             DefenderState::PushingUp => state_processor.process(DefenderPushingUpState::default()),
             DefenderState::TakeBall => state_processor.process(DefenderTakeBallState::default()),
             DefenderState::Shooting => state_processor.process(DefenderShootingState::default()),
+            DefenderState::Guarding => state_processor.process(DefenderGuardingState::default()),
         }
     }
 }
@@ -104,6 +107,7 @@ impl Display for DefenderState {
             DefenderState::PushingUp => write!(f, "Pushing Up"),
             DefenderState::TakeBall => write!(f, "Take Ball"),
             DefenderState::Shooting => write!(f, "Shooting"),
+            DefenderState::Guarding => write!(f, "Guarding"),
         }
     }
 }

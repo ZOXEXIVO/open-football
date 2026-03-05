@@ -9,10 +9,10 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 15.0;
-const FOUL_CHANCE_BASE: f32 = 0.2;
-const PRESSING_DISTANCE: f32 = 70.0;
-const RETURN_DISTANCE: f32 = 100.0;
+const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Close down earlier — aggressive defending
+const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained defenders foul less
+const PRESSING_DISTANCE: f32 = 80.0;
+const RETURN_DISTANCE: f32 = 120.0;
 
 #[derive(Default, Clone)]
 pub struct DefenderTacklingState {}
@@ -183,8 +183,9 @@ impl DefenderTacklingState {
 
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        let success_chance = 0.5 + skill_difference * 0.3;
-        let clamped_success_chance = success_chance.clamp(0.1, 0.9);
+        // Defenders have home advantage in tackles — they pick the moment
+        let success_chance = 0.55 + skill_difference * 0.35;
+        let clamped_success_chance = success_chance.clamp(0.15, 0.92);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 

@@ -1,20 +1,36 @@
 use crate::common::default_handler::Assets;
+use chrono::{Datelike, NaiveDateTime};
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 /// (lang_code, flag_code, display_name)
 pub const SUPPORTED_LANGUAGES: &[(&str, &str, &str)] = &[
     ("en", "us", "English"),
     ("es", "es", "Español"),
+    ("fr", "fr", "Français"),
+    ("de", "de", "Deutsch"),
+    ("pt", "pt", "Português"),
     ("ru", "ru", "Русский"),
 ];
 
-const SUPPORTED_LANG_CODES: &[&str] = &["en", "es", "ru"];
+pub const SUPPORTED_LANG_CODES: &[&str] = &["en", "es", "fr", "de", "pt", "ru"];
 
 pub const DEFAULT_LANGUAGE: &str = "en";
 
+const MONTH_KEYS: &[&str] = &[
+    "month_jan", "month_feb", "month_mar", "month_apr",
+    "month_may", "month_jun", "month_jul", "month_aug",
+    "month_sep", "month_oct", "month_nov", "month_dec",
+];
+
+const DAY_KEYS: &[&str] = &[
+    "day_mon", "day_tue", "day_wed", "day_thu",
+    "day_fri", "day_sat", "day_sun",
+];
+
 pub struct I18nManager {
     translations: HashMap<String, Arc<HashMap<String, String>>>,
+    date: RwLock<NaiveDateTime>,
 }
 
 impl I18nManager {
@@ -32,7 +48,14 @@ impl I18nManager {
             translations.insert(lang.to_string(), Arc::new(map));
         }
 
-        I18nManager { translations }
+        I18nManager {
+            translations,
+            date: RwLock::new(NaiveDateTime::default()),
+        }
+    }
+
+    pub fn set_date(&self, date: NaiveDateTime) {
+        *self.date.write().unwrap() = date;
     }
 
     pub fn for_lang(&self, lang: &str) -> I18n {
@@ -51,10 +74,26 @@ impl I18nManager {
             translations.clone()
         };
 
+        let date = *self.date.read().unwrap();
+        let month_key = MONTH_KEYS[date.month0() as usize];
+        let day_key = DAY_KEYS[date.weekday().num_days_from_monday() as usize];
+
+        let t = |key: &str| -> String {
+            translations.get(key)
+                .or_else(|| fallback.get(key))
+                .cloned()
+                .unwrap_or_else(|| key.to_string())
+        };
+
+        let date_main = format!("{} {} {}", date.day(), t(month_key), date.year());
+        let date_sub = t(day_key);
+
         I18n {
             translations,
             fallback,
             lang: lang_key.to_string(),
+            date_main,
+            date_sub,
         }
     }
 
@@ -67,6 +106,14 @@ pub struct I18n {
     translations: Arc<HashMap<String, String>>,
     fallback: Arc<HashMap<String, String>>,
     pub lang: String,
+    pub date_main: String,
+    pub date_sub: String,
+}
+
+pub struct LangOption {
+    pub code: &'static str,
+    pub flag: &'static str,
+    pub name: &'static str,
 }
 
 impl I18n {
@@ -75,6 +122,26 @@ impl I18n {
             .or_else(|| self.fallback.get(key))
             .map(|s| s.as_str())
             .unwrap_or(key)
+    }
+
+    pub fn current_flag(&self) -> &'static str {
+        SUPPORTED_LANGUAGES.iter()
+            .find(|(code, _, _)| *code == self.lang)
+            .map(|(_, flag, _)| *flag)
+            .unwrap_or("us")
+    }
+
+    pub fn current_name(&self) -> &'static str {
+        SUPPORTED_LANGUAGES.iter()
+            .find(|(code, _, _)| *code == self.lang)
+            .map(|(_, _, name)| *name)
+            .unwrap_or("English")
+    }
+
+    pub fn languages(&self) -> Vec<LangOption> {
+        SUPPORTED_LANGUAGES.iter()
+            .map(|(code, flag, name)| LangOption { code, flag, name })
+            .collect()
     }
 }
 

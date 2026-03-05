@@ -2,8 +2,6 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::players::ShotQualityEvaluator;
-use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -21,24 +19,9 @@ impl StateProcessingHandler for DefenderShootingState {
             ));
         }
 
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
-        }
-
-        // Check shot cooldown
-        let current_tick = ctx.current_tick();
-        if !ctx.memory().can_shoot(current_tick) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
-        }
-
-        // Evaluate xG
-        let xg = ShotQualityEvaluator::evaluate(ctx);
-        if xg < MIN_XG_THRESHOLD {
+        // Last-second quality check: defenders should almost never shoot from distance
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        if distance_to_goal > 35.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));

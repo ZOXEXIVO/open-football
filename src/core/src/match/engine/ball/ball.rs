@@ -30,6 +30,7 @@ pub struct Ball {
     pub contested_claim_count: u32,  // Track rapid contested ownership changes
     pub unowned_ticks: u32,  // How long ball has been unowned (unconditional counter)
     pub goal_scored: bool,  // Flag set when goal detected, used to force reset after event dispatch
+    pub kickoff_team_side: Option<PlayerSide>,  // Side that should kick off after a goal
 }
 
 #[derive(Default, Clone)]
@@ -72,6 +73,7 @@ impl Ball {
             contested_claim_count: 0,
             unowned_ticks: 0,
             goal_scored: false,
+            kickoff_team_side: None,
         }
     }
 
@@ -104,6 +106,7 @@ impl Ball {
         self.move_to(tick_context);
         self.check_goal(context, events);
         self.check_over_goal(context, players, events);
+        self.check_wide_of_goal(context, players, events);
         self.check_boundary_collision(context);
     }
 
@@ -885,6 +888,11 @@ impl Ball {
     }
 
     fn check_goal(&mut self, context: &MatchContext, result: &mut EventCollection) {
+        // Guard: don't detect another goal if one was already scored this tick
+        if self.goal_scored {
+            return;
+        }
+
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
             // Prefer current_owner (e.g. player carrying ball into goal)
             // Fall back to previous_owner (e.g. shooter or passer whose ball went in)
@@ -916,6 +924,14 @@ impl Ball {
 
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));
             }
+
+            // Determine which side should kick off (the conceding team)
+            // Home goal (x=0) = Left side conceded → Left kicks off
+            // Away goal (x=field_width) = Right side conceded → Right kicks off
+            self.kickoff_team_side = match goal_side {
+                GoalSide::Home => Some(PlayerSide::Left),
+                GoalSide::Away => Some(PlayerSide::Right),
+            };
 
             self.goal_scored = true;
             self.reset();
@@ -966,6 +982,79 @@ impl Ball {
             self.claim_cooldown = 30; // Protection so no one steals immediately
             self.flags.in_flight_state = 30;
             self.pass_target_player_id = None;
+
+            events.add_ball_event(BallEvent::Claimed(gk.id));
+        }
+    }
+
+    /// Ball crossed the endline (x <= 0 or x >= field_width) but OUTSIDE the goal posts.
+    /// In real football this is a goal kick (or corner kick).
+    /// Simplified as goal kick: ball given to defending goalkeeper.
+    fn check_wide_of_goal(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let field_width = context.field_size.width as f32;
+        let goal_half_width = crate::r#match::engine::engine::GOAL_WIDTH;
+
+        // Check left endline
+        let crossed_side = if self.position.x <= 0.0 {
+            let goal_center_y = context.goal_positions.left.y;
+            // Only trigger if OUTSIDE the goal posts (inside is handled by check_goal/check_over_goal)
+            if self.position.y < goal_center_y - goal_half_width
+                || self.position.y > goal_center_y + goal_half_width
+            {
+                Some(GoalSide::Home)
+            } else {
+                None
+            }
+        } else if self.position.x >= field_width {
+            let goal_center_y = context.goal_positions.right.y;
+            if self.position.y < goal_center_y - goal_half_width
+                || self.position.y > goal_center_y + goal_half_width
+            {
+                Some(GoalSide::Away)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        let side = match crossed_side {
+            Some(s) => s,
+            None => return,
+        };
+
+        // Goal kick: give ball to defending goalkeeper
+        let defending_side = match side {
+            GoalSide::Home => PlayerSide::Left,
+            GoalSide::Away => PlayerSide::Right,
+        };
+
+        if let Some(gk) = players.iter().find(|p| {
+            p.side == Some(defending_side)
+                && p.tactical_position.current_position.is_goalkeeper()
+        }) {
+            let goal_kick_x = match side {
+                GoalSide::Home => 50.0,
+                GoalSide::Away => field_width - 50.0,
+            };
+
+            self.position.x = goal_kick_x;
+            self.position.y = context.goal_positions.left.y;
+            self.position.z = 0.0;
+            self.velocity = Vector3::zeros();
+
+            self.current_owner = Some(gk.id);
+            self.previous_owner = None;
+            self.ownership_duration = 0;
+            self.claim_cooldown = 30;
+            self.flags.in_flight_state = 30;
+            self.pass_target_player_id = None;
+            self.recent_passers.clear();
 
             events.add_ball_event(BallEvent::Claimed(gk.id));
         }

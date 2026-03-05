@@ -4,10 +4,10 @@ use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 
-const JUMP_DURATION: u64 = 30; // Duration of jump animation in ticks
-const JUMP_HEIGHT: f32 = 2.5; // Maximum jump height
+const JUMP_DURATION: u64 = 25; // Duration of jump animation in ticks (faster reaction)
+const JUMP_HEIGHT: f32 = 3.0; // Maximum jump height (more explosive)
 const MIN_DIVING_DISTANCE: f32 = 1.0; // Minimum distance to dive
-const MAX_DIVING_DISTANCE: f32 = 5.0; // Maximum distance to dive
+const MAX_DIVING_DISTANCE: f32 = 8.0; // Maximum distance to dive (extended reach)
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperJumpingState {}
@@ -63,9 +63,9 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         // Combine all motion components
         let combined_velocity = jump_vector + diving_vector + Vector3::new(0.0, 0.0, vertical_component);
 
-        // Scale based on goalkeeper's jumping and agility attributes
+        // Explosive scaling — jumping/diving must be very fast
         let attribute_scaling = (ctx.player.skills.physical.jumping as f32 +
-            ctx.player.skills.physical.agility as f32) / 40.0;
+            ctx.player.skills.physical.agility as f32) / 25.0; // was /40.0 — 60% faster
 
         Some(combined_velocity * attribute_scaling)
     }

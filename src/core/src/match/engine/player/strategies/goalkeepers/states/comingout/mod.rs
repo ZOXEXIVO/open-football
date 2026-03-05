@@ -7,7 +7,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const CLAIM_BALL_DISTANCE: f32 = 15.0;
-const MAX_COMING_OUT_DISTANCE: f32 = 120.0; // Maximum distance to pursue ball
+const MAX_COMING_OUT_DISTANCE: f32 = 50.0; // Maximum distance to pursue ball (was 120 — caused GK to chase to midfield)
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperComingOutState {}
@@ -26,7 +26,7 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         // IMPORTANT: Only catch if goalkeeper is reasonably close to their goal
         // This prevents catching balls at center field
         let distance_from_goal = ctx.player().distance_from_start_position();
-        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 120.0; // Allow catching within wider range of goal
+        const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
 
         if ball_distance < CLAIM_BALL_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -116,9 +116,9 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
             }
         }
 
-        // Check distance from goal - allow more freedom based on command of area
+        // Check distance from goal — GK must not wander far
         let goal_distance = ctx.player().distance_from_start_position();
-        let max_goal_distance = 60.0 * (1.0 + command_of_area * 0.4);
+        let max_goal_distance = 40.0 * (1.0 + command_of_area * 0.3);
 
         if goal_distance > max_goal_distance {
             // Getting far from goal - only continue if ball is very close and loose

@@ -75,6 +75,7 @@ pub async fn watchlist_page_action(
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
     let i18n = state.i18n.for_lang(&route_params.lang);
+
     let now = simulator_data.date.date();
     let current_path = format!("/{}/watchlist", &route_params.lang);
 

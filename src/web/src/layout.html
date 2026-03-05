@@ -2,16 +2,16 @@
 <html lang="{{ lang }}">
 <head>
     <meta charset="utf-8">
-    <title>{% block html_title %}{{ title }}{% endblock %} - OpenFootball</title>
+    <title>{% block html_title %}{{ title }} - {{ i18n.t("site_name") }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/images/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <link href="/css/bootstrap.min.css" rel="stylesheet">
     <link href="/css/flags.css" rel="stylesheet">
     <link href="/css/font.min.css" rel="stylesheet">
     <link href="/css/styles.min.css?v={{ css_version }}" rel="stylesheet">
-
 </head>
 <body>
+<div id="page-content">
     <div class="container-fluid">
         <div class="row">
             {% if !menu_sections.is_empty() %}
@@ -21,11 +21,12 @@
                     {% if !loop.last %}
                     <ul class="fm-nav-section">
                         {% for item in section.items %}
-                        <li{% if item.active %} class="active"{% endif %}>
-                            <a href="{{ item.url }}">
-                                <i class="fa {{ item.icon }}"></i>
-                                <span>{{ item.title }}</span>
-                            </a>
+                        <li
+                        {% if item.active %} class="active"{% endif %}>
+                        <a href="{{ item.url }}">
+                            <i class="fa {{ item.icon }}"></i>
+                            <span>{{ item.title }}</span>
+                        </a>
                         </li>
                         {% endfor %}
                     </ul>
@@ -36,30 +37,26 @@
                 <ul class="fm-nav-section fm-nav-section-bottom">
                     <li class="fm-sidebar-lang">
                         <div class="fm-sidebar-lang-toggle">
-                            <span class="flag flag-{% if lang == "es" %}es{% else if lang == "ru" %}ru{% else %}us{% endif %}"></span>
-                            <span>{% if lang == "es" %}Español{% else if lang == "ru" %}Русский{% else %}English{% endif %}</span>
+                            <span class="flag flag-{{ i18n.current_flag() }}"></span>
+                            <span>{{ i18n.current_name() }}</span>
                         </div>
                         <div class="fm-sidebar-lang-menu">
-                            <a class="fm-lang-option" data-lang="en">
-                                <span class="flag flag-us"></span>
-                                <span>English</span>
+                            {% for l in i18n.languages() %}
+                            <a class="fm-lang-option" data-lang="{{ l.code }}">
+                                <span class="flag flag-{{ l.flag }}"></span>
+                                <span>{{ l.name }}</span>
                             </a>
-                            <a class="fm-lang-option" data-lang="es">
-                                <span class="flag flag-es"></span>
-                                <span>Español</span>
-                            </a>
-                            <a class="fm-lang-option" data-lang="ru">
-                                <span class="flag flag-ru"></span>
-                                <span>Русский</span>
-                            </a>
+                            {% endfor %}
                         </div>
                     </li>
                     <li class="fm-nav-divider"></li>
                     {% for item in last.items %}
                     <li>
-                        <a href="{{ item.url }}"{% if item.url.starts_with("http") %} target="_blank" rel="noopener"{% endif %}>
-                            <i class="{% if item.icon.starts_with("fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon }}{% endif %}"></i>
-                            <span>{{ item.title }}</span>
+                        <a href="{{ item.url }}" {% if item.url.starts_with("http") %} target="_blank" rel="noopener"{%
+                        endif %}>
+                        <i class="{% if item.icon.starts_with(" fa-brands") %}{{ item.icon }}{% else %}fa {{ item.icon
+                        }}{% endif %}"></i>
+                        <span>{{ item.title }}</span>
                         </a>
                     </li>
                     {% endfor %}
@@ -71,24 +68,32 @@
             <div class="col m-0 p-0">
                 <div class="container-fluid">
                     <div class="row">
-                        <div class="col m-0 p-0"{% if !header_color.is_empty() %} style="--header-bg: {{ header_color }};{% if !foreground_color.is_empty() %} --header-border: {{ foreground_color }}33; --tab-fg: {{ foreground_color }}99; --tab-fg-active: {{ foreground_color }}; --tab-active-border: {{ foreground_color }};{% endif %} --tab-hover-bg: rgba(0,0,0,0.1);"{% endif %}>
-                            <div class="fm-header{% if !header_color.is_empty() %} fm-header-colored{% endif %}" {% if !header_color.is_empty() %}style="background: {{ header_color }};"{% endif %}>
+                        <div class="col m-0 p-0" {% if !header_color.is_empty() %}
+                             style="--header-bg: {{ header_color }};{% if !foreground_color.is_empty() %} --header-border: {{ foreground_color }}33; --tab-fg: {{ foreground_color }}99; --tab-fg-active: {{ foreground_color }}; --tab-active-border: {{ foreground_color }};{% endif %} --tab-hover-bg: rgba(0,0,0,0.1);"
+                             {% endif %}>
+                            <div class="fm-header{% if !header_color.is_empty() %} fm-header-colored{% endif %}" {% if
+                                 !header_color.is_empty() %}style="background: {{ header_color }};" {% endif %}>
                                 {% if !menu_sections.is_empty() %}
-                                <button class="fm-menu-toggle d-xl-none" onclick="document.body.classList.toggle('fm-sidebar-open')" aria-label="Toggle menu">
+                                <button class="fm-menu-toggle d-xl-none"
+                                        onclick="document.body.classList.toggle('fm-sidebar-open')"
+                                        aria-label="Toggle menu">
                                     <span></span>
                                 </button>
                                 {% endif %}
                                 <div class="fm-header-title">
                                     <h1>{{ title }}</h1>
-                                    <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<span class="flag flag-{{ sub_title_country_code }}" style="vertical-align: middle; margin-right: 6px;"></span>{% endif %}<a href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
+                                    <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<span
+                                            class="flag flag-{{ sub_title_country_code }}"
+                                            style="vertical-align: middle; margin-right: 6px;"></span>{% endif %}<a
+                                            href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
                                 <div class="fm-header-actions">
                                     <a class="fm-ai-icon" href="/{{ lang }}/ai" title="AI">
                                         <i class="fa fa-robot"></i>
                                     </a>
                                     <div class="fm-date">
-                                        <div class="fm-date-main" id="date-up"></div>
-                                        <div class="fm-date-sub" id="date-down"></div>
+                                        <div class="fm-date-main">{{ i18n.date_main }}</div>
+                                        <div class="fm-date-sub">{{ i18n.date_sub }}</div>
                                     </div>
                                     <div class="fm-process-btn" id="process-btn"
                                          onclick="startProcess(event)">
@@ -107,110 +112,118 @@
             </div>
         </div>
     </div>
-    <script src="/js/bootstrap.bundle.min.js"></script>
-    <script>
-        async function updateDate(retries) {
-            retries = retries || 0;
-            try {
-                const res = await fetch('/api/date');
-                const data = await res.json();
-                var lang = document.documentElement.lang || 'en';
-                var d = new Date(data.iso);
-                var dateStr = d.toLocaleDateString(lang, { day: 'numeric', month: 'short', year: 'numeric' });
-                var timeStr = d.toLocaleDateString(lang, { weekday: 'long' });
-                document.getElementById('date-up').textContent = dateStr;
-                document.getElementById('date-down').textContent = timeStr;
-
-            } catch(e) {
-                if (retries < 3) {
-                    setTimeout(function() { updateDate(retries + 1); }, 300);
-                }
-            }
+</div>
+<script src="/js/bootstrap.bundle.min.js"></script>
+<script>
+    document.addEventListener('click', function (e) {
+        var toggle = e.target.closest('.fm-sidebar-lang-toggle');
+        if (toggle) {
+            toggle.closest('.fm-sidebar-lang').classList.toggle('fm-lang-open');
+            return;
         }
-        updateDate();
-
-        document.querySelectorAll('.fm-lang-option').forEach(function(el) {
-            var lang = el.dataset.lang;
+        var option = e.target.closest('.fm-lang-option');
+        if (option) {
+            var lang = option.dataset.lang;
             var path = window.location.pathname.replace(/^\/[a-z]{2}(\/|$)/, '/' + lang + '$1');
             if (path === '/' + lang) path = '/' + lang;
-            el.href = path;
+            window.location.href = path;
+            return;
+        }
+        var dd = document.querySelector('.fm-sidebar-lang');
+        if (dd && !dd.contains(e.target)) dd.classList.remove('fm-lang-open');
+    });
+
+    // Refresh #page-content from server without full page reload
+    async function refreshContent() {
+        try {
+            var res = await fetch(window.location.href);
+            if (!res.ok) return;
+            var html = await res.text();
+            var parser = new DOMParser();
+            var doc = parser.parseFromString(html, 'text/html');
+            var newContent = doc.getElementById('page-content');
+            var oldContent = document.getElementById('page-content');
+            if (newContent && oldContent) {
+                oldContent.innerHTML = newContent.innerHTML;
+            }
+        } catch (e) {
+        }
+    }
+
+    var _pollTimer = null;
+
+    function setProcessing(active) {
+        var btn = document.getElementById('process-btn');
+        if (!btn) return;
+        if (active) {
+            btn.classList.add('fm-processing');
+            if (!_pollTimer) {
+                _pollTimer = setInterval(pollProcessing, 1000);
+            }
+        } else {
+            btn.classList.remove('fm-processing');
+            if (_pollTimer) {
+                clearInterval(_pollTimer);
+                _pollTimer = null;
+            }
+        }
+    }
+
+    // Flow 1: Click Process → wait for sync response → refresh content
+    async function startProcess(event) {
+        var btn = document.getElementById('process-btn');
+        if (!btn || btn.classList.contains('fm-processing')) return;
+        var url = event.shiftKey ? '/api/game/process?days=180' : '/api/game/process';
+        btn.classList.add('fm-processing');
+        try {
+            await fetch(url, {method: 'POST'});
+        } catch (e) {
+        }
+        btn.classList.remove('fm-processing');
+        await refreshContent();
+    }
+
+    // Flow 2: Page load → check if already processing → poll 1s until done
+    async function pollProcessing() {
+        try {
+            var res = await fetch('/api/game/processing');
+            var data = await res.json();
+            if (!data.processing) {
+                setProcessing(false);
+                await refreshContent();
+            }
+        } catch (e) {
+        }
+    }
+
+    fetch('/api/game/processing')
+        .then(function (res) {
+            return res.json();
+        })
+        .then(function (data) {
+            if (data.processing) setProcessing(true);
+        })
+        .catch(function () {
         });
+</script>
+{% block scripts %}{% endblock %}
 
-        (function() {
-            var dd = document.querySelector('.fm-sidebar-lang');
-            if (!dd) return;
-            var toggle = dd.querySelector('.fm-sidebar-lang-toggle');
-            if (toggle) {
-                toggle.addEventListener('click', function() {
-                    dd.classList.toggle('fm-lang-open');
-                });
-            }
-            document.addEventListener('click', function(e) {
-                if (!dd.contains(e.target)) dd.classList.remove('fm-lang-open');
-            });
-        })();
+<!-- Google tag (gtag.js) -->
+<script>
+    if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
+        var s = document.createElement('script');
+        s.async = true;
+        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-2WTTN499YZ';
+        document.head.appendChild(s);
+        window.dataLayer = window.dataLayer || [];
 
-        var _pollTimer = null;
-
-        function setProcessing(active) {
-            var btn = document.getElementById('process-btn');
-            if (!btn) return;
-            if (active) {
-                btn.classList.add('fm-processing');
-                if (!_pollTimer) {
-                    _pollTimer = setInterval(checkProcessingStatus, 1000);
-                }
-            } else {
-                btn.classList.remove('fm-processing');
-                if (_pollTimer) {
-                    clearInterval(_pollTimer);
-                    _pollTimer = null;
-                }
-            }
+        function gtag() {
+            dataLayer.push(arguments);
         }
 
-        async function checkProcessingStatus() {
-            try {
-                var res = await fetch('/api/game/processing');
-                var data = await res.json();
-                if (!data.processing) {
-                    setProcessing(false);
-                    updateDate();
-                    window.location.reload();
-                }
-            } catch(e) {}
-        }
-
-        function startProcess(event) {
-            var btn = document.getElementById('process-btn');
-            if (!btn || btn.classList.contains('fm-processing')) return;
-            var url = event.shiftKey ? '/api/game/process?days=30' : '/api/game/process';
-            setProcessing(true);
-            fetch(url, { method: 'POST' }).catch(function() {});
-        }
-
-        // Check if already processing on page load
-        fetch('/api/game/processing')
-            .then(function(res) { return res.json(); })
-            .then(function(data) {
-                if (data.processing) setProcessing(true);
-            })
-            .catch(function() {});
-    </script>
-    {% block scripts %}{% endblock %}
-
-    <!-- Google tag (gtag.js) -->
-    <script>
-        if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-            var s = document.createElement('script');
-            s.async = true;
-            s.src = 'https://www.googletagmanager.com/gtag/js?id=G-2WTTN499YZ';
-            document.head.appendChild(s);
-            window.dataLayer = window.dataLayer || [];
-            function gtag(){dataLayer.push(arguments);}
-            gtag('js', new Date());
-            gtag('config', 'G-2WTTN499YZ');
-        }
-    </script>
+        gtag('js', new Date());
+        gtag('config', 'G-2WTTN499YZ');
+    }
+</script>
 </body>
 </html>

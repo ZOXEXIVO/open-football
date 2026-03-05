@@ -28,8 +28,14 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
             ));
         }
 
-        // If ball is too far, transition to ComingOut
-        if ctx.ball().distance() > 8.0 {
+        // If ball is too far, decide based on distance from goal
+        if ctx.ball().distance() > 12.0 {
+            // If already far from goal, return rather than chasing further
+            if ctx.player().distance_from_start_position() > 40.0 {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::ReturningToGoal,
+                ));
+            }
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));
@@ -56,26 +62,30 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();
+        let agility = ctx.player.skills.physical.agility / 20.0;
+
+        // GK sprints explosively to catch the ball
+        let speed_boost = 1.5 + agility * 0.5; // 1.5x - 2.0x
 
         if ball_distance > 3.0 {
-            // Sprint to ball using Pursuit
+            // Sprint to ball using Pursuit with speed boost
             Some(
                 SteeringBehavior::Pursuit {
                     target: ctx.tick_context.positions.ball.position,
                     target_velocity: ctx.tick_context.positions.ball.velocity,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity * speed_boost,
             )
         } else {
-            // Close - use Arrive for controlled approach
+            // Close - use Arrive for controlled approach but still fast
             Some(
                 SteeringBehavior::Arrive {
                     target: ctx.tick_context.positions.ball.position,
-                    slowing_distance: 2.0,
+                    slowing_distance: 1.5,
                 }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity * (speed_boost * 0.8),
             )
         }
     }
@@ -88,8 +98,8 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
 impl GoalkeeperCatchingState {
     fn is_catch_successful(&self, ctx: &StateProcessingContext) -> bool {
-        // CRITICAL: Hard maximum catch distance - no teleporting the ball!
-        const MAX_CATCH_DISTANCE: f32 = 6.0; // Realistic goalkeeper reach (arms extended)
+        // Maximum catch distance — goalkeeper's full reaching/stretching range
+        const MAX_CATCH_DISTANCE: f32 = 12.0; // Extended reach including stretch
         let distance_to_ball = ctx.ball().distance();
 
         if distance_to_ball > MAX_CATCH_DISTANCE {
@@ -97,15 +107,14 @@ impl GoalkeeperCatchingState {
         }
 
         // Goalkeeper can only catch balls that are flying TOWARDS them or are stationary/slow
-        // If the ball is flying away, they cannot catch it (e.g., their own pass/kick)
         let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        if ball_speed > 1.0 && !ctx.ball().is_towards_player_with_angle(0.8) {
-            return false; // Ball is flying away from goalkeeper - cannot catch
+        if ball_speed > 0.5 && !ctx.ball().is_towards_player_with_angle(0.6) {
+            return false; // Ball is flying away from goalkeeper
         }
 
-        // Use goalkeeper-specific skills (handling is key for catching!)
-        let handling = ctx.player.skills.technical.first_touch; // Using first_touch as handling proxy
-        let reflexes = ctx.player.skills.mental.concentration; // Using concentration as reflexes proxy
+        // Use goalkeeper-specific skills
+        let handling = ctx.player.skills.technical.first_touch;
+        let reflexes = ctx.player.skills.mental.concentration;
         let positioning = ctx.player.skills.technical.technique;
         let agility = ctx.player.skills.physical.agility;
 
@@ -121,65 +130,53 @@ impl GoalkeeperCatchingState {
 
         let ball_height = ctx.tick_context.positions.ball.position.z;
 
-        // Base success rate should be high for skilled keepers (0.6 - 0.95 range)
-        let mut catch_probability = 0.5 + (base_skill * 0.45);
+        // Base success rate calibrated for real shot speeds (~1.0-2.0/tick)
+        // In real football, GKs save ~70% of shots on target
+        let mut catch_probability = 0.60 + (base_skill * 0.35);
 
-        // Ball speed modifier (additive, not multiplicative)
-        // Slower balls are easier to catch
-        if ball_speed < 5.0 {
-            catch_probability += 0.15; // Very slow ball - easy catch
-        } else if ball_speed < 10.0 {
-            catch_probability += 0.10; // Slow ball - easier
-        } else if ball_speed < 15.0 {
-            catch_probability += 0.05; // Medium speed - slightly easier
-        } else if ball_speed > 25.0 {
-            catch_probability -= 0.15; // Very fast - harder
-        } else if ball_speed > 20.0 {
-            catch_probability -= 0.10; // Fast - harder
+        // Ball speed modifier calibrated for actual speeds
+        if ball_speed < 0.8 {
+            catch_probability += 0.15; // Very slow - easy catch
+        } else if ball_speed < 1.2 {
+            catch_probability += 0.08; // Moderate speed
+        } else if ball_speed > 1.8 {
+            catch_probability -= 0.10; // Strong shot - harder
         }
 
-        // Distance modifier (additive)
-        // Close balls are much easier
-        if distance_to_ball < 1.0 {
-            catch_probability += 0.20; // Very close - very easy
-        } else if distance_to_ball < 2.0 {
-            catch_probability += 0.15; // Close - easier
-        } else if distance_to_ball < 3.0 {
-            catch_probability += 0.05; // Reasonable - slightly easier
-        } else if distance_to_ball > 5.0 {
-            catch_probability -= 0.20; // Too far - much harder
-        } else if distance_to_ball > 4.0 {
-            catch_probability -= 0.10; // Far - harder
+        // Distance modifier
+        if distance_to_ball < 2.0 {
+            catch_probability += 0.15; // Very close - easy
+        } else if distance_to_ball < 5.0 {
+            catch_probability += 0.08; // Close
+        } else if distance_to_ball > 10.0 {
+            catch_probability -= 0.12; // Stretched
+        } else if distance_to_ball > 7.0 {
+            catch_probability -= 0.06; // Far
         }
 
-        // Height modifier (additive)
-        // Chest height is ideal, ground and high balls are harder
-        if ball_height >= 0.8 && ball_height <= 1.8 {
-            catch_probability += 0.10; // Ideal catching height (chest to head)
-        } else if ball_height < 0.3 {
-            catch_probability -= 0.10; // Ground ball - harder to catch cleanly
+        // Height modifier
+        if ball_height >= 0.5 && ball_height <= 1.8 {
+            catch_probability += 0.08; // Ideal catching height
+        } else if ball_height < 0.2 {
+            catch_probability -= 0.06; // Ground ball
         } else if ball_height > 2.5 {
-            catch_probability -= 0.15; // High ball - difficult
+            catch_probability -= 0.10; // High ball
         }
 
-        // Check if ball is coming toward keeper (important!)
+        // Direction modifier
         if ctx.ball().is_towards_player_with_angle(0.7) {
-            catch_probability += 0.10; // Ball coming straight at keeper
+            catch_probability += 0.08;
         } else {
-            catch_probability -= 0.15; // Ball at awkward angle
+            catch_probability -= 0.08;
         }
 
-        // Bonus for elite keepers
+        // Elite keeper bonus
         if base_skill > 0.8 {
-            catch_probability += 0.05; // Elite keeper bonus
+            catch_probability += 0.06;
         }
 
-        // Ensure catch probability is within reasonable range (min 10%, max 98%)
-        let clamped_catch_probability = catch_probability.clamp(0.10, 0.98);
+        let clamped_catch_probability = catch_probability.clamp(0.20, 0.95);
 
-        // Random number between 0 and 1
-        let random_factor = rand::random::<f32>();
-
-        clamped_catch_probability > random_factor
+        rand::random::<f32>() < clamped_catch_probability
     }
 }

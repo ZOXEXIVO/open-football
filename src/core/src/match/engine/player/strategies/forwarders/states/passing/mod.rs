@@ -132,7 +132,8 @@ impl ForwardPassingState {
                 .into_iter()
                 .map(|teammate| {
                     let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
-                    let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty;
+                    let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
+                    let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
                     (teammate, score)
                 })
                 .max_by(|(_, score_a), (_, score_b)| {
@@ -164,7 +165,8 @@ impl ForwardPassingState {
             .into_iter()
             .map(|teammate| {
                 let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
-                let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty;
+                let congestion_penalty = self.calculate_congestion_penalty(ctx, &teammate);
+                let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
                 (teammate, score)
             })
             .max_by(|(_, score_a), (_, score_b)| {
@@ -204,41 +206,54 @@ impl ForwardPassingState {
         // Forward-specific factors - much more goal-oriented than midfielders
         let mut score = base_score.expected_value;
 
+        // Space multiplier: scale all bonuses by how free the receiver is
+        // This prevents huge bonuses from overwhelming space considerations
+        let receiver_space = base_score.factors.receiver_positioning;
+        let space_multiplier = if receiver_space > 0.8 {
+            1.0  // Free player - full bonuses
+        } else if receiver_space > 0.5 {
+            0.6  // Some pressure - reduced bonuses
+        } else if receiver_space > 0.3 {
+            0.3  // Crowded - heavily reduced bonuses
+        } else {
+            0.1  // Very crowded - almost no bonuses
+        };
+
         // Goal distance factors - forwards prioritize passes that get closer to goal
         let forward_to_goal_dist = ctx.ball().distance_to_opponent_goal();
         let teammate_to_goal_dist =
             (teammate.position - ctx.player().opponent_goal_position()).magnitude();
 
-        // Significantly boost passes that advance toward goal - key forward priority
+        // Boost passes that advance toward goal, scaled by space
         if teammate_to_goal_dist < forward_to_goal_dist {
-            score += 40.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist));
+            score += 20.0 * (1.0 - (teammate_to_goal_dist / forward_to_goal_dist)) * space_multiplier;
         }
 
-        // MAJOR boost for passes to other forwards (likely in better scoring positions)
+        // Boost for passes to other forwards, scaled by space
         if teammate.tactical_positions.is_forward() {
-            score += 40.0; // Increased from 20.0
+            score += 15.0 * space_multiplier;
 
             // Extra bonus for forward-to-forward in dangerous zone
             if teammate_to_goal_dist < 300.0 {
-                score += 25.0;
+                score += 10.0 * space_multiplier;
             }
 
             // Bonus for forward who is making a run (has high velocity toward goal)
             let teammate_velocity = teammate.velocity(ctx);
             let to_goal = (ctx.player().opponent_goal_position() - teammate.position).normalize();
             if teammate_velocity.dot(&to_goal) > 3.0 {
-                score += 20.0; // Forward is actively running toward goal
+                score += 15.0 * space_multiplier; // Forward is actively running toward goal
             }
         }
 
         // Boost for passes that break defensive lines
         if self.pass_breaks_defensive_line(ctx, teammate) {
-            score += 30.0; // Increased from 25.0
+            score += 15.0 * space_multiplier;
         }
 
-        // Heavy bonus for teammates who have a clear shot on goal - key forward priority
+        // Bonus for teammates who have a clear shot on goal
         if self.teammate_has_clear_shot(ctx, teammate) {
-            score += 50.0; // Increased from 35.0
+            score += 25.0 * space_multiplier;
         }
 
         // Through-ball detection: teammate running toward goal with space ahead
@@ -261,22 +276,25 @@ impl ForwardPassingState {
                 .count();
 
             if defenders_ahead == 0 {
-                score += 45.0; // Major through-ball bonus
+                score += 25.0 * space_multiplier; // Through-ball bonus
             }
         }
 
         // Pass streak bonus: encourage patient build-up play
         let pass_streak = ctx.memory().pass_streak;
-        let streak_bonus = (pass_streak as f32 * 2.0).min(15.0);
+        let streak_bonus = (pass_streak as f32 * 2.0).min(10.0);
         score += streak_bonus;
+
+        // Bonus for receiver being in open space (reward free players directly)
+        score += receiver_space * 15.0;
 
         // Strong penalty for backwards passes unless under heavy pressure
         if teammate.position.x < ctx.player.position.x && !self.is_under_heavy_pressure(ctx) {
-            score -= 30.0;
+            score -= 20.0;
 
             // Extra penalty if passing back when in attacking third
             if forward_to_goal_dist < 350.0 {
-                score -= 20.0;
+                score -= 15.0;
             }
         }
 
@@ -399,8 +417,22 @@ impl ForwardPassingState {
 
     /// Check if a player is heavily marked by opponents
     fn is_heavily_marked(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        const MARKING_DISTANCE: f32 = 10.0;
-        const MAX_MARKERS: usize = 2;
+        const TIGHT_MARKING_DISTANCE: f32 = 5.0;
+        const MARKING_DISTANCE: f32 = 12.0;
+
+        let tight_markers = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opponent| {
+                (opponent.position - teammate.position).magnitude() <= TIGHT_MARKING_DISTANCE
+            })
+            .count();
+
+        // One opponent very close = heavily marked
+        if tight_markers >= 1 {
+            return true;
+        }
 
         let markers = ctx
             .players()
@@ -411,7 +443,8 @@ impl ForwardPassingState {
             })
             .count();
 
-        markers >= MAX_MARKERS
+        // Two opponents within wider radius = heavily marked
+        markers >= 2
     }
 
     /// Determine if teammate has a clear shot on goal
@@ -439,18 +472,31 @@ impl ForwardPassingState {
         ctx: &StateProcessingContext,
         player: &MatchPlayerLite,
     ) -> f32 {
-        let space_radius = 10.0;
+        let space_radius = 20.0;
+
+        // Count all nearby players (opponents and teammates) - both contribute to congestion
         let num_opponents_nearby = ctx
             .players()
             .opponents()
             .all()
             .filter(|opponent| {
-                let distance = (opponent.position - player.position).magnitude();
-                distance <= space_radius
+                (opponent.position - player.position).magnitude() <= space_radius
             })
             .count();
 
-        space_radius - num_opponents_nearby as f32
+        let num_teammates_nearby = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| {
+                t.id != player.id && (t.position - player.position).magnitude() <= space_radius
+            })
+            .count();
+
+        // Opponents count more than teammates for congestion
+        let congestion = num_opponents_nearby as f32 * 3.0 + num_teammates_nearby as f32 * 1.5;
+
+        (space_radius - congestion).max(0.0)
     }
 
     /// Check if player is under heavy pressure from opponents
@@ -519,6 +565,39 @@ impl ForwardPassingState {
         let to_goal = goal_pos - player_pos;
         let goal_direction = to_goal.normalize();
         player_pos + goal_direction * 5.0 // Reduced from 10.0 to prevent excessive movement
+    }
+
+    /// Calculate congestion penalty for a potential pass receiver
+    /// Counts all nearby players to discourage passing into crowded groups
+    fn calculate_congestion_penalty(
+        &self,
+        ctx: &StateProcessingContext,
+        teammate: &MatchPlayerLite,
+    ) -> f32 {
+        let nearby_opponents = ctx
+            .players()
+            .opponents()
+            .all()
+            .filter(|opp| (opp.position - teammate.position).magnitude() < 20.0)
+            .count();
+
+        let nearby_teammates = ctx
+            .players()
+            .teammates()
+            .all()
+            .filter(|t| t.id != teammate.id && t.id != ctx.player.id && (t.position - teammate.position).magnitude() < 20.0)
+            .count();
+
+        let total_nearby = nearby_opponents + nearby_teammates;
+
+        match total_nearby {
+            0 => 1.5,   // Isolated - excellent target
+            1 => 1.2,   // One nearby - good
+            2 => 1.0,   // Normal
+            3 => 0.5,   // Getting crowded
+            4 => 0.25,  // Congested
+            _ => 0.1,   // Huddle - almost never pass here
+        }
     }
 
     /// Look for space between defenders toward the goal

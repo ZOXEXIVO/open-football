@@ -5,13 +5,13 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 6.0; // Increased from 5.0 - slightly earlier tackles
-const BASE_PRESSING_DISTANCE: f32 = 35.0;
-const MAX_PRESSING_BONUS: f32 = 30.0; // effective range: 35-65
-const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 30.0;
-const MAX_PRESSING_BONUS_DEFENSIVE_THIRD: f32 = 25.0; // effective range: 30-55
-const CLOSE_PRESSING_DISTANCE: f32 = 20.0; // Increased from 15.0 - wider close pressing zone
-const STAMINA_THRESHOLD: f32 = 35.0; // Reduced from 40.0 - press more aggressively
+const TACKLING_DISTANCE_THRESHOLD: f32 = 12.0; // Engage tackles earlier — real defenders close down fast
+const BASE_PRESSING_DISTANCE: f32 = 45.0;
+const MAX_PRESSING_BONUS: f32 = 35.0; // effective range: 45-80
+const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 40.0;
+const MAX_PRESSING_BONUS_DEFENSIVE_THIRD: f32 = 30.0; // effective range: 40-70
+const CLOSE_PRESSING_DISTANCE: f32 = 25.0; // Wider close pressing zone for tight approach
+const STAMINA_THRESHOLD: f32 = 30.0; // Press until truly exhausted
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 
 #[derive(Default, Clone)]
@@ -74,22 +74,7 @@ impl StateProcessingHandler for DefenderPressingState {
                 }
             }
 
-            // Check if pressing is creating dangerous gaps
-            if self.is_creating_dangerous_gap(ctx, opponent.position) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::HoldingLine,
-                ));
-            }
-
-            // Check if we would leave space uncovered
-            if ctx.player().defensive().would_leave_space_uncovered(&opponent) {
-                // Too risky to press - stay back
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Covering,
-                ));
-            }
-
-            // Continue pressing
+            // Continue pressing — stay aggressive
             None
         } else {
             // No opponent with the ball - ball might be loose
@@ -124,10 +109,15 @@ impl StateProcessingHandler for DefenderPressingState {
         if let Some(opponent) = opponent_with_ball.next() {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // Calculate direction towards the opponent
-            let direction = (opponent.position - ctx.player.position).normalize();
-            // Set speed based on player's acceleration and pace
-            let speed = ctx.player.skills.physical.pace; // Use pace attribute
+            // Smart pressing: cut off the angle between opponent and our goal
+            // instead of just chasing the ball carrier directly
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let opp_to_goal = (own_goal - opponent.position).normalize();
+            // Intercept point: slightly goal-side of opponent
+            let intercept_offset = 5.0_f32.min(distance_to_opponent * 0.3);
+            let intercept_target = opponent.position + opp_to_goal * intercept_offset;
+            let direction = (intercept_target - ctx.player.position).normalize();
+            let speed = ctx.player.skills.physical.pace;
 
             let pressing_velocity = direction * speed;
 
@@ -158,48 +148,4 @@ impl StateProcessingHandler for DefenderPressingState {
     }
 }
 
-impl DefenderPressingState {
-    /// Check if pressing is creating a dangerous gap in the defensive line
-    fn is_creating_dangerous_gap(&self, ctx: &StateProcessingContext, _opponent_pos: Vector3<f32>) -> bool {
-        let own_goal = ctx.ball().direction_to_own_goal();
-        let player_pos = ctx.player.position;
-
-        // Get all defenders
-        let defenders: Vec<_> = ctx.players().teammates().defenders().collect();
-
-        if defenders.is_empty() {
-            return false;
-        }
-
-        // Calculate the average defensive line position
-        let avg_defender_x = defenders.iter().map(|d| d.position.x).sum::<f32>() / defenders.len() as f32;
-
-        // Check if this defender is significantly ahead of the defensive line
-        let distance_ahead_of_line = if own_goal.x < ctx.context.field_size.width as f32 / 2.0 {
-            avg_defender_x - player_pos.x // Defending left side
-        } else {
-            player_pos.x - avg_defender_x // Defending right side
-        };
-
-        // If more than 25m ahead of the line, might be creating a gap
-        if distance_ahead_of_line > 25.0 {
-            // Check if there are dangerous opponents behind the presser
-            let dangerous_opponents = ctx.players()
-                .opponents()
-                .nearby(70.0)
-                .filter(|opp| {
-                    // Check if opponent is between presser and goal
-                    let opp_distance_to_goal = (opp.position - own_goal).magnitude();
-                    let presser_distance_to_goal = (player_pos - own_goal).magnitude();
-
-                    opp_distance_to_goal < presser_distance_to_goal
-                })
-                .count();
-
-            // If there are 2+ dangerous opponents behind, pressing creates a gap
-            return dangerous_opponents >= 2;
-        }
-
-        false
-    }
-}
+impl DefenderPressingState {}

@@ -5,8 +5,6 @@ use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
 use chrono::NaiveDate;
-use rayon::iter::IntoParallelRefMutIterator;
-use rayon::iter::ParallelIterator;
 
 #[derive(Debug, Clone)]
 pub struct TeamCollection {
@@ -24,7 +22,7 @@ impl TeamCollection {
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> Vec<TeamResult> {
         self.teams
-            .par_iter_mut()
+            .iter_mut()
             .map(|team| {
                 let message = &format!("simulate team: {}", &team.name);
                 Logging::estimate_result(|| team.simulate(ctx.with_team(team.id)), message)

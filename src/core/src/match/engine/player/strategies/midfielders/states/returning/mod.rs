@@ -25,9 +25,8 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // CRITICAL: Tackle if an opponent has the ball nearby
-        // Using new chaining syntax: nearby(30.0).with_ball(ctx)
-        if let Some(opponent) = ctx.players().opponents().nearby(30.0).with_ball(ctx).next() {
+        // CRITICAL: Tackle/press if an opponent has the ball nearby
+        if let Some(opponent) = ctx.players().opponents().nearby(80.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
             if opponent_distance < 30.0 {
@@ -35,11 +34,23 @@ impl StateProcessingHandler for MidfielderReturningState {
                     MidfielderState::Tackling,
                 ));
             }
+            if opponent_distance < 80.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
         }
 
         if !ctx.team().is_control_ball() && ctx.ball().distance() < 250.0 && ctx.ball().is_towards_player_with_angle(0.8) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Intercepting,
+            ));
+        }
+
+        // Guard attackers when ball is on our side
+        if !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Guarding,
             ));
         }
 

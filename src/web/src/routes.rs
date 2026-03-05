@@ -3,7 +3,7 @@ use crate::countries::country_routes;
 use crate::date::current_date_routes;
 use crate::face::face_routes;
 use crate::game::game_routes;
-use crate::i18n::detect_language;
+use crate::i18n::{detect_language, SUPPORTED_LANG_CODES};
 use crate::leagues::league_routes;
 use crate::player::player_routes;
 use crate::r#match::routes::match_routes;
@@ -11,6 +11,7 @@ use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::watchlist::watchlist_routes;
 use crate::GameAppData;
+use axum::extract::State;
 use axum::http::header::ACCEPT_LANGUAGE;
 use axum::http::HeaderMap;
 use axum::response::{IntoResponse, Redirect};
@@ -27,12 +28,31 @@ async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
     Redirect::temporary(&format!("/{}", lang))
 }
 
+async fn sitemap_xml() -> impl IntoResponse {
+    let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
+
+    let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+        <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
+
+    for lang in SUPPORTED_LANG_CODES {
+        xml.push_str(&format!(
+            "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>daily</changefreq>\n  </url>\n",
+            lang, date
+        ));
+    }
+
+    xml.push_str("</urlset>\n");
+
+    ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
+}
+
 pub struct ServerRoutes;
 
 impl ServerRoutes {
     pub fn create() -> Router<GameAppData> {
         Router::<GameAppData>::new()
             .route("/", get(root_redirect))
+            .route("/sitemap.xml", get(sitemap_xml))
             .merge(country_routes())
             .merge(game_routes())
             .merge(league_routes())

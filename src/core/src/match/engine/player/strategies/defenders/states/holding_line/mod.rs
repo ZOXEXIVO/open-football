@@ -4,13 +4,13 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
-const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 40.0;  // Reduced from 50.0 - tighter defensive line
-const BALL_PROXIMITY_THRESHOLD: f32 = 120.0; // Increased from 100.0 - react earlier to ball
-const MARKING_DISTANCE_THRESHOLD: f32 = 40.0; // Increased from 30.0 - pick up attackers earlier
-const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Distance to start pressing ball carrier
-const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 80.0; // Distance to scan for dangerous runs
-const DANGEROUS_RUN_SPEED: f32 = 2.5; // Minimum speed to consider a dangerous run
-const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Minimum alignment toward goal
+const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0;  // Tighter line — less room for attackers
+const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
+const MARKING_DISTANCE_THRESHOLD: f32 = 50.0; // Pick up attackers from further away
+const PRESSING_DISTANCE_THRESHOLD: f32 = 60.0; // Step out to press ball carrier earlier
+const DANGEROUS_RUN_SCAN_DISTANCE: f32 = 100.0; // Scan wider for dangerous runs
+const DANGEROUS_RUN_SPEED: f32 = 2.0; // Detect slower dangerous runs too
+const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound runs
 
 #[derive(Default, Clone)]
 pub struct DefenderHoldingLineState {}
@@ -68,6 +68,19 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Marking,
                 ));
+            }
+        }
+
+        // Guard unmarked attackers in our zone who are trying to get open
+        if ctx.ball().on_own_side() {
+            if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0) {
+                let dist = unmarked.distance(ctx);
+                if dist < 60.0 && !ctx.player().defensive().is_best_defender_for_opponent(&unmarked) {
+                    // Another defender is closer but let's guard secondary threats
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Guarding,
+                    ));
+                }
             }
         }
 

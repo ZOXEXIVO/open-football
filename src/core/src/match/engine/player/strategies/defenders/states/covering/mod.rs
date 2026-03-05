@@ -91,6 +91,15 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
+        // Guard unmarked attackers who are trying to find space
+        if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 3.0) {
+            if !unmarked.has_ball(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Guarding,
+                ));
+            }
+        }
+
         if ball_ops.is_towards_player() && ball_ops.distance() < INTERCEPTION_DISTANCE {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Intercepting,

@@ -5,7 +5,6 @@ use crate::utils::Logging;
 use crate::{Club, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
-use rayon::iter::IntoParallelRefMutIterator;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -161,11 +160,9 @@ impl League {
         ctx: &GlobalContext<'_>,
         friendly: bool,
     ) -> Vec<MatchResult> {
-        use rayon::iter::ParallelIterator;
-
         // Play all matches in parallel
         let match_results: Vec<MatchResult> = scheduled_matches
-            .par_iter_mut()
+            .iter_mut()
             .map(|scheduled_match| {
                 Self::play_single_match_static(
                     scheduled_match,
@@ -261,15 +258,22 @@ impl League {
             friendly,
         );
 
-        let message = &format!(
-            "play match: {} vs {} (Momentum: {:.1} vs {:.1})",
-            &match_to_play.home_squad.team_name,
-            &match_to_play.away_squad.team_name,
-            home_momentum,
-            away_momentum
-        );
+        let home_name = match_to_play.home_squad.team_name.clone();
+        let away_name = match_to_play.away_squad.team_name.clone();
 
-        let match_result = Logging::estimate_result(|| match_to_play.play(), message);
+        let match_result = Logging::estimate_result_with(
+            || match_to_play.play(),
+            |result, duration_ms| {
+                format!(
+                    "play match: {} {}:{} {}, {}ms",
+                    home_name,
+                    result.score.home_team.get(),
+                    result.score.away_team.get(),
+                    away_name,
+                    duration_ms
+                )
+            },
+        );
 
         // Update match result in schedule
         scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));

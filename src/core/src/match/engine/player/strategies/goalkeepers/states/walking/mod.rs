@@ -77,7 +77,7 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         }
 
         // Use decision-making skill for coming out
-        if self.should_come_out_advanced(ctx) && ball_distance < 250.0 {
+        if self.should_come_out_advanced(ctx) && ball_distance < 60.0 {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));

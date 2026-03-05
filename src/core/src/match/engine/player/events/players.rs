@@ -1,7 +1,8 @@
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, ShootingEventContext};
 use crate::r#match::player::statistics::MatchStatisticType;
-use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer};
+use crate::r#match::{GoalDetail, MatchContext, MatchField, MatchPlayer, PlayerSide};
+use crate::PlayerFieldPositionGroup;
 use log::debug;
 use nalgebra::Vector3;
 use rand::{Rng, RngExt};
@@ -110,6 +111,7 @@ pub enum PlayerEvent {
     GainBall(u32),
     CaughtBall(u32),
     CommitFoul,
+    Offside(u32, Vector3<f32>),  // (offside_player_id, position_for_free_kick)
     RequestHeading(u32, Vector3<f32>),
     RequestShot(u32, Vector3<f32>),
     RequestBallReceive(u32),
@@ -151,15 +153,38 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_owner_change_event(player_id, field);
             }
             PlayerEvent::PassTo(pass_event_model) => {
-                // Record the pass event (only if tracking is enabled)
-                if match_data.is_tracking_events() {
-                    match_data.add_pass_event(
-                        context.total_match_time,
-                        pass_event_model.from_player_id,
-                        pass_event_model.to_player_id,
-                    );
+                // Check offside before executing the pass
+                let is_gk = field.players.iter()
+                    .find(|p| p.id == pass_event_model.from_player_id)
+                    .map(|p| p.tactical_position.current_position.position_group() == PlayerFieldPositionGroup::Goalkeeper)
+                    .unwrap_or(false);
+
+                if !is_gk && Self::is_receiver_offside(
+                    pass_event_model.to_player_id,
+                    pass_event_model.from_player_id,
+                    field,
+                ) {
+                    let receiver_pos = field.players.iter()
+                        .find(|p| p.id == pass_event_model.to_player_id)
+                        .map(|p| p.position)
+                        .unwrap_or(field.ball.position);
+
+                    if context.logging_enabled {
+                        debug!("Offside detected: player {} at position {:?}", pass_event_model.to_player_id, receiver_pos);
+                    }
+
+                    Self::handle_offside_event(pass_event_model.to_player_id, receiver_pos, field);
+                } else {
+                    // Record the pass event (only if tracking is enabled)
+                    if match_data.is_tracking_events() {
+                        match_data.add_pass_event(
+                            context.total_match_time,
+                            pass_event_model.from_player_id,
+                            pass_event_model.to_player_id,
+                        );
+                    }
+                    Self::handle_pass_to_event(pass_event_model, field);
                 }
-                Self::handle_pass_to_event(pass_event_model, field);
             }
             PlayerEvent::ClaimBall(player_id) => {
                 Self::handle_claim_ball_event(player_id, field);
@@ -190,6 +215,9 @@ impl PlayerEventDispatcher {
             }
             PlayerEvent::CommitFoul => {
                 Self::handle_commit_foul_event(field);
+            }
+            PlayerEvent::Offside(player_id, position) => {
+                Self::handle_offside_event(player_id, position, field);
             }
             _ => {} // Ignore unsupported events
         }
@@ -947,36 +975,42 @@ impl PlayerEventDispatcher {
         let distance_error_factor = (horizontal_distance / 80.0).clamp(0.8, 3.0);
 
         // Calculate positional error (how far from intended target)
-        // Distance penalty multiplier for base_accuracy
+        // Distance penalty multiplier for base_accuracy — steeper dropoff at range
         let distance_penalty = if horizontal_distance > 200.0 {
-            0.25
+            0.10
+        } else if horizontal_distance > 150.0 {
+            0.18
         } else if horizontal_distance > 100.0 {
-            0.45
+            0.28
+        } else if horizontal_distance > 70.0 {
+            0.40
         } else if horizontal_distance > 50.0 {
-            0.65
+            0.55
+        } else if horizontal_distance > 30.0 {
+            0.70
         } else {
-            0.85
+            0.80
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Larger base error: elite players ±5-10 units, poor players ±25-50 units
-        let base_position_error = 40.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let max_y_error = base_position_error.clamp(5.0, 90.0);
+        // Larger base error: elite players ±10-18 units, poor players ±40-80 units
+        let base_position_error = 65.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let max_y_error = base_position_error.clamp(10.0, 120.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
         // Wide miss chance: even decent players miss the frame sometimes
-        // In real football ~60-70% of shots miss the target
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + 0.15;
+        // In real football ~65% of shots miss the target entirely
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + 0.35;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
-            // Shot goes wide — add large random offset
-            let wide_offset = rng.random_range(GOAL_WIDTH * 0.5..GOAL_WIDTH * 2.0);
+            // Shot goes wide — force y outside goal posts
+            let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
             if rng.random_range(0.0f32..1.0) < 0.5 {
-                actual_y_target += wide_offset;
+                actual_y_target = goal_right_post + extra_wide; // Wide right
             } else {
-                actual_y_target -= wide_offset;
+                actual_y_target = goal_left_post - extra_wide; // Wide left
             }
         }
 
@@ -1047,14 +1081,15 @@ impl PlayerEventDispatcher {
         let vertical_spin_variation = rng.random_range(0.90..1.10);
 
         // Over-the-bar miss chance: shots can balloon over the crossbar
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.3 + 0.10;
-        let over_bar_boost = if rng.random_range(0.0f32..1.0) < over_bar_chance {
-            rng.random_range(1.5..4.0) // Shot goes high over bar
+        // Combined with wide miss, total miss rate should be ~65%
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.4 + 0.22;
+        let z_velocity = if rng.random_range(0.0f32..1.0) < over_bar_chance {
+            // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
+            // Ball needs to reach height > 8.0 during flight, so z_velocity must be significant
+            rng.random_range(3.0..6.0) // Guaranteed to fly high over the bar
         } else {
-            1.0
+            (base_z_velocity * height_variation * vertical_spin_variation).min(5.0)
         };
-
-        let z_velocity = (base_z_velocity * height_variation * vertical_spin_variation * over_bar_boost).min(5.0);
 
         // Calculate final velocity
         let mut final_velocity = Vector3::new(
@@ -1094,12 +1129,18 @@ impl PlayerEventDispatcher {
         field.ball.pass_target_player_id = None;
         field.ball.velocity = final_velocity;
 
-        field.ball.flags.in_flight_state = 100;
+        // Shorter flight protection for shots — allows defenders/GK to claim sooner
+        field.ball.flags.in_flight_state = 40;
     }
 
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
+        // Ball must stop when caught — prevent it from continuing into the goal
+        field.ball.velocity = Vector3::zeros();
+        field.ball.flags.in_flight_state = 0;
+        field.ball.claim_cooldown = 30;
+        field.ball.pass_target_player_id = None;
     }
 
     fn handle_move_player_event(player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
@@ -1151,6 +1192,137 @@ impl PlayerEventDispatcher {
             field.ball.flags.in_flight_state = 60; // Prevent ClaimBall events from tackling states
             field.ball.contested_claim_count = 0; // Reset contested counter
         }
+    }
+
+    /// Check if the receiver is in an offside position at the moment of the pass.
+    /// FIFA rules: a player is offside if they are
+    ///   1) in the opponent's half,
+    ///   2) ahead of the ball, and
+    ///   3) beyond the second-to-last opponent (including goalkeeper).
+    fn is_receiver_offside(
+        receiver_id: u32,
+        passer_id: u32,
+        field: &MatchField,
+    ) -> bool {
+        let receiver = match field.players.iter().find(|p| p.id == receiver_id) {
+            Some(p) => p,
+            None => return false,
+        };
+
+        // Verify passer exists
+        if !field.players.iter().any(|p| p.id == passer_id) {
+            return false;
+        }
+
+        let receiver_side = match receiver.side {
+            Some(s) => s,
+            None => return false,
+        };
+
+        let half_width = field.size.half_width as f32;
+        let ball_x = field.ball.position.x;
+        let receiver_x = receiver.position.x;
+
+        // Tolerance to avoid marginal false positives
+        const TOLERANCE: f32 = 1.0;
+
+        match receiver_side {
+            PlayerSide::Left => {
+                // Left side attacks right: opponent goal at x = field_width
+                // Must be in opponent's half (past halfway)
+                if receiver_x < half_width {
+                    return false;
+                }
+                // Must be ahead of the ball (closer to opponent goal)
+                if receiver_x <= ball_x + TOLERANCE {
+                    return false;
+                }
+                // Collect all opponents (Right side players)
+                // Right side's own goal is at x = field_width
+                // Sort DESCENDING so [0] = closest to their goal (GK), [1] = second-to-last
+                let mut opponent_xs: Vec<f32> = field.players.iter()
+                    .filter(|p| p.side == Some(PlayerSide::Right))
+                    .map(|p| p.position.x)
+                    .collect();
+                opponent_xs.sort_by(|a, b| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+
+                if opponent_xs.len() < 2 {
+                    return false;
+                }
+                let second_last_x = opponent_xs[1];
+
+                // Offside if receiver is beyond (greater x) the second-to-last opponent
+                receiver_x > second_last_x + TOLERANCE
+            }
+            PlayerSide::Right => {
+                // Right side attacks left: opponent goal at x = 0
+                // Must be in opponent's half (before halfway)
+                if receiver_x > half_width {
+                    return false;
+                }
+                // Must be ahead of the ball (closer to opponent goal, i.e. smaller x)
+                if receiver_x >= ball_x - TOLERANCE {
+                    return false;
+                }
+                // Collect all opponents (Left side players)
+                // Left side's own goal is at x = 0
+                // Sort ASCENDING so [0] = closest to their goal (GK), [1] = second-to-last
+                let mut opponent_xs: Vec<f32> = field.players.iter()
+                    .filter(|p| p.side == Some(PlayerSide::Left))
+                    .map(|p| p.position.x)
+                    .collect();
+                opponent_xs.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+                if opponent_xs.len() < 2 {
+                    return false;
+                }
+                let second_last_x = opponent_xs[1];
+
+                // Offside if receiver is beyond (smaller x) the second-to-last opponent
+                receiver_x < second_last_x - TOLERANCE
+            }
+        }
+    }
+
+    /// Handle an offside event: stop the ball, award a free kick to the nearest opponent.
+    fn handle_offside_event(offside_player_id: u32, position: Vector3<f32>, field: &mut MatchField) {
+        // Increment offside stat on the player
+        if let Some(player) = field.players.iter_mut().find(|p| p.id == offside_player_id) {
+            player.statistics.offsides += 1;
+        }
+
+        // Determine the offside player's side to find opponents
+        let offside_side = field.players.iter()
+            .find(|p| p.id == offside_player_id)
+            .and_then(|p| p.side);
+
+        // Find nearest opponent to the offside position to award free kick
+        let nearest_opponent_id = field.players.iter()
+            .filter(|p| p.side != offside_side && p.side.is_some())
+            .min_by(|a, b| {
+                let dist_a = (a.position - position).norm();
+                let dist_b = (b.position - position).norm();
+                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.id);
+
+        // Stop ball at offside position
+        field.ball.position = position;
+        field.ball.velocity = Vector3::new(0.0, 0.0, 0.0);
+
+        // Award possession to nearest opponent (free kick)
+        if let Some(opponent_id) = nearest_opponent_id {
+            field.ball.previous_owner = field.ball.current_owner;
+            field.ball.current_owner = Some(opponent_id);
+            field.ball.ownership_duration = 0;
+        }
+
+        // Protected possession (same pattern as foul free kick)
+        field.ball.claim_cooldown = 60;
+        field.ball.flags.in_flight_state = 60;
+        field.ball.contested_claim_count = 0;
+        field.ball.pass_target_player_id = None;
+        field.ball.clear_pass_history();
     }
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {

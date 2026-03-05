@@ -38,10 +38,11 @@ impl StateProcessingHandler for DefenderHeadingState {
        
         // 2. Attempt to head the ball
         if self.attempt_heading(ctx) {
+            // Defenders clear the ball AWAY from own goal, not toward opponent goal
             Some(StateChangeResult::with_defender_state_and_event(DefenderState::HoldingLine, Event::PlayerEvent(PlayerEvent::Shoot(
                 ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
-                    .with_target(ctx.player().shooting_direction())
+                    .with_target(ctx.player().clearing_direction())
                     .with_reason("DEF_HEADING")
                     .build(ctx)
             ))))

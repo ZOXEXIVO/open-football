@@ -2,7 +2,6 @@ use crate::continent::Continent;
 use crate::NationalTeam;
 use crate::SimulatorData;
 use log::info;
-use rayon::iter::{IntoParallelIterator, ParallelIterator};
 use std::collections::HashMap;
 
 pub struct GlobalCompetitionSimulator;
@@ -34,7 +33,7 @@ impl GlobalCompetitionSimulator {
 
         // Run match engines in parallel
         let engine_results: Vec<(usize, u8, u8, HashMap<u32, u16>)> = prepared
-            .into_par_iter()
+            .into_iter()
             .map(|(idx, home_squad, away_squad)| {
                 let (home_score, away_score, player_goals) =
                     NationalTeam::play_competition_match(home_squad, away_squad);

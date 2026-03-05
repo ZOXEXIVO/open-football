@@ -1,14 +1,15 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
 use nalgebra::Vector3;
 
-const BLOCK_DISTANCE_THRESHOLD: f32 = 5.0; // Increased from 2.0 - wider blocking zone
+const BLOCK_DISTANCE_THRESHOLD: f32 = 8.0; // Wide blocking zone - defender can lunge/stretch
 const MAX_BLOCK_TIME: u64 = 500; // Don't stay in blocking state too long
-const SHOT_SPEED_THRESHOLD: f32 = 6.0; // Ball speed indicating a shot
+const SHOT_SPEED_THRESHOLD: f32 = 0.3; // Ball speed indicating still in motion (shots max at ~2.0/tick)
 
 #[derive(Default, Clone)]
 pub struct DefenderBlockingState {}
@@ -30,8 +31,26 @@ impl StateProcessingHandler for DefenderBlockingState {
 
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
+        let ball_distance = ctx.ball().distance();
 
-        // If ball has slowed down or stopped, exit blocking
+        // Ball is very close — attempt to block/claim it
+        if ball_distance < BLOCK_DISTANCE_THRESHOLD && !ctx.ball().is_owned() {
+            let bravery = ctx.player.skills.mental.bravery / 20.0;
+            let positioning = ctx.player.skills.mental.positioning / 20.0;
+            let block_skill = bravery * 0.6 + positioning * 0.4;
+
+            // Higher skill = higher block chance; proximity increases chance
+            let proximity_bonus = 1.0 - (ball_distance / BLOCK_DISTANCE_THRESHOLD);
+            let block_chance = block_skill * 0.5 + proximity_bonus * 0.3;
+
+            if rand::random::<f32>() < block_chance {
+                let mut result = StateChangeResult::with_defender_state(DefenderState::Standing);
+                result.events.add_player_event(PlayerEvent::ClaimBall(ctx.player.id));
+                return Some(result);
+            }
+        }
+
+        // If ball has stopped, exit blocking
         if ball_speed < SHOT_SPEED_THRESHOLD {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
@@ -39,14 +58,14 @@ impl StateProcessingHandler for DefenderBlockingState {
         }
 
         // If ball is too far, exit blocking
-        if ctx.ball().distance() > BLOCK_DISTANCE_THRESHOLD * 3.0 {
+        if ball_distance > BLOCK_DISTANCE_THRESHOLD * 4.0 {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));
         }
 
         // If ball is not coming toward us anymore, exit
-        if !ctx.ball().is_towards_player_with_angle(0.5) {
+        if !ctx.ball().is_towards_player_with_angle(0.4) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing,
             ));

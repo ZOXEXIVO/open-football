@@ -8,8 +8,6 @@ use std::collections::HashMap;
 impl Continent {
     /// Simulate national team competitions: check cycles, play matches in parallel, progress phases
     pub(crate) fn simulate_national_competitions(&mut self, date: NaiveDate) {
-        use rayon::iter::{IntoParallelIterator, ParallelIterator};
-
         let continent_id = self.id;
 
         // Check if we need to start new competition cycles
@@ -44,7 +42,7 @@ impl Continent {
 
         // Step 2: Run all match engines in parallel
         let engine_results: Vec<(usize, u8, u8, HashMap<u32, u16>)> = prepared
-            .into_par_iter()
+            .into_iter()
             .map(|(idx, home_squad, away_squad)| {
                 let (home_score, away_score, player_goals) =
                     NationalTeam::play_competition_match(home_squad, away_squad);

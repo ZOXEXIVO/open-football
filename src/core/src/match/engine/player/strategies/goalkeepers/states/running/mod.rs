@@ -3,7 +3,6 @@ use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperC
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
-use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -42,45 +41,15 @@ impl StateProcessingHandler for GoalkeeperRunningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        if ctx.player.has_ball(ctx) {
-            if let Some(nearest_opponent) = ctx.players().opponents().nearby(100.0).next() {
-                let player_goal_velocity = SteeringBehavior::Evade {
-                    target: nearest_opponent.position,
-                }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                Some(player_goal_velocity)
-            } else {
-                Some(
-                    SteeringBehavior::Wander {
-                        target: ctx.player.start_position,
-                        radius: IntegerUtils::random(5, 150) as f32,
-                        jitter: IntegerUtils::random(0, 2) as f32,
-                        distance: IntegerUtils::random(10, 150) as f32,
-                        angle: IntegerUtils::random(0, 180) as f32,
-                    }
-                        .calculate(ctx.player)
-                        .velocity,
-                )
+        // GK should always move toward start position, never wander away from goal
+        Some(
+            SteeringBehavior::Arrive {
+                target: ctx.player.start_position,
+                slowing_distance: 10.0,
             }
-        } else {
-            let slowing_distance: f32 = {
-                if ctx.player().goal_distance() < 200.0 {
-                    200.0
-                } else {
-                    10.0
-                }
-            };
-            let result = SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance,
-            }
-                .calculate(ctx.player)
-                .velocity;
-
-            Some(result + ctx.player().separation_velocity())
-        }
+            .calculate(ctx.player)
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

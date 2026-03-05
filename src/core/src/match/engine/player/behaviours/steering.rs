@@ -93,9 +93,9 @@ impl SteeringBehavior {
                     player.player_attributes.condition,
                 ) * pace_normalized;
                 let desired_speed = if distance < safe_slowing_distance {
-                    // Smooth cubic deceleration for better control (changed from quadratic)
+                    // Quadratic deceleration with minimum speed floor to prevent crawling
                     let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
-                    max_speed * ratio * ratio * ratio
+                    (max_speed * ratio * ratio).max(max_speed * 0.15)
                 } else {
                     max_speed
                 };

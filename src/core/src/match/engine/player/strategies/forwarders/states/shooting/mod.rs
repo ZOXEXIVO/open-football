@@ -2,8 +2,6 @@ use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::players::ShotQualityEvaluator;
-use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -21,27 +19,12 @@ impl StateProcessingHandler for ForwardShootingState {
             ));
         }
 
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
+        // Last-second quality check: if too far from goal and no clear shot,
+        // abort and go back to running (which will find a pass instead)
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        if distance_to_goal > 50.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            ));
-        }
-
-        // Check shot cooldown
-        let current_tick = ctx.current_tick();
-        if !ctx.memory().can_shoot(current_tick) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
-            ));
-        }
-
-        // Evaluate xG
-        let xg = ShotQualityEvaluator::evaluate(ctx);
-        if xg < MIN_XG_THRESHOLD {
-            // xG too low - redirect to passing or holding up play
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Passing,
+                ForwardState::Running,
             ));
         }
 

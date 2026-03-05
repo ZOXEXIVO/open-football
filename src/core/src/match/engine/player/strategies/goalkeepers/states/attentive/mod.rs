@@ -13,11 +13,11 @@ pub struct GoalkeeperAttentiveState {}
 
 impl StateProcessingHandler for GoalkeeperAttentiveState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Direct catch for very close slow balls
-        if ctx.ball().distance() < 5.0
+        // Direct catch for close slow balls
+        if ctx.ball().distance() < 10.0
             && !ctx.ball().is_owned()
             && ctx.ball().on_own_side()
-            && ctx.tick_context.positions.ball.velocity.norm() < 8.0
+            && ctx.tick_context.positions.ball.velocity.norm() < 10.0
         {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
@@ -37,13 +37,13 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
             let ball_distance = ctx.ball().distance();
 
             // If the ball is close and the goalkeeper should come out, transition to ComingOut
-            if self.should_come_out(ctx) && ball_distance < 300.0 {
+            if self.should_come_out(ctx) && ball_distance < 80.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::ComingOut,
                 ));
             }
-            // If the ball is moving toward the goalkeeper, prepare for save
-            else if ctx.ball().is_towards_player_with_angle(0.8) && ball_distance < 200.0 {
+            // If the ball is moving toward the goalkeeper, prepare for save immediately
+            else if ctx.ball().is_towards_player_with_angle(0.6) && ball_distance < 300.0 {
                 return Some(StateChangeResult::with_goalkeeper_state(
                     GoalkeeperState::PreparingForSave,
                 ));
@@ -82,40 +82,38 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
         let optimal_position = self.calculate_optimal_position(ctx);
         let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
 
-        // Use positioning skill for movement decisions
-        let positioning_skill = ctx.player.skills.mental.positioning / 20.0;
+        // GK must track ball movement quickly in attentive state
         let agility = ctx.player.skills.physical.agility / 20.0;
 
-        // Movement speed based on how far from optimal position
         if distance_to_optimal < 5.0 {
-            // Close to optimal - make adjustments while staying alert
+            // Close to optimal — active adjustments
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
                     slowing_distance: 3.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (0.4 + positioning_skill * 0.15), // Active, precise movements
+                .velocity * (0.7 + agility * 0.2),
             )
-        } else if distance_to_optimal < 20.0 {
-            // Moderate distance - smooth repositioning
+        } else if distance_to_optimal < 15.0 {
+            // Moderate distance — quick repositioning
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 8.0,
+                    slowing_distance: 6.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (0.6 + agility * 0.2), // Purposeful speed
+                .velocity * (1.0 + agility * 0.3),
             )
         } else {
-            // Need to reposition urgently
+            // Far — urgent sprint to position
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 12.0,
+                    slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
-                .velocity * (0.8 + positioning_skill * 0.2), // Fast movement
+                .velocity * (1.3 + agility * 0.3),
             )
         }
     }
@@ -150,7 +148,7 @@ impl GoalkeeperAttentiveState {
         let ball_speed = ball_velocity.norm();
         let is_toward_goal = ctx.ball().is_towards_player_with_angle(0.8);
 
-        if ball_speed > 15.0 && is_toward_goal && ctx.ball().distance() < 150.0 {
+        if ball_speed > 8.0 && is_toward_goal && ctx.ball().distance() < 200.0 {
             return true;
         }
 
@@ -176,7 +174,7 @@ impl GoalkeeperAttentiveState {
         let adjusted_threshold = base_threshold * (0.7 + skill_factor * 0.6); // Range: 70-130
 
         // Case 1: Ball is very close and no one has possession
-        if ball_distance < 100.0 && !ctx.ball().is_owned() {
+        if ball_distance < 40.0 && !ctx.ball().is_owned() {
             return true;
         }
 
@@ -260,8 +258,9 @@ impl GoalkeeperAttentiveState {
         // Normalize the vector and scale it based on goalkeeper positioning skill
         let positioning_skill = ctx.player.skills.mental.positioning / 20.0; // Normalize to 0-1
 
-        // Determine optimal distance - better goalkeepers position more optimally
-        let base_distance = 45.0;
+        // Determine optimal distance — GK stays relatively close to goal line
+        // but comes out a bit to narrow the angle (real GKs: ~6-10m off line)
+        let base_distance = 18.0;
         let skill_adjusted_distance = base_distance * (0.7 + positioning_skill * 0.6);
 
         // Position is on the line between goal and ball, but closer to goal

@@ -9,7 +9,7 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 80.0; // Defenders rarely shoot, only from close range
+const MAX_SHOOTING_DISTANCE: f32 = 50.0; // Defenders almost never shoot, only from very close
 
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
@@ -17,16 +17,14 @@ pub struct DefenderRunningState {}
 impl StateProcessingHandler for DefenderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            // Defenders should almost always pass — only shoot if very close with clear shot
             if self.is_in_shooting_range(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Shooting,
-                ));
-            }
-
-            if self.has_clear_shot(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Shooting,
-                ));
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                if finishing > 0.4 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Shooting,
+                    ));
+                }
             }
 
             if self.should_pass(ctx) {
@@ -56,11 +54,18 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            // Loose ball nearby — go claim it directly
+            // Loose ball nearby — go claim it, but only if nearest teammate
             if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::TakeBall,
-                ));
+                let ball_pos = ctx.tick_context.positions.ball.position;
+                let my_dist = ctx.ball().distance();
+                let closer_teammate = ctx.players().teammates().all()
+                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
+
+                if !closer_teammate {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::TakeBall,
+                    ));
+                }
             }
 
             // Notification system: if ball system notified us to take the ball, act immediately
@@ -158,19 +163,29 @@ impl StateProcessingHandler for DefenderRunningState {
             }
         }
 
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.player().opponent_goal_position(),
-                slowing_distance: if ctx.player.has_ball(ctx) {
-                    150.0
-                } else {
-                    100.0
-                },
-            }
-            .calculate(ctx.player)
-            .velocity
-                + ctx.player().separation_velocity(),
-        )
+        if ctx.player.has_ball(ctx) {
+            // With ball: move toward opponent goal
+            Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.player().opponent_goal_position(),
+                    slowing_distance: 100.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
+            )
+        } else {
+            // Without ball: return to tactical position
+            Some(
+                SteeringBehavior::Arrive {
+                    target: ctx.player.start_position,
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity(),
+            )
+        }
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
@@ -328,8 +343,8 @@ impl DefenderRunningState {
                 let is_open = !ctx
                     .players()
                     .opponents()
-                    .nearby(20.0)
-                    .any(|opponent| opponent.id == teammate.id);
+                    .all()
+                    .any(|opponent| (opponent.position - teammate.position).magnitude() < 20.0);
                 is_on_opposite_side && is_open
             })
             .collect();
@@ -350,14 +365,6 @@ impl DefenderRunningState {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
-    }
-
-    fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
-        if ctx.ball().distance_to_opponent_goal() < MAX_SHOOTING_DISTANCE {
-            return ctx.player().has_clear_shot();
-        }
-
-        false
     }
 
     /// Find a safe build-up pass target within max_distance.

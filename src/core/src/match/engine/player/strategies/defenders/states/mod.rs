@@ -1,6 +1,7 @@
 pub mod blocking;
 pub mod clearing;
 pub mod covering;
+pub mod guarding;
 pub mod heading;
 pub mod holding_line;
 pub mod intercepting;
@@ -25,6 +26,7 @@ pub mod common;
 pub use blocking::*;
 pub use clearing::*;
 pub use covering::*;
+pub use guarding::*;
 pub use heading::*;
 pub use holding_line::*;
 pub use intercepting::*;

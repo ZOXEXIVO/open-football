@@ -4,8 +4,6 @@ use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::PlayerPositionType;
 use std::ops::Index;
-use rayon::iter::IntoParallelRefMutIterator;
-use rayon::iter::ParallelIterator;
 
 #[derive(Debug, Clone)]
 pub struct PlayerCollection {
@@ -20,7 +18,7 @@ impl PlayerCollection {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerCollectionResult {
         let player_results: Vec<PlayerResult> = self
             .players
-            .par_iter_mut()
+            .iter_mut()
             .map(|player| {
                 let message = &format!("simulate player: id: {}", player.id);
                 Logging::estimate_result(

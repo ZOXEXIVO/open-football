@@ -41,11 +41,14 @@ async fn main() {
 
     let game_data = DatabaseGenerator::generate(&database);
 
+    let i18n = Arc::new(I18nManager::new());
+    i18n.set_date(game_data.date);
+
     let data = GameAppData {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
         process_lock: Arc::new(Mutex::new(())),
-        i18n: Arc::new(I18nManager::new()),
+        i18n,
         ai_registry,
     };
 

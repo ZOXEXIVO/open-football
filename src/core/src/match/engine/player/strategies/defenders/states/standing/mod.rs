@@ -7,16 +7,16 @@ use crate::r#match::{
     StateProcessingHandler, SteeringBehavior,
 };
 
-const INTERCEPTION_DISTANCE: f32 = 200.0;
+const INTERCEPTION_DISTANCE: f32 = 250.0; // React to balls from further out
 const CLEARING_DISTANCE: f32 = 50.0;
 const STANDING_TIME_LIMIT: u64 = 300;
 const WALK_DISTANCE_THRESHOLD: f32 = 15.0;
-const MARKING_DISTANCE: f32 = 25.0; // Increased from 15.0 - pick up attackers earlier
+const MARKING_DISTANCE: f32 = 35.0; // Pick up attackers early
 const FIELD_THIRD_THRESHOLD: f32 = 0.33;
-const PRESSING_DISTANCE: f32 = 60.0; // Increased from 45.0 - more proactive pressing
-const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 50.0; // Increased from 35.0 - tighter in own third
-const TACKLE_DISTANCE: f32 = 30.0;
-const BLOCKING_DISTANCE: f32 = 20.0; // Increased from 15.0 - earlier shot blocking
+const PRESSING_DISTANCE: f32 = 70.0; // Aggressive pressing range
+const PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 60.0; // Very tight in own third
+const TACKLE_DISTANCE: f32 = 40.0; // Engage tackles from further out
+const BLOCKING_DISTANCE: f32 = 35.0; // Block shots from wider range
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
 #[allow(dead_code)]
@@ -147,6 +147,15 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // Guard unmarked attackers who are trying to find space
+        if ctx.ball().on_own_side() {
+            if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Guarding,
+                ));
+            }
+        }
+
         if self.should_cover_space(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Covering,
@@ -197,15 +206,19 @@ impl StateProcessingHandler for DefenderStandingState {
             }
         }
 
-        // When ball is on own side and nearby, move toward covering position
-        if ctx.ball().on_own_side() && ctx.ball().distance() < 150.0 {
+        // When ball is on own side, actively position between ball and goal
+        if ctx.ball().on_own_side() && ctx.ball().distance() < 200.0 {
             let goal_pos = ctx.ball().direction_to_own_goal();
             let ball_pos = ctx.tick_context.positions.ball.position;
-            // Move toward ball-goal midpoint for active positioning
-            let midpoint = (ball_pos + goal_pos) * 0.5;
-            let to_midpoint = midpoint - ctx.player.position;
-            if to_midpoint.magnitude() > 5.0 {
-                return Some(to_midpoint.normalize() * 2.0);
+            // Position goal-side of the ball — closer to ball when it's near our goal
+            let ball_to_goal_dist = (ball_pos - goal_pos).magnitude();
+            let field_width = ctx.context.field_size.width as f32;
+            let urgency = 1.0 - (ball_to_goal_dist / field_width).clamp(0.0, 1.0);
+            // Blend: more toward ball when it's close to goal, more toward midpoint when far
+            let target = ball_pos * (0.3 + urgency * 0.3) + goal_pos * (0.7 - urgency * 0.3);
+            let to_target = target - ctx.player.position;
+            if to_target.magnitude() > 5.0 {
+                return Some(to_target.normalize() * (2.0 + urgency * 2.0));
             }
         }
 
@@ -321,29 +334,28 @@ impl DefenderStandingState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
 
-        // Check if ball is moving fast towards the defender
-        if ball_speed < 8.0 || ball_distance > BLOCKING_DISTANCE {
+        // Ball must be moving with shot-like speed and within blocking range
+        // Shot velocity is capped at ~2.0 per tick, so threshold must be low
+        if ball_speed < 0.8 || ball_distance > BLOCKING_DISTANCE {
+            return false;
+        }
+
+        // Ball must not be owned (it's a free ball / shot in flight)
+        if ctx.ball().is_owned() {
             return false;
         }
 
         // Check if ball is coming towards player
-        if !ctx.ball().is_towards_player_with_angle(0.7) {
+        if !ctx.ball().is_towards_player_with_angle(0.5) {
             return false;
         }
 
-        // Check if opponent recently shot (ball is fast and low)
+        // Check if opponent recently shot (ball is moving and relatively low)
         let ball_height = ctx.tick_context.positions.ball.position.z;
-        if ball_height > 2.0 {
-            return false; // Too high, not a shot
+        if ball_height > 3.0 {
+            return false; // Too high to block
         }
 
-        // Check if there's an opponent nearby who might have shot
-        let opponent_nearby = ctx
-            .players()
-            .opponents()
-            .nearby(30.0)
-            .any(|opp| opp.has_ball(ctx) || opp.distance(ctx) < 15.0);
-
-        opponent_nearby && ball_distance < BLOCKING_DISTANCE
+        true
     }
 }

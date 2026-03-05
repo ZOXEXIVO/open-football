@@ -102,14 +102,8 @@ impl MatchContext {
         self.total_match_time / 10
     }
 
-    /// Check if enough time has passed since the last goal for shooting to be allowed.
-    /// Simulates kickoff restart period (~5 seconds of game time).
     pub fn can_shoot_after_goal(&self) -> bool {
-        const POST_GOAL_COOLDOWN_TICKS: u64 = 500;
-        if self.last_goal_tick == 0 {
-            return true;
-        }
-        self.current_tick().saturating_sub(self.last_goal_tick) >= POST_GOAL_COOLDOWN_TICKS
+        true
     }
 
     pub fn record_goal_tick(&mut self) {

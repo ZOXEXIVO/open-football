@@ -25,7 +25,7 @@ const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
 const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
 
 // Passing decision thresholds for forwards
-const SHOOTING_ZONE_DISTANCE: f32 = 200.0; // Enhanced shooting priority zone
+const SHOOTING_ZONE_DISTANCE: f32 = 60.0; // Only shoot under pressure from close range
 const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.7; // Teammate must be 30% closer to override
 
 // Performance thresholds
@@ -40,39 +40,40 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-            let can_shoot_now = ctx.context.can_shoot_after_goal()
-                && ctx.memory().can_shoot(ctx.current_tick());
-
-            // Priority 0: Near opponent goalkeeper - MUST shoot immediately (with cooldown check)
-            if can_shoot_now {
-                if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
-                    let distance_to_gk = ctx.player.position.distance_to(&gk.position);
-                    if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::Shooting,
-                        ));
-                    }
+            // Priority 0: Near opponent goalkeeper - MUST shoot immediately
+            if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
+                let distance_to_gk = ctx.player.position.distance_to(&gk.position);
+                if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
                 }
             }
 
-            // Priority 0b: Point-blank range - MUST shoot (with cooldown check)
-            if can_shoot_now
-                && distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
+            // Priority 0b: Point-blank range - MUST shoot
+            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
             {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
-            // Priority 0c: Empty goal — no goalkeeper between player and goal
-            if can_shoot_now && distance_to_goal < 120.0 {
-                let has_gk_in_path = ctx.players().opponents().goalkeeper().next().map_or(false, |gk| {
-                    let gk_to_goal = (ctx.player().opponent_goal_position() - gk.position).magnitude();
-                    let player_to_goal = distance_to_goal;
-                    // GK must be between player and goal AND closer to goal
-                    gk_to_goal < player_to_goal && gk_to_goal < 40.0
+            // Priority 0c: Empty goal — goalkeeper is truly out of position
+            // Only trigger from very close range and verify GK is actually off the shot line
+            if distance_to_goal < 40.0 {
+                let goal_truly_empty = ctx.players().opponents().goalkeeper().next().map_or(true, |gk| {
+                    let goal_pos = ctx.player().opponent_goal_position();
+                    let gk_to_goal = (goal_pos - gk.position).magnitude();
+                    // GK must be far from goal (rushed out or out of position)
+                    // AND not on the shot line (check lateral offset)
+                    let shot_dir = (goal_pos - ctx.player.position).normalize();
+                    let to_gk = gk.position - ctx.player.position;
+                    let projection = to_gk.dot(&shot_dir);
+                    let lateral_offset = (to_gk - shot_dir * projection).magnitude();
+                    // GK is "out of position" only if far from goal AND far off the shot line
+                    gk_to_goal > 80.0 || (gk_to_goal > 50.0 && lateral_offset > 20.0)
                 });
-                if !has_gk_in_path {
+                if goal_truly_empty {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
@@ -128,20 +129,16 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 1: In shooting range — SHOOT. Forwards should always prefer shooting.
-            if ctx.player().shooting().in_shooting_range() {
-                if ctx.player().has_clear_shot() || distance_to_goal < CLOSE_RANGE_DISTANCE {
+            // Priority 1: In shooting range with clear shot — SHOOT
+            // Must have clear shot AND be in range. Heavily marked players should pass.
+            if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
+                // If heavily marked (2+ opponents within 8m), prefer passing unless very close
+                let heavily_marked = ctx.players().opponents().nearby(8.0).count() >= 2;
+                if !heavily_marked || distance_to_goal < POINT_BLANK_DISTANCE {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
                 }
-            }
-
-            // Priority 1b: Excellent shooting opportunity (xG-based fallback for edge cases)
-            if ctx.player().should_attempt_shot() {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
             }
 
             // Priority 2: Clear ball if congested - but NOT in shooting range
@@ -210,8 +207,8 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
             if ctx.in_state_time > 150 {
-                // Prefer shooting when close to goal, pass otherwise
-                if distance_to_goal < SHOOTING_ZONE_DISTANCE {
+                // Only shoot if very close to goal with clear shot, otherwise always pass
+                if distance_to_goal < POINT_BLANK_DISTANCE && ctx.player().has_clear_shot() {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
@@ -454,9 +451,14 @@ impl ForwardRunningState {
         let ball_distance = ctx.ball().distance();
         let ball_speed = ctx.ball().speed();
 
-        // Static or slow-moving ball nearby
+        // Static or slow-moving ball nearby - only if nearest teammate
         if ball_distance < 30.0 && ball_speed < 2.0 {
-            return true;
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let closer_teammate = ctx.players().teammates().all()
+                .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < ball_distance - 5.0);
+            if !closer_teammate {
+                return true;
+            }
         }
 
         // Ball moving toward player
@@ -701,13 +703,11 @@ impl ForwardRunningState {
 
     /// Calculate fatigue factor for movement
     fn calculate_fatigue_factor(&self, ctx: &StateProcessingContext) -> f32 {
-        let stamina = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
         let time_in_state = ctx.in_state_time as f32;
 
-        // Gradual fatigue over time
-        let time_factor = (1.0 - (time_in_state / 500.0)).max(0.5);
-
-        stamina * time_factor
+        // Only apply time-based fatigue here.
+        // Condition is already factored in by steering behaviors via max_speed_with_condition().
+        (1.0 - (time_in_state / 600.0)).max(0.7)
     }
 
     /// Calculate movement when carrying the ball
@@ -871,14 +871,31 @@ impl ForwardRunningState {
             .velocity
                 + ctx.player().separation_velocity() * 2.0
         } else {
-            // Move toward ball if no clear holder
-            SteeringBehavior::Arrive {
-                target: ctx.tick_context.positions.ball.position,
-                slowing_distance: 50.0,
+            // No clear ball holder - only nearest forward chases ball, others hold position
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let my_distance = (ctx.player.position - ball_pos).magnitude();
+            let closer_teammate_exists = ctx.players().teammates().all()
+                .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_distance - 5.0);
+
+            if closer_teammate_exists {
+                // Not nearest - maintain tactical position instead of chasing
+                SteeringBehavior::Arrive {
+                    target: ctx.player.start_position,
+                    slowing_distance: 30.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity()
+            } else {
+                // Nearest forward - go to ball
+                SteeringBehavior::Arrive {
+                    target: ball_pos,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    + ctx.player().separation_velocity()
             }
-            .calculate(ctx.player)
-            .velocity
-                + ctx.player().separation_velocity() * 2.5
         }
     }
 

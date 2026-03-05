@@ -40,18 +40,27 @@ impl StateProcessingHandler for ForwardStandingState {
                 //return Some(StateChangeResult::with_forward_state(ForwardState::HoldingPossession));
             }
         } else {
-            // Emergency: if ball is nearby, slow-moving, and unowned, go for it immediately
-            // OR if player is notified to take the ball (no distance limit when notified)
-            let is_nearby = ctx.ball().distance() < 50.0;
-            let is_notified = ctx.ball().is_player_notified();
+            // If notified by ball system, always respond (only 1 per team gets notified)
+            if ctx.ball().is_player_notified() && !ctx.ball().is_owned() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::TakeBall,
+                ));
+            }
 
-            if (is_nearby || is_notified) && !ctx.ball().is_owned() {
+            // Emergency: ball nearby and unowned - only chase if nearest teammate
+            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 3.0 { // Increased from 1.0 to catch slow rolling balls
-                    // Ball is stopped or slow-moving - take it directly
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::TakeBall,
-                    ));
+                if ball_velocity < 3.0 {
+                    let ball_pos = ctx.tick_context.positions.ball.position;
+                    let my_dist = ctx.ball().distance();
+                    let closer_teammate = ctx.players().teammates().all()
+                        .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
+
+                    if !closer_teammate {
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::TakeBall,
+                        ));
+                    }
                 }
             }
 

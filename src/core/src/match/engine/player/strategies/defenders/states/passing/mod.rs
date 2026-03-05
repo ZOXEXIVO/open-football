@@ -49,17 +49,17 @@ impl StateProcessingHandler for DefenderPassingState {
             };
         }
 
-        // If teammates are tired, prefer short pass to nearest teammate
+        // If teammates are tired, prefer a safe short pass
         if self.are_teammates_tired(ctx) {
-            if let Some(nearest) = ctx.player().passing().find_any_teammate_with_distance(100.0) {
-                let dist = (nearest.position - ctx.player.position).magnitude();
+            if let Some(safe_target) = ctx.player().passing().find_safe_pass_option_with_distance(100.0) {
+                let dist = (safe_target.position - ctx.player.position).magnitude();
                 if dist >= 20.0 {
                     return Some(StateChangeResult::with_defender_state_and_event(
                         DefenderState::Standing,
                         Event::PlayerEvent(PlayerEvent::PassTo(
                             PassingEventContext::new()
                                 .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(nearest.id)
+                                .with_to_player_id(safe_target.id)
                                 .with_reason("DEF_PASSING_TIRED_SHORT")
                                 .build(ctx),
                         )),

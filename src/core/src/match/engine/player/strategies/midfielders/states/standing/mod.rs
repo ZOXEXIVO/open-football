@@ -5,7 +5,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const PRESSING_DISTANCE_THRESHOLD: f32 = 50.0; // Adjust as needed
+const PRESSING_DISTANCE_THRESHOLD: f32 = 80.0; // Midfielders press from further out
 
 #[derive(Default, Clone)]
 pub struct MidfielderStandingState {}
@@ -47,9 +47,9 @@ impl StateProcessingHandler for MidfielderStandingState {
                         ));
                     }
 
-                    if ctx.ball().distance() < 100.0 {
+                    if ctx.ball().distance() < 150.0 {
                         return Some(StateChangeResult::with_midfielder_state(
-                            MidfielderState::Tackling,
+                            MidfielderState::Pressing,
                         ));
                     }
                 }
@@ -60,6 +60,13 @@ impl StateProcessingHandler for MidfielderStandingState {
                     && ctx.ball().is_towards_player_with_angle(0.8) {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Intercepting,
+                    ));
+                }
+
+                // Guard unmarked attackers on our side
+                if ctx.ball().on_own_side() {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Guarding,
                     ));
                 }
             }

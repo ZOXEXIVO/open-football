@@ -225,9 +225,9 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         receiver: &MatchPlayerLite,
     ) -> f32 {
-        const VERY_CLOSE_RADIUS: f32 = 3.0;
-        const CLOSE_RADIUS: f32 = 7.0;
-        const MEDIUM_RADIUS: f32 = 12.0;
+        const VERY_CLOSE_RADIUS: f32 = 5.0;
+        const CLOSE_RADIUS: f32 = 10.0;
+        const MEDIUM_RADIUS: f32 = 18.0;
 
         // Check opponents at multiple distance ranges for nuanced space evaluation
         let all_opponents: Vec<(u32, f32)> = ctx.tick_context
@@ -488,15 +488,15 @@ impl PassEvaluator {
     /// Calculate overall success probability from factors
     fn calculate_success_probability(factors: &PassFactors) -> f32 {
         // Weighted combination of all factors
-        // Reduced receiver positioning weight to allow passes to marked attackers
+        // Receiver positioning is critical - passing to free players is key
         let probability =
-            factors.distance_factor * 0.15 +
-                factors.angle_factor * 0.12 +
-                factors.pressure_factor * 0.12 +
-                factors.receiver_positioning * 0.25 +  // Reduced from 0.30 to allow penetrating passes
-                factors.passer_ability * 0.15 +        // Increased from 0.13
-                factors.receiver_ability * 0.10 +
-                factors.tactical_value * 0.11;         // Increased from 0.08 to reward forward play
+            factors.distance_factor * 0.12 +
+                factors.angle_factor * 0.10 +
+                factors.pressure_factor * 0.10 +
+                factors.receiver_positioning * 0.33 +  // Increased: free receivers are much better targets
+                factors.passer_ability * 0.12 +
+                factors.receiver_ability * 0.08 +
+                factors.tactical_value * 0.15;         // Increased to reward forward play and width
 
         probability.clamp(0.1, 0.99)
     }

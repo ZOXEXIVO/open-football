@@ -33,11 +33,10 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
         }
 
         // Timeout after a short time if no pass is made
-        // This prevents the goalkeeper from being stuck trying to pass forever
+        // Clear the ball rather than running with it (GK should never wander with ball)
         if ctx.in_state_time > 20 {
-            // If we still have the ball after timeout, try running to find space
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Running,
+                GoalkeeperState::Clearing,
             ));
         }
 

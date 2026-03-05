@@ -194,10 +194,35 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         // After all events are dispatched, force-reset positions if a goal was scored.
         // This prevents stale events (ClaimBall, PassTo, etc.) from overriding the goal reset.
         if field.ball.goal_scored {
+            let kickoff_side = field.ball.kickoff_team_side;
+
             field.reset_players_positions();
             field.ball.reset();
 
+            // Kickoff: give the conceding team protected possession at center
+            if let Some(side) = kickoff_side {
+                let ball_pos = field.ball.position;
+                // Find the nearest player from the kickoff team to center
+                let kickoff_player_id = field.players.iter()
+                    .filter(|p| p.side == Some(side))
+                    .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
+                    .min_by(|a, b| {
+                        let dist_a = (a.position - ball_pos).norm();
+                        let dist_b = (b.position - ball_pos).norm();
+                        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|p| p.id);
+
+                if let Some(player_id) = kickoff_player_id {
+                    field.ball.current_owner = Some(player_id);
+                    field.ball.claim_cooldown = 120; // ~2 seconds of protected possession
+                    field.ball.flags.in_flight_state = 120;
+                    field.ball.contested_claim_count = 0;
+                }
+            }
+
             field.ball.goal_scored = false;
+            field.ball.kickoff_team_side = None;
 
             context.record_goal_tick();
         }

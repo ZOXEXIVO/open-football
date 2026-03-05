@@ -34,20 +34,6 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
-            ));
-        }
-
-        // Check shot cooldown
-        if !ctx.memory().can_shoot(ctx.current_tick()) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
-            ));
-        }
-
         // Evaluate shooting opportunity
         if self.is_favorable_shooting_opportunity(ctx) {
             // Transition to shooting state
@@ -99,10 +85,14 @@ impl MidfielderDistanceShootingState {
         let distance_threshold = 100.0; // Maximum ~50m for long shots
         let angle_threshold = std::f32::consts::PI / 6.0; // 30 degrees
 
+        // Also check no heavy pressure
+        let heavily_marked = ctx.players().opponents().nearby(10.0).count() >= 2;
+
         distance_to_goal <= distance_threshold
             && angle_to_goal <= angle_threshold
             && has_clear_shot
-            && long_shots > 0.55 // Reduced from 0.7 to 0.55 - more players can take long shots
+            && long_shots > 0.65 // Only good long-shot takers attempt distance shots
+            && !heavily_marked
     }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {

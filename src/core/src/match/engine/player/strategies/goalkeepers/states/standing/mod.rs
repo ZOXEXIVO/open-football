@@ -16,29 +16,23 @@ pub struct GoalkeeperStandingState {}
 
 impl StateProcessingHandler for GoalkeeperStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Direct catch for very close slow balls
+        // Direct catch for close slow balls
         let ball_distance = ctx.ball().distance();
-        if ball_distance < 5.0
+        if ball_distance < 10.0
             && !ctx.ball().is_owned()
             && ctx.ball().on_own_side()
-            && ctx.tick_context.positions.ball.velocity.norm() < 8.0
+            && ctx.tick_context.positions.ball.velocity.norm() < 10.0
         {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
             ));
         }
 
-        // If goalkeeper has the ball, decide whether to pass or run
+        // If goalkeeper has the ball, distribute it (never run with ball)
         if ctx.player.has_ball(ctx) {
-            return if ctx.players().opponents().exists(DANGER_ZONE_RADIUS) {
-                Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Distributing,
-                ))
-            } else {
-                Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Running,
-                ))
-            }
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Distributing,
+            ));
         }
 
         let ball_on_own_side = ctx.ball().on_own_side();
@@ -73,13 +67,14 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             }
         }
 
-        // Check if ball is coming toward goal
-        if ctx.ball().is_towards_player_with_angle(0.7) && ball_on_own_side {
+        // Check if ball is coming toward goal — react faster to shots
+        // Shot velocities are ~1.0-2.0/tick, thresholds must match
+        if ctx.ball().is_towards_player_with_angle(0.6) && ball_on_own_side {
             let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
 
-            if ball_speed > 5.0 {
-                // Fast ball coming - prepare for save
-                if ball_distance < MEDIUM_THREAT_DISTANCE * (1.0 + anticipation * 0.5) {
+            if ball_speed > 0.5 {
+                // Ball moving toward goal — prepare immediately
+                if ball_distance < FAR_THREAT_DISTANCE * (1.0 + anticipation * 0.5) {
                     return Some(StateChangeResult::with_goalkeeper_state(
                         GoalkeeperState::PreparingForSave,
                     ));
@@ -95,7 +90,7 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         }
 
         // Check for loose ball in dangerous area
-        if !ctx.ball().is_owned() && ball_on_own_side && ball_distance < CLOSE_DANGER_DISTANCE * (1.0 + command_of_area * 0.5) {
+        if !ctx.ball().is_owned() && ball_on_own_side && ball_distance < 40.0 * (1.0 + command_of_area * 0.3) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ComingOut,
             ));
@@ -146,39 +141,36 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         let optimal_position = self.calculate_optimal_position(ctx);
         let distance_to_optimal = ctx.player.position.distance_to(&optimal_position);
 
-        // If we're close to optimal position, make small adjustments
-        if distance_to_optimal < 8.0 {
-            // Small movements to stay alert and ready
-            Some(
-                SteeringBehavior::Wander {
-                    target: optimal_position,
-                    radius: 3.0,
-                    jitter: 0.8,
-                    distance: 3.0,
-                    angle: (ctx.in_state_time % 360) as f32,
-                }
-                .calculate(ctx.player)
-                .velocity * 0.4, // Gentle movement
-            )
-        } else if distance_to_optimal < 25.0 {
-            // Repositioning needed
+        // GKs need to reposition quickly to track the ball
+        if distance_to_optimal < 5.0 {
+            // Close to position — small adjustments to stay ready
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 8.0,
+                    slowing_distance: 3.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.65, // Moderate speed
+                .velocity * 0.7,
+            )
+        } else if distance_to_optimal < 15.0 {
+            // Repositioning needed — move with purpose
+            Some(
+                SteeringBehavior::Arrive {
+                    target: optimal_position,
+                    slowing_distance: 6.0,
+                }
+                .calculate(ctx.player)
+                .velocity * 1.0,
             )
         } else {
-            // Need to move to better position quickly
+            // Urgently out of position — sprint
             Some(
                 SteeringBehavior::Arrive {
                     target: optimal_position,
-                    slowing_distance: 12.0,
+                    slowing_distance: 10.0,
                 }
                 .calculate(ctx.player)
-                .velocity * 0.85, // Faster movement
+                .velocity * 1.3,
             )
         }
     }

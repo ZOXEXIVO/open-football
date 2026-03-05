@@ -2,8 +2,6 @@ use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
-use crate::r#match::player::strategies::players::ShotQualityEvaluator;
-use crate::r#match::player::strategies::players::MIN_XG_THRESHOLD;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -22,26 +20,11 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
-        // Check global post-goal cooldown (kickoff protection)
-        if !ctx.context.can_shoot_after_goal() {
+        // Last-second quality check: if too far and no clear shot, abort
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        if distance_to_goal > 40.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
-            ));
-        }
-
-        // Check shot cooldown
-        let current_tick = ctx.current_tick();
-        if !ctx.memory().can_shoot(current_tick) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
-            ));
-        }
-
-        // Evaluate xG
-        let xg = ShotQualityEvaluator::evaluate(ctx);
-        if xg < MIN_XG_THRESHOLD {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing,
+                MidfielderState::Running,
             ));
         }
 

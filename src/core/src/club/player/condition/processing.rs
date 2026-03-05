@@ -40,8 +40,17 @@ impl Player {
         // Jadedness penalty: jaded players recover slower
         let jadedness_factor = 1.0 - (jadedness as f32 / 10000.0) * 0.3;
 
+        // Rest bonus: players without recent matches recover faster
+        let rest_bonus = if self.player_attributes.days_since_last_match > 7 {
+            1.5 // Fully rested — 50% faster recovery
+        } else if self.player_attributes.days_since_last_match > 3 {
+            1.3 // Well rested — 30% faster recovery
+        } else {
+            1.0 // Recently played — normal recovery
+        };
+
         let recovery =
-            (base_recovery * age_factor.max(0.5) * jadedness_factor.max(0.5)) as u16;
+            (base_recovery * age_factor.max(0.5) * jadedness_factor.max(0.5) * rest_bonus) as u16;
 
         if self.player_attributes.condition < CONDITION_MAX_VALUE {
             self.player_attributes.rest(recovery);

@@ -3,7 +3,6 @@ use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -12,9 +11,9 @@ pub struct MidfielderPressingState {}
 
 impl StateProcessingHandler for MidfielderPressingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Scale max press time by tactical intensity (40-80 tick range)
+        // Scale max press time by tactical intensity (60-120 tick range)
         let intensity = ctx.team().tactics().pressing_intensity();
-        let max_press_time = (40.0 + 40.0 * intensity) as u64;
+        let max_press_time = (60.0 + 60.0 * intensity) as u64;
         if ctx.in_state_time > max_press_time {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -57,21 +56,19 @@ impl StateProcessingHandler for MidfielderPressingState {
         }
 
         // CRITICAL: Tackle if an opponent has the ball nearby
-        // Using new chaining syntax: nearby(30.0).with_ball(ctx)
-        if let Some(opponent) = ctx.players().opponents().nearby(30.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx.players().opponents().nearby(50.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            // This prevents the midfielder from just circling without tackling
-            if opponent_distance < 30.0 {
+            // Engage tackle from further out — midfielders need to win the ball
+            if opponent_distance < 40.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
             }
         }
 
-        // If ball is far away, stop pressing
-        // Don't exit pressing just because ball is stationary (speed < 0.5 makes is_towards return false)
-        if ctx.ball().distance() > 250.0 || (ctx.ball().speed() > 0.5 && !ctx.ball().is_towards_player_with_angle(0.8)) {
+        // Only give up pressing if ball is truly far away
+        if ctx.ball().distance() > 300.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
             ));
@@ -100,28 +97,32 @@ impl StateProcessingHandler for MidfielderPressingState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Only pursue if opponent has the ball
-        if let Some(_opponent) = ctx.players().opponents().nearby(500.0).with_ball(ctx).next() {
-            // Pursue the ball (which is with the opponent)
-            Some(
-                SteeringBehavior::Pursuit {
-                    target: ctx.tick_context.positions.ball.position,
-                    target_velocity: ctx.tick_context.positions.ball.velocity,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity(),
-            )
-        } else if !ctx.ball().is_owned() && ctx.ball().distance() < 80.0 {
-            // Loose ball — pursue it
-            Some(
-                SteeringBehavior::Pursuit {
-                    target: ctx.tick_context.positions.ball.position,
-                    target_velocity: ctx.tick_context.positions.ball.velocity,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity(),
-            )
+        if let Some(opponent) = ctx.players().opponents().nearby(500.0).with_ball(ctx).next() {
+            let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
+
+            // Smart pressing: cut off angle to goal instead of chasing directly
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let opp_to_goal = (own_goal - opponent.position).normalize();
+            let intercept_offset = 5.0_f32.min(distance_to_opponent * 0.3);
+            let intercept_target = opponent.position + opp_to_goal * intercept_offset;
+            let direction = (intercept_target - ctx.player.position).normalize();
+            let speed = ctx.player.skills.physical.pace;
+
+            let pressing_velocity = direction * speed;
+
+            // Reduce separation when actively pressing to allow close approach
+            let separation = if distance_to_opponent < 25.0 {
+                ctx.player().separation_velocity() * 0.05
+            } else {
+                ctx.player().separation_velocity() * 0.15
+            };
+
+            Some(pressing_velocity + separation)
+        } else if !ctx.ball().is_owned() && ctx.ball().distance() < 100.0 {
+            // Loose ball — pursue it directly
+            let direction = (ctx.tick_context.positions.ball.position - ctx.player.position).normalize();
+            let speed = ctx.player.skills.physical.pace;
+            Some(direction * speed)
         } else {
             // Teammate has ball — maintain position
             Some(Vector3::zeros())
