@@ -389,14 +389,21 @@ impl StateProcessingHandler for ForwardRunningState {
                 0.0,
             );
 
+            let dist_to_target = (target - ctx.player.position).magnitude();
+
+            let arrive_velocity = SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            // Dampen separation near target to prevent oscillation
+            let sep_damping = (dist_to_target / 40.0).clamp(0.0, 1.0);
+            let separation = ctx.player().separation_velocity() * sep_damping;
+
             Some(
-                SteeringBehavior::Arrive {
-                    target,
-                    slowing_distance: 25.0,
-                }
-                .calculate(ctx.player)
-                .velocity * fatigue_factor
-                    + ctx.player().separation_velocity(),
+                arrive_velocity * fatigue_factor + separation,
             )
         }
     }

@@ -380,14 +380,22 @@ impl StateProcessingHandler for MidfielderRunningState {
                 0.0,
             );
 
-            Some(
-                SteeringBehavior::Arrive {
-                    target,
-                    slowing_distance: 25.0,
-                }
-                .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
-            )
+            let dist_to_target = (target - ctx.player.position).magnitude();
+
+            let arrive_velocity = SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 25.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            // Dampen separation near target to prevent oscillation feedback loop:
+            // Arrive produces small velocity near target, but separation (up to 15.0)
+            // pushes player away, then Arrive corrects back → constant twitching
+            let sep_damping = (dist_to_target / 40.0).clamp(0.0, 1.0);
+            let separation = ctx.player().separation_velocity() * sep_damping;
+
+            Some(arrive_velocity + separation)
         }
     }
 

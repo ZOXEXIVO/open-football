@@ -176,8 +176,14 @@
         var url = event.shiftKey ? '/api/game/process?days=180' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
-            await fetch(url, {method: 'POST'});
+            var res = await fetch(url, {method: 'POST'});
+            if (res.status === 504) {
+                setProcessing(true);
+                return;
+            }
         } catch (e) {
+            setProcessing(true);
+            return;
         }
         btn.classList.remove('fm-processing');
         await refreshContent();
