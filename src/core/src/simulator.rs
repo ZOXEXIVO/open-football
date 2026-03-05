@@ -43,7 +43,7 @@ impl FootballSimulator {
         }
 
         // Global competitions
-        crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
+        //crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
 
         // Refresh player indexes after transfers may have moved players between clubs
         if let Some(mut indexes) = data.indexes.take() {
