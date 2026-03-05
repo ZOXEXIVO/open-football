@@ -145,6 +145,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             });
         }
 
+        // Include stats from substituted-out players
+        for (player_id, mut stats) in context.substituted_out_stats.drain(..) {
+            // Look up the player's team to calculate match rating
+            // Use the substitution records to find team_id
+            let team_id = context.substitutions.iter()
+                .find(|s| s.player_out_id == player_id)
+                .map(|s| s.team_id);
+
+            let (player_team_goals, opponent_goals) = if team_id == Some(home_team_id) {
+                (home_goals, away_goals)
+            } else {
+                (away_goals, home_goals)
+            };
+
+            // Calculate match rating for subbed-out player
+            // Use Midfielder as default position group (no longer on field to check)
+            stats.match_rating = Self::calculate_match_rating(
+                stats.goals,
+                stats.assists,
+                stats.passes_attempted,
+                stats.passes_completed,
+                stats.shots_on_target,
+                stats.shots_total,
+                stats.tackles,
+                player_team_goals,
+                opponent_goals,
+                crate::PlayerFieldPositionGroup::Midfielder,
+            );
+
+            result.player_stats.insert(player_id, stats);
+        }
+
         result
     }
 
@@ -320,6 +352,27 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 let sub_id = Self::find_best_substitute(field, team_id, position_group);
 
                 if let Some(player_in_id) = sub_id {
+                    // Save subbed-out player's stats before they're replaced
+                    if let Some(player_out) = field.get_player(*player_out_id) {
+                        let goals = player_out.statistics.items.iter()
+                            .filter(|i| i.stat_type == MatchStatisticType::Goal && !i.is_auto_goal)
+                            .count() as u16;
+                        let assists = player_out.statistics.items.iter()
+                            .filter(|i| i.stat_type == MatchStatisticType::Assist)
+                            .count() as u16;
+
+                        context.substituted_out_stats.push((*player_out_id, PlayerMatchEndStats {
+                            shots_on_target: player_out.memory.shots_on_target as u16,
+                            shots_total: player_out.memory.shots_taken as u16,
+                            passes_attempted: player_out.statistics.passes_attempted,
+                            passes_completed: player_out.statistics.passes_completed,
+                            tackles: player_out.statistics.tackles,
+                            goals,
+                            assists,
+                            match_rating: 0.0, // Will be calculated at the end
+                        }));
+                    }
+
                     if field.substitute_player(*player_out_id, player_in_id) {
                         context.record_substitution(
                             team_id,

@@ -71,6 +71,24 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             }
         }
 
+        // COVER COLLAPSE: When a teammate is pressing the ball carrier nearby,
+        // break from line to provide secondary cover — don't just stand and watch
+        if ctx.ball().on_own_side() {
+            if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
+                let distance = opponent_with_ball.distance(ctx);
+                // Opponent is within range but we're not the one pressing
+                if distance < 100.0 && distance > PRESSING_DISTANCE_THRESHOLD {
+                    // Check if a teammate is already engaging this opponent
+                    if ctx.player().defensive().is_opponent_being_engaged(&opponent_with_ball) {
+                        // Provide cover — position between attacker and goal
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Covering,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Guard unmarked attackers in our zone who are trying to get open
         if ctx.ball().on_own_side() {
             if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0) {

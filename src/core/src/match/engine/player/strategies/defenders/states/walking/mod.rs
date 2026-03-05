@@ -78,6 +78,25 @@ impl StateProcessingHandler for DefenderWalkingState {
             }
         }
 
+        // Priority 2.5: When ball is on own side and opponent advancing, provide cover
+        if ctx.ball().on_own_side() {
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                let distance = opponent.distance(ctx);
+                if distance < 120.0 {
+                    // Close enough to press or support
+                    if distance < PRESSING_DISTANCE {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                    // Provide cover depth — position between attacker and goal
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Covering,
+                    ));
+                }
+            }
+        }
+
         // Priority 3: Intercept ball if it's coming towards player
         if ctx.ball().is_towards_player_with_angle(0.8)
             && ctx.ball().distance() < INTERCEPTION_DISTANCE

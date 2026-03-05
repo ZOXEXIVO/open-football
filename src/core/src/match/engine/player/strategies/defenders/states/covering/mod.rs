@@ -60,9 +60,19 @@ impl StateProcessingHandler for DefenderCoveringState {
         }
 
         if ball_ops.on_own_side() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Standing,
-            ));
+            // Stay active in covering if an opponent with ball is advancing nearby
+            // This prevents defenders from going passive when defense is most needed
+            let threat_nearby = ctx.players().opponents().with_ball()
+                .next()
+                .map(|opp| opp.distance(ctx) < 120.0)
+                .unwrap_or(false);
+
+            if !threat_nearby {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Standing,
+                ));
+            }
+            // Threat nearby — fall through to active covering checks
         }
 
         if ball_ops.distance_to_opponent_goal()
@@ -114,6 +124,41 @@ impl StateProcessingHandler for DefenderCoveringState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // When an opponent with ball is advancing on own side, position between them and goal
+        if ctx.ball().on_own_side() {
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                if opponent.distance(ctx) < 120.0 {
+                    let own_goal = ctx.ball().direction_to_own_goal();
+                    let opp_pos = opponent.position;
+                    let opp_velocity = opponent.velocity(ctx);
+
+                    // Predict where opponent will be shortly
+                    let opp_future = opp_pos + opp_velocity * 0.3;
+
+                    // Position goal-side of the attacker, offset toward our zone
+                    let to_goal = (own_goal - opp_future).normalize();
+                    let cover_point = opp_future + to_goal * 25.0;
+
+                    // Blend with tactical position to avoid all defenders collapsing to same spot
+                    let tether = 0.2;
+                    let target = cover_point * (1.0 - tether) + ctx.player.start_position * tether;
+
+                    let to_target = target - ctx.player.position;
+                    let distance = to_target.magnitude();
+
+                    if distance < 3.0 {
+                        return Some(opp_velocity * 0.4 + ctx.player().separation_velocity() * 0.3);
+                    }
+
+                    let direction = to_target.normalize();
+                    let speed = ctx.player.skills.physical.pace * 0.6;
+                    let urgency = (distance / 30.0).clamp(0.4, 1.0);
+
+                    return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.3);
+                }
+            }
+        }
+
         let target = self.calculate_optimal_covering_position(ctx);
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         // Project ball movement influence onto covering position

@@ -11,16 +11,23 @@ pub struct MidfielderPressingState {}
 
 impl StateProcessingHandler for MidfielderPressingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Scale max press time by tactical intensity (60-120 tick range)
-        let intensity = ctx.team().tactics().pressing_intensity();
-        let max_press_time = (60.0 + 60.0 * intensity) as u64;
-        if ctx.in_state_time > max_press_time {
+        if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
         }
 
-        if ctx.player.has_ball(ctx) {
+        // If team has possession, stop pressing and contribute to attack
+        if ctx.team().is_control_ball() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::AttackSupporting,
+            ));
+        }
+
+        // Scale max press time by tactical intensity (60-120 tick range)
+        let intensity = ctx.team().tactics().pressing_intensity();
+        let max_press_time = (60.0 + 60.0 * intensity) as u64;
+        if ctx.in_state_time > max_press_time {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
@@ -48,13 +55,6 @@ impl StateProcessingHandler for MidfielderPressingState {
             }
         }
 
-        // Loose ball nearby — go claim it directly instead of pressing thin air
-        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::TakeBall,
-            ));
-        }
-
         // CRITICAL: Tackle if an opponent has the ball nearby
         if let Some(opponent) = ctx.players().opponents().nearby(50.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
@@ -67,17 +67,24 @@ impl StateProcessingHandler for MidfielderPressingState {
             }
         }
 
+        // Loose ball nearby — go claim it directly instead of pressing thin air
+        // But only if no teammate is closer (avoid chasing ball during teammate's pass)
+        if !ctx.ball().is_owned() && ball_distance < 50.0 && ctx.ball().speed() < 3.0 {
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let closer_teammate = ctx.players().teammates().all()
+                .any(|t| (t.position - ball_pos).magnitude() < ball_distance - 5.0);
+
+            if !closer_teammate {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::TakeBall,
+                ));
+            }
+        }
+
         // Only give up pressing if ball is truly far away
         if ctx.ball().distance() > 300.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Returning,
-            ));
-        }
-
-        // If team has possession, contribute to attack
-        if ctx.team().is_control_ball() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::AttackSupporting,
             ));
         }
 

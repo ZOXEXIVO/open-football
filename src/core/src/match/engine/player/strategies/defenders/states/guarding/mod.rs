@@ -6,13 +6,15 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const GUARD_DISTANCE: f32 = 6.0; // Stay very tight to the attacker
+const GUARD_DISTANCE: f32 = 20.0; // Keep a realistic marking distance (don't sit on top of opponent)
 const MAX_GUARD_RANGE: f32 = 80.0; // Give up guarding if attacker moves too far
 const TACKLE_TRANSITION_DISTANCE: f32 = 5.0; // Tackle if opponent receives ball and is close
 const STAMINA_THRESHOLD: f32 = 15.0; // Guarding is tiring — need minimum stamina
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
 const PREDICTION_TIME: f32 = 0.25; // Look ahead 250ms to mirror movement
+const MAX_DISTANCE_FROM_START: f32 = 120.0; // Don't follow opponent too far from tactical zone
+const BOUNDARY_MARGIN: f32 = 15.0; // Stay away from field edges
 
 #[derive(Default, Clone)]
 pub struct DefenderGuardingState {}
@@ -89,7 +91,30 @@ impl StateProcessingHandler for DefenderGuardingState {
                 ));
             }
 
-            // Continue guarding — stay tight
+            // 7. Don't follow opponent too far from our tactical position
+            let dist_from_start = (ctx.player.position - ctx.player.start_position).magnitude();
+            if dist_from_start > MAX_DISTANCE_FROM_START {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
+
+            // 8. Don't get stuck at the boundary following an opponent
+            let field_width = ctx.context.field_size.width as f32;
+            let field_height = ctx.context.field_size.height as f32;
+            let pos = ctx.player.position;
+            let at_boundary = pos.x < BOUNDARY_MARGIN
+                || pos.x > field_width - BOUNDARY_MARGIN
+                || pos.y < BOUNDARY_MARGIN
+                || pos.y > field_height - BOUNDARY_MARGIN;
+
+            if at_boundary {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Returning,
+                ));
+            }
+
+            // Continue guarding from distance
             None
         } else {
             // No one to guard — return to holding line
@@ -107,41 +132,35 @@ impl StateProcessingHandler for DefenderGuardingState {
         if let Some(opponent) = self.find_guard_target(ctx) {
             let opponent_velocity = opponent.velocity(ctx);
             let own_goal = ctx.ball().direction_to_own_goal();
-            let ball_position = ctx.tick_context.positions.ball.position;
 
             // Predict where the opponent is heading
             let opponent_future = opponent.position + opponent_velocity * PREDICTION_TIME;
 
-            // Position between opponent and ball (deny receiving passes)
-            let to_ball = (ball_position - opponent_future).normalize();
-            let ball_deny_offset = to_ball * GUARD_DISTANCE * 0.4;
-
-            // Position between opponent and goal (deny shooting lane)
+            // Position between opponent and our goal at GUARD_DISTANCE away
+            // This keeps us goal-side of the opponent at a realistic marking distance
             let to_goal = (own_goal - opponent_future).normalize();
-            let goal_side_offset = to_goal * GUARD_DISTANCE * 0.3;
+            let desired_position = opponent_future + to_goal * GUARD_DISTANCE;
 
-            // Stay close to opponent's predicted position, biased toward ball and goal
-            let desired_position = opponent_future + ball_deny_offset + goal_side_offset;
+            // Blend with tactical position to avoid straying too far
+            let tether_strength = 0.15;
+            let desired_position = desired_position * (1.0 - tether_strength)
+                + ctx.player.start_position * tether_strength;
 
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();
 
-            if distance < 1.0 {
-                // Mirror opponent's velocity to stay in sync
-                return Some(opponent_velocity * 0.9);
+            if distance < 2.0 {
+                // Close enough — mirror opponent movement gently
+                return Some(opponent_velocity * 0.5 + ctx.player().separation_velocity() * 0.3);
             }
 
             let direction = to_desired.normalize();
 
-            // Match or exceed opponent speed to keep up
-            let opponent_speed = opponent_velocity.norm();
-            let chase_speed = ctx.player.skills.physical.pace;
-            let speed = chase_speed.max(opponent_speed * 1.05); // Slightly faster to close gap
+            // Speed based on how far off position we are
+            let base_speed = ctx.player.skills.physical.pace * 0.4;
+            let urgency = (distance / GUARD_DISTANCE).clamp(0.4, 1.0);
 
-            // Urgency: faster when further from desired position
-            let urgency = (distance / GUARD_DISTANCE).clamp(0.6, 1.4);
-
-            Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.2)
+            Some(direction * base_speed * urgency + ctx.player().separation_velocity() * 0.3)
         } else {
             Some(Vector3::zeros())
         }

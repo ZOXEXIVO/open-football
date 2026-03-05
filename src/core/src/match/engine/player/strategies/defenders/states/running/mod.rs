@@ -27,15 +27,22 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            if self.should_pass(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Passing,
-                ));
-            }
-
             if self.should_clear(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
+                ));
+            }
+
+            // Allow defenders to carry the ball forward when safe
+            // This wastes time (good for protecting a lead) and lets teammates rest
+            if self.should_carry_ball(ctx) {
+                // Stay in Running state — don't pass yet
+                return None;
+            }
+
+            if self.should_pass(ctx) {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Passing,
                 ));
             }
         } else {
@@ -196,6 +203,50 @@ impl StateProcessingHandler for DefenderRunningState {
 }
 
 impl DefenderRunningState {
+    /// Determine if the defender should carry the ball forward instead of passing immediately.
+    /// Useful for time-wasting, letting teammates recover, and advancing play when safe.
+    fn should_carry_ball(&self, ctx: &StateProcessingContext) -> bool {
+        // Need to have been in state for a few ticks (don't override initial entry logic)
+        if ctx.in_state_time < 5 {
+            return false;
+        }
+
+        // Don't carry too long — eventually must pass (max ~3-4 seconds of carrying)
+        if ctx.in_state_time > 200 {
+            return false;
+        }
+
+        // Never carry in own penalty area — too dangerous
+        if ctx.ball().in_own_penalty_area() {
+            return false;
+        }
+
+        // Check for immediate pressure: opponent very close = must pass/clear
+        if ctx.players().opponents().exists(10.0) {
+            return false;
+        }
+
+        // No opponent within moderate range — safe to carry
+        let has_space_ahead = !ctx.players().opponents().exists(25.0);
+
+        // Dribbling skill threshold — even average defenders can carry when safe
+        let dribbling = ctx.player.skills.technical.dribbling / 20.0;
+        let composure = ctx.player.skills.mental.composure / 20.0;
+        let carry_ability = dribbling * 0.6 + composure * 0.4;
+
+        if has_space_ahead && carry_ability > 0.3 {
+            return true;
+        }
+
+        // Also carry if opponents are only at medium distance and player has decent skills
+        let opponents_medium = ctx.players().opponents().exists(20.0);
+        if !opponents_medium && carry_ability > 0.2 {
+            return true;
+        }
+
+        false
+    }
+
     pub fn should_clear(&self, ctx: &StateProcessingContext) -> bool {
         // Clear if in own penalty area with opponents pressing close
         if ctx.ball().in_own_penalty_area() && ctx.players().opponents().exists(30.0) {
@@ -250,12 +301,14 @@ impl DefenderRunningState {
             return false;
         }
 
-        if ctx.players().opponents().exists(20.0) {
+        // Only pass under genuine pressure — opponent closing in
+        if ctx.players().opponents().exists(12.0) {
             return true;
         }
 
-        // If teammates are tired, prefer short passes to relieve pressure
-        if self.are_teammates_tired(ctx) {
+        // If teammates are tired, carry the ball instead of passing to let them rest
+        // Only pass if under actual pressure
+        if self.are_teammates_tired(ctx) && ctx.players().opponents().exists(15.0) {
             return true;
         }
 

@@ -1,5 +1,7 @@
 use nalgebra::Vector3;
 use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
+use crate::r#match::engine::player::statistics::MatchStatisticType;
+use crate::r#match::engine::result::PlayerMatchEndStats;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
 
@@ -34,6 +36,9 @@ pub struct MatchContext {
     // Global goal cooldown: tick when last goal was scored
     // Prevents immediate scoring after kickoff restart
     pub last_goal_tick: u64,
+
+    // Stats for players who were substituted out (preserved before replacement)
+    pub substituted_out_stats: Vec<(u32, PlayerMatchEndStats)>,
 }
 
 impl MatchContext {
@@ -53,6 +58,7 @@ impl MatchContext {
             substitutions: Vec::new(),
             max_substitutions_per_team: if is_friendly { usize::MAX } else { 3 },
             last_goal_tick: 0,
+            substituted_out_stats: Vec::new(),
         }
     }
 

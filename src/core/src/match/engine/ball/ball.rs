@@ -893,6 +893,13 @@ impl Ball {
             return;
         }
 
+        // Don't detect goals when ball is attached to a player (ball follows owner).
+        // Goals only happen when the ball crosses the line freely (shot, deflection, etc.).
+        // This prevents defenders "carrying" the ball into their own goal via boundary clamping.
+        if self.current_owner.is_some() {
+            return;
+        }
+
         if let Some(goal_side) = context.goal_positions.is_goal(self.position) {
             // Prefer current_owner (e.g. player carrying ball into goal)
             // Fall back to previous_owner (e.g. shooter or passer whose ball went in)
@@ -904,12 +911,53 @@ impl Ball {
                     _ => false
                 };
 
+                // Deflection fix: if this would be an own goal but the player only just
+                // touched the ball (deflection/failed save), credit the goal to the
+                // previous owner (the attacker who actually shot) instead.
+                // A genuine own goal requires the defender to have had meaningful possession.
+                let (final_scorer, final_is_auto_goal) = if is_auto_goal
+                    && self.ownership_duration < 30
+                {
+                    // Check if previous_owner is from the opposing team (the attacker)
+                    let attacker = if self.current_owner == Some(goalscorer) {
+                        self.previous_owner
+                    } else {
+                        // goalscorer came from previous_owner, check recent_passers
+                        self.recent_passers.iter().rev()
+                            .find(|&&id| id != goalscorer)
+                            .copied()
+                    };
+
+                    if let Some(attacker_id) = attacker {
+                        if let Some(attacker_player) = context.players.by_id(attacker_id) {
+                            // Verify attacker is from the other team
+                            let attacker_would_score = match attacker_player.side {
+                                Some(PlayerSide::Left) => goal_side != GoalSide::Home,
+                                Some(PlayerSide::Right) => goal_side != GoalSide::Away,
+                                _ => false,
+                            };
+                            if attacker_would_score {
+                                // Credit the attacker — this was a deflection, not a real own goal
+                                (attacker_id, false)
+                            } else {
+                                (goalscorer, true)
+                            }
+                        } else {
+                            (goalscorer, true)
+                        }
+                    } else {
+                        (goalscorer, true)
+                    }
+                } else {
+                    (goalscorer, is_auto_goal)
+                };
+
                 // Find assist provider: most recent passer who isn't the goalscorer
-                let assist_player_id = if !is_auto_goal {
+                let assist_player_id = if !final_is_auto_goal {
                     self.recent_passers
                         .iter()
                         .rev()
-                        .find(|&&id| id != goalscorer)
+                        .find(|&&id| id != final_scorer)
                         .copied()
                 } else {
                     None
@@ -917,9 +965,9 @@ impl Ball {
 
                 let goal_event_metadata = BallGoalEventMetadata {
                     side: goal_side,
-                    goalscorer_player_id: goalscorer,
+                    goalscorer_player_id: final_scorer,
                     assist_player_id,
-                    auto_goal: is_auto_goal,
+                    auto_goal: final_is_auto_goal,
                 };
 
                 result.add_ball_event(BallEvent::Goal(goal_event_metadata));

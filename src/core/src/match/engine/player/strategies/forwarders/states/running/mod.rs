@@ -337,13 +337,67 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             Some(self.calculate_ball_carrying_movement(ctx) * fatigue_factor)
         }
-        // Team has possession but this player doesn't have the ball
-        else if ctx.team().is_control_ball() {
-            Some(self.calculate_supporting_movement(ctx) * fatigue_factor)
-        }
-        // Team doesn't have possession
+        // Without ball — single smooth target, no binary is_control_ball() switch
+        // which flickers and causes twitching / snapping to center
         else {
-            Some(self.calculate_defensive_movement(ctx) * fatigue_factor)
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let start_pos = ctx.player.start_position;
+            let field_width = ctx.context.field_size.width as f32;
+            let field_height = ctx.context.field_size.height as f32;
+            let ball_distance = ctx.ball().distance();
+
+            let attacking_direction = match ctx.player.side {
+                Some(PlayerSide::Left) => 1.0,
+                Some(PlayerSide::Right) => -1.0,
+                None => 0.0,
+            };
+
+            // Smooth ball proximity (no binary switches)
+            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.75);
+
+            // Forwards stay HIGH — target pushes well ahead of ball toward opponent goal
+            let advanced_x = ball_pos.x + attacking_direction * 70.0;
+            // Clamp advanced_x toward opponent's half so forwards don't drop behind the ball
+            let min_forward_x = match ctx.player.side {
+                Some(PlayerSide::Left) => (field_width * 0.45).max(ball_pos.x),
+                Some(PlayerSide::Right) => 0.0_f32,
+                None => 0.0,
+            };
+            let max_forward_x = match ctx.player.side {
+                Some(PlayerSide::Left) => field_width,
+                Some(PlayerSide::Right) => (field_width * 0.55).min(ball_pos.x),
+                None => field_width,
+            };
+            let clamped_advanced_x = advanced_x.clamp(min_forward_x, max_forward_x);
+            let target_x = start_pos.x + (clamped_advanced_x - start_pos.x) * proximity;
+
+            // Y: anchor to tactical position, shift toward ball Y for passing angles
+            let center_y = field_height / 2.0;
+            let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
+            let y_attraction = if is_wide { proximity * 0.2 } else { proximity * 0.35 };
+            let target_y = start_pos.y + (ball_pos.y - start_pos.y) * y_attraction;
+
+            // Per-forward organic drift for unique movement
+            let match_time = ctx.context.total_match_time as f32;
+            let seed = ctx.player.id as f32 * 2.39;
+            let drift_x = (seed + match_time * 0.005).sin() * 12.0;
+            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 10.0;
+
+            let target = Vector3::new(
+                (target_x + drift_x).clamp(30.0, field_width - 30.0),
+                (target_y + drift_y).clamp(40.0, field_height - 40.0),
+                0.0,
+            );
+
+            Some(
+                SteeringBehavior::Arrive {
+                    target,
+                    slowing_distance: 25.0,
+                }
+                .calculate(ctx.player)
+                .velocity * fatigue_factor
+                    + ctx.player().separation_velocity(),
+            )
         }
     }
 
@@ -800,203 +854,6 @@ impl ForwardRunningState {
     }
 
     /// Calculate supporting movement when team has ball
-    fn calculate_supporting_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Find ball holder
-        let ball_holder = ctx
-            .ball()
-            .owner_id()
-            .and_then(|id| ctx.context.players.by_id(id))
-            .filter(|p| p.team_id == ctx.player.team_id);
-
-        if let Some(holder) = ball_holder {
-            let player_pos = ctx.player.position;
-            let holder_pos = holder.position;
-            let goal_pos = ctx.player().opponent_goal_position();
-            let field_width = ctx.context.field_size.width as f32;
-            let field_height = ctx.context.field_size.height as f32;
-
-            // Calculate direction toward goal
-            let attacking_direction = match ctx.player.side {
-                Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),
-                Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0),
-                None => (goal_pos - player_pos).normalize(),
-            };
-
-            // Determine if we're already ahead of the ball holder
-            let is_ahead_of_holder = match ctx.player.side {
-                Some(PlayerSide::Left) => player_pos.x > holder_pos.x,
-                Some(PlayerSide::Right) => player_pos.x < holder_pos.x,
-                None => false,
-            };
-
-            // Calculate target position based on role
-            let target_position = if is_ahead_of_holder {
-                // Already ahead - make run toward goal, creating passing option
-                let forward_run_distance = 60.0; // Run toward goal
-                let lateral_offset = if player_pos.y < field_height / 2.0 {
-                    -20.0 // Stay on left side
-                } else {
-                    20.0 // Stay on right side
-                };
-
-                Vector3::new(
-                    (player_pos.x + attacking_direction.x * forward_run_distance)
-                        .clamp(20.0, field_width - 20.0),
-                    (player_pos.y + lateral_offset).clamp(30.0, field_height - 30.0),
-                    0.0,
-                )
-            } else {
-                // Behind ball holder - get ahead of them toward goal
-                let overtake_distance = 80.0;
-                let lateral_spread = if player_pos.y < field_height / 2.0 {
-                    -30.0 // Spread left
-                } else {
-                    30.0 // Spread right
-                };
-
-                Vector3::new(
-                    (holder_pos.x + attacking_direction.x * overtake_distance)
-                        .clamp(20.0, field_width - 20.0),
-                    (holder_pos.y + lateral_spread).clamp(30.0, field_height - 30.0),
-                    0.0,
-                )
-            };
-
-            // Use Pursuit behavior for more aggressive movement toward target
-            SteeringBehavior::Pursuit {
-                target: target_position,
-                target_velocity: Vector3::zeros(),
-            }
-            .calculate(ctx.player)
-            .velocity
-                + ctx.player().separation_velocity() * 2.0
-        } else {
-            // No clear ball holder - only nearest forward chases ball, others hold position
-            let ball_pos = ctx.tick_context.positions.ball.position;
-            let my_distance = (ctx.player.position - ball_pos).magnitude();
-            let closer_teammate_exists = ctx.players().teammates().all()
-                .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_distance - 5.0);
-
-            if closer_teammate_exists {
-                // Not nearest - maintain tactical position instead of chasing
-                SteeringBehavior::Arrive {
-                    target: ctx.player.start_position,
-                    slowing_distance: 30.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity()
-            } else {
-                // Nearest forward - go to ball
-                SteeringBehavior::Arrive {
-                    target: ball_pos,
-                    slowing_distance: 20.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity()
-            }
-        }
-    }
-
-    /// Calculate intelligent support run position
-    #[allow(dead_code)]
-    fn calculate_support_run_position(
-        &self,
-        ctx: &StateProcessingContext,
-        holder_pos: Vector3<f32>,
-    ) -> Vector3<f32> {
-        let player_pos = ctx.player.position;
-        let _field_width = ctx.context.field_size.width as f32;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Determine player's role based on position
-        let is_central = (player_pos.y - field_height / 2.0).abs() < field_height * 0.2;
-        let is_wide = !is_central;
-
-        if is_wide {
-            // Wide players make runs down the flanks
-            self.calculate_wide_support_position(ctx, holder_pos)
-        } else {
-            // Central players make runs through the middle
-            self.calculate_central_support_position(ctx, holder_pos)
-        }
-    }
-
-    /// Calculate wide support position
-    #[allow(dead_code)]
-    fn calculate_wide_support_position(
-        &self,
-        ctx: &StateProcessingContext,
-        holder_pos: Vector3<f32>,
-    ) -> Vector3<f32> {
-        let player_pos = ctx.player.position;
-        let field_height = ctx.context.field_size.height as f32;
-
-        // Stay wide and ahead of ball
-        let target_y = if player_pos.y < field_height / 2.0 {
-            field_height * 0.1 // Left wing
-        } else {
-            field_height * 0.9 // Right wing
-        };
-
-        // Increased distance from ball carrier (40 → 80 units) to prevent clustering
-        let target_x = match ctx.player.side {
-            Some(PlayerSide::Left) => holder_pos.x + 80.0,
-            Some(PlayerSide::Right) => holder_pos.x - 80.0,
-            None => holder_pos.x,
-        };
-
-        Vector3::new(target_x, target_y, 0.0)
-    }
-
-    /// Calculate central support position
-    #[allow(dead_code)]
-    fn calculate_central_support_position(
-        &self,
-        ctx: &StateProcessingContext,
-        holder_pos: Vector3<f32>,
-    ) -> Vector3<f32> {
-        let field_height = ctx.context.field_size.height as f32;
-        let player_pos = ctx.player.position;
-
-        // Move into space between defenders - increased distance (50 → 90 units)
-        let target_x = match ctx.player.side {
-            Some(PlayerSide::Left) => holder_pos.x + 90.0,
-            Some(PlayerSide::Right) => holder_pos.x - 90.0,
-            None => holder_pos.x,
-        };
-
-        // Use player's current Y position with slight adjustment toward center
-        // REMOVED oscillating sine wave that caused left-right cycling
-        let center_pull = (field_height / 2.0 - player_pos.y) * 0.2; // Gentle pull toward center
-        let target_y = player_pos.y + center_pull;
-
-        Vector3::new(target_x, target_y.clamp(field_height * 0.3, field_height * 0.7), 0.0)
-    }
-
-    /// Calculate defensive movement
-    fn calculate_defensive_movement(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let field_width = ctx.context.field_size.width as f32;
-
-        // Forwards maintain higher defensive line
-        let defensive_line = match ctx.player.side {
-            Some(PlayerSide::Left) => field_width * 0.55,
-            Some(PlayerSide::Right) => field_width * 0.45,
-            None => field_width * 0.5,
-        };
-
-        // Stay compact with midfield
-        let target_y = ctx.player.start_position.y;
-        let target_x = defensive_line;
-
-        SteeringBehavior::Arrive {
-            target: Vector3::new(target_x, target_y, 0.0),
-            slowing_distance: 40.0,
-        }
-            .calculate(ctx.player)
-            .velocity
-    }
 
     fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
         let teammates: Vec<MatchPlayerLite> = ctx.players().teammates().nearby(300.0).collect();
