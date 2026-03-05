@@ -75,23 +75,20 @@ impl StateProcessingHandler for MidfielderRunningState {
             let long_shots = ctx.player.skills.technical.long_shots / 20.0;
             let finishing = ctx.player.skills.technical.finishing / 20.0;
 
-            // Standard shooting - close enough with clear shot and good skill
-            // Also check that player is not heavily marked
+            // Standard shooting - in range with reasonable skill
             if goal_dist <= STANDARD_SHOOTING_DISTANCE
-                && ctx.player().has_clear_shot()
-                && finishing > 0.65
-                && ctx.players().opponents().nearby(8.0).count() < 2 {
+                && ctx.player().shooting().in_shooting_range()
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
             }
 
-            // Distance shooting - long range with excellent skills and no pressure
+            // Distance shooting - long range with good long shot skills
             if goal_dist <= MAX_SHOOTING_DISTANCE
-                && ctx.player().has_clear_shot()
-                && long_shots > 0.65
-                && finishing > 0.55
-                && !ctx.players().opponents().exists(PRESSURE_CHECK_DISTANCE) {
+                && long_shots > 0.6
+                && finishing > 0.5
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
                 ));

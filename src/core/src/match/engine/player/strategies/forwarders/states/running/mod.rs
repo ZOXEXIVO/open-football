@@ -6,7 +6,6 @@ use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
-    VectorExtensions,
 };
 use crate::IntegerUtils;
 use nalgebra::Vector3;
@@ -40,52 +39,13 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-            // Priority 0: Near opponent goalkeeper - MUST shoot immediately
-            if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
-                let distance_to_gk = ctx.player.position.distance_to(&gk.position);
-                if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
-            }
-
-            // Priority 0b: Point-blank range - MUST shoot
-            if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE
+            // Priority 0: In shooting range — SHOOT
+            if distance_to_goal > MIN_SHOOTING_DISTANCE
+                && ctx.player().shooting().in_shooting_range()
             {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
-            }
-
-            // Priority 0c: Empty goal — goalkeeper is truly out of position
-            // Only trigger from very close range and verify GK is actually off the shot line
-            if distance_to_goal < 40.0 {
-                let goal_truly_empty = ctx.players().opponents().goalkeeper().next().map_or(true, |gk| {
-                    let goal_pos = ctx.player().opponent_goal_position();
-                    let gk_to_goal = (goal_pos - gk.position).magnitude();
-                    // GK must be far from goal (rushed out or out of position)
-                    // AND not on the shot line (check lateral offset)
-                    let shot_dir = (goal_pos - ctx.player.position).normalize();
-                    let to_gk = gk.position - ctx.player.position;
-                    let projection = to_gk.dot(&shot_dir);
-                    let lateral_offset = (to_gk - shot_dir * projection).magnitude();
-                    // GK is "out of position" only if far from goal AND far off the shot line
-                    gk_to_goal > 80.0 || (gk_to_goal > 50.0 && lateral_offset > 20.0)
-                });
-                if goal_truly_empty {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
-            }
-
-            // Priority 0.5: Before general shooting, check if a teammate is in a MUCH better scoring position
-            // This distributes goals across the team instead of one forward shooting every time
-            if distance_to_goal > POINT_BLANK_DISTANCE {
-                if self.has_teammate_with_much_better_shot(ctx, distance_to_goal) {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
-                }
             }
 
             // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
@@ -129,19 +89,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 1: In shooting range with clear shot — SHOOT
-            // Must have clear shot AND be in range. Heavily marked players should pass.
-            if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
-                // If heavily marked (2+ opponents within 8m), prefer passing unless very close
-                let heavily_marked = ctx.players().opponents().nearby(8.0).count() >= 2;
-                if !heavily_marked || distance_to_goal < POINT_BLANK_DISTANCE {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
-            }
-
-            // Priority 2: Clear ball if congested - but NOT in shooting range
+            // Clear ball if congested far from goal
             if distance_to_goal > SHOOTING_ZONE_DISTANCE {
                 if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
                     if let Some(_) = ctx.players().teammates().all().next() {
@@ -170,14 +118,8 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 3: Under pressure - quick decision needed
+            // Under pressure - quick decision needed
             if ctx.player().pressure().is_under_immediate_pressure() {
-                // Even under pressure, shoot if close to goal
-                if distance_to_goal < SHOOTING_ZONE_DISTANCE && ctx.player().has_clear_shot() {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
                 if self.should_pass_under_pressure(ctx) {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
                 } else if self.can_dribble_out_of_pressure(ctx) {
@@ -187,7 +129,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 4: Evaluate best action based on game context
+            // Evaluate best action based on game context
             if self.should_pass(ctx) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
@@ -198,7 +140,7 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            // Priority 5: Cross from wide position in attacking third
+            // Cross from wide position in attacking third
             if self.should_cross(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Crossing,
@@ -207,8 +149,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
             if ctx.in_state_time > 150 {
-                // Only shoot if very close to goal with clear shot, otherwise always pass
-                if distance_to_goal < POINT_BLANK_DISTANCE && ctx.player().has_clear_shot() {
+                if distance_to_goal < SHOOTING_ZONE_DISTANCE {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));

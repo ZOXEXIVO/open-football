@@ -8,6 +8,7 @@ use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
 use nalgebra::Vector3;
+use rand::RngExt;
 use std::collections::HashMap;
 
 pub struct FootballEngine<const W: usize, const H: usize> {}
@@ -54,10 +55,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
             StateManager::handle_state_finish(&mut context, &mut field, play_state_result);
 
-            // Halftime substitutions: after first half finishes, make up to 3 subs per team
-            if state == MatchState::FirstHalf {
-                Self::process_substitutions(&mut field, &mut context, 3);
-            }
         }
 
         let mut result = MatchResultRaw::with_match_time(context.total_match_time);
@@ -187,20 +184,28 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) -> PlayMatchStateResult {
         let result = PlayMatchStateResult::default();
 
-        // Track last substitution check time for periodic second-half subs
-        let mut last_sub_check_ms: u64 = 0;
-        // Check every 15 game-minutes during second half
-        const SUB_CHECK_INTERVAL_MS: u64 = 15 * 60 * 1000;
+        // Schedule substitution times for second half (randomized)
+        let mut next_sub_time_ms: u64 = 0;
+        let mut sub_times_initialized = false;
 
         while context.increment_time() {
             Self::game_tick(field, context, match_data);
 
-            // Periodic substitution check during second half
+            // Substitutions only during second half
             if context.state.match_state == MatchState::SecondHalf {
+                if !sub_times_initialized {
+                    // First sub between 10-20 min of second half (55'-65')
+                    let mut rng = rand::rng();
+                    next_sub_time_ms = rng.random_range(10..20) * 60 * 1000;
+                    sub_times_initialized = true;
+                }
+
                 let period_time = context.time.time;
-                if period_time >= last_sub_check_ms + SUB_CHECK_INTERVAL_MS {
-                    last_sub_check_ms = period_time;
+                if period_time >= next_sub_time_ms {
                     Self::process_substitutions(field, context, 1);
+                    // Next sub 5-15 min later
+                    let mut rng = rand::rng();
+                    next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }
             }
         }
@@ -313,29 +318,19 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 continue;
             }
 
-            // Collect candidates to substitute off, sorted by condition (worst first)
-            let mut tired_players: Vec<(u32, i16, PlayerPositionType)> = field
+            // Collect outfield players sorted by condition (worst first)
+            let mut candidates: Vec<(u32, i16, PlayerPositionType)> = field
                 .players
                 .iter()
                 .filter(|p| p.team_id == team_id)
-                .filter(|p| {
-                    let condition = p.player_attributes.condition;
-                    let is_gk = p.tactical_position.current_position == PlayerPositionType::Goalkeeper;
-                    if is_gk {
-                        // Only sub GK if critically low
-                        condition < 2000
-                    } else {
-                        condition < 5000
-                    }
-                })
+                .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
                 .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
                 .collect();
 
-            // Sort by condition ascending (most tired first)
-            tired_players.sort_by_key(|&(_, cond, _)| cond);
+            candidates.sort_by_key(|&(_, cond, _)| cond);
 
             let mut subs_made = 0;
-            for (player_out_id, _, position) in &tired_players {
+            for (player_out_id, _, position) in &candidates {
                 if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
                     break;
                 }
