@@ -359,13 +359,13 @@ impl StateProcessingHandler for ForwardRunningState {
             let advanced_x = ball_pos.x + attacking_direction * 70.0;
             // Clamp advanced_x toward opponent's half so forwards don't drop behind the ball
             let min_forward_x = match ctx.player.side {
-                Some(PlayerSide::Left) => (field_width * 0.45).max(ball_pos.x),
+                Some(PlayerSide::Left) => (field_width * 0.45).max(ball_pos.x).min(field_width),
                 Some(PlayerSide::Right) => 0.0_f32,
                 None => 0.0,
             };
             let max_forward_x = match ctx.player.side {
                 Some(PlayerSide::Left) => field_width,
-                Some(PlayerSide::Right) => (field_width * 0.55).min(ball_pos.x),
+                Some(PlayerSide::Right) => (field_width * 0.55).min(ball_pos.x).max(0.0),
                 None => field_width,
             };
             let clamped_advanced_x = advanced_x.clamp(min_forward_x, max_forward_x);
