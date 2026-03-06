@@ -348,6 +348,16 @@ impl PassEvaluator {
         let is_defender = ctx.player.tactical_position.current_position.position_group()
             == crate::PlayerFieldPositionGroup::Defender;
 
+        // Penalize pure sideways passes that don't progress the ball
+        let lateral_change = (receiver_position.y - passer_position.y).abs();
+        let forward_change = ((receiver_position.x - passer_position.x) * forward_direction_multiplier).abs();
+        let sideways_penalty = if forward_change < 10.0 && lateral_change > 20.0 {
+            // Nearly pure sideways pass — discourages cycling in a cluster
+            -0.3
+        } else {
+            0.0
+        };
+
         let forward_value = if forward_progress < 0.0 {
             // Backward pass - heavy penalty
             // Even composed players get penalized for going backward
@@ -494,7 +504,8 @@ impl PassEvaluator {
             long_pass_bonus * 0.05 +       // Reduced: long passes less encouraged
             width_bonus * 0.09 +           // Reward wide passes
             switch_play_bonus * 0.09 +     // Reward switching play
-            overload_penalty;              // Penalize crowded side
+            overload_penalty +             // Penalize crowded side
+            sideways_penalty;              // Penalize pure sideways passes
 
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
@@ -609,10 +620,10 @@ impl PassEvaluator {
         let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let min_pass_distance = if is_under_pressure {
             // Under pressure, allow shorter passes but still avoid huddle passes
-            8.0
+            15.0
         } else {
             // Not under pressure, enforce minimum distance to prevent group passing
-            20.0
+            40.0
         };
 
         for teammate in ctx.players().teammates().nearby(max_distance) {

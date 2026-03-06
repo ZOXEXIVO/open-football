@@ -82,17 +82,9 @@ impl MidfielderDistributingState {
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
         let opponent_distance_threshold = 5.0; // Adjust the threshold as needed
 
-        let opponents_nearby = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                let distance = (opponent.position - teammate.position).magnitude();
-                distance <= opponent_distance_threshold
-            })
-            .count();
-
-        opponents_nearby == 0
+        // Use distance closure: from teammate's perspective, opponents are nearby
+        ctx.tick_context.distances.opponents(teammate.id, opponent_distance_threshold)
+            .next().is_none()
     }
 
     fn calculate_space_around_player(
@@ -102,15 +94,9 @@ impl MidfielderDistributingState {
     ) -> f32 {
         let space_radius = 10.0; // Adjust the radius as needed
 
-        let num_opponents_nearby = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                let distance = (opponent.position - player.position).magnitude();
-                distance <= space_radius
-            })
-            .count();
+        // Use distance closure instead of scanning all opponents
+        let num_opponents_nearby = ctx.tick_context.distances
+            .opponents(player.id, space_radius).count();
 
         space_radius - num_opponents_nearby as f32
     }

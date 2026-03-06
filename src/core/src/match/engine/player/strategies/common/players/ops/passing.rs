@@ -73,14 +73,13 @@ impl<'p> PassingOperationsImpl<'p> {
         // Calculate how much this pass moves away from own goal (higher is better)
         let pass_away_from_goal = -(pass_vector.normalize().dot(&to_own_goal.normalize()));
 
-        // Calculate space around target player
+        // Calculate space around target player using pre-computed distances
         let space_factor = 1.0
             - (self
                 .ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|o| (o.position - target.position).magnitude() < 10.0)
+                .tick_context
+                .distances
+                .opponents(target.id, 10.0)
                 .count() as f32
                 * 0.2)
                 .min(0.8);
@@ -101,13 +100,13 @@ impl<'p> PassingOperationsImpl<'p> {
 
     /// Check if a teammate is under pressure
     pub fn is_teammate_under_pressure(&self, teammate: &MatchPlayerLite) -> bool {
+        // Use pre-computed distance lookup instead of scanning all opponents
         self.ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|o| (o.position - teammate.position).magnitude() < 10.0)
-            .count()
-            >= 1
+            .tick_context
+            .distances
+            .opponents(teammate.id, 10.0)
+            .next()
+            .is_some()
     }
 
     /// Find any teammate as a last resort option
@@ -161,21 +160,15 @@ impl<'p> PassingOperationsImpl<'p> {
         let marking_distance = 8.0;
         let close_distance = 3.0;
 
-        let markers = self
-            .ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|o| (o.position - teammate.position).magnitude() < marking_distance)
-            .count();
-
-        let close_markers = self
-            .ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|o| (o.position - teammate.position).magnitude() < close_distance)
-            .count();
+        // Single scan at max distance, bucket by distance
+        let mut markers = 0;
+        let mut close_markers = 0;
+        for (_id, dist) in self.ctx.tick_context.distances.opponents(teammate.id, marking_distance) {
+            markers += 1;
+            if dist <= close_distance {
+                close_markers += 1;
+            }
+        }
 
         markers >= 2 || (markers >= 1 && close_markers > 0)
     }
@@ -195,10 +188,9 @@ impl<'p> PassingOperationsImpl<'p> {
 
             let in_free_space = self
                 .ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 12.0)
+                .tick_context
+                .distances
+                .opponents(teammate.id, 12.0)
                 .count()
                 < 2;
 
@@ -225,10 +217,9 @@ impl<'p> PassingOperationsImpl<'p> {
             let has_clear_lane = self.ctx.player().has_clear_pass(teammate.id);
             let has_space = self
                 .ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 10.0)
+                .tick_context
+                .distances
+                .opponents(teammate.id, 10.0)
                 .count()
                 < 2;
 

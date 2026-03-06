@@ -1,13 +1,12 @@
 use crate::r#match::{MatchField, VectorExtensions};
 use log::debug;
 use std::cmp::Ordering;
-use std::collections::BinaryHeap;
 
 const MAX_DISTANCE: f32 = 999.0;
 
 #[derive(Debug, Clone)]
 pub struct PlayerDistanceClosure {
-    pub distances: BinaryHeap<PlayerDistanceItem>,
+    pub distances: Vec<PlayerDistanceItem>,
 }
 
 #[derive(Debug, Clone)]
@@ -22,9 +21,9 @@ pub struct PlayerDistanceItem {
 impl From<&MatchField> for PlayerDistanceClosure {
     fn from(field: &MatchField) -> Self {
         let n = field.players.len();
-        let capacity = (n * (n - 1)) / 2;
+        let capacity = n * (n - 1); // Both (A→B) and (B→A) are stored
 
-        let mut distances = BinaryHeap::with_capacity(capacity);
+        let mut distances = Vec::with_capacity(capacity);
 
         for outer_player in &field.players {
             for inner_player in &field.players {

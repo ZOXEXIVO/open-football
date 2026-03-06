@@ -23,7 +23,7 @@ impl StateProcessingHandler for ForwardShootingState {
 
         // Only abort for very long range with no clear shot
         // Close and medium range: always take the shot — keeper/save mechanics handle the rest
-        if distance_to_goal > 100.0 && !ctx.player().has_clear_shot() {
+        if distance_to_goal > 150.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,
             ));

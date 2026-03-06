@@ -7,3 +7,6 @@ edition = "2024"
 core = { path = "../../src/core" }
 macroquad = "0.4.14"
 env_logger = "0.11.9"
+
+[profile.release]
+debug = true

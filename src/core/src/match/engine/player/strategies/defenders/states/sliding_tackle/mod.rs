@@ -25,8 +25,14 @@ impl StateProcessingHandler for DefenderSlidingTackleState {
             ));
         }
 
-        // 2. Identify the opponent player with the ball
+        // 2. Back off during foul protection
+        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
+        }
 
+        // 3. Identify the opponent player with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             // 3. Calculate the distance to the opponent
             let distance_to_opponent = (ctx.player.position - opponent.position).magnitude();

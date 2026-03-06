@@ -145,8 +145,25 @@
             const oldContent = document.getElementById('page-content');
             if (newContent && oldContent) {
                 oldContent.innerHTML = newContent.innerHTML;
-                document.dispatchEvent(new Event('content-refreshed'));
             }
+            // Re-execute page-specific scripts
+            const newScripts = doc.getElementById('page-scripts');
+            const oldScripts = document.getElementById('page-scripts');
+            if (newScripts && oldScripts) {
+                oldScripts.innerHTML = '';
+                newScripts.querySelectorAll('script').forEach(function(orig) {
+                    var s = document.createElement('script');
+                    if (orig.src) {
+                        // Skip src scripts already loaded
+                        if (document.querySelector('script[src="' + orig.src.replace(location.origin, '') + '"]')) return;
+                        s.src = orig.src;
+                    } else {
+                        s.textContent = orig.textContent;
+                    }
+                    oldScripts.appendChild(s);
+                });
+            }
+            document.dispatchEvent(new Event('content-refreshed'));
         } catch (e) {
         }
     }
@@ -214,7 +231,7 @@
         });
 </script>
 <script src="/js/badge-deck.js?v=1"></script>
-{% block scripts %}{% endblock %}
+<div id="page-scripts">{% block scripts %}{% endblock %}</div>
 
 <!-- Google tag (gtag.js) -->
 <script>

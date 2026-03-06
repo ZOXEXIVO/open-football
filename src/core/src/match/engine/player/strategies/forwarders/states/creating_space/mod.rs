@@ -176,7 +176,12 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         }
 
         // Fallback: use the existing complex logic when no teammate has ball
-        let target_position = self.find_optimal_free_zone(ctx);
+        // Only do expensive scan every 15 ticks
+        let target_position = if ctx.in_state_time % 15 == 0 {
+            self.find_optimal_free_zone(ctx)
+        } else {
+            self.get_forward_search_center(ctx)
+        };
         let avoidance_vector = self.calculate_dynamic_avoidance(ctx);
         let movement_pattern = self.get_intelligent_movement_pattern(ctx);
 
@@ -264,17 +269,19 @@ impl ForwardCreatingSpaceState {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
 
-        // Collect relevant opponents (defenders and midfielders in forward zones)
-        let opponents: Vec<Vector3<f32>> = ctx.players()
+        // Pre-collect ALL opponent positions once for reuse in scoring
+        let all_opponent_positions: Vec<Vector3<f32>> = ctx.players()
             .opponents()
             .all()
-            .filter(|opp| {
-                let is_relevant_position = opp.tactical_positions.is_defender()
-                    || opp.tactical_positions.is_midfielder();
-                let distance = (opp.position - player_pos).magnitude();
-                is_relevant_position && distance < SPACE_SCAN_RADIUS
-            })
             .map(|opp| opp.position)
+            .collect();
+
+        // Collect relevant nearby opponents for gap-finding
+        let opponents: Vec<Vector3<f32>> = all_opponent_positions.iter()
+            .filter(|&&pos| {
+                (pos - player_pos).magnitude() < SPACE_SCAN_RADIUS
+            })
+            .copied()
             .collect();
 
         // If no nearby opponents, move toward goal
@@ -286,41 +293,43 @@ impl ForwardCreatingSpaceState {
             );
         }
 
+        // Pre-compute values used in scoring
+        let ball_holder = self.get_ball_holder(ctx);
+        let attacking_direction = self.get_attacking_direction(ctx);
+        let is_attacking_left = attacking_direction.x > 0.0;
+
+        // Pre-compute defensive line for offside checks
+        let last_defender_x = all_opponent_positions.iter()
+            .fold(if is_attacking_left { f32::MIN } else { f32::MAX },
+                  |acc, pos| if is_attacking_left { acc.max(pos.x) } else { acc.min(pos.x) });
+
         // Find gaps between opponents using improved multi-strategy approach
         let mut candidate_positions = Vec::with_capacity(40);
 
-        // Strategy 1: Midpoints between adjacent opponents (existing)
+        // Strategy 1: Midpoints between adjacent opponents
         for i in 0..opponents.len() {
             for j in (i + 1)..opponents.len() {
                 let midpoint = (opponents[i] + opponents[j]) * 0.5;
                 let gap_width = (opponents[i] - opponents[j]).magnitude();
 
-                // Widened gap consideration (was 15-60, now 12-80)
                 if gap_width > 12.0 && gap_width < 80.0 {
                     candidate_positions.push(midpoint);
-
-                    // NEW: Also add positions pushed forward through the gap
                     let to_goal = (goal_pos - midpoint).normalize();
                     candidate_positions.push(midpoint + to_goal * 10.0);
                 }
             }
         }
 
-        // Strategy 2: Positions offset from opponents (existing, improved)
+        // Strategy 2: Positions offset from opponents
         for &opp_pos in &opponents {
             let to_goal = (goal_pos - opp_pos).normalize();
             let perpendicular = Vector3::new(-to_goal.y, to_goal.x, 0.0);
-
-            // Wider lateral positions and deeper runs
             candidate_positions.push(opp_pos + perpendicular * 25.0 + to_goal * 20.0);
             candidate_positions.push(opp_pos - perpendicular * 25.0 + to_goal * 20.0);
-
-            // NEW: Positions directly behind defenders (in space behind)
             candidate_positions.push(opp_pos + to_goal * 15.0);
         }
 
-        // Strategy 3: NEW - Grid-based open space detection
-        // Create grid of positions in attacking third and find truly open ones
+        // Strategy 3: Grid-based open space detection
         let forward_direction = (goal_pos - player_pos).normalize();
         for x_offset in [20.0, 35.0, 50.0] {
             for y_offset in [-30.0, -15.0, 0.0, 15.0, 30.0] {
@@ -330,22 +339,23 @@ impl ForwardCreatingSpaceState {
             }
         }
 
-        // Add current player position as fallback
         candidate_positions.push(player_pos);
 
-        // Evaluate candidates and pick best
+        // Evaluate candidates using pre-collected data
         let mut best_position = player_pos;
         let mut best_score = f32::MIN;
 
         for candidate in candidate_positions {
-            // Ensure position is within bounds
             let clamped = Vector3::new(
                 candidate.x.clamp(20.0, field_width - 20.0),
                 candidate.y.clamp(20.0, field_height - 20.0),
                 0.0,
             );
 
-            let score = self.evaluate_forward_position(ctx, clamped);
+            let score = self.evaluate_forward_position_fast(
+                ctx, clamped, &all_opponent_positions,
+                &ball_holder, last_defender_x, is_attacking_left,
+            );
 
             if score > best_score {
                 best_score = score;
@@ -353,11 +363,126 @@ impl ForwardCreatingSpaceState {
             }
         }
 
-        // Apply tactical adjustments
         self.apply_forward_tactical_adjustment(ctx, best_position)
     }
 
+    /// Fast position evaluation using pre-collected opponent data
+    fn evaluate_forward_position_fast(
+        &self,
+        ctx: &StateProcessingContext,
+        position: Vector3<f32>,
+        all_opponents: &[Vector3<f32>],
+        ball_holder: &Option<MatchPlayerLite>,
+        last_defender_x: f32,
+        is_attacking_left: bool,
+    ) -> f32 {
+        let mut score = 0.0;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let distance_to_goal = (position - goal_pos).magnitude();
+
+        // Space score using pre-collected opponents
+        let mut congestion = 0.0f32;
+        for &opp_pos in all_opponents {
+            let distance = (opp_pos - position).magnitude();
+            if distance < 30.0 {
+                congestion += (30.0 - distance) / 30.0;
+            }
+        }
+        score += (10.0 - congestion.min(10.0)) * 3.0;
+
+        // Goal threat score
+        let goal_threat = if distance_to_goal < 15.0 {
+            8.0
+        } else if distance_to_goal < 25.0 {
+            10.0
+        } else if distance_to_goal < 35.0 {
+            6.0
+        } else {
+            (100.0 - distance_to_goal).max(0.0) / 20.0
+        };
+        score += goal_threat * 6.0;
+
+        // Box area bonus
+        if distance_to_goal < 180.0 {
+            score += 30.0;
+        } else if distance_to_goal < 250.0 {
+            score += 20.0;
+        }
+
+        // Offside check using pre-computed defensive line
+        let is_offside = if is_attacking_left {
+            position.x > last_defender_x + 2.0
+        } else {
+            position.x < last_defender_x - 2.0
+        };
+        if !is_offside {
+            score += 15.0;
+        } else {
+            score -= 50.0;
+        }
+
+        // Channel positioning
+        let field_height = ctx.context.field_size.height as f32;
+        let channel_width = field_height / 5.0;
+        let center = field_height / 2.0;
+        if (position.y - center).abs() < channel_width * 1.5 {
+            score += 20.0;
+            if distance_to_goal < 300.0 {
+                score += 15.0;
+            }
+        }
+
+        // Behind defensive line using pre-computed data
+        let avg_defender_x = all_opponents.iter()
+            .map(|p| p.x)
+            .sum::<f32>() / all_opponents.len().max(1) as f32;
+        let is_behind = if is_attacking_left {
+            position.x > avg_defender_x
+        } else {
+            position.x < avg_defender_x
+        };
+        if is_behind {
+            score += 30.0;
+        }
+
+        // Ball holder awareness
+        if let Some(holder) = ball_holder {
+            let holder_distance = (position - holder.position).magnitude();
+
+            if holder_distance >= OPTIMAL_PASSING_DISTANCE_MIN
+                && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX {
+                score += 25.0;
+            } else if holder_distance < OPTIMAL_PASSING_DISTANCE_MIN {
+                score -= (OPTIMAL_PASSING_DISTANCE_MIN - holder_distance) * 0.5;
+            } else if holder_distance > OPTIMAL_PASSING_DISTANCE_MAX {
+                score -= (holder_distance - OPTIMAL_PASSING_DISTANCE_MAX) * 0.8;
+            }
+
+            // Clear passing lane check using pre-collected opponents
+            let direction = (position - holder.position).normalize();
+            let distance = (position - holder.position).magnitude();
+            let lane_blocked = all_opponents.iter().any(|&opp_pos| {
+                let to_opp = opp_pos - holder.position;
+                let projection = to_opp.dot(&direction);
+                if projection <= 0.0 || projection >= distance {
+                    return false;
+                }
+                let projected_point = holder.position + direction * projection;
+                (opp_pos - projected_point).magnitude() < 4.0
+            });
+
+            if !lane_blocked {
+                score += PASSING_LANE_IMPORTANCE;
+            } else {
+                score -= 10.0;
+            }
+        }
+
+        score
+    }
+
     /// Evaluate a position for forward play
+    #[allow(dead_code)]
     fn evaluate_forward_position(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         let mut score = 0.0;
         let goal_pos = ctx.player().opponent_goal_position();
@@ -448,43 +573,28 @@ impl ForwardCreatingSpaceState {
         let mut avoidance = Vector3::zeros();
         let player_pos = ctx.player.position;
 
-        // Strong avoidance of defenders
-        for opponent in ctx.players().opponents().all() {
-            if opponent.tactical_positions.is_defender() {
-                let distance = (opponent.position - player_pos).magnitude();
-                if distance < 25.0 && distance > 0.1 {
-                    let direction = (player_pos - opponent.position).normalize();
-                    let weight = 1.0 - (distance / 25.0);
+        // Use nearby() instead of all() — avoidance only matters for close players
+        for opponent in ctx.players().opponents().nearby(25.0) {
+            let distance = (opponent.position - player_pos).magnitude();
+            if distance > 0.1 {
+                let direction = (player_pos - opponent.position).normalize();
+                let weight = 1.0 - (distance / 25.0);
 
-                    // Predict defender movement
-                    let future_pos = opponent.position + opponent.velocity(ctx) * 0.3;
-                    let future_direction = (player_pos - future_pos).normalize();
-
-                    avoidance += (direction + future_direction * 0.5) * weight * 20.0;
-                }
-            }
-        }
-
-        // Moderate avoidance of midfielders
-        for opponent in ctx.players().opponents().all() {
-            if opponent.tactical_positions.is_midfielder() {
-                let distance = (opponent.position - player_pos).magnitude();
-                if distance < 15.0 && distance > 0.1 {
-                    let direction = (player_pos - opponent.position).normalize();
-                    let weight = 1.0 - (distance / 15.0);
+                if opponent.tactical_positions.is_defender() {
+                    avoidance += direction * weight * 20.0;
+                } else {
                     avoidance += direction * weight * 10.0;
                 }
             }
         }
 
-        // Light avoidance of teammates to maintain spacing
-        for teammate in ctx.players().teammates().all() {
-            if teammate.id == ctx.player.id || !teammate.tactical_positions.is_forward() {
+        // Light avoidance of nearby forward teammates
+        for teammate in ctx.players().teammates().nearby(20.0) {
+            if !teammate.tactical_positions.is_forward() {
                 continue;
             }
-
             let distance = (teammate.position - player_pos).magnitude();
-            if distance < 20.0 && distance > 0.1 {
+            if distance > 0.1 {
                 let direction = (player_pos - teammate.position).normalize();
                 let weight = 1.0 - (distance / 20.0);
                 avoidance += direction * weight * 5.0;
@@ -867,29 +977,30 @@ impl ForwardCreatingSpaceState {
     }
 
     fn calculate_defensive_shift_vector(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let defenders: Vec<Vector3<f32>> = ctx.players().opponents().all()
-            .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| p.position)
-            .collect();
+        // Single scan: collect both positions and velocities of defenders
+        let mut count = 0u32;
+        let mut velocity_sum = Vector3::zeros();
 
-        if defenders.len() < 2 {
+        for p in ctx.players().opponents().all()
+            .filter(|p| p.tactical_positions.is_defender())
+        {
+            count += 1;
+            velocity_sum += p.velocity(ctx);
+        }
+
+        if count < 2 {
             return Vector3::zeros();
         }
 
-        // Calculate average movement direction
-        let avg_velocity: Vector3<f32> = ctx.players().opponents().all()
-            .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| p.velocity(ctx))
-            .sum::<Vector3<f32>>() / defenders.len() as f32;
-
-        avg_velocity
+        velocity_sum / count as f32
     }
 
     fn has_clear_passing_lane(&self, from: Vector3<f32>, to: Vector3<f32>, ctx: &StateProcessingContext) -> bool {
         let direction = (to - from).normalize();
         let distance = (to - from).magnitude();
 
-        !ctx.players().opponents().all().any(|opp| {
+        // Pre-filter: only check opponents near the player (within pass distance + margin)
+        !ctx.players().opponents().nearby(distance + 10.0).any(|opp| {
             let to_opp = opp.position - from;
             let projection = to_opp.dot(&direction);
 
@@ -1115,8 +1226,8 @@ impl ForwardCreatingSpaceState {
     fn ball_holder_can_make_forward_pass(&self, ctx: &StateProcessingContext) -> bool {
         if let Some(holder) = self.get_ball_holder(ctx) {
             // Check if holder is under pressure
-            let holder_under_pressure = ctx.players().opponents().all()
-                .any(|opp| (opp.position - holder.position).magnitude() < 8.0);
+            let holder_under_pressure = ctx.tick_context.distances
+                .opponents(holder.id, 8.0).count() > 0;
 
             !holder_under_pressure
         } else {
@@ -1129,7 +1240,8 @@ impl ForwardCreatingSpaceState {
         let attacking_direction = self.get_attacking_direction(ctx);
         let check_position = player_position + attacking_direction * 40.0;
 
-        let opponents_in_space = ctx.players().opponents().all()
+        // Pre-filter: only check opponents within 55 units (40 ahead + 15 radius)
+        let opponents_in_space = ctx.players().opponents().nearby(55.0)
             .filter(|opp| (opp.position - check_position).magnitude() < 15.0)
             .count();
 
@@ -1182,20 +1294,7 @@ impl ForwardCreatingSpaceState {
 
     /// Check if ball holder is under defensive pressure
     fn is_ball_holder_under_pressure(&self, ctx: &StateProcessingContext, holder_id: u32) -> bool {
-        if let Some(holder) = ctx.players().teammates().all().find(|p| p.id == holder_id) {
-            // Check for opponents within pressing distance
-            let pressing_opponents = ctx.players()
-                .opponents()
-                .all()
-                .filter(|opp| {
-                    let distance = (opp.position - holder.position).magnitude();
-                    distance < 10.0
-                })
-                .count();
-
-            pressing_opponents >= 1
-        } else {
-            false
-        }
+        // Use distance closure instead of scanning all opponents
+        ctx.tick_context.distances.opponents(holder_id, 10.0).next().is_some()
     }
 }

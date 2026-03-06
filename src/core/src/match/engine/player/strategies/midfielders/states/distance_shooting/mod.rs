@@ -34,9 +34,23 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
+        // Close to goal — just shoot regardless of conditions
+        let distance_to_goal = ctx.player().goal_distance();
+        if distance_to_goal < 50.0 {
+            return Some(StateChangeResult::with_midfielder_state_and_event(
+                MidfielderState::Shooting,
+                Event::PlayerEvent(PlayerEvent::Shoot(
+                    ShootingEventContext::new()
+                        .with_player_id(ctx.player.id)
+                        .with_target(ctx.player().shooting_direction())
+                        .with_reason("MID_DISTANCE_SHOOTING_CLOSE")
+                        .build(ctx),
+                )),
+            ));
+        }
+
         // Evaluate shooting opportunity
         if self.is_favorable_shooting_opportunity(ctx) {
-            // Transition to shooting state
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -44,6 +58,20 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
                         .with_player_id(ctx.player.id)
                         .with_target(ctx.player().shooting_direction())
                         .with_reason("MID_DISTANCE_SHOOTING")
+                        .build(ctx),
+                )),
+            ));
+        }
+
+        // Timeout — don't run forever without shooting
+        if ctx.in_state_time > 60 {
+            return Some(StateChangeResult::with_midfielder_state_and_event(
+                MidfielderState::Shooting,
+                Event::PlayerEvent(PlayerEvent::Shoot(
+                    ShootingEventContext::new()
+                        .with_player_id(ctx.player.id)
+                        .with_target(ctx.player().shooting_direction())
+                        .with_reason("MID_DISTANCE_SHOOTING_TIMEOUT")
                         .build(ctx),
                 )),
             ));
@@ -86,7 +114,8 @@ impl MidfielderDistanceShootingState {
         let angle_threshold = std::f32::consts::PI / 4.0; // 45 degrees (widened)
 
         // Check no heavy pressure (but 1 nearby opponent is OK)
-        let heavily_marked = ctx.players().opponents().nearby(8.0).count() >= 2;
+        let heavily_marked = ctx.tick_context.distances
+            .opponents(ctx.player.id, 8.0).count() >= 2;
 
         distance_to_goal <= distance_threshold
             && angle_to_goal <= angle_threshold

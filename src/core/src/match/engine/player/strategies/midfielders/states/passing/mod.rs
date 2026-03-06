@@ -66,11 +66,18 @@ impl StateProcessingHandler for MidfielderPassingState {
         // Under heavy pressure, bail out faster to dribble away
         let bail_time = if self.is_under_heavy_pressure(ctx) { 15 } else { 30 };
         if ctx.in_state_time > bail_time {
-            return if ctx.ball().distance_to_opponent_goal() < 200.0 {
+            let goal_dist = ctx.ball().distance_to_opponent_goal();
+            return if goal_dist < 120.0 {
+                // Close to goal — shoot rather than cycling to dribbling
+                Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ))
+            } else if goal_dist < 200.0 {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
                 ))
             } else {
+                // Far from goal — dribble forward
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Dribbling,
                 ))
@@ -176,24 +183,19 @@ impl MidfielderPassingState {
         ctx: &StateProcessingContext,
         teammate: &MatchPlayerLite,
     ) -> f32 {
-        // Check for opponents in different radius zones
-        let very_close_opponents = ctx.players().opponents().all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < 5.0)
-            .count();
-
-        let close_opponents = ctx.players().opponents().all()
-            .filter(|opp| {
-                let dist = (opp.position - teammate.position).magnitude();
-                (5.0..10.0).contains(&dist)
-            })
-            .count();
-
-        let medium_opponents = ctx.players().opponents().all()
-            .filter(|opp| {
-                let dist = (opp.position - teammate.position).magnitude();
-                (10.0..15.0).contains(&dist)
-            })
-            .count();
+        // Single scan at max distance, bucket by distance zones
+        let mut very_close_opponents = 0;
+        let mut close_opponents = 0;
+        let mut medium_opponents = 0;
+        for (_id, dist) in ctx.tick_context.distances.opponents(teammate.id, 15.0) {
+            if dist < 5.0 {
+                very_close_opponents += 1;
+            } else if dist < 10.0 {
+                close_opponents += 1;
+            } else {
+                medium_opponents += 1;
+            }
+        }
 
         // Calculate weighted score
         let space_score: f32 = 1.0
@@ -305,21 +307,23 @@ impl MidfielderPassingState {
         const MARKING_DISTANCE: f32 = 5.0;
         const MAX_MARKERS: usize = 2;
 
-        let markers = ctx.players().opponents().all()
-            .filter(|opponent| {
-                let distance = (opponent.position - teammate.position).magnitude();
-                distance <= MARKING_DISTANCE
-            })
-            .collect::<Vec<_>>();
+        // Use pre-computed distances: opponents near teammate
+        let mut marker_count = 0;
+        let mut single_marker_id = 0u32;
+        let mut single_marker_dist = 0.0f32;
+        for (opp_id, dist) in ctx.tick_context.distances.opponents(teammate.id, MARKING_DISTANCE) {
+            marker_count += 1;
+            single_marker_id = opp_id;
+            single_marker_dist = dist;
+        }
 
-        if markers.len() >= MAX_MARKERS {
+        if marker_count >= MAX_MARKERS {
             return true;
         }
 
-        if markers.len() == 1 {
-            let marker = &markers[0];
-            let marking_skill = ctx.player().skills(marker.id).mental.positioning;
-            if marking_skill > 16.0 && (marker.position - teammate.position).magnitude() < 2.5 {
+        if marker_count == 1 {
+            let marking_skill = ctx.player().skills(single_marker_id).mental.positioning;
+            if marking_skill > 16.0 && single_marker_dist < 2.5 {
                 return true;
             }
         }
@@ -348,14 +352,14 @@ impl MidfielderPassingState {
             return under_pressure || has_good_vision;
         }
 
-        let teammate_will_be_pressured = ctx.players().opponents().all()
-            .any(|opponent| {
-                let current_distance = (opponent.position - teammate.position).magnitude();
-                let opponent_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
-                let future_opponent_pos = opponent.position + opponent_velocity * 10.0;
+        let teammate_will_be_pressured = ctx.tick_context.distances
+            .opponents(teammate.id, 15.0)
+            .any(|(opp_id, _dist)| {
+                let opp_pos = ctx.tick_context.positions.players.position(opp_id);
+                let opponent_velocity = ctx.tick_context.positions.players.velocity(opp_id);
+                let future_opponent_pos = opp_pos + opponent_velocity * 10.0;
                 let future_distance = (future_opponent_pos - teammate.position).magnitude();
-
-                current_distance < 15.0 && future_distance < 5.0
+                future_distance < 5.0
             });
 
         advances_toward_goal && !teammate_will_be_pressured

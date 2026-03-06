@@ -295,11 +295,13 @@ impl MidfielderAttackSupportingState {
         let field_height = ctx.context.field_size.height as f32;
         let player_y = ctx.player.position.y;
 
-        // Check defender positioning
-        let defenders_central = ctx.players().opponents().all()
+        // Check defender positioning — only nearby opponents matter
+        let center_y = field_height / 2.0;
+        let central_band = field_height * 0.2;
+        let defenders_central = ctx.players().opponents().nearby(200.0)
             .filter(|opp| {
                 opp.tactical_positions.is_defender() &&
-                    (opp.position.y - field_height / 2.0).abs() < field_height * 0.2
+                    (opp.position.y - center_y).abs() < central_band
             })
             .count();
 
@@ -389,8 +391,8 @@ impl MidfielderAttackSupportingState {
             field_height * 0.85  // Right flank
         };
 
-        // Count opponents in wide area
-        let opponents_wide = ctx.players().opponents().all()
+        // Count opponents in wide area — use nearby to reduce scan range
+        let opponents_wide = ctx.players().opponents().nearby(200.0)
             .filter(|opp| (opp.position.y - flank_y).abs() < 30.0)
             .count();
 
@@ -437,8 +439,8 @@ impl MidfielderAttackSupportingState {
             0.0,
         );
 
-        // Check if forward space is clear
-        let forward_clear = !ctx.players().opponents().all()
+        // Check if forward space is clear — use nearby since forward_space is close to player
+        let forward_clear = !ctx.players().opponents().nearby(60.0)
             .any(|opp| (opp.position - forward_space).magnitude() < 20.0);
 
         if forward_clear {
@@ -727,7 +729,7 @@ impl MidfielderAttackSupportingState {
 
     /// Get attacking teammates
     fn get_attacking_teammates(&self, ctx: &StateProcessingContext) -> Vec<MatchPlayerLite> {
-        ctx.players().teammates().all()
+        ctx.players().teammates().nearby(300.0)
             .filter(|t| t.tactical_positions.is_forward() ||
                 (t.tactical_positions.is_midfielder() &&
                     self.is_in_attacking_position(ctx, t)))
@@ -756,11 +758,12 @@ impl MidfielderAttackSupportingState {
     fn is_center_congested(&self, ctx: &StateProcessingContext) -> bool {
         let field_height = ctx.context.field_size.height as f32;
         let center_y = field_height / 2.0;
+        let central_band = field_height * 0.2;
         let ball_position = ctx.tick_context.positions.ball.position;
 
-        let players_in_center = ctx.players().opponents().all()
+        let players_in_center = ctx.players().opponents().nearby(150.0)
             .filter(|opp| {
-                (opp.position.y - center_y).abs() < field_height * 0.2 &&
+                (opp.position.y - center_y).abs() < central_band &&
                     (opp.position.x - ball_position.x).abs() < 50.0
             })
             .count();
@@ -773,14 +776,19 @@ impl MidfielderAttackSupportingState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let field_height = ctx.context.field_size.height as f32;
 
-        // Determine which flank is less occupied
-        let left_flank_players = ctx.players().teammates().all()
-            .filter(|t| t.position.y < field_height * 0.3)
-            .count();
+        // Single scan: count teammates on each flank
+        let mut left_flank_players = 0u32;
+        let mut right_flank_players = 0u32;
+        let left_threshold = field_height * 0.3;
+        let right_threshold = field_height * 0.7;
 
-        let right_flank_players = ctx.players().teammates().all()
-            .filter(|t| t.position.y > field_height * 0.7)
-            .count();
+        for t in ctx.players().teammates().all() {
+            if t.position.y < left_threshold {
+                left_flank_players += 1;
+            } else if t.position.y > right_threshold {
+                right_flank_players += 1;
+            }
+        }
 
         let target_y = if left_flank_players <= right_flank_players {
             field_height * 0.15
@@ -797,22 +805,28 @@ impl MidfielderAttackSupportingState {
 
     /// Position between defensive lines
     fn position_between_lines(&self, ctx: &StateProcessingContext, attacking_direction: f32) -> Vector3<f32> {
-        let defenders = ctx.players().opponents().all()
-            .filter(|opp| opp.tactical_positions.is_defender())
-            .collect::<Vec<_>>();
+        // Single scan: split opponents into defenders and midfielders
+        let mut def_sum_x = 0.0f32;
+        let mut def_count = 0u32;
+        let mut mid_sum_x = 0.0f32;
+        let mut mid_count = 0u32;
 
-        let midfielders = ctx.players().opponents().all()
-            .filter(|opp| opp.tactical_positions.is_midfielder())
-            .collect::<Vec<_>>();
+        for opp in ctx.players().opponents().all() {
+            if opp.tactical_positions.is_defender() {
+                def_sum_x += opp.position.x;
+                def_count += 1;
+            } else if opp.tactical_positions.is_midfielder() {
+                mid_sum_x += opp.position.x;
+                mid_count += 1;
+            }
+        }
 
-        if !defenders.is_empty() && !midfielders.is_empty() {
-            let avg_def_x = defenders.iter().map(|d| d.position.x).sum::<f32>() / defenders.len() as f32;
-            let avg_mid_x = midfielders.iter().map(|m| m.position.x).sum::<f32>() / midfielders.len() as f32;
-
+        if def_count > 0 && mid_count > 0 {
+            let avg_def_x = def_sum_x / def_count as f32;
+            let avg_mid_x = mid_sum_x / mid_count as f32;
             let between_x = (avg_def_x + avg_mid_x) / 2.0;
-            let player_y = ctx.player.position.y;
 
-            return Vector3::new(between_x, player_y, 0.0);
+            return Vector3::new(between_x, ctx.player.position.y, 0.0);
         }
 
         // Default progressive position
@@ -847,18 +861,17 @@ impl MidfielderAttackSupportingState {
 
     /// Avoid clustering with other midfielders
     fn avoid_midfielder_clustering(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
-        let other_midfielders = ctx.players().teammates().all()
-            .filter(|t| t.tactical_positions.is_midfielder() && t.id != ctx.player.id)
-            .collect::<Vec<_>>();
-
         let mut adjusted = target;
 
-        for midfielder in other_midfielders {
+        // Only check nearby teammates — no need to scan all
+        for midfielder in ctx.players().teammates().nearby(50.0) {
+            if midfielder.id == ctx.player.id || !midfielder.tactical_positions.is_midfielder() {
+                continue;
+            }
             let distance = (midfielder.position - adjusted).magnitude();
             if distance < 25.0 {
-                // Move away from clustered midfielder
                 let away = (adjusted - midfielder.position).normalize();
-                adjusted = adjusted + away * (25.0 - distance);
+                adjusted += away * (25.0 - distance);
             }
         }
 
@@ -888,11 +901,13 @@ impl MidfielderAttackSupportingState {
     }
 
     /// Calculate crowd factor around a position
-    fn calculate_crowd_factor(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
-        let players_nearby = ctx.players().opponents().all()
-            .chain(ctx.players().teammates().all())
-            .filter(|p| (p.position - position).magnitude() < 30.0)
-            .count();
+    fn calculate_crowd_factor(&self, ctx: &StateProcessingContext, _position: Vector3<f32>) -> f32 {
+        // Use pre-computed distances from current player (position ≈ player position)
+        let player_id = ctx.player.id;
+        let players_nearby = ctx.tick_context.distances
+            .teammates(player_id, 0.0, 30.0).count()
+            + ctx.tick_context.distances
+            .opponents(player_id, 30.0).count();
 
         (players_nearby as f32 / 8.0).min(1.0)
     }

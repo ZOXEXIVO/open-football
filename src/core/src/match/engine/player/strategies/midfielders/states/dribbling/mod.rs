@@ -17,8 +17,16 @@ impl StateProcessingHandler for MidfielderDribblingState {
             ));
         }
 
-        // Shooting takes priority
-        if self.is_in_shooting_position(ctx) {
+        // Shooting takes priority — use proper shooting range check
+        let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        if ctx.player().shooting().in_shooting_range() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Shooting,
+            ));
+        }
+
+        // Point-blank — always shoot regardless of skill
+        if distance_to_goal < 50.0 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Shooting,
             ));
@@ -32,8 +40,8 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // Check if heavily pressured — multiple opponents closing in
         let close_opponents = ctx.players().opponents().nearby(15.0).count();
         if close_opponents >= 2 {
-            // Under heavy pressure: pass or shoot
-            if ctx.ball().distance_to_opponent_goal() < 40.0 {
+            // Under heavy pressure near goal: shoot
+            if distance_to_goal < 120.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
@@ -147,8 +155,9 @@ impl MidfielderDribblingState {
         None
     }
 
+    #[allow(dead_code)]
     fn is_in_shooting_position(&self, ctx: &StateProcessingContext) -> bool {
-        let shooting_range = 25.0; // Distance from goal to consider shooting
+        let shooting_range = 25.0;
         let player_position = ctx.player.position;
         let goal_position = ctx.player().opponent_goal_position();
 

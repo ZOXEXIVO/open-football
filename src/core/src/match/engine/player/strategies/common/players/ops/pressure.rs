@@ -37,35 +37,24 @@ impl<'p> PressureOperationsImpl<'p> {
 
     /// Check if a teammate is marked by opponents
     pub fn is_teammate_marked(&self, teammate: &MatchPlayerLite, marking_distance: f32) -> bool {
-        self.ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < marking_distance)
-            .count()
-            >= 1
+        // Use pre-computed distances: opponents of teammate = our players near them,
+        // but we need opponents near teammate, so from teammate's POV our team are opponents
+        self.ctx.tick_context.distances
+            .opponents(teammate.id, marking_distance)
+            .count() >= 1
     }
 
     /// Check if a teammate is heavily marked (multiple opponents or very close marking)
     pub fn is_teammate_heavily_marked(&self, teammate: &MatchPlayerLite) -> bool {
-        let marking_distance = 8.0;
-        let close_marking_distance = 3.0;
-
-        let markers = self
-            .ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < marking_distance)
-            .count();
-
-        let close_markers = self
-            .ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < close_marking_distance)
-            .count();
+        // Single scan at max distance, bucket by distance
+        let mut markers = 0;
+        let mut close_markers = 0;
+        for (_id, dist) in self.ctx.tick_context.distances.opponents(teammate.id, 8.0) {
+            markers += 1;
+            if dist <= 3.0 {
+                close_markers += 1;
+            }
+        }
 
         markers >= 2 || (markers >= 1 && close_markers > 0)
     }
@@ -85,13 +74,18 @@ impl<'p> PressureOperationsImpl<'p> {
 
     /// Calculate pressure intensity (0.0 = no pressure, 1.0 = extreme pressure)
     pub fn pressure_intensity(&self) -> f32 {
-        let close_opponents = self.pressing_opponents_count(10.0) as f32;
-        let medium_opponents = self.pressing_opponents_count(20.0) as f32;
-        let far_opponents = self.pressing_opponents_count(30.0) as f32;
+        // Single scan at max distance, bucket by distance
+        let mut close: f32 = 0.0;
+        let mut medium: f32 = 0.0;
+        let mut far: f32 = 0.0;
+        for (_id, dist) in self.ctx.tick_context.distances.opponents(self.ctx.player.id, 30.0) {
+            far += 1.0;
+            if dist <= 20.0 { medium += 1.0; }
+            if dist <= 10.0 { close += 1.0; }
+        }
 
         // Weight closer opponents more heavily
-        let intensity = (close_opponents * 0.5 + medium_opponents * 0.3 + far_opponents * 0.2) / 3.0;
-
+        let intensity = (close * 0.5 + medium * 0.3 + far * 0.2) / 3.0;
         intensity.min(1.0)
     }
 

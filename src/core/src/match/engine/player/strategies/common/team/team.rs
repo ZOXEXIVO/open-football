@@ -1,4 +1,4 @@
-use crate::r#match::{MatchContext, MatchPlayerLite, PlayerSide, StateProcessingContext};
+use crate::r#match::{PlayerSide, StateProcessingContext};
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
 
@@ -135,44 +135,57 @@ impl<'b> TeamOperationsImpl<'b> {
         if let Some(owner_id) = self.ctx.ball().owner_id() {
             if let Some(owner) = self.ctx.context.players.by_id(owner_id) {
                 if owner.team_id == self.ctx.player.team_id {
-                    // A teammate has the ball, don't try to take it
                     return false;
                 }
             }
         }
 
-        // Check if the player is already the closest to the ball on their team
-        // Calculate player's "ball-chasing score" based on distance, position, and attributes
-        let calculate_score = |player: &MatchPlayerLite, _context: &MatchContext| -> f32 {
-            let pos = self.ctx.tick_context.positions.players.position(player.id);
-            let dist = (ball_position - pos).magnitude();
-
-            let player_ops = self.ctx.player();
-
-            let player = player_ops.get(player.id);
-            let skills = player_ops.skills(player.id);
-
+        // Score for current player — single HashMap lookup
+        let player_score = {
+            let dist = (ball_position - self.ctx.player.position).magnitude();
+            let skills = &self.ctx.player.skills;
             let pace_factor = skills.physical.pace / 20.0;
             let acceleration_factor = skills.physical.acceleration / 20.0;
-            let position_factor = match player.tactical_positions.position_group() {
-                // Forwards and midfielders are more likely to chase the ball
+            let position_factor = match self.ctx.player.tactical_position.current_position.position_group() {
                 PlayerFieldPositionGroup::Forward => 1.2,
                 PlayerFieldPositionGroup::Midfielder => 1.1,
                 PlayerFieldPositionGroup::Defender => 0.9,
                 PlayerFieldPositionGroup::Goalkeeper => 0.5,
             };
-
-            // Lower score is better
-            dist * (1.0 / (pace_factor * acceleration_factor * position_factor * 0.5 + 0.5))
+            dist / (pace_factor * acceleration_factor * position_factor * 0.5 + 0.5)
         };
 
-        let player_score = calculate_score(&self.ctx.player.into(), &self.ctx.context);
+        let threshold = player_score * 0.8;
 
-        // Compare against other teammates
+        // Compare against teammates — use data already in MatchPlayerLite + single by_id lookup
         !self.ctx
             .players()
             .teammates()
             .all()
-            .any(|player| calculate_score(&player, &self.ctx.context) < player_score * 0.8) // 20% threshold to avoid constant switching
+            .any(|teammate| {
+                let dist = (ball_position - teammate.position).magnitude();
+                // Quick distance check: if teammate is farther than our raw distance,
+                // they can't beat our score (since position_factor <= 1.2)
+                if dist > player_score {
+                    return false;
+                }
+
+                let skills = match self.ctx.context.players.by_id(teammate.id) {
+                    Some(p) => &p.skills,
+                    None => return false,
+                };
+
+                let pace_factor = skills.physical.pace / 20.0;
+                let acceleration_factor = skills.physical.acceleration / 20.0;
+                let position_factor = match teammate.tactical_positions.position_group() {
+                    PlayerFieldPositionGroup::Forward => 1.2,
+                    PlayerFieldPositionGroup::Midfielder => 1.1,
+                    PlayerFieldPositionGroup::Defender => 0.9,
+                    PlayerFieldPositionGroup::Goalkeeper => 0.5,
+                };
+
+                let score = dist / (pace_factor * acceleration_factor * position_factor * 0.5 + 0.5);
+                score < threshold
+            })
     }
 }

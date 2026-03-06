@@ -1905,7 +1905,7 @@ a:link, a:visited, a:hover, a:active {
 /* --- Loan status label --- */
 
 .fm-ph-loan {
-    font-size: 12px;
+    font-size: 1em;
 }
 
 .fm-ph-loan-label {

@@ -27,7 +27,14 @@ impl StateProcessingHandler for DefenderPressingState {
             ));
         }
 
-        // 2. Identify the opponent player with the ball
+        // 2. Back off during foul protection — don't crowd the free kick
+        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::HoldingLine,
+            ));
+        }
+
+        // 3. Identify the opponent player with the ball
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 

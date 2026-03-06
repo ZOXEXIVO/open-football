@@ -26,9 +26,9 @@ impl StateProcessingHandler for ForwardTacklingState {
         }
 
         // CRITICAL: Don't try to claim ball if it's in protected flight state
-        // This prevents the flapping issue where two players repeatedly claim
+        // Transition OUT of tackling to avoid clustering around the ball carrier
         if ctx.ball().is_in_flight() {
-            return None;
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         let opponents = ctx.players().opponents();

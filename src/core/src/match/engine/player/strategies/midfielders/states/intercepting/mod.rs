@@ -14,12 +14,11 @@ impl StateProcessingHandler for MidfielderInterceptingState {
             ));
         }
 
+        // Team has ball — no need to intercept, transition out
         if ctx.team().is_control_ball() {
-            if ctx.ball().distance() > 150.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Returning,
-                ));
-            }
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
         }
         else {
             let ball_distance = ctx.ball().distance();

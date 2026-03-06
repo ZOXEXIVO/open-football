@@ -22,6 +22,13 @@ impl StateProcessingHandler for ForwardPressingState {
             ));
         }
 
+        // Back off during foul protection — don't crowd the free kick
+        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Running,
+            ));
+        }
+
         // Loose ball nearby — go claim it directly instead of pressing thin air
         if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
             return Some(StateChangeResult::with_forward_state(

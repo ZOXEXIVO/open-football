@@ -5,18 +5,18 @@ pub struct ShootingOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
-// Realistic shooting distances (field is typically 840 units)
-const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
+// Realistic shooting distances (field is typically 840 units) — all +20%
+const MAX_SHOOTING_DISTANCE: f32 = 180.0; // ~90m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 30.0; // ~15m - anyone can shoot (penalty spot)
-const CLOSE_RANGE_DISTANCE: f32 = 50.0; // ~25m - close range shots
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 100.0; // ~50m - medium range shots
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot (penalty spot)
+const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 96.0; // ~48m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 120.0; // ~60m - medium range shots
 
-// Shooting decision thresholds
-const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 40.0; // Always prefer shooting if closer than this
-const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 55.0; // Shoot over pass for decent finishers
-const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 80.0; // Distance for close-range excellent opportunity
+// Shooting decision thresholds — all +20%
+const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 48.0; // Always prefer shooting if closer than this
+const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 66.0; // Shoot over pass for decent finishers
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 96.0; // Distance for close-range excellent opportunity
 
 // Teammate advantage thresholds (multipliers)
 const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot
@@ -105,9 +105,12 @@ impl<'p> ShootingOperationsImpl<'p> {
             return false;
         }
 
+        // Single scan: count opponents within 8 units (reused below)
+        let opponents_within_8 = self.ctx.tick_context.distances
+            .opponents(self.ctx.player.id, 8.0).count();
+
         // Check if heavily marked — prefer pass if 2+ opponents very close
-        let heavily_marked = self.ctx.players().opponents().nearby(8.0).count() >= 2;
-        if heavily_marked && distance > VERY_CLOSE_RANGE_DISTANCE {
+        if opponents_within_8 >= 2 && distance > VERY_CLOSE_RANGE_DISTANCE {
             return false;
         }
 
@@ -154,7 +157,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         if distance <= MEDIUM_RANGE_DISTANCE
             && long_shots > 0.5
             && finishing > 0.45
-            && !self.ctx.players().opponents().exists(8.0)
+            && opponents_within_8 == 0
         {
             return true;
         }
@@ -215,8 +218,15 @@ impl<'p> ShootingOperationsImpl<'p> {
 
     /// Get pressure factor for shooting confidence (1.0 = no pressure, 0.0 = extreme pressure)
     fn pressure_factor(&self) -> f32 {
-        let close_opponents = self.ctx.players().opponents().nearby(5.0).count();
-        let medium_opponents = self.ctx.players().opponents().nearby(10.0).count();
+        // Single scan at max distance, bucket by distance
+        let mut close_opponents = 0;
+        let mut medium_opponents = 0;
+        for (_id, dist) in self.ctx.tick_context.distances.opponents(self.ctx.player.id, 10.0) {
+            if dist <= 5.0 {
+                close_opponents += 1;
+            }
+            medium_opponents += 1;
+        }
 
         if close_opponents >= 2 {
             return 0.3;

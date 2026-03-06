@@ -54,7 +54,14 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            // Priority 0.6: Long-range shooting — skilled players shoot from distance
+            // Priority 0.6: Unopposed approach — shoot from further out when no defenders nearby
+            if distance_to_goal < 120.0 && !ctx.players().opponents().exists(25.0) {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
+            }
+
+            // Priority 0.7: Long-range shooting — skilled players shoot from distance
             {
                 let long_shots = ctx.player.skills.technical.long_shots / 20.0;
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
@@ -504,13 +511,10 @@ impl ForwardRunningState {
             let opponents_in_path = ctx
                 .players()
                 .opponents()
-                .all()
+                .nearby(20.0)
                 .filter(|opp| {
-                    let to_opp = opp.position - player_pos;
-                    let dist = to_opp.magnitude();
-                    let dot = to_opp.normalize().dot(&check_direction);
-
-                    dist < 20.0 && dot > 0.7
+                    let to_opp = (opp.position - player_pos).normalize();
+                    to_opp.dot(&check_direction) > 0.7
                 })
                 .count();
 
@@ -987,13 +991,8 @@ impl ForwardRunningState {
                 // Teammate must be significantly closer (at least 40% closer)
                 let is_much_closer = teammate_distance < own_distance * 0.6;
                 let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
-                let not_heavily_marked = ctx
-                    .players()
-                    .opponents()
-                    .all()
-                    .filter(|opp| (opp.position - teammate.position).magnitude() < 8.0)
-                    .count()
-                    < 2;
+                let not_heavily_marked = ctx.tick_context.distances
+                    .opponents(teammate.id, 8.0).count() < 2;
 
                 is_much_closer && has_clear_pass && not_heavily_marked
             })
@@ -1063,14 +1062,9 @@ impl ForwardRunningState {
             // Check if teammate is in a good attacking position
             let in_attacking_position = teammate_distance < current_distance * 1.1;
 
-            // Check if teammate is in free space
-            let in_free_space = ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 12.0)
-                .count()
-                < 2;
+            // Check if teammate is in free space (use pre-computed distances)
+            let in_free_space = ctx.tick_context.distances
+                .opponents(teammate.id, 12.0).count() < 2;
 
             // Check if teammate is making a forward run
             let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
@@ -1093,13 +1087,8 @@ impl ForwardRunningState {
     ) -> bool {
         teammates.iter().any(|teammate| {
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-            let has_space = ctx
-                .players()
-                .opponents()
-                .all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 10.0)
-                .count()
-                < 2;
+            let has_space = ctx.tick_context.distances
+                .opponents(teammate.id, 10.0).count() < 2;
 
             // Prefer forward passes (side-aware)
             let is_forward_pass = match ctx.player.side {
@@ -1117,10 +1106,17 @@ impl ForwardRunningState {
         ctx: &StateProcessingContext,
         _teammate: &MatchPlayerLite,
     ) -> bool {
-        let marking_distance = 8.0;
-        let markers = ctx.players().opponents().nearby(marking_distance).count();
+        // Single scan at max distance, bucket by distance
+        let mut markers = 0;
+        let mut very_close = 0;
+        for (_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 8.0) {
+            markers += 1;
+            if dist <= 3.0 {
+                very_close += 1;
+            }
+        }
 
-        markers >= 2 || (markers >= 1 && ctx.players().opponents().nearby(3.0).count() > 0)
+        markers >= 2 || (markers >= 1 && very_close > 0)
     }
 
     fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
@@ -1299,10 +1295,9 @@ impl ForwardRunningState {
             return None;
         }
 
-        // Passer must be in open space
-        let opponents_near_passer = ctx.players().opponents().all()
-            .filter(|opp| (opp.position - passer_pos).magnitude() < 12.0)
-            .count();
+        // Passer must be in open space (use pre-computed distances)
+        let opponents_near_passer = ctx.tick_context.distances
+            .opponents(passer_id, 12.0).count();
         if opponents_near_passer >= 2 {
             return None;
         }
@@ -1353,9 +1348,8 @@ impl ForwardRunningState {
                 // Teammate must be further from opponent goal (behind us)
                 let is_behind = t_goal_dist > our_goal_dist * 1.1;
                 // Teammate must be in space
-                let in_space = ctx.players().opponents().all()
-                    .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
-                    .count() < 2;
+                let in_space = ctx.tick_context.distances
+                    .opponents(t.id, 10.0).count() < 2;
                 // Prefer midfielders who can carry forward
                 let is_midfielder_or_attacker = t.tactical_positions.is_midfielder()
                     || t.tactical_positions.is_forward();
@@ -1411,9 +1405,8 @@ impl ForwardRunningState {
                     && t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
                     && ctx.ball().passer_recency_penalty(t.id) > 0.3
-                    && ctx.players().opponents().all()
-                        .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
-                        .count() < 2
+                    && ctx.tick_context.distances
+                        .opponents(t.id, 10.0).count() < 2
             })
             .min_by(|a, b| {
                 let da = (a.position - vacated_zone).magnitude();
@@ -1439,10 +1432,12 @@ impl ForwardRunningState {
             return false;
         }
 
-        // Count all nearby players (teammates + opponents) within 15 units
-        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
-        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
-        let total_nearby = nearby_teammates + nearby_opponents;
+        // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
+        let player_id = ctx.player.id;
+        let total_nearby = ctx.tick_context.distances
+            .teammates(player_id, 0.0, 15.0).count()
+            + ctx.tick_context.distances
+            .opponents(player_id, 15.0).count();
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3

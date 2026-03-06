@@ -218,6 +218,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
     ) {
+        // Recalculate N² distance matrix every 3 ticks
+        field.update_distances(3);
+
         let game_tick_context = GameTickContext::new(field);
 
         let mut events = EventCollection::new();

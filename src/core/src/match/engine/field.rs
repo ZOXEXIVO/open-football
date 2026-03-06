@@ -1,5 +1,5 @@
 ﻿use crate::r#match::ball::Ball;
-use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, PositionType, POSITION_POSITIONING};
+use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerDistanceClosure, PlayerSide, PositionType, POSITION_POSITIONING};
 use crate::Tactics;
 use nalgebra::Vector3;
 
@@ -17,6 +17,9 @@ pub struct MatchField {
 
     pub right_side_players: Option<FieldSquad>,
     pub right_team_tactics: Tactics,
+
+    pub cached_distances: PlayerDistanceClosure,
+    pub distance_tick: u32,
 }
 
 impl MatchField {
@@ -38,7 +41,7 @@ impl MatchField {
         let (players_on_field, substitutes) =
             setup_player_on_field(left_team_squad, right_team_squad);
 
-        MatchField {
+        let mut field = MatchField {
             size: MatchFieldSize::new(width, height),
             ball: Ball::with_coord(width as f32, height as f32),
             players: players_on_field,
@@ -49,6 +52,20 @@ impl MatchField {
             left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),
             right_team_tactics: right_tactics,
+            cached_distances: PlayerDistanceClosure { distances: Vec::new() },
+            distance_tick: 0,
+        };
+
+        field.cached_distances = PlayerDistanceClosure::from(&field);
+
+        field
+    }
+
+    /// Recalculate distance closure every N ticks (amortized N² cost)
+    pub fn update_distances(&mut self, interval: u32) {
+        self.distance_tick += 1;
+        if self.distance_tick % interval == 0 {
+            self.cached_distances = PlayerDistanceClosure::from(&*self);
         }
     }
 
@@ -59,6 +76,9 @@ impl MatchField {
 
             p.set_default_state();
         });
+
+        // Force distance recalculation after position reset (e.g., after a goal)
+        self.cached_distances = PlayerDistanceClosure::from(&*self);
     }
 
     pub fn swap_squads(&mut self) {
@@ -124,6 +144,9 @@ impl MatchField {
 
             // Clear any ball references to the substituted-out player
             self.ball.clear_player_reference(player_out_id);
+
+            // Force distance recalculation after substitution (new player IDs/positions)
+            self.cached_distances = PlayerDistanceClosure::from(&*self);
 
             true
         } else {

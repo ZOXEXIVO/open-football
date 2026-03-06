@@ -68,8 +68,13 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Find the optimal free zone on the opposite side
-        let target_position = self.find_opposite_side_free_zone(ctx);
+        // Only do expensive grid scan every 15 ticks; otherwise keep current heading
+        let target_position = if ctx.in_state_time % 15 == 0 {
+            self.find_opposite_side_free_zone(ctx)
+        } else {
+            // Cheap fallback: continue toward opposite side without full scan
+            self.calculate_simple_opposite_target(ctx)
+        };
 
         // Add dynamic avoidance of congested areas during movement
         let avoidance_vector = self.calculate_congestion_avoidance(ctx);
@@ -147,6 +152,26 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
 }
 
 impl MidfielderCreatingSpaceState {
+    /// Cheap target calculation for non-scan ticks
+    fn calculate_simple_opposite_target(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+
+        let ball_on_left = ball_pos.y < field_height / 2.0;
+        let opposite_y = if ball_on_left {
+            field_height * 0.75
+        } else {
+            field_height * 0.25
+        };
+
+        Vector3::new(
+            ball_pos.x.clamp(20.0, field_width - 20.0),
+            opposite_y.clamp(20.0, field_height - 20.0),
+            0.0,
+        )
+    }
+
     /// Find free zone on the opposite side of play
     fn find_opposite_side_free_zone(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
         let ball_pos = ctx.tick_context.positions.ball.position;
@@ -163,6 +188,20 @@ impl MidfielderCreatingSpaceState {
             field_height * 0.25 // Left side
         };
 
+        // Pre-collect nearby players once instead of iterating all players per grid cell
+        let scan_center = Vector3::new(ball_pos.x, opposite_y, 0.0);
+        let scan_radius = 150.0; // Covers the scan area
+
+        let nearby_opponents: Vec<_> = ctx.players().opponents().all()
+            .filter(|o| (o.position - scan_center).magnitude() < scan_radius)
+            .map(|o| (o.position, o.velocity(ctx)))
+            .collect();
+
+        let nearby_teammates: Vec<_> = ctx.players().teammates().all()
+            .filter(|t| t.id != ctx.player.id && (t.position - scan_center).magnitude() < scan_radius)
+            .map(|t| t.position)
+            .collect();
+
         // Find the freest zone on that side
         let mut best_position = Vector3::new(
             ball_pos.x,
@@ -172,10 +211,13 @@ impl MidfielderCreatingSpaceState {
 
         let mut min_congestion = f32::MAX;
 
-        // Scan a grid on the opposite side
+        // Scan a coarser grid on the opposite side (30-unit step instead of 15)
         let scan_width = 80.0;
         let scan_depth = 100.0;
-        let grid_step = 15.0;
+        let grid_step = 30.0;
+
+        let goal_pos = ctx.player().opponent_goal_position();
+        let current_to_goal = (ctx.player.position - goal_pos).magnitude();
 
         for x_offset in (-scan_depth as i32..=scan_depth as i32).step_by(grid_step as usize) {
             for y_offset in (-scan_width as i32..=scan_width as i32).step_by(grid_step as usize) {
@@ -185,16 +227,36 @@ impl MidfielderCreatingSpaceState {
                     0.0,
                 );
 
-                // Calculate dynamic congestion considering player velocities
-                let congestion = self.calculate_dynamic_congestion(ctx, test_pos);
+                // Calculate congestion using pre-collected players
+                let mut congestion = 0.0f32;
+                for &(opp_pos, opp_vel) in &nearby_opponents {
+                    let distance = (opp_pos - test_pos).magnitude();
+                    let future_pos = opp_pos + opp_vel * 0.5;
+                    let future_distance = (future_pos - test_pos).magnitude();
 
-                // Prefer progressive positions
-                let progression_bonus = self.calculate_progression_value(ctx, test_pos);
+                    if distance < 40.0 {
+                        congestion += 40.0 / (distance + 1.0);
+                    }
+                    if future_distance < 30.0 {
+                        congestion += 20.0 / (future_distance + 1.0);
+                    }
+                }
+                for &tm_pos in &nearby_teammates {
+                    let distance = (tm_pos - test_pos).magnitude();
+                    if distance < 25.0 {
+                        congestion += 10.0 / (distance + 1.0);
+                    }
+                }
 
-                // Prefer positions with good passing angles
-                let passing_angle_bonus = self.calculate_passing_angle_value(ctx, test_pos);
+                // Prefer progressive positions (inline)
+                let test_to_goal = (test_pos - goal_pos).magnitude();
+                let progression_bonus = if test_to_goal < current_to_goal {
+                    (current_to_goal - test_to_goal) * 0.5
+                } else {
+                    0.0
+                };
 
-                let total_score = congestion - progression_bonus - passing_angle_bonus;
+                let total_score = congestion - progression_bonus;
 
                 if total_score < min_congestion {
                     min_congestion = total_score;
@@ -212,14 +274,13 @@ impl MidfielderCreatingSpaceState {
         let mut avoidance = Vector3::zeros();
         let player_pos = ctx.player.position;
 
-        // Consider all nearby players (both teams)
         let avoidance_radius = 30.0;
         let mut total_weight = 0.0;
 
-        for opponent in ctx.players().opponents().all() {
+        // Use nearby() instead of all() to avoid iterating every player
+        for opponent in ctx.players().opponents().nearby(avoidance_radius) {
             let distance = (opponent.position - player_pos).magnitude();
-            if distance < avoidance_radius && distance > 0.1 {
-                // Calculate repulsion force
+            if distance > 0.1 {
                 let direction = (player_pos - opponent.position).normalize();
                 let weight = 1.0 - (distance / avoidance_radius);
                 avoidance += direction * weight * 15.0;
@@ -227,16 +288,12 @@ impl MidfielderCreatingSpaceState {
             }
         }
 
-        // Also avoid teammates slightly to spread out
-        for teammate in ctx.players().teammates().all() {
-            if teammate.id == ctx.player.id {
-                continue;
-            }
-
+        let teammate_radius = avoidance_radius * 0.7;
+        for teammate in ctx.players().teammates().nearby(teammate_radius) {
             let distance = (teammate.position - player_pos).magnitude();
-            if distance < avoidance_radius * 0.7 && distance > 0.1 {
+            if distance > 0.1 {
                 let direction = (player_pos - teammate.position).normalize();
-                let weight = 1.0 - (distance / (avoidance_radius * 0.7));
+                let weight = 1.0 - (distance / teammate_radius);
                 avoidance += direction * weight * 8.0;
                 total_weight += weight;
             }
@@ -250,6 +307,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Calculate dynamic congestion considering player movements
+    #[allow(dead_code)]
     fn calculate_dynamic_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         let mut congestion = 0.0;
 
@@ -311,13 +369,12 @@ impl MidfielderCreatingSpaceState {
     fn add_intelligent_curve(&self, ctx: &StateProcessingContext, target: Vector3<f32>) -> Vector3<f32> {
         let player_pos = ctx.player.position;
 
-        // Find nearest opponent
-        if let Some(nearest_opponent) = ctx.players().opponents().all()
-            .min_by(|a, b| {
-                let dist_a = (a.position - player_pos).magnitude();
-                let dist_b = (b.position - player_pos).magnitude();
-                dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-            }) {
+        // Find nearest opponent using pre-computed distances
+        if let Some((nearest_id, _)) = ctx.tick_context.distances
+            .opponents(ctx.player.id, 50.0)
+            .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
+        {
+            let nearest_opponent = ctx.context.players.by_id(nearest_id).unwrap();
             // Curve away from opponent
             let to_target = (target - player_pos).normalize();
             let to_opponent = (nearest_opponent.position - player_pos).normalize();
@@ -370,6 +427,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Calculate progression value for a position
+    #[allow(dead_code)]
     fn calculate_progression_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         let goal_pos = ctx.player().opponent_goal_position();
         let current_to_goal = (ctx.player.position - goal_pos).magnitude();
@@ -383,6 +441,7 @@ impl MidfielderCreatingSpaceState {
     }
 
     /// Calculate passing angle value for a position
+    #[allow(dead_code)]
     fn calculate_passing_angle_value(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {
         if let Some(ball_holder) = self.find_ball_holder(ctx) {
             // Check angle to ball holder
@@ -449,12 +508,12 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate local congestion around player
     fn calculate_local_congestion(&self, ctx: &StateProcessingContext) -> f32 {
-        ctx.players().opponents().nearby(20.0).count() as f32
+        ctx.tick_context.distances.opponents(ctx.player.id, 20.0).count() as f32
     }
 
     /// Check if player has a close marker
     fn has_close_marker(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().nearby(10.0).count() > 0
+        ctx.tick_context.distances.opponents(ctx.player.id, 10.0).count() > 0
     }
 
     /// Make a third man run (beyond the immediate play)
@@ -511,10 +570,9 @@ impl MidfielderCreatingSpaceState {
     fn has_created_quality_space(&self, ctx: &StateProcessingContext) -> bool {
         let space_radius = SPACE_CREATION_RADIUS;
 
-        // No opponents in immediate vicinity
-        let opponents_nearby = ctx.players().opponents().all()
-            .filter(|opp| (opp.position - ctx.player.position).magnitude() < space_radius)
-            .count();
+        // No opponents in immediate vicinity (use pre-computed distances)
+        let opponents_nearby = ctx.tick_context.distances
+            .opponents(ctx.player.id, space_radius).count();
 
         // Good distance from ball
         let ball_distance = ctx.ball().distance();
@@ -837,9 +895,11 @@ impl MidfielderCreatingSpaceState {
             let to_player = (ctx.player.position - ball_holder.position).normalize();
             let distance = (ctx.player.position - ball_holder.position).magnitude();
 
-            // Check for opponents in passing lane
-            !ctx.players().opponents().all()
-                .any(|opp| {
+            // Check for opponents in passing lane using pre-computed distances from ball holder
+            !ctx.tick_context.distances
+                .opponents(ball_holder.id, distance)
+                .any(|(opp_id, _)| {
+                    let opp = ctx.context.players.by_id(opp_id).unwrap();
                     let to_opp = opp.position - ball_holder.position;
                     let projection = to_opp.dot(&to_player);
 

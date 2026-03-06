@@ -14,7 +14,7 @@ impl GameTickContext {
         GameTickContext {
             ball: BallMetadata::from(field),
             positions: MatchObjectsPositions::from(field),
-            distances: PlayerDistanceClosure::from(field),
+            distances: field.cached_distances.clone(),
             space: Space::from(field),
         }
     }

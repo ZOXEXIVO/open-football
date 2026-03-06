@@ -33,6 +33,13 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
+        // Back off during foul protection — don't crowd the free kick
+        if ctx.ball().is_in_flight() && ctx.ball().is_owned() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         // Early exit if a teammate is significantly closer to avoid circular running
         let ball_distance = ctx.ball().distance();
         let ball_position = ctx.tick_context.positions.ball.position;

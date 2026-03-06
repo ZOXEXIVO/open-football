@@ -204,27 +204,31 @@ impl<'p> MovementOperationsImpl<'p> {
             return false;
         }
 
-        // Count all nearby players (teammates + opponents)
-        let nearby_teammates = self.ctx.players().teammates().nearby(15.0).count();
-        let nearby_opponents = self.ctx.players().opponents().nearby(15.0).count();
-        let total_nearby = nearby_teammates + nearby_opponents;
+        // Single count using pre-computed distances (teammates + opponents)
+        let player_id = self.ctx.player.id;
+        let total_nearby = self.ctx.tick_context.distances
+            .teammates(player_id, 0.0, 15.0).count()
+            + self.ctx.tick_context.distances
+            .opponents(player_id, 15.0).count();
 
-        // If 3 or more players nearby (congestion)
+        // If 2 or more players nearby (congestion)
         total_nearby >= 2
     }
 
     /// Check if player is in general congestion (anywhere on field)
     /// This prevents mid-field clustering where multiple players get stuck
     pub fn is_congested(&self) -> bool {
-        const CONGESTION_RADIUS: f32 = 20.0; // Check within 20 units
-        const CONGESTION_THRESHOLD: usize = 4; // 4+ players = congested
+        const CONGESTION_RADIUS: f32 = 15.0;
+        const CONGESTION_THRESHOLD: usize = 6; // 6+ players = congested
 
-        // Count all nearby players (teammates + opponents)
-        let nearby_teammates = self.ctx.players().teammates().nearby(CONGESTION_RADIUS).count();
-        let nearby_opponents = self.ctx.players().opponents().nearby(CONGESTION_RADIUS).count();
-        let total_nearby = nearby_teammates + nearby_opponents;
+        // Single count using pre-computed distances (teammates + opponents)
+        let player_id = self.ctx.player.id;
+        let total_nearby = self.ctx.tick_context.distances
+            .teammates(player_id, 0.0, CONGESTION_RADIUS).count()
+            + self.ctx.tick_context.distances
+            .opponents(player_id, CONGESTION_RADIUS).count();
 
-        // If 4 or more players clustered together
+        // If 6 or more players clustered together
         total_nearby >= CONGESTION_THRESHOLD
     }
 

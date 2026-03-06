@@ -27,9 +27,11 @@ impl StateProcessingHandler for DefenderTacklingState {
         }
 
         // CRITICAL: Don't try to claim ball if it's in protected flight state
-        // This prevents the flapping issue where two players repeatedly claim
+        // Transition OUT of tackling to avoid clustering around the ball carrier
         if ctx.ball().is_in_flight() {
-            return None;
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Returning,
+            ));
         }
 
         // Check if there's an opponent with the ball

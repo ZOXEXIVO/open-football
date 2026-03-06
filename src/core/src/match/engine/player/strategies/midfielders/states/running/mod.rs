@@ -97,6 +97,13 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            // Unopposed approach — shoot from further out when no defenders nearby
+            if goal_dist < 100.0 && !ctx.players().opponents().exists(25.0) {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+
             // Distance shooting - long range with good long shot skills
             if goal_dist <= MAX_SHOOTING_DISTANCE
                 && long_shots > 0.6
@@ -476,15 +483,18 @@ impl StateProcessingHandler for MidfielderRunningState {
             let center_y = field_height / 2.0;
             let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
 
-            // === UNIQUE PLAYER SLOT: Use player ID to assign distinct vertical zones ===
-            let mut teammate_mid_ids: Vec<u32> = ctx.players().teammates().all()
-                .filter(|t| t.tactical_positions.is_midfielder())
-                .map(|t| t.id)
-                .collect();
-            teammate_mid_ids.push(ctx.player.id);
-            teammate_mid_ids.sort();
-            let slot_index = teammate_mid_ids.iter().position(|&id| id == ctx.player.id).unwrap_or(0);
-            let total_mids = teammate_mid_ids.len().max(1);
+            // === UNIQUE PLAYER SLOT: count teammates with lower ID (no alloc, no sort) ===
+            let my_id = ctx.player.id;
+            let mut slot_index = 0u32;
+            let mut total_mids = 1u32; // count self
+            for t in ctx.players().teammates().all() {
+                if t.tactical_positions.is_midfielder() {
+                    total_mids += 1;
+                    if t.id < my_id {
+                        slot_index += 1;
+                    }
+                }
+            }
 
             // Spread midfielders across 20%-80% of field height
             let slot_y = field_height * 0.2
@@ -507,7 +517,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             // Organic drift for natural movement — slow-changing to prevent twitching
             // Quantize time to 100-tick intervals so drift doesn't change every tick
             let quantized_time = (ctx.context.total_match_time / 100) as f32;
-            let player_seed = ctx.player.id as f32 * 2.39;
+            let player_seed = my_id as f32 * 2.39;
             let drift_x = (player_seed + quantized_time * 0.5).sin() * 10.0;
             let drift_y = (player_seed * 1.37 + quantized_time * 0.4).cos() * 8.0;
 
@@ -521,7 +531,7 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             // If already close to target, stand still to prevent twitching
             if dist_to_target < 8.0 {
-                return Some(Vector3::new(0.0, 0.0, 0.0));
+                return Some(Vector3::zeros());
             }
 
             let arrive_velocity = SteeringBehavior::Arrive {
@@ -532,10 +542,12 @@ impl StateProcessingHandler for MidfielderRunningState {
             .velocity;
 
             // Only apply separation when far from target to prevent oscillation
-            let sep_damping = ((dist_to_target - 15.0) / 40.0).clamp(0.0, 0.5);
-            let separation = ctx.player().separation_velocity() * sep_damping;
-
-            Some(arrive_velocity + separation)
+            if dist_to_target > 15.0 {
+                let sep_damping = ((dist_to_target - 15.0) / 40.0).min(0.5);
+                Some(arrive_velocity + ctx.player().separation_velocity() * sep_damping)
+            } else {
+                Some(arrive_velocity)
+            }
         }
     }
 
@@ -635,14 +647,18 @@ impl MidfielderRunningState {
 
     /// Calculate pressing intensity based on number and proximity of opponents
     fn calculate_pressing_intensity(&self, ctx: &StateProcessingContext) -> f32 {
-        let very_close = ctx.players().opponents().nearby(15.0).count() as f32;
-        let close = ctx.players().opponents().nearby(30.0).count() as f32;
-        let medium = ctx.players().opponents().nearby(50.0).count() as f32;
+        // Use pre-computed distance closure instead of scanning all players
+        let mut weighted_pressure = 0.0f32;
+        for (_opp_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 50.0) {
+            if dist < 15.0 {
+                weighted_pressure += 0.5; // very close
+            } else if dist < 30.0 {
+                weighted_pressure += 0.3; // close
+            } else {
+                weighted_pressure += 0.1; // medium
+            }
+        }
 
-        // Weight closer opponents more heavily
-        let weighted_pressure = (very_close * 0.5) + (close * 0.3) + (medium * 0.1);
-
-        // Normalize to 0-1 range (assuming max 5 opponents can reasonably press)
         (weighted_pressure / 2.0).min(1.0)
     }
 
@@ -654,17 +670,25 @@ impl MidfielderRunningState {
             .any(|teammate| {
                 let teammate_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
                 let is_closer = teammate_distance < current_distance * 0.8;
-                let has_space = ctx.players().opponents().all()
-                    .filter(|opp| (opp.position - teammate.position).magnitude() < 15.0)
+                if !is_closer {
+                    return false;
+                }
+                let has_space = ctx.tick_context.distances
+                    .opponents(teammate.id, 15.0)
                     .count() < 2;
-                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
-
-                is_closer && has_space && has_clear_pass
+                if !has_space {
+                    return false;
+                }
+                ctx.player().has_clear_pass(teammate.id)
             })
     }
 
     /// Check if there's a teammate in a dangerous attacking position
     fn has_teammate_in_dangerous_position(&self, ctx: &StateProcessingContext) -> bool {
+        let goal_pos = ctx.player().opponent_goal_position();
+        let field_width = ctx.context.field_size.width as f32;
+        let attacking_third_dist = field_width * 0.4;
+
         ctx.players()
             .teammates()
             .nearby(350.0)
@@ -672,27 +696,37 @@ impl MidfielderRunningState {
                 // Prefer forwards and attacking midfielders
                 let is_attacker = teammate.tactical_positions.is_forward() ||
                                  teammate.tactical_positions.is_midfielder();
+                if !is_attacker {
+                    return false;
+                }
 
                 // Check if in attacking third
-                let teammate_distance = (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-                let field_width = ctx.context.field_size.width as f32;
-                let in_attacking_third = teammate_distance < field_width * 0.4;
+                let teammate_distance = (teammate.position - goal_pos).magnitude();
+                if teammate_distance >= attacking_third_dist {
+                    return false;
+                }
 
-                // Check if in free space
-                let in_free_space = ctx.players().opponents().all()
-                    .filter(|opp| (opp.position - teammate.position).magnitude() < 12.0)
+                // Check if in free space (use pre-computed distances)
+                let in_free_space = ctx.tick_context.distances
+                    .opponents(teammate.id, 12.0)
                     .count() < 2;
 
                 // Check if making a forward run
-                let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
-                let making_run = teammate_velocity.magnitude() > 1.5 && {
-                    let to_goal = ctx.player().opponent_goal_position() - teammate.position;
-                    teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
+                let making_run = if !in_free_space {
+                    let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
+                    teammate_velocity.magnitude() > 1.5 && {
+                        let to_goal = goal_pos - teammate.position;
+                        teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
+                    }
+                } else {
+                    false // don't need to check if already in free space
                 };
 
-                let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
+                if !in_free_space && !making_run {
+                    return false;
+                }
 
-                is_attacker && in_attacking_third && (in_free_space || making_run) && has_clear_pass
+                ctx.player().has_clear_pass(teammate.id)
             })
     }
 
@@ -725,8 +759,8 @@ impl MidfielderRunningState {
         }
 
         // Passer must be in open space (fewer than 2 opponents within 12 units)
-        let opponents_near_passer = ctx.players().opponents().all()
-            .filter(|opp| (opp.position - passer_pos).magnitude() < 12.0)
+        let opponents_near_passer = ctx.tick_context.distances
+            .opponents(passer_id, 12.0)
             .count();
         if opponents_near_passer >= 2 {
             return None;
@@ -782,8 +816,8 @@ impl MidfielderRunningState {
                 // Teammate should be near the vacated space or generally in that direction
                 t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
-                    && ctx.players().opponents().all()
-                        .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
+                    && ctx.tick_context.distances
+                        .opponents(t.id, 10.0)
                         .count() < 2
             })
             .min_by(|a, b| {
@@ -913,8 +947,8 @@ impl MidfielderRunningState {
             }
 
             // Must have space (no opponent within 10 units)
-            let opponents_near = ctx.players().opponents().all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 10.0)
+            let opponents_near = ctx.tick_context.distances
+                .opponents(teammate.id, 10.0)
                 .count();
             if opponents_near >= 2 {
                 continue;
@@ -966,8 +1000,10 @@ impl MidfielderRunningState {
         }
 
         // Count all nearby players (teammates + opponents) within 15 units
-        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
-        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
+        let nearby_teammates = ctx.tick_context.distances
+            .teammates(ctx.player.id, 0.0, 15.0).count();
+        let nearby_opponents = ctx.tick_context.distances
+            .opponents(ctx.player.id, 15.0).count();
         let total_nearby = nearby_teammates + nearby_opponents;
 
         // If 3 or more players nearby (congestion), need to clear

@@ -122,8 +122,15 @@ impl ShotQualityEvaluator {
     }
 
     fn pressure_factor(ctx: &StateProcessingContext) -> f32 {
-        let very_close = ctx.players().opponents().nearby(5.0).count();
-        let close = ctx.players().opponents().nearby(10.0).count();
+        // Single scan at max distance, bucket by distance
+        let mut very_close = 0;
+        let mut close = 0;
+        for (_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 10.0) {
+            if dist <= 5.0 {
+                very_close += 1;
+            }
+            close += 1;
+        }
 
         if very_close >= 2 {
             0.2

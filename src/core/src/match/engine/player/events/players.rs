@@ -905,7 +905,7 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 29.0; // Half-width of goal (~3.66m, full width ~7.32m real size)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 2.0; // Maximum realistic shot velocity per tick
+        const MAX_SHOT_VELOCITY: f32 = 10.0; // Maximum realistic shot velocity per tick
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -1039,7 +1039,7 @@ impl PlayerEventDispatcher {
 
         // Calculate horizontal velocity with skill-based power
         let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
-        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 0.8;
+        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 2.0;
 
         // Add power randomness (better players have more consistent power)
         let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04
@@ -1190,8 +1190,8 @@ impl PlayerEventDispatcher {
         // When a foul is committed, the current ball owner (victim) gets protected possession
         // This simulates a free kick - the victim gets time to act without being challenged
         if field.ball.current_owner.is_some() {
-            field.ball.claim_cooldown = 60; // ~1 second of protection
-            field.ball.flags.in_flight_state = 60; // Prevent ClaimBall events from tackling states
+            field.ball.claim_cooldown = 150; // ~2.5 seconds of protection (free kick setup)
+            field.ball.flags.in_flight_state = 150; // Prevent ClaimBall events from tackling states
             field.ball.contested_claim_count = 0; // Reset contested counter
         }
     }

@@ -175,7 +175,7 @@ impl StateProcessingHandler for DefenderRunningState {
         }
 
         if ctx.player.has_ball(ctx) {
-            // With ball: move toward opponent goal
+            // With ball: move toward opponent goal, separation matters
             Some(
                 SteeringBehavior::Arrive {
                     target: ctx.player().opponent_goal_position(),
@@ -187,15 +187,21 @@ impl StateProcessingHandler for DefenderRunningState {
             )
         } else {
             // Without ball: return to tactical position
-            Some(
-                SteeringBehavior::Arrive {
-                    target: ctx.player.start_position,
-                    slowing_distance: 30.0,
-                }
-                .calculate(ctx.player)
-                .velocity
-                    + ctx.player().separation_velocity(),
-            )
+            // Separation already has early-exit when nobody is nearby
+            let base = SteeringBehavior::Arrive {
+                target: ctx.player.start_position,
+                slowing_distance: 30.0,
+            }
+            .calculate(ctx.player)
+            .velocity;
+
+            // Only compute separation if close to start (near other defenders)
+            let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
+            if dist_to_start < 40.0 {
+                Some(base + ctx.player().separation_velocity())
+            } else {
+                Some(base)
+            }
         }
     }
 
@@ -281,10 +287,12 @@ impl DefenderRunningState {
             return false;
         }
 
-        // Count all nearby players (teammates + opponents) within 15 units
-        let nearby_teammates = ctx.players().teammates().nearby(15.0).count();
-        let nearby_opponents = ctx.players().opponents().nearby(15.0).count();
-        let total_nearby = nearby_teammates + nearby_opponents;
+        // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
+        let player_id = ctx.player.id;
+        let total_nearby = ctx.tick_context.distances
+            .teammates(player_id, 0.0, 15.0).count()
+            + ctx.tick_context.distances
+            .opponents(player_id, 15.0).count();
 
         // If 3 or more players nearby (congestion), need to clear
         total_nearby >= 3
@@ -304,37 +312,52 @@ impl DefenderRunningState {
 
         // In congested area — prefer carrying OUT of congestion instead of passing into it
         // Only pass if there's a teammate in open space (not in the same cluster)
-        let nearby_players = ctx.players().opponents().nearby(20.0).count()
-            + ctx.players().teammates().nearby(20.0).count();
+        let player_id = ctx.player.id;
+        let nearby_players = ctx.tick_context.distances
+            .opponents(player_id, 20.0).count()
+            + ctx.tick_context.distances
+            .teammates(player_id, 0.0, 20.0).count();
         if nearby_players >= 4 {
             // Heavily congested — only pass to someone FAR from this cluster
             let has_open_target = ctx.players().teammates().nearby(300.0)
                 .any(|t| {
                     let dist = (t.position - ctx.player.position).magnitude();
-                    let opp_near_t = ctx.players().opponents().all()
-                        .filter(|opp| (opp.position - t.position).magnitude() < 15.0)
-                        .count();
-                    dist > 50.0 && opp_near_t < 2 && ctx.player().has_clear_pass(t.id)
+                    if dist <= 50.0 {
+                        return false;
+                    }
+                    let opp_near_t = ctx.tick_context.distances
+                        .opponents(t.id, 15.0).count();
+                    opp_near_t < 2 && ctx.player().has_clear_pass(t.id)
                 });
             if !has_open_target {
                 return false; // No open target — carry the ball out
             }
         }
 
+        // Single scan: count opponents at 12, 15, 30 thresholds
+        let mut opp_within_12 = false;
+        let mut opp_within_15 = false;
+        let mut opp_within_30 = false;
+        for (_id, dist) in ctx.tick_context.distances.opponents(player_id, 30.0) {
+            opp_within_30 = true;
+            if dist <= 15.0 { opp_within_15 = true; }
+            if dist <= 12.0 { opp_within_12 = true; }
+        }
+
         // Only pass under genuine pressure — opponent closing in
-        if ctx.players().opponents().exists(12.0) {
+        if opp_within_12 {
             return true;
         }
 
         // If teammates are tired, carry the ball instead of passing to let them rest
         // Only pass if under actual pressure
-        if self.are_teammates_tired(ctx) && ctx.players().opponents().exists(15.0) {
+        if opp_within_15 && self.are_teammates_tired(ctx) {
             return true;
         }
 
         // BUILD FROM BACK: If no opponents within 30 units and team controls ball,
         // look for progressive pass (advance play toward opponent goal)
-        if !ctx.players().opponents().exists(30.0) && ctx.team().is_control_ball() {
+        if !opp_within_30 && ctx.team().is_control_ball() {
             let player_pos = ctx.player.position;
             let goal_pos = ctx.player().opponent_goal_position();
             let to_goal = (goal_pos - player_pos).normalize();
@@ -344,11 +367,10 @@ impl DefenderRunningState {
                 .any(|t| {
                     let to_t = (t.position - player_pos).normalize();
                     let is_ahead = to_t.dot(&to_goal) > 0.2;
-                    let in_space = ctx.players().opponents().all()
-                        .filter(|opp| (opp.position - t.position).magnitude() < 15.0)
-                        .count() < 2;
-                    let has_lane = ctx.player().has_clear_pass(t.id);
-                    is_ahead && in_space && has_lane
+                    if !is_ahead { return false; }
+                    let in_space = ctx.tick_context.distances
+                        .opponents(t.id, 15.0).count() < 2;
+                    in_space && ctx.player().has_clear_pass(t.id)
                 });
             if has_progressive_target {
                 return true;
@@ -466,10 +488,9 @@ impl DefenderRunningState {
                 continue;
             }
 
-            // Check teammate is in space (no opponent within 15 units)
-            let opponents_near = ctx.players().opponents().all()
-                .filter(|opp| (opp.position - teammate.position).magnitude() < 15.0)
-                .count();
+            // Check teammate is in space (use pre-computed distances)
+            let opponents_near = ctx.tick_context.distances
+                .opponents(teammate.id, 15.0).count();
             if opponents_near >= 2 {
                 continue;
             }

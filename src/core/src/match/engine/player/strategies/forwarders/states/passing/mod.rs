@@ -135,6 +135,9 @@ impl ForwardPassingState {
             })
             .collect();
 
+        // Minimum score threshold — don't pass if best option is terrible
+        const MIN_FWD_PASS_SCORE: f32 = 5.0;
+
         // If we have forwards nearby in good positions, prioritize them
         if !nearby_forwards.is_empty() {
             let best_forward = nearby_forwards
@@ -145,6 +148,7 @@ impl ForwardPassingState {
                     let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
                     (teammate, score)
                 })
+                .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
                 .max_by(|(_, score_a), (_, score_b)| {
                     score_a.partial_cmp(score_b).unwrap_or(std::cmp::Ordering::Equal)
                 })
@@ -178,6 +182,7 @@ impl ForwardPassingState {
                 let score = self.evaluate_forward_pass(ctx, &teammate) * recency_penalty * congestion_penalty;
                 (teammate, score)
             })
+            .filter(|(_, score)| *score >= MIN_FWD_PASS_SCORE)
             .max_by(|(_, score_a), (_, score_b)| {
                 score_a
                     .partial_cmp(score_b)
@@ -186,21 +191,16 @@ impl ForwardPassingState {
             .map(|(teammate, _)| teammate)
     }
 
-    /// Hard-reject a teammate who is the most recent passer AND very close.
-    /// This prevents two forwards from ping-ponging the ball at close range.
+    /// Hard-reject a teammate who is the most recent passer.
+    /// This prevents two forwards from ping-ponging the ball regardless of distance.
     fn is_close_recent_passer(
         &self,
         ctx: &StateProcessingContext,
         teammate: &MatchPlayerLite,
     ) -> bool {
-        const CLOSE_DISTANCE: f32 = 40.0;
         let recency = ctx.ball().passer_recency_penalty(teammate.id);
-        // recency <= 0.1 means most recent passer, <= 0.3 means second most recent
-        if recency > 0.3 {
-            return false;
-        }
-        let distance = (teammate.position - ctx.player.position).magnitude();
-        distance < CLOSE_DISTANCE
+        // recency <= 0.1 means most recent passer — always reject to break ping-pong
+        recency <= 0.1
     }
 
     /// Forward-specific pass evaluation - prioritizing attacks and goal scoring opportunities
@@ -439,28 +439,21 @@ impl ForwardPassingState {
         const TIGHT_MARKING_DISTANCE: f32 = 5.0;
         const MARKING_DISTANCE: f32 = 12.0;
 
-        let tight_markers = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                (opponent.position - teammate.position).magnitude() <= TIGHT_MARKING_DISTANCE
-            })
-            .count();
+        // Single distance scan at max radius, bucket by distance
+        let mut tight_markers = 0;
+        let mut markers = 0;
+
+        for (_opp_id, dist) in ctx.tick_context.distances.opponents(teammate.id, MARKING_DISTANCE) {
+            markers += 1;
+            if dist <= TIGHT_MARKING_DISTANCE {
+                tight_markers += 1;
+            }
+        }
 
         // One opponent very close = heavily marked
         if tight_markers >= 1 {
             return true;
         }
-
-        let markers = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                (opponent.position - teammate.position).magnitude() <= MARKING_DISTANCE
-            })
-            .count();
 
         // Two opponents within wider radius = heavily marked
         markers >= 2
@@ -495,12 +488,9 @@ impl ForwardPassingState {
 
         // Count all nearby players (opponents and teammates) - both contribute to congestion
         let num_opponents_nearby = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                (opponent.position - player.position).magnitude() <= space_radius
-            })
+            .tick_context
+            .distances
+            .opponents(player.id, space_radius)
             .count();
 
         let num_teammates_nearby = ctx
@@ -594,10 +584,9 @@ impl ForwardPassingState {
         teammate: &MatchPlayerLite,
     ) -> f32 {
         let nearby_opponents = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opp| (opp.position - teammate.position).magnitude() < 20.0)
+            .tick_context
+            .distances
+            .opponents(teammate.id, 20.0)
             .count();
 
         let nearby_teammates = ctx
