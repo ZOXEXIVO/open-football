@@ -449,15 +449,17 @@ impl PlayerEventDispatcher {
         field.ball.pass_target_player_id = Some(event_model.to_player_id);
 
         // Increase in_flight_state based on pass distance to prevent immediate reclaim
-        // Short passes (< 30m): 20 ticks (~0.33s)
-        // Medium passes (30-60m): 30 ticks (~0.5s)
-        // Long passes (> 60m): 40 ticks (~0.67s)
+        // Ball velocity is low (~1-3 units/tick) so it needs significant protection
+        // to travel most of the distance before opponents can claim
+        // Short passes (< 30m): 40 ticks — covers ~45% of distance
+        // Medium passes (30-80m): 60 ticks — covers ~60% of distance
+        // Long passes (> 80m): 80 ticks — covers ~70% of distance
         let flight_protection = if actual_horizontal_distance < 30.0 {
-            20
-        } else if actual_horizontal_distance < 60.0 {
-            30
-        } else {
             40
+        } else if actual_horizontal_distance < 80.0 {
+            60
+        } else {
+            80
         };
         field.ball.flags.in_flight_state = flight_protection;
     }

@@ -4829,11 +4829,12 @@ a:link, a:visited, a:hover, a:active {
     .fm-player-grid-left {
         order: 2;
         flex: 0 0 220px;
+        margin: 0 auto;
     }
 
     .fm-player-grid-right {
         order: 1;
-        flex: 0 0 max(500px, 70%);
+        flex: 1 0 max(500px, 70%);
     }
 
     .fp-field {

@@ -63,8 +63,9 @@ impl StateProcessingHandler for MidfielderPassingState {
         }
 
         // If no good passing option after waiting, try something else
-        // Reduced from 50 to 30 ticks for faster decision-making
-        if ctx.in_state_time > 30 {
+        // Under heavy pressure, bail out faster to dribble away
+        let bail_time = if self.is_under_heavy_pressure(ctx) { 15 } else { 30 };
+        if ctx.in_state_time > bail_time {
             return if ctx.ball().distance_to_opponent_goal() < 200.0 {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,

@@ -627,23 +627,31 @@ impl PassEvaluator {
             }
 
             // CONGESTION PENALTY: Heavily penalize passing into crowded areas.
-            // Count ALL players (teammates + opponents) near the receiver.
-            // This forces the ball OUT of huddles toward players in open space.
+            // Opponents near the receiver are weighted more heavily than teammates,
+            // and close opponents are weighted much more than distant ones.
             let nearby_teammates_count = ctx.tick_context.distances
                 .teammates(teammate.id, 0.0, 20.0)
                 .count();
-            let nearby_opponents_count = ctx.tick_context.distances
-                .opponents(teammate.id, 20.0)
+            let close_opponents_count = ctx.tick_context.distances
+                .opponents(teammate.id, 10.0)
                 .count();
-            let total_nearby = nearby_teammates_count + nearby_opponents_count;
+            let medium_opponents_count = ctx.tick_context.distances
+                .opponents(teammate.id, 20.0)
+                .count() - close_opponents_count;
 
-            let congestion_penalty = match total_nearby {
+            // Close opponents count double — passing into tight marking is very risky
+            let weighted_nearby = nearby_teammates_count
+                + close_opponents_count * 2
+                + medium_opponents_count;
+
+            let congestion_penalty = match weighted_nearby {
                 0 => 1.5,   // Completely isolated — excellent target
                 1 => 1.2,   // One nearby player — good
                 2 => 1.0,   // Normal
-                3 => 0.6,   // Getting crowded
-                4 => 0.35,  // Congested — strongly discouraged
-                _ => 0.15,  // Huddle — almost never pass here
+                3 => 0.5,   // Getting crowded — discouraged
+                4 => 0.25,  // Congested — strongly discouraged
+                5 => 0.12,  // Huddle — almost never pass here
+                _ => 0.05,  // Extremely congested — effectively blocked
             };
 
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);
@@ -905,6 +913,13 @@ impl PassEvaluator {
                 best_score = score;
                 best_option = Some(teammate);
             }
+        }
+
+        // Minimum score threshold: if the best option scores too low,
+        // return None so the player dribbles/runs instead of making a bad pass
+        const MIN_PASS_SCORE: f32 = 0.15;
+        if best_score < MIN_PASS_SCORE {
+            return None;
         }
 
         best_option.map(|teammate| (teammate, "PASS_EVALUATOR"))

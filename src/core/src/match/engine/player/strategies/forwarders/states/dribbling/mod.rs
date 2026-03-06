@@ -12,7 +12,11 @@ pub struct ForwardDribblingState {}
 impl StateProcessingHandler for ForwardDribblingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
-            // Transition to Running state if the player doesn't have the ball
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+
+        // No opponents nearby — just run, dribbling is for beating defenders
+        if !ctx.players().opponents().exists(25.0) {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 

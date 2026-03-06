@@ -51,12 +51,15 @@ impl StateProcessingHandler for ForwardPassingState {
             }
         }
 
-        // No good pass option found - prefer dribbling toward goal if close enough
+        // No good pass option found - keep running toward goal
+        // Only dribble if opponents are actually nearby to beat
         if distance_to_goal < 200.0 {
-            // Close to goal with no pass option - dribble forward instead of holding
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Dribbling,
-            ));
+            let opponents_nearby = ctx.players().opponents().exists(20.0);
+            return if opponents_nearby {
+                Some(StateChangeResult::with_forward_state(ForwardState::Dribbling))
+            } else {
+                Some(StateChangeResult::with_forward_state(ForwardState::Running))
+            };
         }
 
         // If under excessive pressure, consider going back to dribbling
@@ -295,7 +298,12 @@ impl ForwardPassingState {
         score += receiver_space * 15.0;
 
         // Strong penalty for backwards passes unless under heavy pressure
-        if teammate.position.x < ctx.player.position.x && !self.is_under_heavy_pressure(ctx) {
+        let is_backward_pass = match ctx.player.side {
+            Some(crate::r#match::PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
+            Some(crate::r#match::PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
+            None => false,
+        };
+        if is_backward_pass && !self.is_under_heavy_pressure(ctx) {
             score -= 20.0;
 
             // Extra penalty if passing back when in attacking third
@@ -393,7 +401,12 @@ impl ForwardPassingState {
 
         // Passing backwards is generally not a good option for forwards
         // unless under heavy pressure
-        if teammate.position.x < ctx.player.position.x {
+        let is_backward = match ctx.player.side {
+            Some(crate::r#match::PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
+            Some(crate::r#match::PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
+            None => false,
+        };
+        if is_backward {
             // Only allow backwards passes if under heavy pressure or teammate has lots of space
             if self.is_under_heavy_pressure(ctx) {
                 return true;

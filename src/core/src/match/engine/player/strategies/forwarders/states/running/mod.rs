@@ -94,11 +94,12 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
-            // draw defenders and lay off to a supporting teammate
-            // Requires carrying the ball for a while to prevent instant pass-after-receive
+            // draw defenders and lay off to a supporting teammate.
+            // Only when forward genuinely can't advance (opponents blocking ahead).
             if ctx.ball().has_stable_possession()
                 && distance_to_goal > CLOSE_RANGE_DISTANCE
                 && ctx.tick_context.ball.ownership_duration > 30
+                && !self.has_open_space_ahead(ctx)  // Don't lay off if can run forward
             {
                 if let Some(layoff_target) = self.find_hold_up_layoff(ctx) {
                     return Some(StateChangeResult::with_forward_state_and_event(
@@ -423,6 +424,23 @@ impl StateProcessingHandler for ForwardRunningState {
 }
 
 impl ForwardRunningState {
+
+    /// Check if there's open space ahead toward the opponent goal
+    fn has_open_space_ahead(&self, ctx: &StateProcessingContext) -> bool {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        // Check for opponents blocking the path ahead (within 25 units, roughly toward goal)
+        let blockers = ctx.players().opponents().nearby(25.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.4
+            })
+            .count();
+
+        blockers == 0
+    }
 
     /// Check if under immediate pressure
     #[allow(dead_code)]
@@ -1083,8 +1101,12 @@ impl ForwardRunningState {
                 .count()
                 < 2;
 
-            // Prefer forward passes
-            let is_forward_pass = teammate.position.x > ctx.player.position.x;
+            // Prefer forward passes (side-aware)
+            let is_forward_pass = match ctx.player.side {
+                Some(PlayerSide::Left) => teammate.position.x > ctx.player.position.x,
+                Some(PlayerSide::Right) => teammate.position.x < ctx.player.position.x,
+                None => false,
+            };
 
             has_clear_lane && has_space && is_forward_pass
         })
@@ -1299,14 +1321,21 @@ impl ForwardRunningState {
 
     /// HOLD-UP PLAY: When forward is under pressure from behind and a supporting
     /// midfielder/teammate is arriving behind them, lay the ball off.
+    /// Only triggers when there are opponents AHEAD blocking the path to goal.
     fn find_hold_up_layoff<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
 
-        // Need at least one opponent pressing from behind or close
-        let under_pressure = ctx.players().opponents().nearby(20.0).count() >= 1;
-        if !under_pressure {
-            return None;
+        // Need opponents actively blocking the forward path (ahead of us, toward goal)
+        let to_goal = (goal_pos - player_pos).normalize();
+        let opponents_ahead = ctx.players().opponents().nearby(25.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.3 // Opponent is roughly between us and goal
+            })
+            .count();
+        if opponents_ahead < 1 {
+            return None; // Path to goal is clear — run, don't lay off
         }
 
         // Find a supporting teammate who is behind us (closer to own goal)
