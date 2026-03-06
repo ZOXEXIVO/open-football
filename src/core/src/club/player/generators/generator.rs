@@ -381,7 +381,7 @@ impl PlayerGenerator {
             player_attributes: PlayerAttributes {
                 is_banned: false,
                 is_injured: false,
-                condition: IntegerUtils::random(7000, 10000) as i16,
+                condition: IntegerUtils::random(7500, 9000) as i16,
                 fitness: IntegerUtils::random(5000, 8000) as i16,
                 jadedness: 0,
                 weight: IntegerUtils::random(55, 85) as u8,

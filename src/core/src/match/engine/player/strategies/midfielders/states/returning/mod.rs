@@ -18,8 +18,8 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // Priority 0: Free ball nearby - go claim it
-        if ctx.ball().should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
             ));
@@ -54,12 +54,18 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // Use hysteresis: only transition to Walking when significantly close (< 80 units)
-        // This prevents oscillation at the 100-unit boundary
+        // If team has possession, switch to supporting instead of returning home
+        if ctx.team().is_control_ball() && ctx.ball().distance() < 300.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::AttackSupporting,
+            ));
+        }
+
+        // Transition to Running when close to position (don't walk, stay active)
         let distance_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
         if distance_to_start < 80.0 {
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Walking,
+                MidfielderState::Running,
             ));
         }
 

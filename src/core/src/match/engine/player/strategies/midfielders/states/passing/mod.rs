@@ -25,35 +25,41 @@ impl StateProcessingHandler for MidfielderPassingState {
             ));
         }
 
-        if !ctx.ball().on_own_side() {
-            // First, look for high-value breakthrough passes (for skilled players)
-            if let Some(breakthrough_target) = self.find_breakthrough_pass_option(ctx) {
-                // Execute the high-quality breakthrough pass
+        // Brief scanning delay before executing pass (unless under pressure)
+        let under_pressure = self.is_under_heavy_pressure(ctx);
+        let min_scan_time: u64 = if under_pressure { 3 } else { 8 };
+
+        if ctx.in_state_time >= min_scan_time {
+            if !ctx.ball().on_own_side() {
+                // First, look for high-value breakthrough passes (for skilled players)
+                if let Some(breakthrough_target) = self.find_breakthrough_pass_option(ctx) {
+                    // Execute the high-quality breakthrough pass
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(breakthrough_target.id)
+                                .with_reason("MID_PASSING_BREAKTHROUGH")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+            }
+
+            // Find the best regular pass option with improved logic
+            if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
                 return Some(StateChangeResult::with_midfielder_state_and_event(
-                    MidfielderState::Standing,
+                    MidfielderState::Running,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(breakthrough_target.id)
-                            .with_reason("MID_PASSING_BREAKTHROUGH")
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("MID_PASSING_STATE")
                             .build(ctx),
                     )),
                 ));
             }
-        }
-
-        // Find the best regular pass option with improved logic
-        if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
-            return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Running,
-                Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
-                        .with_from_player_id(ctx.player.id)
-                        .with_to_player_id(target_teammate.id)
-                        .with_reason("MID_PASSING_STATE")
-                        .build(ctx),
-                )),
-            ));
         }
 
         // If no good passing option after waiting, try something else

@@ -17,8 +17,8 @@ impl StateProcessingHandler for DefenderWalkingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
-        // Notification system: if ball system notified us to take the ball, act immediately
-        if ctx.ball().should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));

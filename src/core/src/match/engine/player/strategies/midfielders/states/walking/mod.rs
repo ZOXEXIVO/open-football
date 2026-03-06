@@ -37,26 +37,18 @@ impl StateProcessingHandler for MidfielderWalkingState {
             ));
         }
 
-        // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
-        // But only if this player is the nearest teammate to prevent mass-chasing
+        // Loose ball nearby — only chase if best positioned teammate
         if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
             let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 3.0 {
-                let ball_pos = ctx.tick_context.positions.ball.position;
-                let my_dist = ctx.ball().distance();
-                let closer_teammate = ctx.players().teammates().all()
-                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
-
-                if !closer_teammate {
-                    return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::TakeBall,
-                    ));
-                }
+            if ball_velocity < 3.0 && ctx.team().is_best_player_to_chase_ball() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::TakeBall,
+                ));
             }
         }
 
-        // Notification system: if ball system notified us to take the ball, act immediately
-        if ctx.ball().should_take_ball_immediately() {
+        // Notification: take ball only if best positioned
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
             ));
@@ -123,7 +115,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
             ));
         }
 
-        if ctx.in_state_time > 50 {
+        // Midfielders shouldn't walk for long — get back into the action
+        if ctx.in_state_time > 20 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running
             ));

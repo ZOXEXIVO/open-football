@@ -42,8 +42,8 @@ impl StateProcessingHandler for ForwardWalkingState {
             }
         }
 
-        // Notification system: if ball system notified us to take the ball, act immediately
-        if ctx.ball().should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::TakeBall,
             ));

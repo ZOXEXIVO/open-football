@@ -51,80 +51,80 @@ impl PlayerTraining {
             TrainingType::Endurance => {
                 effects.physical_gains.stamina = 0.05 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.natural_fitness = 0.03 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = 15.0 * intensity_multiplier;
+                effects.fatigue_change = -100.0 * intensity_multiplier; // Net recovery — endurance builds fitness
                 effects.injury_risk = 0.02 * intensity_multiplier;
             }
             TrainingType::Strength => {
                 effects.physical_gains.strength = 0.04 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.jumping = 0.02 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = 20.0 * intensity_multiplier;
+                effects.fatigue_change = 100.0 * intensity_multiplier; // Tiring — heavy session
                 effects.injury_risk = 0.03 * intensity_multiplier;
             }
             TrainingType::Speed => {
                 effects.physical_gains.pace = 0.03 * coach_quality * player_receptiveness * age_factor;
                 effects.physical_gains.agility = 0.04 * coach_quality * player_receptiveness * age_factor;
-                effects.fatigue_change = 25.0 * intensity_multiplier;
+                effects.fatigue_change = 150.0 * intensity_multiplier; // Most tiring physical session
                 effects.injury_risk = 0.04 * intensity_multiplier;
             }
             TrainingType::BallControl => {
                 effects.technical_gains.first_touch = 0.05 * coach_quality * player_receptiveness;
                 effects.technical_gains.technique = 0.04 * coach_quality * player_receptiveness;
                 effects.technical_gains.dribbling = 0.03 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.fatigue_change = -50.0 * intensity_multiplier; // Light — slight recovery
                 effects.injury_risk = 0.01 * intensity_multiplier;
             }
             TrainingType::Passing => {
                 effects.technical_gains.passing = 0.06 * coach_quality * player_receptiveness;
                 effects.mental_gains.vision = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 8.0 * intensity_multiplier;
+                effects.fatigue_change = -100.0 * intensity_multiplier; // Light — net recovery
                 effects.injury_risk = 0.01 * intensity_multiplier;
             }
             TrainingType::Shooting => {
                 effects.technical_gains.finishing = 0.05 * coach_quality * player_receptiveness;
                 effects.technical_gains.technique = 0.02 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.01 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 12.0 * intensity_multiplier;
+                effects.fatigue_change = 50.0 * intensity_multiplier; // Moderate physical load
                 effects.injury_risk = 0.02 * intensity_multiplier;
             }
             TrainingType::Positioning => {
                 effects.mental_gains.positioning = 0.06 * coach_quality * player_receptiveness;
                 effects.mental_gains.concentration = 0.03 * coach_quality * player_receptiveness;
                 effects.mental_gains.decisions = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 5.0 * intensity_multiplier;
+                effects.fatigue_change = -150.0 * intensity_multiplier; // Tactical — good recovery
                 effects.injury_risk = 0.005 * intensity_multiplier;
             }
             TrainingType::TeamShape => {
                 effects.mental_gains.teamwork = 0.05 * coach_quality * player_receptiveness;
                 effects.mental_gains.positioning = 0.04 * coach_quality * player_receptiveness;
                 effects.mental_gains.work_rate = 0.02 * coach_quality * player_receptiveness;
-                effects.fatigue_change = 10.0 * intensity_multiplier;
+                effects.fatigue_change = -50.0 * intensity_multiplier; // Moderate — slight recovery
                 effects.injury_risk = 0.01 * intensity_multiplier;
                 effects.morale_change = 0.1; // Team activities boost morale
             }
             TrainingType::Recovery => {
-                effects.fatigue_change = -30.0; // Negative means recovery
-                effects.injury_risk = -0.02; // Reduces injury risk
+                effects.fatigue_change = -800.0; // Strong recovery — main condition restoration
+                effects.injury_risk = -0.02;
                 effects.morale_change = 0.05;
             }
             TrainingType::VideoAnalysis => {
                 effects.mental_gains.decisions = 0.03 * coach_quality;
                 effects.mental_gains.positioning = 0.02 * coach_quality;
                 effects.mental_gains.vision = 0.02 * coach_quality;
-                effects.fatigue_change = 0.0;
+                effects.fatigue_change = -200.0; // Light recovery while watching video
                 effects.injury_risk = 0.0;
             }
             TrainingType::RestDay => {
-                effects.fatigue_change = -50.0; // Full rest day — best recovery
+                effects.fatigue_change = -600.0; // Full rest day — good recovery
                 effects.injury_risk = -0.03;
                 effects.morale_change = 0.03;
             }
             TrainingType::LightRecovery => {
-                effects.fatigue_change = -20.0;
+                effects.fatigue_change = -500.0; // Light recovery session
                 effects.injury_risk = -0.01;
                 effects.morale_change = 0.02;
             }
             TrainingType::Rehabilitation => {
-                effects.fatigue_change = -15.0;
+                effects.fatigue_change = -400.0; // Rehab recovery
                 effects.injury_risk = -0.02;
             }
             _ => {

@@ -132,7 +132,7 @@ impl Player {
         !self.player_attributes.is_injured
             && !self.player_attributes.is_banned
             && !self.player_attributes.is_in_recovery()
-            && self.player_attributes.condition_percentage() > 50
+            && self.player_attributes.condition_percentage() > 30
     }
 
     pub fn growth_potential(&self, now: NaiveDate) -> u8 {

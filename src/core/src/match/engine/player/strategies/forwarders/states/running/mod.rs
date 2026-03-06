@@ -39,13 +39,37 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-            // Priority 0: In shooting range — SHOOT
-            if distance_to_goal > MIN_SHOOTING_DISTANCE
-                && ctx.player().shooting().in_shooting_range()
-            {
+            // Priority 0: Point-blank range — MUST shoot regardless of clear shot
+            // Prevents running into the goalkeeper
+            if distance_to_goal <= POINT_BLANK_DISTANCE {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
+            }
+
+            // Priority 0.5: In shooting range — SHOOT
+            if ctx.player().shooting().in_shooting_range() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
+            }
+
+            // Priority 0.6: Long-range shooting — skilled players shoot from distance
+            {
+                let long_shots = ctx.player.skills.technical.long_shots / 20.0;
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+
+                if distance_to_goal > CLOSE_RANGE_DISTANCE
+                    && distance_to_goal <= MAX_SHOOTING_DISTANCE
+                    && long_shots > 0.6
+                    && finishing > 0.5
+                    && ctx.player().has_clear_shot()
+                    && !ctx.players().opponents().exists(8.0)
+                {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
             }
 
             // ONE-TWO COMBINATION: After just receiving ball, check if passer ran into space
@@ -71,9 +95,10 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // HOLD-UP PLAY: When facing away from goal with midfielders arriving,
             // draw defenders and lay off to a supporting teammate
+            // Requires carrying the ball for a while to prevent instant pass-after-receive
             if ctx.ball().has_stable_possession()
                 && distance_to_goal > CLOSE_RANGE_DISTANCE
-                && ctx.in_state_time > 15
+                && ctx.tick_context.ball.ownership_duration > 30
             {
                 if let Some(layoff_target) = self.find_hold_up_layoff(ctx) {
                     return Some(StateChangeResult::with_forward_state_and_event(
@@ -89,8 +114,10 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Clear ball if congested far from goal
-            if distance_to_goal > SHOOTING_ZONE_DISTANCE {
+            // Clear ball if congested far from goal — only after carrying for a while
+            if distance_to_goal > SHOOTING_ZONE_DISTANCE
+                && ctx.tick_context.ball.ownership_duration > 15
+            {
                 if ctx.player().movement().is_congested_near_boundary() || ctx.player().movement().is_congested() {
                     if let Some(_) = ctx.players().teammates().all().next() {
                         return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
@@ -101,7 +128,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // DRAW AND RELEASE: When an opponent is committing to tackle, draw them in
             // then pass to space they vacated
             if ctx.ball().has_stable_possession()
-                && ctx.in_state_time > 10
+                && ctx.tick_context.ball.ownership_duration > 20
                 && distance_to_goal > CLOSE_RANGE_DISTANCE
             {
                 if let Some(release_target) = self.find_draw_and_release_pass(ctx) {
@@ -130,11 +157,13 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // Evaluate best action based on game context
-            if self.should_pass(ctx) {
+            // Require minimum carry time to prevent instant pass-after-receive
+            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+            if ownership_ticks > 25 && self.should_pass(ctx) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
-            if self.should_dribble(ctx) {
+            if ownership_ticks > 20 && self.should_dribble(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Dribbling,
                 ));
@@ -148,8 +177,11 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-            if ctx.in_state_time > 150 {
+            if ctx.in_state_time > 60 {
                 if distance_to_goal < SHOOTING_ZONE_DISTANCE {
+                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+                }
+                if distance_to_goal < MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot() {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
@@ -160,8 +192,8 @@ impl StateProcessingHandler for ForwardRunningState {
         }
         // Handle cases when player doesn't have the ball
         else {
-            // Priority 0: Emergency - if ball is nearby, stopped, and unowned, go for it immediately
-            if ctx.ball().should_take_ball_immediately() {
+            // Priority 0: Loose ball nearby — only chase if best positioned
+            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::TakeBall,
                 ));
@@ -278,14 +310,30 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             Some(self.calculate_ball_carrying_movement(ctx) * fatigue_factor)
         }
-        // Without ball — single smooth target, no binary is_control_ball() switch
-        // which flickers and causes twitching / snapping to center
+        // Without ball — spread across pitch using unique player slots
         else {
             let ball_pos = ctx.tick_context.positions.ball.position;
             let start_pos = ctx.player.start_position;
             let field_width = ctx.context.field_size.width as f32;
             let field_height = ctx.context.field_size.height as f32;
             let ball_distance = ctx.ball().distance();
+
+            // ANTI-FOLLOWING: If very close to ball carrier, spread away
+            if ball_distance < 35.0 && ctx.team().is_control_ball() {
+                let away_from_ball = (ctx.player.position - ball_pos).normalize();
+                let lateral = Vector3::new(-away_from_ball.y, away_from_ball.x, 0.0);
+                let spread_target = ctx.player.position + away_from_ball * 25.0 + lateral * 15.0;
+                let clamped = Vector3::new(
+                    spread_target.x.clamp(30.0, field_width - 30.0),
+                    spread_target.y.clamp(40.0, field_height - 40.0),
+                    0.0,
+                );
+                return Some(
+                    (SteeringBehavior::Arrive { target: clamped, slowing_distance: 10.0 }
+                        .calculate(ctx.player).velocity
+                        + ctx.player().separation_velocity()) * fatigue_factor,
+                );
+            }
 
             let attacking_direction = match ctx.player.side {
                 Some(PlayerSide::Left) => 1.0,
@@ -294,10 +342,25 @@ impl StateProcessingHandler for ForwardRunningState {
             };
 
             // Smooth ball proximity (no binary switches)
-            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.75);
+            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.45);
+
+            // === UNIQUE FORWARD SLOT: spread forwards vertically ===
+            let mut teammate_fwd_ids: Vec<u32> = ctx.players().teammates().all()
+                .filter(|t| t.tactical_positions.is_forward())
+                .map(|t| t.id)
+                .collect();
+            teammate_fwd_ids.push(ctx.player.id);
+            teammate_fwd_ids.sort();
+            let slot_index = teammate_fwd_ids.iter().position(|&id| id == ctx.player.id).unwrap_or(0);
+            let total_fwds = teammate_fwd_ids.len().max(1);
+
+            // Spread forwards across 25%-75% of field height
+            let slot_y = field_height * 0.25
+                + (field_height * 0.5) * (slot_index as f32 + 0.5) / total_fwds as f32;
 
             // Forwards stay HIGH — target pushes well ahead of ball toward opponent goal
-            let advanced_x = ball_pos.x + attacking_direction * 70.0;
+            let depth_stagger = attacking_direction * (slot_index as f32 * 20.0);
+            let advanced_x = ball_pos.x + attacking_direction * 70.0 + depth_stagger;
             // Clamp advanced_x toward opponent's half so forwards don't drop behind the ball
             let min_forward_x = match ctx.player.side {
                 Some(PlayerSide::Left) => (field_width * 0.45).max(ball_pos.x).min(field_width),
@@ -312,17 +375,21 @@ impl StateProcessingHandler for ForwardRunningState {
             let clamped_advanced_x = advanced_x.clamp(min_forward_x, max_forward_x);
             let target_x = start_pos.x + (clamped_advanced_x - start_pos.x) * proximity;
 
-            // Y: anchor to tactical position, shift toward ball Y for passing angles
+            // Y: blend between assigned slot and start position
             let center_y = field_height / 2.0;
             let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
-            let y_attraction = if is_wide { proximity * 0.2 } else { proximity * 0.35 };
-            let target_y = start_pos.y + (ball_pos.y - start_pos.y) * y_attraction;
+            let slot_weight = if is_wide { 0.4 } else { 0.5 };
+            let ball_weight = proximity * (1.0 - slot_weight);
+            let start_weight = (1.0 - slot_weight - ball_weight).max(0.0);
+            let target_y = slot_y * slot_weight
+                + ball_pos.y * ball_weight
+                + start_pos.y * start_weight;
 
-            // Per-forward organic drift for unique movement
+            // Per-forward organic drift for unique movement (smaller — slot handles spread)
             let match_time = ctx.context.total_match_time as f32;
             let seed = ctx.player.id as f32 * 2.39;
-            let drift_x = (seed + match_time * 0.005).sin() * 12.0;
-            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 10.0;
+            let drift_x = (seed + match_time * 0.005).sin() * 8.0;
+            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 6.0;
 
             let target = Vector3::new(
                 (target_x + drift_x).clamp(30.0, field_width - 30.0),
@@ -483,7 +550,13 @@ impl ForwardRunningState {
             return false;
         }
 
+        // Only the closest player should initiate the press — prevents swarming
+        // Exception: very close range (<30) anyone can press reactively
         let ball_distance = ctx.ball().distance();
+        if ball_distance > 30.0 && !ctx.team().is_best_player_to_chase_ball() {
+            return false;
+        }
+
         let stamina_level = ctx.player.player_attributes.condition_percentage() as f32 / 100.0;
         let work_rate = ctx.player.skills.mental.work_rate / 20.0;
         let intensity = ctx.team().tactics().pressing_intensity();
@@ -1059,14 +1132,34 @@ impl ForwardRunningState {
     }
 
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        // Check player's dribbling skill
-        let dribbling_skill = ctx.player.skills.technical.dribbling;
+        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
+        let pace = ctx.player.skills.physical.pace / 20.0;
 
-        // Check if there's space to dribble
-        let has_space = !ctx.players().opponents().exists(15.0);
+        // Check for opponents directly ahead (not just any nearby)
+        let goal_pos = ctx.player().opponent_goal_position();
+        let player_pos = ctx.player.position;
+        let to_goal = (goal_pos - player_pos).normalize();
 
-        // Forwards with good dribbling should try to dribble more often when they have space
-        dribbling_skill > 15.0 && has_space
+        let opponents_blocking = ctx.players().opponents().nearby(25.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.5 && (opp.position - player_pos).magnitude() < 20.0
+            })
+            .count();
+
+        // No opponents blocking — just keep running, don't dribble
+        if opponents_blocking == 0 {
+            return false;
+        }
+
+        // Skilled dribblers take on opponents
+        if dribbling_skill > 0.7 && pace > 0.6 {
+            opponents_blocking <= 2
+        } else if dribbling_skill > 0.5 {
+            opponents_blocking <= 1
+        } else {
+            false
+        }
     }
 
     fn is_in_good_attacking_position(&self, ctx: &StateProcessingContext) -> bool {
@@ -1197,7 +1290,7 @@ impl ForwardRunningState {
             return None;
         }
         let pass_distance = (passer_pos - player_pos).magnitude();
-        if pass_distance > 180.0 || pass_distance < 8.0 {
+        if pass_distance > 180.0 || pass_distance < 25.0 {
             return None;
         }
 
@@ -1222,6 +1315,11 @@ impl ForwardRunningState {
 
         ctx.players().teammates().nearby(150.0)
             .filter(|t| {
+                let t_dist = (t.position - player_pos).magnitude();
+                // Reject very close teammates to prevent short group passes
+                if t_dist < 30.0 {
+                    return false;
+                }
                 let t_goal_dist = (goal_pos - t.position).magnitude();
                 // Teammate must be further from opponent goal (behind us)
                 let is_behind = t_goal_dist > our_goal_dist * 1.1;
@@ -1234,10 +1332,13 @@ impl ForwardRunningState {
                     || t.tactical_positions.is_forward();
                 // Clear passing lane
                 let clear_pass = ctx.player().has_clear_pass(t.id);
+                // Reject recent passers to prevent cycling
+                let not_recent = ctx.ball().passer_recency_penalty(t.id) > 0.3;
 
-                is_behind && in_space && is_midfielder_or_attacker && clear_pass
+                is_behind && in_space && is_midfielder_or_attacker && clear_pass && not_recent
             })
-            .min_by(|a, b| {
+            .max_by(|a, b| {
+                // Prefer farther teammates — they're more likely outside the congested group
                 let da = (a.position - player_pos).magnitude();
                 let db = (b.position - player_pos).magnitude();
                 da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
@@ -1272,12 +1373,15 @@ impl ForwardRunningState {
         let opp_velocity = ctx.tick_context.positions.players.velocity(approaching_opponent.id);
         let vacated_zone = approaching_opponent.position - opp_velocity.normalize() * 30.0;
 
-        // Find teammate near vacated space
+        // Find teammate near vacated space (at least 25 units away to avoid short group passes)
         ctx.players().teammates().nearby(200.0)
             .filter(|t| {
+                let t_dist = (t.position - player_pos).magnitude();
                 let t_dist_to_vacated = (t.position - vacated_zone).magnitude();
-                t_dist_to_vacated < 60.0
+                t_dist > 25.0
+                    && t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
+                    && ctx.ball().passer_recency_penalty(t.id) > 0.3
                     && ctx.players().opponents().all()
                         .filter(|opp| (opp.position - t.position).magnitude() < 10.0)
                         .count() < 2

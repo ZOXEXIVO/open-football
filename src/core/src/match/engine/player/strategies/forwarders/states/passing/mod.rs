@@ -30,19 +30,25 @@ impl StateProcessingHandler for ForwardPassingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
+        // Brief scanning delay before executing pass (unless under pressure)
+        let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+        let min_scan_time = if under_pressure { 3 } else { 8 };
+
         // Determine the best teammate to pass to
-        if let Some(target_teammate) = self.find_best_pass_option(ctx) {
-            // Execute the pass
-            return Some(StateChangeResult::with_forward_state_and_event(
-                ForwardState::Running,
-                Event::PlayerEvent(PlayerEvent::PassTo(
-                    PassingEventContext::new()
-                        .with_from_player_id(ctx.player.id)
-                        .with_to_player_id(target_teammate.id)
-                        .with_reason("FWD_PASSING_STATE")
-                        .build(ctx),
-                )),
-            ));
+        if ctx.in_state_time >= min_scan_time {
+            if let Some(target_teammate) = self.find_best_pass_option(ctx) {
+                // Execute the pass
+                return Some(StateChangeResult::with_forward_state_and_event(
+                    ForwardState::Running,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target_teammate.id)
+                            .with_reason("FWD_PASSING_STATE")
+                            .build(ctx),
+                    )),
+                ));
+            }
         }
 
         // No good pass option found - prefer dribbling toward goal if close enough

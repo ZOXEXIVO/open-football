@@ -1,18 +1,24 @@
 use crate::club::player::player::Player;
-use crate::club::{PlayerStatusType, CONDITION_MAX_VALUE};
+use crate::club::PlayerStatusType;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
-/// Minimum condition floor for injured players (15%)
-const INJURY_CONDITION_FLOOR: i16 = 1500;
+/// Minimum condition floor for injured players (30%)
+const INJURY_CONDITION_FLOOR: i16 = 3000;
 
 /// Minimum fitness floor for injured players (20%)
 const INJURY_FITNESS_FLOOR: i16 = 2000;
 
+/// The "normal" condition level that rest/training pushes toward (90%)
+const CONDITION_NORMAL_LEVEL: i16 = 9000;
+
 impl Player {
-    /// Daily condition processing.
-    /// Injured players lose condition, fitness, and match readiness (like FM).
-    /// Healthy players recover condition naturally.
+    /// Daily condition processing (rest day — no training scheduled).
+    /// This provides slow natural recovery. Training is the main mechanism
+    /// for restoring condition back to normal levels (FM-like behavior).
+    ///
+    /// Rest-only recovery: ~150-300/day (1.5-3%) — slow without training.
+    /// With training recovery sessions: much faster (handled in training result).
     pub(crate) fn process_condition_recovery(&mut self, now: NaiveDate) {
         let natural_fitness = self.skills.physical.natural_fitness;
 
@@ -24,42 +30,47 @@ impl Player {
 
         let age = DateUtils::age(self.birth_date, now);
         let jadedness = self.player_attributes.jadedness;
+        let condition = self.player_attributes.condition;
 
-        // Base recovery: 80-250 per day based on natural_fitness
-        let base_recovery = 80.0 + (natural_fitness / 20.0) * 170.0;
+        // Only recover if below normal level — don't overshoot
+        if condition < CONDITION_NORMAL_LEVEL {
+            // Base recovery: 200-500 per day based on natural_fitness
+            // This is rest-only (no training). A player at 60% reaches ~85% in ~5-6 days.
+            let base_recovery = 200.0 + (natural_fitness / 20.0) * 300.0;
 
-        // Age penalty: older players recover slower
-        let age_factor = if age > 30 {
-            1.0 - (age as f32 - 30.0) * 0.06
-        } else if age < 23 {
-            1.1
-        } else {
-            1.0
-        };
+            // Age penalty: older players recover slower
+            let age_factor = if age > 30 {
+                1.0 - (age as f32 - 30.0) * 0.05
+            } else if age < 23 {
+                1.1
+            } else {
+                1.0
+            };
 
-        // Jadedness penalty: jaded players recover slower
-        let jadedness_factor = 1.0 - (jadedness as f32 / 10000.0) * 0.3;
+            // Jadedness penalty: jaded players recover slower
+            let jadedness_factor = 1.0 - (jadedness as f32 / 10000.0) * 0.3;
 
-        // Rest bonus: players without recent matches recover faster
-        let rest_bonus = if self.player_attributes.days_since_last_match > 7 {
-            1.5 // Fully rested — 50% faster recovery
-        } else if self.player_attributes.days_since_last_match > 3 {
-            1.3 // Well rested — 30% faster recovery
-        } else {
-            1.0 // Recently played — normal recovery
-        };
+            // Rest bonus: more days since match = better recovery
+            let rest_bonus = if self.player_attributes.days_since_last_match > 7 {
+                1.4
+            } else if self.player_attributes.days_since_last_match > 3 {
+                1.2
+            } else {
+                1.0
+            };
 
-        let recovery =
-            (base_recovery * age_factor.max(0.5) * jadedness_factor.max(0.5) * rest_bonus) as u16;
+            let recovery =
+                (base_recovery * age_factor.max(0.5) * jadedness_factor.max(0.5) * rest_bonus) as u16;
 
-        if self.player_attributes.condition < CONDITION_MAX_VALUE {
-            self.player_attributes.rest(recovery);
+            // Cap recovery so we don't overshoot normal level
+            let max_gain = (CONDITION_NORMAL_LEVEL - condition) as u16;
+            self.player_attributes.rest(recovery.min(max_gain));
         }
 
-        // Jadedness natural decay: -100/day when no match for 3+ days
+        // Jadedness natural decay: -150/day when no match for 3+ days
         if self.player_attributes.days_since_last_match > 3 {
             self.player_attributes.jadedness =
-                (self.player_attributes.jadedness - 100).max(0);
+                (self.player_attributes.jadedness - 150).max(0);
         }
 
         // Remove Rst status when jadedness drops below threshold
@@ -73,12 +84,13 @@ impl Player {
 
     /// Injured players lose condition, fitness, and match readiness daily.
     /// Higher natural_fitness slows the decay (like FM's Natural Fitness attribute).
+    /// Condition floors at 30% — even injured players maintain baseline condition.
     fn process_injury_condition_decay(&mut self, natural_fitness: f32) {
         let nf_factor = 1.0 - (natural_fitness / 20.0) * 0.7; // 0.3..1.0
 
-        // Condition decay: ~50-150/day depending on natural_fitness
-        // At nf=20: ~50/day, at nf=1: ~147/day
-        let condition_decay = (150.0 * nf_factor) as i16;
+        // Condition decay: ~30-100/day depending on natural_fitness
+        // At nf=20: ~30/day, at nf=1: ~98/day
+        let condition_decay = (100.0 * nf_factor) as i16;
         self.player_attributes.condition =
             (self.player_attributes.condition - condition_decay).max(INJURY_CONDITION_FLOOR);
 

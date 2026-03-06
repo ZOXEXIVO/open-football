@@ -29,10 +29,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             // Priority: Clear ball if congested anywhere (not just boundaries)
-            // Allow emergency clearances even without stable possession
-            // Cooldown: only attempt every 30 ticks to prevent claim-pass-reclaim loops
+            // Only attempt after carrying ball for a while to prevent instant pass-after-receive
             if (self.is_congested_near_boundary(ctx) || ctx.player().movement().is_congested())
-                && ctx.in_state_time % 30 < 2
+                && ctx.in_state_time > 20
+                && ctx.tick_context.ball.ownership_duration > 15
             {
                 // Try to find a good pass option first using the standard evaluator
                 if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
@@ -52,10 +52,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                     }
                 }
 
-                // Fallback: find teammate at least 40 units away (outside congestion zone)
-                if let Some(target_teammate) = ctx.players().teammates().nearby(100.0)
-                    .filter(|t| (t.position - ctx.player.position).magnitude() > 40.0)
-                    .next()
+                // Fallback: find teammate at least 40 units away, not a recent passer,
+                // and in open space (outside congestion zone)
+                if let Some(target_teammate) = ctx.players().teammates().nearby(200.0)
+                    .filter(|t| {
+                        let dist = (t.position - ctx.player.position).magnitude();
+                        dist > 40.0
+                            && ctx.ball().passer_recency_penalty(t.id) > 0.3
+                            && ctx.tick_context.distances
+                                .opponents(t.id, 15.0)
+                                .count() < 2
+                    })
+                    .max_by(|a, b| {
+                        // Prefer the farthest teammate in open space
+                        let da = (a.position - ctx.player.position).magnitude();
+                        let db = (b.position - ctx.player.position).magnitude();
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    })
                 {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
@@ -96,6 +109,44 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             // Minimum carry time before considering passes — let midfielders run with the ball
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+
+            // DRIBBLE: If there's space ahead and player has dribbling skill, beat opponents
+            if ownership_ticks > 5 && ownership_ticks < 60 {
+                let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
+                let pace = ctx.player.skills.physical.pace / 20.0;
+
+                // Check if there's space to dribble into (no opponent blocking ahead)
+                let goal_pos = ctx.player().opponent_goal_position();
+                let player_pos = ctx.player.position;
+                let to_goal = (goal_pos - player_pos).normalize();
+
+                let opponents_ahead = ctx.players().opponents().nearby(40.0)
+                    .filter(|opp| {
+                        let to_opp = (opp.position - player_pos).normalize();
+                        to_opp.dot(&to_goal) > 0.3 // Opponent is ahead in our direction
+                            && (opp.position - player_pos).magnitude() < 35.0
+                    })
+                    .count();
+
+                // Skilled dribblers take on opponents; others only dribble into open space
+                let should_dribble = if dribbling_skill > 0.7 && pace > 0.6 {
+                    opponents_ahead <= 2 // Skilled: take on 1-2 opponents
+                } else if dribbling_skill > 0.5 {
+                    opponents_ahead <= 1 // Decent: take on 1 opponent
+                } else {
+                    opponents_ahead == 0 // Poor: only open space
+                };
+
+                // Don't dribble in own defensive third — too risky
+                let goal_dist_from_opp = ctx.ball().distance_to_opponent_goal();
+                let field_width = ctx.context.field_size.width as f32;
+
+                if should_dribble && goal_dist_from_opp < field_width * 0.75 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Dribbling,
+                    ));
+                }
+            }
 
             // COUNTER-ATTACK: Quick transition but not instant — need a few ticks to assess
             if ownership_ticks > 8 && ctx.ball().has_stable_possession()
@@ -176,50 +227,84 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
         } else {
-            // Without ball - check for opponent with ball first (highest priority)
-            // CRITICAL: Tackle opponent with ball if close enough
+            // Without ball - check for opponent with ball first
+            // Only the closest player should chase — others hold tactical shape
             if let Some(opponent) = ctx.players().opponents().nearby(150.0).with_ball(ctx).next() {
                 let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-                // If opponent with ball is close, tackle immediately
-                if opponent_distance < 40.0 {
+                // Very close — tackle regardless (reactive)
+                if opponent_distance < 20.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));
                 }
 
-                // If opponent with ball is nearby, press them aggressively
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Pressing,
-                ));
+                // Only the best-positioned player presses — prevents team swarming
+                if ctx.team().is_best_player_to_chase_ball() {
+                    if opponent_distance < 40.0 {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Tackling,
+                        ));
+                    }
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
+                // Others: stay in running (will follow waypoints via velocity)
             }
 
-            // Teammate has the ball — don't chase it, support via movement instead
+            // Teammate has the ball — actively support the attack
             if ctx.team().is_control_ball() {
-                // Stay in Running — velocity() handles attacking support positioning
+                let ball_distance = ctx.ball().distance();
+                let goal_dist = ctx.ball().distance_to_opponent_goal();
+                let field_width = ctx.context.field_size.width as f32;
+
+                // ANTI-CLUSTERING: If too many teammates nearby, go find space
+                let nearby_teammates = ctx.players().teammates().nearby(25.0).count();
+                if nearby_teammates >= 2 && ball_distance > 30.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::CreatingSpace,
+                    ));
+                }
+
+                // If ball is in attacking third and we're nearby, make attacking runs
+                if goal_dist < field_width * 0.4 && ball_distance < 300.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::AttackSupporting,
+                    ));
+                }
+
+                // If far from ball, create space to offer a passing option
+                if ball_distance > 200.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::CreatingSpace,
+                    ));
+                }
+
+                // Medium range: actively support (don't just drift)
+                if ctx.in_state_time > 20 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::AttackSupporting,
+                    ));
+                }
+
+                // First 20 ticks: stay in Running with active velocity
                 return None;
             }
 
-            // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
-            // But only if this player is the nearest teammate to prevent mass-chasing
+            // Loose ball nearby — only chase if we're the best positioned teammate
             if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
                 let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 3.0 {
-                    let ball_pos = ctx.tick_context.positions.ball.position;
-                    let my_dist = ctx.ball().distance();
-                    let closer_teammate = ctx.players().teammates().all()
-                        .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
-
-                    if !closer_teammate {
-                        return Some(StateChangeResult::with_midfielder_state(
-                            MidfielderState::TakeBall,
-                        ));
-                    }
+                if ball_velocity < 3.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::TakeBall,
+                    ));
                 }
             }
 
             // Notification system: if ball system notified us to take the ball, act immediately
-            if ctx.ball().should_take_ball_immediately() {
+            // But still check we're the best option to prevent swarming
+            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::TakeBall,
                 ));
@@ -333,13 +418,51 @@ impl StateProcessingHandler for MidfielderRunningState {
                 Some(self.calculate_simple_ball_movement(ctx))
             }
         } else {
-            // Single smooth target per player — no binary is_control_ball() switch
-            // which flickers and causes twitching / conflicting velocity directions
-            let ball_pos = ctx.tick_context.positions.ball.position;
             let start_pos = ctx.player.start_position;
             let field_width = ctx.context.field_size.width as f32;
             let field_height = ctx.context.field_size.height as f32;
+
+            // When opponent has ball: hold tactical shape at start position
+            // DO NOT converge toward ball — that creates clusters in front of goalkeeper
+            if !ctx.team().is_control_ball() {
+                let target = Vector3::new(
+                    start_pos.x.clamp(30.0, field_width - 30.0),
+                    start_pos.y.clamp(30.0, field_height - 30.0),
+                    0.0,
+                );
+
+                let dist = (target - ctx.player.position).magnitude();
+                if dist < 8.0 {
+                    return Some(Vector3::new(0.0, 0.0, 0.0));
+                }
+
+                let arrive_velocity = SteeringBehavior::Arrive {
+                    target,
+                    slowing_distance: 20.0,
+                }
+                .calculate(ctx.player)
+                .velocity;
+
+                return Some(arrive_velocity);
+            }
+
+            // Team has ball — off-ball movement: spread across the pitch using unique player slots
+            let ball_pos = ctx.tick_context.positions.ball.position;
             let ball_distance = ctx.ball().distance();
+
+            // ANTI-FOLLOWING: If very close to ball carrier, move toward start position
+            // to create space instead of calculating a volatile escape direction
+            if ball_distance < 40.0 {
+                let spread_target = Vector3::new(
+                    start_pos.x.clamp(30.0, field_width - 30.0),
+                    start_pos.y.clamp(30.0, field_height - 30.0),
+                    0.0,
+                );
+                return Some(
+                    SteeringBehavior::Arrive { target: spread_target, slowing_distance: 20.0 }
+                        .calculate(ctx.player).velocity,
+                );
+            }
 
             let attacking_direction = match ctx.player.side {
                 Some(crate::r#match::PlayerSide::Left) => 1.0,
@@ -347,29 +470,46 @@ impl StateProcessingHandler for MidfielderRunningState {
                 None => 0.0,
             };
 
-            // Smooth ball proximity: 0.0 (very far) → 0.7 (right at ball)
-            // Continuous function of distance — no flickering
-            let proximity = (1.0 - ball_distance / 350.0).clamp(0.05, 0.7);
+            // Moderate ball proximity — don't rush toward the ball
+            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.35);
 
             let center_y = field_height / 2.0;
             let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
 
-            // X: shift from tactical start toward a support position ahead of ball
-            let support_x = ball_pos.x + attacking_direction * 35.0;
-            // Wide players stagger forward to break flat lines
-            let width_stagger = if is_wide { attacking_direction * 15.0 } else { 0.0 };
+            // === UNIQUE PLAYER SLOT: Use player ID to assign distinct vertical zones ===
+            let mut teammate_mid_ids: Vec<u32> = ctx.players().teammates().all()
+                .filter(|t| t.tactical_positions.is_midfielder())
+                .map(|t| t.id)
+                .collect();
+            teammate_mid_ids.push(ctx.player.id);
+            teammate_mid_ids.sort();
+            let slot_index = teammate_mid_ids.iter().position(|&id| id == ctx.player.id).unwrap_or(0);
+            let total_mids = teammate_mid_ids.len().max(1);
+
+            // Spread midfielders across 20%-80% of field height
+            let slot_y = field_height * 0.2
+                + (field_height * 0.6) * (slot_index as f32 + 0.5) / total_mids as f32;
+
+            // X: push ahead of ball to offer passing options, stagger by slot
+            let depth_stagger = attacking_direction * (20.0 + (slot_index as f32) * 15.0);
+            let support_x = ball_pos.x + attacking_direction * 50.0 + depth_stagger;
+            let width_stagger = if is_wide { attacking_direction * 20.0 } else { 0.0 };
             let target_x = start_pos.x + (support_x - start_pos.x) * proximity + width_stagger;
 
-            // Y: anchor to each player's unique tactical Y, attracted toward ball Y
-            // Wide players hold width more; central players track ball more
-            let y_attraction = if is_wide { proximity * 0.15 } else { proximity * 0.35 };
-            let target_y = start_pos.y + (ball_pos.y - start_pos.y) * y_attraction;
+            // Y: blend between assigned slot, start position, and ball — heavy start_pos weight
+            let slot_weight = if is_wide { 0.5 } else { 0.35 };
+            let ball_weight = proximity * 0.3;
+            let start_weight = (1.0 - slot_weight - ball_weight).max(0.15);
+            let target_y = slot_y * slot_weight
+                + ball_pos.y * ball_weight
+                + start_pos.y * start_weight;
 
-            // Per-player organic drift using stable match time (never resets)
-            let match_time = ctx.context.total_match_time as f32;
+            // Organic drift for natural movement — slow-changing to prevent twitching
+            // Quantize time to 100-tick intervals so drift doesn't change every tick
+            let quantized_time = (ctx.context.total_match_time / 100) as f32;
             let player_seed = ctx.player.id as f32 * 2.39;
-            let drift_x = (player_seed + match_time * 0.004).sin() * 10.0;
-            let drift_y = (player_seed * 1.37 + match_time * 0.003).cos() * 8.0;
+            let drift_x = (player_seed + quantized_time * 0.5).sin() * 10.0;
+            let drift_y = (player_seed * 1.37 + quantized_time * 0.4).cos() * 8.0;
 
             let target = Vector3::new(
                 (target_x + drift_x).clamp(30.0, field_width - 30.0),
@@ -379,17 +519,20 @@ impl StateProcessingHandler for MidfielderRunningState {
 
             let dist_to_target = (target - ctx.player.position).magnitude();
 
+            // If already close to target, stand still to prevent twitching
+            if dist_to_target < 8.0 {
+                return Some(Vector3::new(0.0, 0.0, 0.0));
+            }
+
             let arrive_velocity = SteeringBehavior::Arrive {
                 target,
-                slowing_distance: 25.0,
+                slowing_distance: 20.0,
             }
             .calculate(ctx.player)
             .velocity;
 
-            // Dampen separation near target to prevent oscillation feedback loop:
-            // Arrive produces small velocity near target, but separation (up to 15.0)
-            // pushes player away, then Arrive corrects back → constant twitching
-            let sep_damping = (dist_to_target / 40.0).clamp(0.0, 1.0);
+            // Only apply separation when far from target to prevent oscillation
+            let sep_damping = ((dist_to_target - 15.0) / 40.0).clamp(0.0, 0.5);
             let separation = ctx.player().separation_velocity() * sep_damping;
 
             Some(arrive_velocity + separation)

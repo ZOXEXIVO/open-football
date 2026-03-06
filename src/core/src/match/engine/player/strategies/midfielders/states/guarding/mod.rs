@@ -33,8 +33,8 @@ impl StateProcessingHandler for MidfielderGuardingState {
             ));
         }
 
-        // Free ball nearby — claim it
-        if ctx.ball().should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::TakeBall,
             ));
@@ -48,15 +48,17 @@ impl StateProcessingHandler for MidfielderGuardingState {
             ));
         }
 
-        // Press opponent with ball if nearby
+        // Press opponent with ball if nearby — only chase if best positioned
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let dist = opponent_with_ball.distance(ctx);
-            if dist < 40.0 {
+            // Very close — tackle reactively
+            if dist < 15.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
             }
-            if dist < 100.0 {
+            // Only the best-positioned player presses further out
+            if dist < 100.0 && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));

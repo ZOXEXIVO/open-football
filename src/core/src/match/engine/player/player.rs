@@ -218,10 +218,21 @@ impl MatchPlayer {
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {
         let has_ball = self.has_ball(ctx);
-        let is_ball_close = ctx.ball().distance() < 100.0;
+        if has_ball {
+            return false;
+        }
+
         let team_in_control = ctx.team().is_control_ball();
 
-        !has_ball && !is_ball_close && team_in_control
+        if !team_in_control {
+            // Opponent has ball — only the best chaser deviates, everyone else holds shape
+            return !ctx.team().is_best_player_to_chase_ball();
+        }
+
+        // Team has ball — use dynamic off-ball positioning (slot system) not static waypoints
+        // The slot system spreads players across the pitch with limited ball proximity
+        // This creates passing options and prevents clustering at static formation positions
+        false
     }
 }
 

@@ -1,7 +1,7 @@
 use crate::r#match::ConditionContext;
 use log::trace;
 use super::activity_intensity::{ActivityIntensity, ActivityIntensityConfig};
-use super::constants::{MAX_CONDITION, MAX_JADEDNESS, FATIGUE_RATE_MULTIPLIER, RECOVERY_RATE_MULTIPLIER};
+use super::constants::{MAX_CONDITION, MATCH_CONDITION_FLOOR, MAX_JADEDNESS, FATIGUE_RATE_MULTIPLIER, RECOVERY_RATE_MULTIPLIER};
 
 /// Generic condition processor with role-specific configurations
 pub struct ConditionProcessor<T: ActivityIntensityConfig> {
@@ -99,9 +99,10 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
 
             let old_condition = ctx.player.player_attributes.condition;
 
-            // Apply condition change (clamped to 0..MAX_CONDITION)
+            // Apply condition change (clamped to MATCH_CONDITION_FLOOR..MAX_CONDITION)
+            // In FM, condition never drops below ~30% even during the most intense match
             ctx.player.player_attributes.condition =
-                (ctx.player.player_attributes.condition - condition_change).clamp(0, MAX_CONDITION);
+                (ctx.player.player_attributes.condition - condition_change).clamp(MATCH_CONDITION_FLOOR, MAX_CONDITION);
 
             trace!(
                 "Condition: player={}, vel={:.3}, change={}, acc={:.3}, condition: {} -> {}",

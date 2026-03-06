@@ -39,8 +39,8 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-        if ball_ops.should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ball_ops.should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::TakeBall,
             ));
@@ -117,9 +117,11 @@ impl StateProcessingHandler for DefenderStandingState {
                 ));
             }
 
-            // Only press if opponent has the ball, not just if team doesn't have control
-            if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
-                if ball_ops.distance() < PRESSING_DISTANCE {
+            // Only press if opponent has the ball AND we're best positioned
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                if ball_ops.distance() < PRESSING_DISTANCE
+                    && ctx.player().defensive().is_best_defender_for_opponent(&opponent)
+                {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,
                     ));

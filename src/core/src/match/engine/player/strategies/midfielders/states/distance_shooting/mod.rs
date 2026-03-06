@@ -81,17 +81,17 @@ impl MidfielderDistanceShootingState {
         let has_clear_shot = self.has_clear_shot(ctx);
         let long_shots = ctx.player.skills.technical.long_shots / 20.0;
 
-        // Distance shooting only for skilled players from reasonable distance
-        let distance_threshold = 100.0; // Maximum ~50m for long shots
-        let angle_threshold = std::f32::consts::PI / 6.0; // 30 degrees
+        // Distance shooting for skilled players from reasonable distance
+        let distance_threshold = 120.0; // ~60m for long shots
+        let angle_threshold = std::f32::consts::PI / 4.0; // 45 degrees (widened)
 
-        // Also check no heavy pressure
-        let heavily_marked = ctx.players().opponents().nearby(10.0).count() >= 2;
+        // Check no heavy pressure (but 1 nearby opponent is OK)
+        let heavily_marked = ctx.players().opponents().nearby(8.0).count() >= 2;
 
         distance_to_goal <= distance_threshold
             && angle_to_goal <= angle_threshold
             && has_clear_shot
-            && long_shots > 0.65 // Only good long-shot takers attempt distance shots
+            && long_shots > 0.55 // Lowered threshold — more players attempt distance shots
             && !heavily_marked
     }
 

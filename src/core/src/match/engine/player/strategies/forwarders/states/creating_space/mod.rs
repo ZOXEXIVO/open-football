@@ -38,8 +38,8 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             ));
         }
 
-        // Priority 0: Free ball nearby - go claim it
-        if ctx.ball().should_take_ball_immediately() {
+        // Take ball only if best positioned — prevents swarming
+        if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::TakeBall,
             ));

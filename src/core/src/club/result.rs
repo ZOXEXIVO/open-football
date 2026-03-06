@@ -66,8 +66,27 @@ impl ClubResult {
             let player_growth_potential = player.growth_potential(data.date.date());
             let base_salary = get_contract_salary(player_growth_potential);
 
-            // For renewals, offer at least their current salary
-            let offered_salary = base_salary.max(current_salary);
+            let offered_salary = if result.contract.want_improve_contract {
+                // Staff evaluates whether this player deserves a raise
+                let ability = player.player_attributes.current_ability as f32;
+                let matches_played = player.statistics.played + player.statistics.played_subs;
+                let is_not_needed = player.contract.as_ref()
+                    .map(|c| matches!(c.squad_status, crate::PlayerSquadStatus::NotNeeded))
+                    .unwrap_or(false);
+
+                // Staff blocks: low ability backup with few appearances, or not needed
+                if is_not_needed || (ability < 60.0 && matches_played < 5) {
+                    return;
+                }
+
+                // Staff offers a raise scaled by ability
+                let raise_pct = 1.10 + (ability / 200.0) * 0.10; // 10-15% raise
+                let raised = (current_salary as f32 * raise_pct) as u32;
+                raised.max(base_salary).max(current_salary + 1)
+            } else {
+                // Extension/no-contract: offer at least their current salary
+                base_salary.max(current_salary)
+            };
 
             player.mailbox.push(PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {

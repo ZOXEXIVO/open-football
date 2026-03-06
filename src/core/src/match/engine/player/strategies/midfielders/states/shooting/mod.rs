@@ -20,19 +20,29 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
-        // Last-second quality check: if too far and no clear shot, abort
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        if distance_to_goal > 40.0 && !ctx.player().has_clear_shot() {
+
+        // Only abort for long range with no clear shot
+        // Close and medium range: take the shot
+        if distance_to_goal > 80.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
         }
 
+        let reason = if distance_to_goal <= 30.0 {
+            "MID_SHOOTING_CLOSE"
+        } else if distance_to_goal <= 60.0 {
+            "MID_SHOOTING_MEDIUM"
+        } else {
+            "MID_SHOOTING_LONG"
+        };
+
         Some(StateChangeResult::with_midfielder_state_and_event(MidfielderState::Standing, Event::PlayerEvent(PlayerEvent::Shoot(
             ShootingEventContext::new()
                 .with_player_id(ctx.player.id)
                 .with_target(ctx.player().shooting_direction())
-                .with_reason("MID_SHOOTING")
+                .with_reason(reason)
                 .build(ctx)
         ))))
     }

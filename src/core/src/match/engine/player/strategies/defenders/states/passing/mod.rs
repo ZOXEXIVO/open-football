@@ -69,11 +69,19 @@ impl StateProcessingHandler for DefenderPassingState {
         }
 
         // Normal passing situation - evaluate options more carefully
-        if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option() {
+        // Defenders use shorter max distance (200 units) to avoid wild long passes
+        if let Some((best_target, _reason)) = ctx.player().passing().find_best_pass_option_with_distance(200.0) {
             // ANTI-LOOP: Ensure pass target is far enough away for the ball to actually reach them.
             // Very short passes (< 30 units) with low pass force create claim-pass-reclaim loops.
             let pass_distance = (best_target.position - ctx.player.position).magnitude();
-            if pass_distance >= 30.0 {
+
+            // Also verify the pass isn't going backward toward own goal
+            let goal_pos = ctx.player().opponent_goal_position();
+            let to_goal = (goal_pos - ctx.player.position).normalize();
+            let to_target = (best_target.position - ctx.player.position).normalize();
+            let forward_component = to_target.dot(&to_goal);
+
+            if pass_distance >= 30.0 && forward_component > -0.3 {
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
@@ -105,22 +113,25 @@ impl StateProcessingHandler for DefenderPassingState {
         if ctx.in_state_time > 50 {
             // If we've been in this state for a while, make a decision
 
-            // Try to find ANY teammate to pass to
-            if let Some(any_teammate) = ctx.player().passing().find_any_teammate() {
-                return Some(StateChangeResult::with_defender_state_and_event(
-                    DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::PassTo(
-                        PassingEventContext::new()
-                            .with_from_player_id(ctx.player.id)
-                            .with_to_player_id(any_teammate.id)
-                            .with_reason("DEF_PASSING_TIMEOUT")
-                            .build(ctx),
-                    )),
-                ));
+            // Try to find a safe pass option (directionally aware) rather than any random teammate
+            if let Some(safe_target) = ctx.player().passing().find_safe_pass_option_with_distance(200.0) {
+                let dist = (safe_target.position - ctx.player.position).magnitude();
+                if dist >= 20.0 {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe_target.id)
+                                .with_reason("DEF_PASSING_TIMEOUT")
+                                .build(ctx),
+                        )),
+                    ));
+                }
             }
 
-            // If no teammates at all, clear the ball
-            if ctx.in_state_time > 75 {
+            // If no safe option, clear the ball rather than making a wild pass
+            if ctx.in_state_time > 65 {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ));

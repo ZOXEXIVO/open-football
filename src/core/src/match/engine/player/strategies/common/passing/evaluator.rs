@@ -113,34 +113,30 @@ impl PassEvaluator {
             let range = ultra_long_threshold - max_effective_range;
             let skill_factor = (vision_skill / 20.0 * 0.6) + (technique_skill / 20.0 * 0.3);
 
-            let base_factor = 0.5 - (excess / range * 0.25);
-            (base_factor + skill_factor * 0.3).clamp(0.2, 0.7)
+            let base_factor = 0.4 - (excess / range * 0.25);
+            (base_factor + skill_factor * 0.2).clamp(0.15, 0.55)
         } else if distance <= extreme_long_threshold {
             // Ultra-long passes (200-300m) - only elite players can execute
             let skill_factor = (vision_skill / 20.0 * 0.7) + (technique_skill / 20.0 * 0.3);
 
             // Require high skills for these passes
             if skill_factor > 0.7 {
-                // Elite passer - can attempt with decent success
-                (0.4 + skill_factor * 0.2).clamp(0.3, 0.6)
-            } else if skill_factor > 0.5 {
-                // Good passer - risky but possible
                 (0.3 + skill_factor * 0.15).clamp(0.2, 0.45)
+            } else if skill_factor > 0.5 {
+                (0.2 + skill_factor * 0.1).clamp(0.15, 0.35)
             } else {
-                // Average/poor passer - very low success
-                0.15
+                0.1
             }
         } else {
             // Extreme long passes (300m+) - goalkeeper clearances, desperate plays
             let skill_factor = (vision_skill / 20.0 * 0.5) + (technique_skill / 20.0 * 0.35) + (passing_skill / 20.0 * 0.15);
 
-            // Only world-class passers have reasonable success
             if skill_factor > 0.8 {
-                0.5 // Elite - still challenging
+                0.35
             } else if skill_factor > 0.6 {
-                0.35 // Good - very risky
+                0.2
             } else {
-                0.2 // Poor - mostly luck
+                0.1
             }
         }
     }
@@ -348,13 +344,29 @@ impl PassEvaluator {
         let forward_progress = ((receiver_position.x - ball_position.x) * forward_direction_multiplier) / field_width;
 
         // Strong penalty for backward passes, strong reward for forward
+        // Defenders get extra penalty for backward passes since they're already deep
+        let is_defender = ctx.player.tactical_position.current_position.position_group()
+            == crate::PlayerFieldPositionGroup::Defender;
+
         let forward_value = if forward_progress < 0.0 {
-            // Backward pass - heavy penalty unless under extreme pressure
-            let pressure_factor = 1.0 - ctx.player.skills.mental.composure / 20.0;
-            forward_progress * 2.0 * pressure_factor.max(0.3) // -0.6 to -0.1
+            // Backward pass - heavy penalty
+            // Even composed players get penalized for going backward
+            let composure_reduction = (ctx.player.skills.mental.composure / 20.0) * 0.3;
+            let base_penalty = forward_progress * 3.0 * (1.0 - composure_reduction).max(0.5);
+            if is_defender {
+                // Defenders: extra 50% backward penalty — they should almost never pass backward
+                base_penalty * 1.5
+            } else {
+                base_penalty // -1.5 to -0.75
+            }
         } else {
-            // Forward pass - strong reward
-            forward_progress * 1.5 // Up to 1.5
+            // Forward pass - strong reward, especially for significant progress
+            if is_defender {
+                // Defenders: extra reward for playing forward — building from the back
+                forward_progress * 3.0
+            } else {
+                forward_progress * 2.5 // Up to 2.5
+            }
         };
 
         // Distance bonus: prefer passes of 20-50m over very short (< 15m) or very long
@@ -371,13 +383,16 @@ impl PassEvaluator {
         } else if pass_distance < 80.0 {
             // Long pass - still valuable
             0.8
-        } else if pass_distance < 150.0 {
-            // Very long pass - situational
-            0.6
+        } else if pass_distance < 120.0 {
+            // Long pass - declining value
+            0.5
+        } else if pass_distance < 200.0 {
+            // Very long pass - risky
+            0.3
         } else {
-            // Extreme distance - only with high vision
+            // Extreme distance - rarely accurate
             let vision_skill = ctx.player.skills.mental.vision / 20.0;
-            0.4 * vision_skill
+            0.2 * vision_skill
         };
 
         // === WIDTH AND FLANKS BONUS ===
@@ -448,17 +463,17 @@ impl PassEvaluator {
         let technique_skill = ctx.player.skills.technical.technique / 20.0;
 
         let long_pass_bonus = if pass_distance > 300.0 {
-            // Extreme distance (300m+) - goalkeeper goal kicks, desperate clearances
-            (vision_skill * 0.5 + technique_skill * 0.3) * 0.5
+            // Extreme distance (300m+) - very risky, minimal bonus
+            (vision_skill * 0.3 + technique_skill * 0.2) * 0.2
         } else if pass_distance > 200.0 {
-            // Ultra-long diagonal (200-300m) - switches play across entire field
-            (vision_skill * 0.45 + technique_skill * 0.25) * 0.4
+            // Ultra-long diagonal (200-300m) - risky
+            (vision_skill * 0.3 + technique_skill * 0.15) * 0.2
         } else if pass_distance > 100.0 {
-            // Very long cross-field switch (100-200m) - valuable for high vision players
-            vision_skill * 0.3
-        } else if pass_distance > 60.0 {
-            // Long pass (60-100m) - some bonus for vision
+            // Very long pass (100-200m) - small bonus for high vision
             vision_skill * 0.15
+        } else if pass_distance > 60.0 {
+            // Long pass (60-100m) - modest bonus
+            vision_skill * 0.1
         } else {
             0.0
         };
@@ -473,13 +488,13 @@ impl PassEvaluator {
 
         // Weighted combination - includes width and switching bonuses
         let tactical_value =
-            forward_value * 0.45 +         // Reduced from 0.55 to make room for width
-            distance_value * 0.18 +        // Reduced from 0.22
-            position_value * 0.10 +        // Reduced from 0.13
-            long_pass_bonus * 0.07 +       // Reduced from 0.10
-            width_bonus * 0.10 +           // NEW: reward wide passes
-            switch_play_bonus * 0.10 +     // NEW: reward switching play
-            overload_penalty;              // NEW: penalize crowded side
+            forward_value * 0.50 +         // Strongest factor: forward progression
+            distance_value * 0.15 +        // Pass distance quality
+            position_value * 0.12 +        // Receiver's tactical position (forwards > defenders)
+            long_pass_bonus * 0.05 +       // Reduced: long passes less encouraged
+            width_bonus * 0.09 +           // Reward wide passes
+            switch_play_bonus * 0.09 +     // Reward switching play
+            overload_penalty;              // Penalize crowded side
 
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)
@@ -593,12 +608,11 @@ impl PassEvaluator {
         // NOTE: This filter prevents "too short" passes that don't progress the ball
         let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let min_pass_distance = if is_under_pressure {
-            // Under pressure, allow any distance
-            0.0
+            // Under pressure, allow shorter passes but still avoid huddle passes
+            8.0
         } else {
-            // Not under pressure, discourage very short passes (but allow them)
-            // This is handled by scoring bonuses instead of hard filtering
-            0.0
+            // Not under pressure, enforce minimum distance to prevent group passing
+            20.0
         };
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
@@ -710,46 +724,54 @@ impl PassEvaluator {
                 // Very short - strongly discouraged (keeps ball in huddle)
                 0.4
             } else if pass_distance <= 100.0 {
-                // Long passes (70-100m) - still valuable
-                1.2 // New tier - was implicitly 1.0
+                // Long passes (70-100m) - moderate value
+                1.1
+            } else if pass_distance <= 150.0 {
+                // Very long passes - declining value
+                0.85
             } else {
-                // Very long passes - situational
-                1.0
+                // Extreme long passes - discouraged
+                0.6
             };
 
             // Distance preference based on personality
             let distance_preference = if is_playmaker {
-                // Playmakers love long through balls and switches
+                // Playmakers prefer through balls but not unrealistic long passes
                 if pass_distance > 300.0 {
-                    // Extreme passes - only if vision is elite
+                    // Extreme passes - very risky even for elite
                     if vision_skill > 0.85 {
-                        1.8 // World-class playmaker - go for spectacular passes
+                        1.1
                     } else {
-                        0.8 // Too risky for most
+                        0.6
                     }
                 } else if pass_distance > 200.0 {
-                    // Ultra-long switches - playmaker specialty
+                    // Ultra-long switches - risky
                     if vision_skill > 0.75 {
-                        1.6 // High vision - loves these passes
+                        1.15
                     } else {
-                        1.1
+                        0.8
                     }
                 } else if pass_distance > 100.0 {
-                    1.5 // Very long passes - excellent for playmakers
+                    1.2 // Long passes - moderate bonus
                 } else if pass_distance > 80.0 {
-                    1.4
+                    1.25 // Medium-long - sweet spot for playmakers
                 } else if pass_distance > 50.0 {
                     1.2
                 } else {
                     1.0
                 }
             } else if is_direct {
-                // Direct players prefer forward passes of any length
-                let forward_progress = teammate.position.x - ctx.player.position.x;
+                // Direct players strongly prefer forward passes
+                let forward_direction_multiplier = match ctx.player.side {
+                    Some(PlayerSide::Left) => 1.0,
+                    Some(PlayerSide::Right) => -1.0,
+                    None => 1.0,
+                };
+                let forward_progress = (teammate.position.x - ctx.player.position.x) * forward_direction_multiplier;
                 if forward_progress > 0.0 {
-                    1.3
+                    1.4
                 } else {
-                    0.6 // Avoid backward passes
+                    0.5 // Strongly avoid backward passes
                 }
             } else if is_conservative {
                 // Conservative players prefer short, safe passes

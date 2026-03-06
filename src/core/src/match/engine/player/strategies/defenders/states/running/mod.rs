@@ -52,31 +52,35 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // Only tackle if an opponent has the ball
+            // Only tackle if an opponent has the ball nearby AND we're best positioned
             if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
-                if ctx.ball().distance() < 200.0 {
+                let ball_dist = ctx.ball().distance();
+                // Very close — tackle reactively
+                if ball_dist < 30.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                // Only the best-positioned defender chases further out
+                if ball_dist < 100.0 && ctx.team().is_best_player_to_chase_ball() {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
                 }
             }
 
-            // Loose ball nearby — go claim it, but only if nearest teammate
+            // Loose ball nearby — only chase if we're the best positioned teammate
             if !ctx.ball().is_owned() && ctx.ball().distance() < 50.0 && ctx.ball().speed() < 3.0 {
-                let ball_pos = ctx.tick_context.positions.ball.position;
-                let my_dist = ctx.ball().distance();
-                let closer_teammate = ctx.players().teammates().all()
-                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
-
-                if !closer_teammate {
+                if ctx.team().is_best_player_to_chase_ball() {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::TakeBall,
                     ));
                 }
             }
 
-            // Notification system: if ball system notified us to take the ball, act immediately
-            if ctx.ball().should_take_ball_immediately() {
+            // Notification system: if ball system notified us to take the ball
+            // Still check we're the best option to prevent swarming
+            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::TakeBall,
                 ));
@@ -288,17 +292,33 @@ impl DefenderRunningState {
 
     pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
         // ANTI-LOOP: Don't pass immediately after entering Running state.
-        // This prevents the Standing→Running→Passing→Standing loop where
-        // a weak pass gets reclaimed and the cycle repeats endlessly.
         if ctx.in_state_time < 10 {
             return false;
         }
 
-        // Also check ownership duration — if we just reclaimed the ball after a pass,
-        // hold it for a moment before trying again
+        // Hold the ball briefly after reclaiming
         let ownership_duration = ctx.tick_context.ball.ownership_duration;
         if ownership_duration < 5 {
             return false;
+        }
+
+        // In congested area — prefer carrying OUT of congestion instead of passing into it
+        // Only pass if there's a teammate in open space (not in the same cluster)
+        let nearby_players = ctx.players().opponents().nearby(20.0).count()
+            + ctx.players().teammates().nearby(20.0).count();
+        if nearby_players >= 4 {
+            // Heavily congested — only pass to someone FAR from this cluster
+            let has_open_target = ctx.players().teammates().nearby(300.0)
+                .any(|t| {
+                    let dist = (t.position - ctx.player.position).magnitude();
+                    let opp_near_t = ctx.players().opponents().all()
+                        .filter(|opp| (opp.position - t.position).magnitude() < 15.0)
+                        .count();
+                    dist > 50.0 && opp_near_t < 2 && ctx.player().has_clear_pass(t.id)
+                });
+            if !has_open_target {
+                return false; // No open target — carry the ball out
+            }
         }
 
         // Only pass under genuine pressure — opponent closing in
@@ -422,6 +442,7 @@ impl DefenderRunningState {
 
     /// Find a safe build-up pass target within max_distance.
     /// Prefers midfielders in space, same-side or central players, with clear pass lanes.
+    /// Strongly favors forward/sideways passes and penalizes backward passes.
     fn find_safe_buildup_pass(&self, ctx: &StateProcessingContext, max_distance: f32) -> Option<MatchPlayerLite> {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
@@ -453,26 +474,41 @@ impl DefenderRunningState {
                 continue;
             }
 
+            // Calculate forward component: 1.0 = directly toward opponent goal, -1.0 = toward own goal
+            let to_teammate = (teammate.position - player_pos).normalize();
+            let forward_component = to_teammate.dot(&to_goal);
+
+            // HARD REJECT: Never pass directly backward from defensive positions
+            // unless absolutely no other options exist (handled by fallback logic)
+            if forward_component < -0.5 {
+                continue;
+            }
+
             // Score the pass option
             let mut score: f32 = 0.0;
 
-            // Prefer midfielders
-            if teammate.tactical_positions.is_midfielder() {
-                score += 50.0;
+            // Forward progression is the PRIMARY factor for defenders building up
+            // Range: [-20, +60] — strongly rewards forward passes
+            if forward_component > 0.0 {
+                score += forward_component * 60.0; // Up to +60 for direct forward
+            } else {
+                score += forward_component * 40.0; // -20 for slight backward (still allowed)
             }
 
-            // Prefer passes that advance play (toward opponent goal)
-            let to_teammate = (teammate.position - player_pos).normalize();
-            let forward_component = to_teammate.dot(&to_goal);
-            score += forward_component * 30.0;
+            // Position group bonus — midfielders preferred but NOT overwhelming
+            if teammate.tactical_positions.is_midfielder() {
+                score += 25.0; // Reduced from 50 — direction matters more
+            } else if teammate.tactical_positions.is_forward() {
+                score += 35.0; // Forwards even better if in range
+            }
 
             // Prefer teammates in space
             if opponents_near == 0 {
-                score += 30.0;
+                score += 25.0;
             }
 
-            // Prefer shorter passes (safer)
-            score += (max_distance - pass_dist) / max_distance * 20.0;
+            // Prefer shorter passes (safer) but not too strongly
+            score += (max_distance - pass_dist) / max_distance * 15.0;
 
             if let Some((_, best_score)) = &best_target {
                 if score > *best_score {

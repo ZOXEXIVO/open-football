@@ -216,13 +216,14 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         // Distance scaling: pass power proportional to distance needed
         let max_pass_distance = self.ctx.context.field_size.width as f32 * 0.8;
-        let distance_factor = if distance < 10.0 {
-            (0.05 + (distance / 10.0) * 0.075).clamp(0.05, 0.125)
+        let distance_factor = if distance < 20.0 {
+            // Short passes: minimum floor so ball visibly travels
+            (0.15 + (distance / 20.0) * 0.1).clamp(0.15, 0.25)
         } else {
-            (distance / max_pass_distance).clamp(0.125, 1.0)
+            (distance / max_pass_distance).clamp(0.25, 1.0)
         };
 
-        let min_power = 0.3;
+        let min_power = 0.5;
         let max_power = 2.0;
         let base_power = min_power + (max_power - min_power) * skill_factor * distance_factor;
 
@@ -370,11 +371,10 @@ impl<'p> PlayerOperationsImpl<'p> {
             return false; // Direct obstruction
         }
 
-        // Wider corridor check: any opponent within ~12 units of the shooting lane
-        // blocks the shot (in real football, nearby defenders affect shooting decisions)
+        // Corridor check: opponents close to the shooting lane block the shot
         // Skip the last 15% of distance (goalkeeper area — GK is handled by save mechanics)
         let check_distance = distance_to_goal * 0.85;
-        let corridor_half_width = 12.0;
+        let corridor_half_width = 6.0;
 
         let has_corridor_blocker = self.ctx.players().opponents().all()
             .any(|opp| {
@@ -406,10 +406,10 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         let mut separation = Vector3::zeros();
 
-        // Balanced parameters to prevent oscillation while maintaining separation
-        const SEPARATION_RADIUS: f32 = 20.0;
-        const SEPARATION_STRENGTH: f32 = 15.0; // Reduced to prevent separation canceling pressing forces
-        const MIN_SEPARATION_DISTANCE: f32 = 3.0; // Reduced threshold for emergency separation
+        // Separation parameters — wider radius to prevent group running
+        const SEPARATION_RADIUS: f32 = 30.0;
+        const SEPARATION_STRENGTH: f32 = 20.0;
+        const MIN_SEPARATION_DISTANCE: f32 = 5.0;
 
         // Apply separation from teammates
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
@@ -460,7 +460,7 @@ impl<'p> PlayerOperationsImpl<'p> {
 
         // Clamp separation force to reasonable limits to prevent excessive velocities
         // Separation should add to steering, not dominate it
-        const MAX_SEPARATION_FORCE: f32 = 15.0;
+        const MAX_SEPARATION_FORCE: f32 = 20.0;
         let separation_magnitude = separation.magnitude();
         if separation_magnitude > MAX_SEPARATION_FORCE {
             separation = separation * MAX_SEPARATION_FORCE / separation_magnitude;

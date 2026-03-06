@@ -12,20 +12,26 @@ impl StateProcessingHandler for ForwardStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
-            // CRITICAL: Add cooldown before allowing another shot to prevent rapid-fire goal spam
-            // Must wait at least 40 ticks (~0.7 seconds) after entering Standing before shooting again
-            const SHOOTING_COOLDOWN: u64 = 40;
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-            // Decide next action based on game context
+            // PRIORITY: Close to goal — shoot immediately (no cooldown)
+            // Forwards should ALWAYS shoot when in range rather than pass
+            if distance_to_goal <= 60.0 && ctx.player().shooting().in_shooting_range() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
+            }
+
+            // Cooldown for medium/long range shots to prevent rapid-fire spam
+            const SHOOTING_COOLDOWN: u64 = 20;
+
             if ctx.player().should_attempt_shot() && ctx.in_state_time > SHOOTING_COOLDOWN {
-                // Transition to Shooting state (only after cooldown and xG check)
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
             if let Some(_) = self.find_best_teammate_to_pass(ctx) {
-                // Transition to Passing state
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
@@ -35,9 +41,10 @@ impl StateProcessingHandler for ForwardStandingState {
                     ForwardState::Dribbling,
                 ))
             } else {
-                None
-                // Hold possession
-                //return Some(StateChangeResult::with_forward_state(ForwardState::HoldingPossession));
+                // Transition to Running to approach goal
+                Some(StateChangeResult::with_forward_state(
+                    ForwardState::Running,
+                ))
             }
         } else {
             // If notified by ball system, always respond (only 1 per team gets notified)
@@ -142,17 +149,30 @@ impl ForwardStandingState {
 
     /// Decides whether the forward should dribble based on game context.
     fn should_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        // Example logic: dribble if no immediate threat and space is available
-        let safe_distance = 10.0;
+        // Only dribble when there are opponents to beat nearby
+        let nearby_opponents = ctx.players().opponents().exists(15.0);
 
-        !ctx.players().opponents().exists(safe_distance)
+        // No opponents — just run, don't dribble
+        if !nearby_opponents {
+            return false;
+        }
+
+        // Dribble to beat nearby defenders if skilled enough
+        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
+        dribbling_skill > 0.5
     }
 
     /// Decides whether the forward should press the opponent.
     fn should_press(&self, ctx: &StateProcessingContext) -> bool {
-        // Only press if opponent has the ball AND is close
+        // Only press if opponent has the ball AND is close AND we're best positioned
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            opponent.distance(ctx) < PRESS_DISTANCE
+            let dist = opponent.distance(ctx);
+            // Very close — anyone reacts
+            if dist < 10.0 {
+                return true;
+            }
+            // Otherwise only the best chaser presses
+            dist < PRESS_DISTANCE && ctx.team().is_best_player_to_chase_ball()
         } else {
             false
         }

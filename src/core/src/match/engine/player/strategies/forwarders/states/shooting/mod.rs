@@ -19,14 +19,23 @@ impl StateProcessingHandler for ForwardShootingState {
             ));
         }
 
-        // Last-second quality check: if too far from goal and no clear shot,
-        // abort and go back to running (which will find a pass instead)
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        if distance_to_goal > 50.0 && !ctx.player().has_clear_shot() {
+
+        // Only abort for very long range with no clear shot
+        // Close and medium range: always take the shot — keeper/save mechanics handle the rest
+        if distance_to_goal > 100.0 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,
             ));
         }
+
+        let reason = if distance_to_goal <= 30.0 {
+            "FWD_SHOOTING_CLOSE"
+        } else if distance_to_goal <= 60.0 {
+            "FWD_SHOOTING_MEDIUM"
+        } else {
+            "FWD_SHOOTING_LONG"
+        };
 
         Some(StateChangeResult::with_forward_state_and_event(
             ForwardState::Running,
@@ -34,7 +43,7 @@ impl StateProcessingHandler for ForwardShootingState {
                 ShootingEventContext::new()
                     .with_player_id(ctx.player.id)
                     .with_target(ctx.player().shooting_direction())
-                    .with_reason("FWD_SHOOTING")
+                    .with_reason(reason)
                     .build(ctx)
             )),
         ))

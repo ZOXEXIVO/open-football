@@ -22,32 +22,34 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
             ));
         }
 
-        // If team loses possession, switch to defensive duties IMMEDIATELY
+        // If team loses possession, switch to defensive duties
         if !ctx.team().is_control_ball() {
             let ball_distance = ctx.ball().distance();
 
+            // Very close — tackle reactively
             if ball_distance < TACKLE_RANGE {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
             }
 
-            // Press any nearby opponent with the ball
-            if ball_distance < 150.0 {
+            // Only the best-positioned player presses — others hold shape
+            if ball_distance < 150.0 && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
             }
 
-            // Guard unmarked attackers instead of just returning
+            // Guard unmarked attackers on our side
             if ctx.ball().on_own_side() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Guarding,
                 ));
             }
 
+            // Others: transition to Running to follow waypoints back to position
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Pressing,
+                MidfielderState::Running,
             ));
         }
 

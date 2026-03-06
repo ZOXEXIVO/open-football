@@ -76,8 +76,13 @@ impl PlayerTrainingResult {
             player.player_attributes.current_ability = player.skills.calculate_ability();
 
             // Apply fatigue changes
+            // Negative fatigue_change = recovery (condition increases)
+            // Positive fatigue_change = fatigue (condition decreases)
+            // Cap recovery at 90% (normal level) — training restores toward normal, not to 100%
+            // Floor at 30% — condition never drops below this
             let new_condition = player.player_attributes.condition as f32 - self.effects.fatigue_change;
-            player.player_attributes.condition = new_condition.clamp(0.0, 10000.0) as i16;
+            let condition_cap = if self.effects.fatigue_change < 0.0 { 9000.0 } else { 10000.0 };
+            player.player_attributes.condition = new_condition.clamp(3000.0, condition_cap) as i16;
 
             // Apply injury risk — use proper injury system
             let injury_proneness = player.player_attributes.injury_proneness;

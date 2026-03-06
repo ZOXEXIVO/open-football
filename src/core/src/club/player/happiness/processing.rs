@@ -1,7 +1,7 @@
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
-use crate::{HappinessEventType, PlayerSquadStatus};
+use crate::{ContractType, HappinessEventType, PlayerSquadStatus};
 use chrono::NaiveDate;
 
 impl Player {
@@ -48,6 +48,18 @@ impl Player {
 
         // Recalculate overall morale
         self.happiness.recalculate_morale();
+
+        // Salary unhappy: player wants contract renegotiation (with 90-day cooldown)
+        if salary_factor <= -5.0 {
+            let cooldown_passed = self.happiness.last_salary_negotiation
+                .map(|d| (now - d).num_days() >= 90)
+                .unwrap_or(true);
+
+            if cooldown_passed {
+                result.contract.want_improve_contract = true;
+                self.happiness.last_salary_negotiation = Some(now);
+            }
+        }
 
         // Set Unh status if morale < 35
         if self.happiness.morale < 35.0 {
@@ -105,32 +117,44 @@ impl Player {
     }
 
     fn calculate_salary_factor(&self, age: u8) -> f32 {
-        if let Some(ref contract) = self.contract {
-            // Expected salary based on ability level (rough scaling)
-            let ability = self.player_attributes.current_ability as f32;
-            let expected_base = ability * ability * 0.5; // quadratic scaling
-            let age_factor = if age < 22 { 0.6 } else if age > 30 { 0.85 } else { 1.0 };
-            let expected = expected_base * age_factor;
+        let Some(ref contract) = self.contract else {
+            return -5.0;
+        };
 
-            if expected < 1.0 {
-                return 0.0;
-            }
-
-            let ratio = contract.salary as f32 / expected;
-            if ratio >= 1.2 {
-                // Well paid
-                10.0_f32.min(ratio * 5.0)
-            } else if ratio >= 0.8 {
-                // Fairly paid
-                (ratio - 0.8) * 25.0 // 0 to 10
-            } else {
-                // Underpaid
-                (ratio - 0.8) * 37.5 // -30 to 0, clamped
-            }
-        } else {
-            -5.0 // No contract is slightly negative
+        // Youth/amateur players don't evaluate salary competitively
+        match contract.contract_type {
+            ContractType::Youth | ContractType::Amateur | ContractType::NonContract => return 0.0,
+            _ => {}
         }
-        .clamp(-15.0, 15.0)
+
+        let ability = self.player_attributes.current_ability as f32;
+
+        // Map ability to expected salary matching the generation curve:
+        // Salaries are generated as random(2k + rep*30k, 10k + rep*190k)
+        // Ability ~30-170 roughly maps to rep_factor 0.0-1.0
+        let ability_ratio = ((ability - 30.0) / 140.0).clamp(0.0, 1.0);
+        let expected_base = 6000.0 + ability_ratio * 110000.0;
+
+        let age_factor = if age < 22 { 0.7 } else if age > 30 { 0.85 } else { 1.0 };
+        let expected = expected_base * age_factor;
+
+        if expected < 1.0 {
+            return 0.0;
+        }
+
+        let ratio = contract.salary as f32 / expected;
+        let factor = if ratio >= 1.2 {
+            // Well paid
+            10.0_f32.min(ratio * 5.0)
+        } else if ratio >= 0.8 {
+            // Fairly paid
+            (ratio - 0.8) * 25.0 // 0 to 10
+        } else {
+            // Underpaid
+            (ratio - 0.8) * 37.5
+        };
+
+        factor.clamp(-15.0, 15.0)
     }
 
     fn calculate_manager_relationship_factor(&self) -> f32 {

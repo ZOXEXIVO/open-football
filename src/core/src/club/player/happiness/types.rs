@@ -1,8 +1,11 @@
+use chrono::NaiveDate;
+
 #[derive(Debug, Clone)]
 pub struct PlayerHappiness {
     pub morale: f32,
     pub factors: HappinessFactors,
     pub recent_events: Vec<HappinessEvent>,
+    pub last_salary_negotiation: Option<NaiveDate>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -47,6 +50,7 @@ impl PlayerHappiness {
             morale: 50.0,
             factors: HappinessFactors::default(),
             recent_events: Vec::new(),
+            last_salary_negotiation: None,
         }
     }
 

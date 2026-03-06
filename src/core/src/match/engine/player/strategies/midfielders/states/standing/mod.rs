@@ -25,29 +25,38 @@ impl StateProcessingHandler for MidfielderStandingState {
             };
         }
         else {
-            // Emergency: if ball is nearby, stopped, and unowned, go for it immediately
-            if ctx.ball().should_take_ball_immediately() {
+            // Emergency: take ball only if best positioned to prevent swarming
+            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::TakeBall,
                 ));
             }
 
             if ctx.team().is_control_ball() {
+                // If teammates are clustered nearby, create space instead of running
+                let nearby_teammates = ctx.players().teammates().nearby(25.0).count();
+                if nearby_teammates >= 2 && ctx.ball().distance() > 30.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::CreatingSpace,
+                    ));
+                }
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Running,
                 ));
             }
             else {
-                // Only press/tackle if an OPPONENT has the ball
+                // Only press/tackle if an OPPONENT has the ball AND we're the best chaser
                 if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
-                    if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD {
-                        // Transition to Pressing state to try and win the ball
+                    if ctx.ball().distance() < PRESSING_DISTANCE_THRESHOLD
+                        && ctx.team().is_best_player_to_chase_ball()
+                    {
                         return Some(StateChangeResult::with_midfielder_state(
                             MidfielderState::Pressing,
                         ));
                     }
 
-                    if ctx.ball().distance() < 150.0 {
+                    // Second closest can press from very short range only
+                    if ctx.ball().distance() < 20.0 {
                         return Some(StateChangeResult::with_midfielder_state(
                             MidfielderState::Pressing,
                         ));
@@ -72,33 +81,26 @@ impl StateProcessingHandler for MidfielderStandingState {
             }
         }
 
-        // Only press if opponent is nearby AND has the ball
+        // Only press if opponent is nearby AND has the ball AND we're closest
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-            if opponent.distance(ctx) < PRESSING_DISTANCE_THRESHOLD {
-                // Transition to Pressing state to apply pressure
+            if opponent.distance(ctx) < PRESSING_DISTANCE_THRESHOLD
+                && ctx.team().is_best_player_to_chase_ball()
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
             }
         }
 
-        // Add timeout to prevent getting stuck in standing state
-        // (moved after ball checks so we don't miss nearby loose balls)
-        if ctx.in_state_time > 30 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Running,
-            ));
-        }
-
-        // 4. Check if a teammate is making a run and needs support
+        // Check if a teammate is making a run and needs support
         if self.should_support_attack(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::AttackSupporting,
             ));
         }
 
-        // If nothing else is happening, start moving again after a brief pause
-        if ctx.in_state_time > 15 {
+        // Midfielders should not stand still for long — get moving quickly
+        if ctx.in_state_time > 8 {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));

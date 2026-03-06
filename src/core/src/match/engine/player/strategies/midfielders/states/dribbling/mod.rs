@@ -11,31 +11,59 @@ pub struct MidfielderDribblingState {}
 
 impl StateProcessingHandler for MidfielderDribblingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Add timeout to avoid getting stuck - reduced from 60 to 30 ticks
-        if ctx.in_state_time > 30 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing // Force decision instead of just running
-            ));
-        }
-
-        if ctx.player.has_ball(ctx) {
-            // If the player has the ball, consider shooting, passing, or dribbling
-            if self.is_in_shooting_position(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::DistanceShooting,
-                ));
-            }
-
-            if self.find_open_teammate(ctx).is_some() {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Passing
-                ));
-            }
-        } else {
-            // If they don't have the ball anymore, change state
+        if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
+        }
+
+        // Shooting takes priority
+        if self.is_in_shooting_position(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Shooting,
+            ));
+        }
+
+        let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
+
+        // Skilled dribblers can carry longer (40-80 ticks), less skilled exit earlier (25-40)
+        let max_dribble_ticks = (25.0 + dribbling_skill * 55.0) as u64;
+
+        // Check if heavily pressured — multiple opponents closing in
+        let close_opponents = ctx.players().opponents().nearby(15.0).count();
+        if close_opponents >= 2 {
+            // Under heavy pressure: pass or shoot
+            if ctx.ball().distance_to_opponent_goal() < 40.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Shooting,
+                ));
+            }
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
+        }
+
+        // Timeout — force a decision
+        if ctx.in_state_time > max_dribble_ticks {
+            // Look for pass first
+            if self.find_open_teammate(ctx).is_some() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Passing,
+                ));
+            }
+            // Otherwise go back to running (will re-evaluate)
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
+        // If a great pass opens up mid-dribble, take it
+        if ctx.in_state_time > 15 && dribbling_skill < 0.7 {
+            if self.find_open_teammate(ctx).is_some() {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Passing,
+                ));
+            }
         }
 
         None
@@ -46,29 +74,59 @@ impl StateProcessingHandler for MidfielderDribblingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Instead of returning zero velocity, actually dribble toward goal
-        if ctx.player.has_ball(ctx) {
-            // Dribble toward the goal (REMOVED random jitter that causes circular movement)
-            let goal_pos = ctx.player().opponent_goal_position();
-            let player_pos = ctx.player.position;
-            let direction = (goal_pos - player_pos).normalize();
-
-            // Calculate speed based on player's dribbling and pace
-            let dribble_skill = ctx.player.skills.technical.dribbling / 20.0;
-            let pace = ctx.player.skills.physical.pace / 20.0;
-            let speed = 3.0 * (0.7 * dribble_skill + 0.3 * pace);
-
-            // Add separation to avoid teammates clustering
-            Some(direction * speed + ctx.player().separation_velocity() * 2.0)
-        } else {
-            // If player doesn't have the ball anymore, move toward it
+        if !ctx.player.has_ball(ctx) {
             let ball_pos = ctx.tick_context.positions.ball.position;
-            let player_pos = ctx.player.position;
-            let direction = (ball_pos - player_pos).normalize();
-            let speed = ctx.player.skills.physical.pace * 0.3;
-
-            Some(direction * speed)
+            let direction = (ball_pos - ctx.player.position).normalize();
+            return Some(direction * ctx.player.skills.physical.pace * 0.3);
         }
+
+        let goal_pos = ctx.player().opponent_goal_position();
+        let player_pos = ctx.player.position;
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        let dribble_skill = ctx.player.skills.technical.dribbling / 20.0;
+        let pace = ctx.player.skills.physical.pace / 20.0;
+        let agility = ctx.player.skills.physical.agility / 20.0;
+
+        // Base dribble speed — faster than walking, slower than sprinting
+        let base_speed = 3.5 * (0.5 * dribble_skill + 0.3 * pace + 0.2 * agility);
+
+        // Find nearest opponent to dribble around
+        let nearest_opponent = ctx.players().opponents().nearby(30.0)
+            .min_by(|a, b| {
+                let da = (a.position - player_pos).magnitude();
+                let db = (b.position - player_pos).magnitude();
+                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+            });
+
+        let direction = if let Some(opponent) = nearest_opponent {
+            let opp_dist = (opponent.position - player_pos).magnitude();
+
+            if opp_dist < 20.0 {
+                // Opponent is close — use skill-based evasion
+                let to_opp = (opponent.position - player_pos).normalize();
+                // Perpendicular direction (dodge sideways, biased toward goal)
+                let perp = Vector3::new(-to_opp.y, to_opp.x, 0.0);
+                // Choose the perpendicular that points more toward goal
+                let dodge_dir = if perp.dot(&to_goal) > (-perp).dot(&to_goal) {
+                    perp
+                } else {
+                    -perp
+                };
+                // Blend dodge direction with goal direction (skilled players stay on course)
+                (to_goal * dribble_skill + dodge_dir * (1.0 - dribble_skill * 0.5)).normalize()
+            } else {
+                // Opponent nearby but not immediate — curve run to avoid
+                let to_opp = (opponent.position - player_pos).normalize();
+                let avoidance = to_goal - to_opp * 0.3;
+                avoidance.normalize()
+            }
+        } else {
+            // Open space — run straight toward goal
+            to_goal
+        };
+
+        Some(direction * base_speed + ctx.player().separation_velocity())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

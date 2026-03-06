@@ -56,45 +56,47 @@ impl PlayerSkills {
     }
 
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
+    /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch)
+    /// pace=1 → ~0.30 (~3.8 m/s), pace=20 → ~0.80 (~10 m/s)
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
         let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
         let agility_factor = (self.physical.agility as f32 - 1.0) / 19.0;
-        let balance_factor = (self.physical.balance as f32 - 1.0) / 19.0;
 
-        let base_speed = 0.8;
-        let max_speed = base_speed
-            * (0.6 * pace_factor
-                + 0.2 * acceleration_factor
-                + 0.1 * agility_factor
-                + 0.1 * balance_factor);
+        // Weighted skill blend (pace dominant)
+        let skill_blend = 0.7 * pace_factor
+            + 0.2 * acceleration_factor
+            + 0.1 * agility_factor;
 
-        max_speed
+        // Linear scale: min 0.30 (pace=1) to max 0.80 (pace=20)
+        let min_speed = 0.30;
+        let max_speed = 0.80;
+
+        min_speed + skill_blend * (max_speed - min_speed)
     }
 
     /// Calculate maximum speed with condition factor (real-time performance)
-    /// This is what should be used during match for actual speed calculation
-    /// Speed depends primarily (90%) on condition, with minimal stamina influence (10%)
+    /// Condition reduces speed by at most ~25% (like real football)
+    /// A tired player (30% condition) still runs at ~75-80% of max speed
     pub fn max_speed_with_condition(&self, condition: i16) -> f32 {
         let base_max_speed = self.max_speed();
 
-        // Condition is the primary factor (0-10000 scale)
-        let condition_percentage = (condition as f32 / 10000.0).clamp(0.0, 1.0);
+        // Condition percentage (0.0 to 1.0)
+        let condition_pct = (condition as f32 / 10000.0).clamp(0.0, 1.0);
 
-        // Stamina provides minimal resistance to fatigue (0-10% boost when tired)
-        // High stamina players maintain 90-100% speed at low condition
-        // Low stamina players drop to 80-100% speed at low condition
+        // Stamina provides fatigue resistance
+        // High stamina players lose less speed when tired
         let stamina_normalized = (self.physical.stamina / 20.0).clamp(0.0, 1.0);
-        let stamina_protection = stamina_normalized * 0.10; // Max 10% protection
 
-        // Simple linear condition curve with stamina protection
-        // At 100% condition: 100% speed (regardless of stamina)
-        // At 50% condition: 50-60% speed (depending on stamina)
-        // At 0% condition: 10-20% speed (minimum + stamina protection)
-        let condition_factor = (condition_percentage * (1.0 - stamina_protection) + stamina_protection)
-            .clamp(0.10, 1.0);
+        // Condition affects speed mildly (max ~25% reduction at 0% condition)
+        // At 100% condition: 100% speed
+        // At 50% condition: ~87-93% speed (depending on stamina)
+        // At 30% condition: ~80-88% speed (depending on stamina)
+        // At 0% condition: ~75-85% speed (depending on stamina)
+        let max_reduction = 0.25 - stamina_normalized * 0.10; // 15-25% max reduction
+        let condition_factor = 1.0 - max_reduction * (1.0 - condition_pct);
 
-        base_max_speed * condition_factor
+        base_max_speed * condition_factor.clamp(0.75, 1.0)
     }
 
     /// Calculate maximum speed for a goalkeeper with state-dependent boost.

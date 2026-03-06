@@ -2932,7 +2932,6 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-history-table thead th.sq-fee {
-    width: 20%;
     text-align: center;
     white-space: nowrap;
 }
@@ -4813,18 +4812,28 @@ a:link, a:visited, a:hover, a:active {
         flex-direction: column;
     }
 
-    /* Player page: stack grid */
+    /* Player page: single row with horizontal scroll */
     .fm-player-grid {
-        grid-template-columns: 1fr;
+        display: flex;
         gap: 12px;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .fm-player-grid::-webkit-scrollbar {
+        display: none;
     }
 
     .fm-player-grid-left {
         order: 2;
+        flex: 0 0 220px;
     }
 
     .fm-player-grid-right {
         order: 1;
+        flex: 0 0 max(500px, 70%);
     }
 
     .fp-field {
@@ -4861,6 +4870,12 @@ a:link, a:visited, a:hover, a:active {
     .fm-panel {
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .fm-panel::-webkit-scrollbar {
+        display: none;
     }
 
     .fm-stats,
@@ -4868,6 +4883,10 @@ a:link, a:visited, a:hover, a:active {
     .fm-squad {
         width: 100%;
         min-width: 600px;
+    }
+
+    .fm-history-table {
+        min-width: 860px;
     }
 
     .fm-schedule thead th,
@@ -4940,13 +4959,34 @@ a:link, a:visited, a:hover, a:active {
         font-size: 18px;
     }
 
-    /* Skills grid: single column */
-    .fm-skills-grid,
+    /* Skills grid: single row with horizontal scroll */
+    .fm-skills-grid {
+        display: flex;
+        overflow-x: auto;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+    }
+
+    .fm-skills-grid::-webkit-scrollbar {
+        display: none;
+    }
+
+    .fm-skills-grid .fm-skill-col {
+        flex: 0 0 180px;
+        border-right: 1px solid #263340;
+        border-bottom: none;
+    }
+
+    .fm-skills-grid .fm-skill-col:last-child {
+        border-right: none;
+    }
+
     .fm-staff-attrs {
         grid-template-columns: 1fr;
     }
 
-    .fm-skill-col {
+    .fm-staff-attrs .fm-skill-col {
         border-right: none;
         border-bottom: 1px solid #263340;
     }
@@ -4957,10 +4997,6 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-staff-attrs .fm-skill-col:last-child {
-        border-bottom: none;
-    }
-
-    .fm-skill-col:last-child {
         border-bottom: none;
     }
 
@@ -5030,6 +5066,28 @@ a:link, a:visited, a:hover, a:active {
     .fm-schedule .sch-comp {
         text-align: right;
         font-size: 11px;
+    }
+
+    /* History table: hide less critical columns, compact stats */
+    .fm-history-table {
+        min-width: 530px;
+    }
+
+    .fm-history-table td.sq-league,
+    .fm-history-table thead th.sq-league {
+        display: none;
+    }
+
+    .fm-history-table td.sq-nat,
+    .fm-history-table thead th.sq-nat {
+        display: none;
+    }
+
+    .fm-history-table thead th,
+    .fm-history-table tbody td {
+        padding: 7px 6px;
+        font-size: 12px;
+        white-space: nowrap;
     }
 }
 
