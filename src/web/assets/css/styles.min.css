@@ -1822,13 +1822,21 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-id-cols {
-    display: grid;
-    grid-template-columns: 1fr 1fr 1fr;
-    gap: 0;
+    display: flex;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
     width: 100%;
 }
 
+.fm-ph-id-cols::-webkit-scrollbar {
+    display: none;
+}
+
 .fm-ph-id-col {
+    flex: 0 0 33.333%;
+    min-width: 180px;
     padding: 4px 18px;
     border-right: 1px solid #263340;
     display: flex;
@@ -1840,6 +1848,15 @@ a:link, a:visited, a:hover, a:active {
     padding-left: 0;
 }
 
+.fm-ph-id-col:nth-child(2) {
+    flex: 0 0 40%;
+    min-width: 280px;
+}
+
+.fm-ph-id-col:nth-child(2) .fm-ph-meta {
+    white-space: nowrap;
+}
+
 .fm-ph-id-col:last-child {
     border-right: none;
 }
@@ -1847,7 +1864,8 @@ a:link, a:visited, a:hover, a:active {
 .fm-ph-name-row {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 6px 10px;
+    flex-wrap: wrap;
 }
 
 .fm-ph-flag {
@@ -4845,23 +4863,7 @@ a:link, a:visited, a:hover, a:active {
         padding: 14px 16px;
     }
 
-    .fm-ph-id-cols {
-        grid-template-columns: 1fr;
-    }
-
-    .fm-ph-id-col {
-        border-right: none;
-        border-bottom: 1px solid #263340;
-        padding: 8px 0;
-    }
-
-    .fm-ph-id-col:first-child {
-        padding-top: 0;
-    }
-
     .fm-ph-id-col:last-child {
-        border-bottom: none;
-        padding-bottom: 0;
         flex-direction: row;
         flex-wrap: wrap;
         gap: 6px 24px;
@@ -4979,6 +4981,21 @@ a:link, a:visited, a:hover, a:active {
         border-bottom: none;
     }
 
+    .fm-skills-grid .fm-skills {
+        table-layout: fixed;
+        width: 100%;
+    }
+
+    .fm-skills-grid .fm-skills td:first-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .fm-skills-grid .fm-skills td:last-child {
+        width: 28px;
+    }
+
     .fm-skills-grid .fm-skill-col:last-child {
         border-right: none;
     }
@@ -5090,6 +5107,15 @@ a:link, a:visited, a:hover, a:active {
         font-size: 12px;
         white-space: nowrap;
     }
+
+    /* Personal tab: stack cards vertically */
+    .fm-personal-grid {
+        grid-template-columns: 1fr;
+    }
+
+    .fm-happiness-grid {
+        grid-template-columns: 1fr;
+    }
 }
 
 @media (max-width: 575.98px) {
@@ -5144,16 +5170,6 @@ a:link, a:visited, a:hover, a:active {
 
     .fm-page {
         padding: 10px 8px;
-    }
-
-    /* Player identity: stack ratings vertically on small screens */
-    .fm-ph-id-col:last-child {
-        flex-direction: column;
-        gap: 6px;
-    }
-
-    .fm-ph-meta {
-        flex-wrap: wrap;
     }
 
     .fm-ph-name {

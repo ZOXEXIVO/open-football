@@ -237,6 +237,12 @@ pub async fn player_get_action(
         let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
         let staff_id = head_coach.id;
 
+        let (main_team_name, main_team_slug) = simulator_data
+            .club(team.club_id)
+            .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
+            .map(|t| (t.name.clone(), t.slug.clone()))
+            .unwrap_or_else(|| (team.name.clone(), team.slug.clone()));
+
         let player_vm = PlayerViewModel {
             id: player.id,
             first_name: player.full_name.display_first_name().to_string(),
@@ -245,8 +251,8 @@ pub async fn player_get_action(
             contract,
             birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
-            team_slug: team.slug.clone(),
-            team_name: team.name.clone(),
+            team_slug: main_team_slug,
+            team_name: main_team_name,
             country_slug: country.slug.clone(),
             country_code: country.code.clone(),
             country_name: country.name.clone(),
