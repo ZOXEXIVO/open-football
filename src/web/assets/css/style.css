@@ -1923,7 +1923,7 @@ a:link, a:visited, a:hover, a:active {
 /* --- Loan status label --- */
 
 .fm-ph-loan {
-    font-size: 1em;
+    font-size: 0.9em;
 }
 
 .fm-ph-loan-label {
@@ -1944,6 +1944,7 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-ph-loan-text a {
     color: #94a3af;
+    text-decoration: underline !important;
 }
 
 .fm-ph-loan-text a:hover {
@@ -2001,7 +2002,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-detail-value {
-    font-size: 13px;
+    font-size: 0.9em;
     color: #c8d4de;
     font-weight: 500;
     text-align: right;
@@ -2010,6 +2011,7 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-detail-value a {
     color: #c8d4de;
+    text-decoration: underline !important;
     transition: color 0.12s;
 }
 
