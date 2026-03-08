@@ -5,6 +5,7 @@ pub struct Settings {
     pub match_events: bool,
     pub match_recordings: bool,
     pub match_threads: usize,
+    pub match_store_threads: usize,
 }
 
 impl Settings {
@@ -29,10 +30,16 @@ impl Settings {
                     .unwrap_or(4)
             });
 
+        let match_store_threads = env::var("MAX_MATCH_STORE_THREADS")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(4);
+
         Settings {
             match_events,
             match_recordings,
             match_threads,
+            match_store_threads,
         }
     }
 
@@ -40,6 +47,7 @@ impl Settings {
         core::set_match_events_mode(self.match_events);
         core::set_match_recordings_mode(self.match_recordings);
         core::init_match_engine_pool(self.match_threads);
+        core::set_match_store_max_threads(self.match_store_threads);
     }
 
     pub fn log(&self) {
@@ -50,5 +58,6 @@ impl Settings {
             info!("Match recordings mode disabled");
         }
         info!("Match engine pool: {} threads", self.match_threads);
+        info!("Match store pool: {} threads", self.match_store_threads);
     }
 }

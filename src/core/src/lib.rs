@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
@@ -18,6 +18,16 @@ pub fn set_match_recordings_mode(enabled: bool) {
 
 pub fn is_match_recordings_mode() -> bool {
     MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
+}
+
+static MATCH_STORE_MAX_THREADS: AtomicUsize = AtomicUsize::new(4);
+
+pub fn set_match_store_max_threads(n: usize) {
+    MATCH_STORE_MAX_THREADS.store(n, Ordering::SeqCst);
+}
+
+pub fn match_store_max_threads() -> usize {
+    MATCH_STORE_MAX_THREADS.load(Ordering::SeqCst)
 }
 
 static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();

@@ -10,6 +10,7 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::task::JoinSet;
 
 #[derive(Deserialize)]
 pub struct ProcessQuery {
@@ -85,13 +86,24 @@ pub async fn game_processing_status_action(
 async fn write_match_results(result: SimulationResult) {
     let now = Instant::now();
 
+    let max_concurrent = core::match_store_max_threads();
+    let semaphore = Arc::new(tokio::sync::Semaphore::new(max_concurrent));
+
+    let mut tasks = JoinSet::new();
+
     for match_result in result.match_results {
         if match_result.friendly {
             continue;
         }
 
-        MatchStore::store(match_result).await;
+        let permit = Arc::clone(&semaphore);
+        tasks.spawn(async move {
+            let _permit = permit.acquire().await.unwrap();
+            MatchStore::store(match_result).await;
+        });
     }
+
+    tasks.join_all().await;
 
     debug!("match results stored in {} ms", now.elapsed().as_millis());
 }
