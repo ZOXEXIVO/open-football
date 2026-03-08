@@ -1547,6 +1547,10 @@ a:link, a:visited, a:hover, a:active {
     text-decoration: none !important;
 }
 
+.fm-squad .sq-name {
+    white-space: nowrap;
+}
+
 .fm-squad .sq-name a {
     font-weight: 500;
 }
@@ -4961,21 +4965,14 @@ a:link, a:visited, a:hover, a:active {
         font-size: 18px;
     }
 
-    /* Skills grid: single row with horizontal scroll */
+    /* Skills grid: horizontal columns, no scroll */
     .fm-skills-grid {
         display: flex;
-        overflow-x: auto;
-        -webkit-overflow-scrolling: touch;
-        scrollbar-width: none;
-        -ms-overflow-style: none;
-    }
-
-    .fm-skills-grid::-webkit-scrollbar {
-        display: none;
     }
 
     .fm-skills-grid .fm-skill-col {
-        flex: 0 0 180px;
+        flex: 1 1 0;
+        min-width: 0;
         border-right: 1px solid #263340;
         border-bottom: none;
     }
