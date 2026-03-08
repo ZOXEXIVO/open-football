@@ -12,11 +12,11 @@
         <table class="fm-schedule">
             <thead>
                 <tr>
-                    <th>{{ i18n.t("date") }}</th>
-                    <th>{{ i18n.t("time") }}</th>
+                    <th class="sch-date">{{ i18n.t("date") }}</th>
+                    <th class="sch-time">{{ i18n.t("time") }}</th>
                     <th class="sch-venue">{{ i18n.t("venue") }}</th>
                     <th>{{ i18n.t("opponent") }}</th>
-                    <th>{{ i18n.t("competition") }}</th>
+                    <th class="sch-comp">{{ i18n.t("competition") }}</th>
                     <th class="sch-result">{{ i18n.t("result") }}</th>
                 </tr>
             </thead>
@@ -32,7 +32,7 @@
                         <span class="fm-venue venue-a">A</span>
                         {% endif %}
                     </td>
-                    <td><a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a></td>
+                    <td class="sch-opponent"><a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a></td>
                     <td class="sch-comp">{{ item.competition_name }}</td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}

@@ -169,6 +169,7 @@
     }
 
     let _pollTimer = null;
+    let _requestInFlight = false;
 
     function setProcessing(active) {
         const btn = document.getElementById('process-btn');
@@ -187,10 +188,12 @@
         }
     }
 
-    // Flow 1: Click Process → wait for sync response → refresh content
+    // Click Process → show spinner → single request → handle result
     async function startProcess(event) {
+        if (_requestInFlight) return;
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
+        _requestInFlight = true;
         const url = event.shiftKey ? '/api/game/process?days=30' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
@@ -202,6 +205,8 @@
         } catch (e) {
             setProcessing(true);
             return;
+        } finally {
+            _requestInFlight = false;
         }
         btn.classList.remove('fm-processing');
         await refreshContent();

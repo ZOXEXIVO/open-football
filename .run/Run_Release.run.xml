@@ -4,7 +4,7 @@
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
-      <env name="SKIP_MATCH_RECORDING" value="false" />
+      <env name="SKIP_MATCH_RECORDING" value="true" />
     </envs>
     <option name="emulateTerminal" value="false" />
     <option name="channel" value="DEFAULT" />

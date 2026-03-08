@@ -4885,7 +4885,6 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-stats,
-    .fm-schedule,
     .fm-squad {
         width: 100%;
         min-width: 600px;
@@ -5014,72 +5013,26 @@ a:link, a:visited, a:hover, a:active {
         border-bottom: none;
     }
 
-    /* Schedule: card layout instead of table */
-    .fm-schedule {
-        display: block;
-        overflow-x: visible;
-    }
-
-    .fm-schedule thead {
-        display: none;
-    }
-
-    .fm-schedule tbody {
-        display: block;
-    }
-
-    .fm-schedule tbody tr {
-        display: grid;
-        grid-template-columns: 1fr auto;
-        padding: 10px 14px;
-        gap: 2px 10px;
-        border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-        border-left: none;
-    }
-
-    .fm-schedule tbody tr:nth-child(even) {
-        background: rgba(0, 0, 0, 0.1);
-    }
-
+    /* Schedule: compact table on mobile — same layout as desktop, smaller */
+    .fm-schedule thead th,
     .fm-schedule tbody td {
-        padding: 0;
-        border-bottom: none;
-        text-align: left;
-        font-size: 13px;
-        color: #b0bac2;
-        width: auto;
+        padding: 5px 4px;
+        font-size: 11px;
+        white-space: nowrap;
     }
 
-    /* Row 1: date spans full width */
-    .fm-schedule .sch-date {
-        grid-column: 1 / -1;
-        font-size: 10px;
-        font-weight: 700;
-        color: #546a78;
-        text-transform: uppercase;
-        letter-spacing: 0.3px;
-    }
-
-    /* Time: hidden on mobile */
     .fm-schedule .sch-time {
         display: none;
     }
 
-    /* Row 2: Opposition (left) + Venue badge (right) — auto-placed */
-    .fm-schedule .sch-venue {
-        width: auto;
-        text-align: right;
+    .fm-schedule .sch-venue .fm-venue {
+        padding: 1px 5px;
+        font-size: 9px;
     }
 
-    /* Row 3: Result (left) + Competition (right) — auto-placed */
-    .fm-schedule .sch-result {
-        width: auto;
-        text-align: left;
-    }
-
-    .fm-schedule .sch-comp {
-        text-align: right;
-        font-size: 11px;
+    .fm-schedule .sch-result .fm-result,
+    .fm-schedule .sch-result .fm-pending {
+        font-size: 12px;
     }
 
     /* History table: hide less critical columns, compact stats */
