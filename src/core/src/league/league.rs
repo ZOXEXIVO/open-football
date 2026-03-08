@@ -1,7 +1,6 @@
 use crate::context::{GlobalContext, SimulationContext};
 use crate::league::{LeagueMatch, LeagueMatchResultResult, LeagueResult, LeagueTable, LeagueTableRow, MatchStorage, Schedule, ScheduleItem};
 use crate::r#match::{Match, MatchResult, SelectionContext};
-use crate::utils::Logging;
 use crate::{Club, Player, PlayerStatusType, Team, TeamType};
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info, warn};
@@ -160,11 +159,11 @@ impl League {
         ctx: &GlobalContext<'_>,
         friendly: bool,
     ) -> Vec<MatchResult> {
-        // Play all matches in parallel
-        let match_results: Vec<MatchResult> = scheduled_matches
-            .iter_mut()
+        // Build all Match objects
+        let matches: Vec<Match> = scheduled_matches
+            .iter()
             .map(|scheduled_match| {
-                Self::play_single_match_static(
+                Self::build_match(
                     scheduled_match,
                     clubs,
                     ctx,
@@ -175,7 +174,14 @@ impl League {
             })
             .collect();
 
-        // Update momentum sequentially after all matches are played
+        // Play all matches through the engine pool (bounded parallelism)
+        let match_results = crate::match_engine_pool().play(matches);
+
+        // Update schedule results and momentum
+        for (scheduled_match, result) in scheduled_matches.iter_mut().zip(match_results.iter()) {
+            scheduled_match.result = Some(LeagueMatchResultResult::from_score(&result.score));
+        }
+
         for result in &match_results {
             self.dynamics.update_team_momentum_after_match(
                 result.home_team_id,
@@ -187,14 +193,14 @@ impl League {
         match_results
     }
 
-    fn play_single_match_static(
-        scheduled_match: &mut LeagueMatch,
+    fn build_match(
+        scheduled_match: &LeagueMatch,
         clubs: &[Club],
         ctx: &GlobalContext<'_>,
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
         friendly: bool,
-    ) -> MatchResult {
+    ) -> Match {
         let home_team = clubs
             .iter()
             .flat_map(|c| &c.teams.teams)
@@ -227,8 +233,6 @@ impl League {
 
         // Prepare squads: friendly leagues use rotation (development), competitive use best-11
         let (mut home_squad, mut away_squad) = if friendly {
-            // Rotation selection — prioritizes players who haven't played recently
-            // Non-main teams borrow players from other club teams when short-staffed
             let home_supplements = Self::collect_supplementary_players(clubs, home_team.club_id, home_team.id, friendly);
             let away_supplements = Self::collect_supplementary_players(clubs, away_team.club_id, away_team.id, friendly);
             (
@@ -236,7 +240,6 @@ impl League {
                 away_team.get_rotation_match_squad_with_reserves(&away_supplements, &selection_ctx),
             )
         } else {
-            // Competitive selection — gather reserve players and pick best squad
             let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly);
             let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly);
             (
@@ -248,37 +251,14 @@ impl League {
         Self::apply_psychological_factors_static(&mut home_squad, home_momentum, home_pressure);
         Self::apply_psychological_factors_static(&mut away_squad, away_momentum, away_pressure);
 
-        // Create and play match
-        let match_to_play = Match::make(
+        Match::make(
             scheduled_match.id.clone(),
             scheduled_match.league_id,
             &scheduled_match.league_slug,
             home_squad,
             away_squad,
             friendly,
-        );
-
-        let home_name = match_to_play.home_squad.team_name.clone();
-        let away_name = match_to_play.away_squad.team_name.clone();
-
-        let match_result = Logging::estimate_result_with(
-            || match_to_play.play(),
-            |result, duration_ms| {
-                format!(
-                    "play match: {} {}:{} {}, {}ms",
-                    home_name,
-                    result.score.home_team.get(),
-                    result.score.away_team.get(),
-                    away_name,
-                    duration_ms
-                )
-            },
-        );
-
-        // Update match result in schedule
-        scheduled_match.result = Some(LeagueMatchResultResult::from_score(&match_result.score));
-
-        match_result
+        )
     }
 
     /// Collect available reserve players from the same club.

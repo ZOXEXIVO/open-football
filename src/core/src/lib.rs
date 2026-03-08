@@ -1,4 +1,5 @@
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::OnceLock;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
 static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(true);
@@ -17,6 +18,21 @@ pub fn set_match_recordings_mode(enabled: bool) {
 
 pub fn is_match_recordings_mode() -> bool {
     MATCH_RECORDINGS_MODE.load(Ordering::SeqCst)
+}
+
+static MATCH_ENGINE_POOL: OnceLock<r#match::MatchPlayEnginePool> = OnceLock::new();
+
+pub fn init_match_engine_pool(num_threads: usize) {
+    MATCH_ENGINE_POOL.get_or_init(|| r#match::MatchPlayEnginePool::new(num_threads));
+}
+
+pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
+    MATCH_ENGINE_POOL.get_or_init(|| {
+        let cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4);
+        r#match::MatchPlayEnginePool::new(cpus)
+    })
 }
 
 pub mod simulator;

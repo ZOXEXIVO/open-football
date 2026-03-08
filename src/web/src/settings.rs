@@ -4,6 +4,7 @@ use log::info;
 pub struct Settings {
     pub match_events: bool,
     pub match_recordings: bool,
+    pub match_threads: usize,
 }
 
 impl Settings {
@@ -17,15 +18,28 @@ impl Settings {
                 .map(|v| v == "true")
                 .unwrap_or(false));
 
+        let match_threads = args.iter()
+            .find(|arg| arg.starts_with("--match-threads="))
+            .and_then(|arg| arg.strip_prefix("--match-threads="))
+            .and_then(|v| v.parse().ok())
+            .or_else(|| env::var("MAX_MATCH_THREADS").ok().and_then(|v| v.parse().ok()))
+            .unwrap_or_else(|| {
+                std::thread::available_parallelism()
+                    .map(|n| n.get())
+                    .unwrap_or(4)
+            });
+
         Settings {
             match_events,
             match_recordings,
+            match_threads,
         }
     }
 
     pub fn apply(&self) {
         core::set_match_events_mode(self.match_events);
         core::set_match_recordings_mode(self.match_recordings);
+        core::init_match_engine_pool(self.match_threads);
     }
 
     pub fn log(&self) {
@@ -35,5 +49,6 @@ impl Settings {
         if !self.match_recordings {
             info!("Match recordings mode disabled");
         }
+        info!("Match engine pool: {} threads", self.match_threads);
     }
 }

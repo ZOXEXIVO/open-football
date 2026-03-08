@@ -41,7 +41,7 @@ steps:
       - name: docker_sock
         path: /var/run/docker.sock
     commands:
-      - docker run -d -p 0.0.0.0:18000:18000 --restart always -e SKIP_MATCH_RECORDING=false --name open-football open-football:1.0.0.$$DRONE_BUILD_NUMBER
+      - docker run -d -p 0.0.0.0:18000:18000 --restart always -e SKIP_MATCH_RECORDING=false -e MAX_MATCH_THREADS=16 --name open-football open-football:1.0.0.$$DRONE_BUILD_NUMBER
     when:
       branch:
         - master
