@@ -76,11 +76,11 @@ impl ClubTransferStrategy {
 
         // Adjust based on asking price
         let mut offer_amount = if asking_price.amount > 0.0 {
-            // Start with 60-90% of asking price depending on aggressiveness
-            asking_price.amount * (0.6 + (self.buying_aggressiveness as f64 * 0.3))
+            // Start with 80-93% of asking price depending on aggressiveness
+            asking_price.amount * (0.80 + (self.buying_aggressiveness as f64 * 0.15))
         } else {
             // No asking price - use our valuation but discount it
-            player_value.amount * (0.7 + (self.buying_aggressiveness as f64 * 0.2f64))
+            player_value.amount * (0.80 + (self.buying_aggressiveness as f64 * 0.15))
         };
 
         // Cap by budget - never offer more than 80% of available budget

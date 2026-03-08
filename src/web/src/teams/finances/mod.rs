@@ -126,10 +126,13 @@ pub async fn team_finances_get_action(
         .sum();
     let annual_wages = format_currency(total_annual_wages as i64);
 
-    // Monthly income/expenses
-    let monthly_income = format_currency(finance.balance.income as i64);
-    let monthly_expenses = format_currency(finance.balance.outcome as i64);
-    let net = finance.balance.income - finance.balance.outcome;
+    // Monthly income/expenses (use latest completed month from history, not in-progress month)
+    let (monthly_income_val, monthly_expenses_val) = finance.history.iter().next()
+        .map(|(_, bal)| (bal.income, bal.outcome))
+        .unwrap_or((finance.balance.income, finance.balance.outcome));
+    let monthly_income = format_currency(monthly_income_val as i64);
+    let monthly_expenses = format_currency(monthly_expenses_val as i64);
+    let net = monthly_income_val - monthly_expenses_val;
     let net_monthly_positive = net >= 0;
     let net_monthly = format_currency(net as i64);
 

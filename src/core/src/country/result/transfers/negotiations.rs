@@ -139,20 +139,20 @@ impl CountryResult {
     ) {
         let mut chance: f32 = if neg_data.asking_price > 0.0 {
             let ratio = neg_data.offer_amount / neg_data.asking_price;
-            if ratio >= 1.2 { 80.0 }
-            else if ratio >= 1.0 { 65.0 }
-            else if ratio >= 0.9 { 50.0 }
-            else if ratio >= 0.8 { 35.0 }
-            else if ratio >= 0.7 { 20.0 }
-            else { 10.0 }
+            if ratio >= 1.2 { 90.0 }
+            else if ratio >= 1.0 { 75.0 }
+            else if ratio >= 0.9 { 60.0 }
+            else if ratio >= 0.8 { 50.0 }
+            else if ratio >= 0.7 { 35.0 }
+            else { 15.0 }
         } else {
-            50.0
+            55.0
         };
 
         let importance = Self::calculate_player_importance(
             country, neg_data.player_id, neg_data.selling_club_id,
         );
-        chance -= importance * 30.0;
+        chance -= importance * 20.0;
 
         if let Some(selling_club) = country.clubs.iter().find(|c| c.id == neg_data.selling_club_id) {
             if selling_club.finance.balance.balance < 0 {
@@ -175,7 +175,7 @@ impl CountryResult {
         } else if round < 3 {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 let new_amount = crate::utils::FormattingUtils::round_fee(
-                    negotiation.current_offer.base_fee.amount * 1.10
+                    negotiation.current_offer.base_fee.amount * 1.15
                 );
                 negotiation.current_offer.base_fee.amount = new_amount;
                 negotiation.advance_club_negotiation_round(date);
@@ -201,17 +201,22 @@ impl CountryResult {
         date: NaiveDate,
     ) {
 
-        let mut chance: f32 = 50.0;
+        let mut chance: f32 = 60.0;
+
+        // Listed players are more willing to move
+        if neg_data.is_listed {
+            chance += 10.0;
+        }
 
         let rep_diff = neg_data.buying_rep - neg_data.selling_rep;
         if rep_diff > 0.3 {
-            chance += 30.0;
+            chance += 25.0;
         } else if rep_diff > 0.15 {
             chance += 15.0;
         } else if rep_diff < -0.3 {
-            chance -= 30.0;
+            chance -= 20.0;
         } else if rep_diff < -0.15 {
-            chance -= 15.0;
+            chance -= 10.0;
         }
 
         if let Some(player) = find_player_in_country(country, neg_data.player_id) {
