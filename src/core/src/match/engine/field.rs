@@ -2,6 +2,7 @@
 use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerDistanceClosure, PlayerSide, PositionType, POSITION_POSITIONING};
 use crate::Tactics;
 use nalgebra::Vector3;
+use std::rc::Rc;
 
 pub struct MatchField {
     pub size: MatchFieldSize,
@@ -18,7 +19,7 @@ pub struct MatchField {
     pub right_side_players: Option<FieldSquad>,
     pub right_team_tactics: Tactics,
 
-    pub cached_distances: PlayerDistanceClosure,
+    pub cached_distances: Rc<PlayerDistanceClosure>,
     pub distance_tick: u32,
 }
 
@@ -52,11 +53,11 @@ impl MatchField {
             left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),
             right_team_tactics: right_tactics,
-            cached_distances: PlayerDistanceClosure { distances: Vec::new() },
+            cached_distances: Rc::new(PlayerDistanceClosure { distances: Vec::new() }),
             distance_tick: 0,
         };
 
-        field.cached_distances = PlayerDistanceClosure::from(&field);
+        field.cached_distances = Rc::new(PlayerDistanceClosure::from(&field));
 
         field
     }
@@ -65,7 +66,7 @@ impl MatchField {
     pub fn update_distances(&mut self, interval: u32) {
         self.distance_tick += 1;
         if self.distance_tick % interval == 0 {
-            self.cached_distances = PlayerDistanceClosure::from(&*self);
+            self.cached_distances = Rc::new(PlayerDistanceClosure::from(&*self));
         }
     }
 
@@ -78,7 +79,7 @@ impl MatchField {
         });
 
         // Force distance recalculation after position reset (e.g., after a goal)
-        self.cached_distances = PlayerDistanceClosure::from(&*self);
+        self.cached_distances = Rc::new(PlayerDistanceClosure::from(&*self));
     }
 
     pub fn swap_squads(&mut self) {
@@ -146,7 +147,7 @@ impl MatchField {
             self.ball.clear_player_reference(player_out_id);
 
             // Force distance recalculation after substitution (new player IDs/positions)
-            self.cached_distances = PlayerDistanceClosure::from(&*self);
+            self.cached_distances = Rc::new(PlayerDistanceClosure::from(&*self));
 
             true
         } else {

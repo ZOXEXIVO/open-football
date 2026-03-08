@@ -63,7 +63,7 @@ impl ResultMatchPositionData {
     pub fn new() -> Self {
         ResultMatchPositionData {
             ball: Vec::new(),
-            players: HashMap::with_capacity(22 * 2 * 9000),
+            players: HashMap::with_capacity(44),
             passes: Vec::new(),
             events: Vec::new(),
             track_events: false,
@@ -74,7 +74,7 @@ impl ResultMatchPositionData {
     pub fn new_with_tracking() -> Self {
         ResultMatchPositionData {
             ball: Vec::new(),
-            players: HashMap::with_capacity(22 * 2 * 9000),
+            players: HashMap::with_capacity(44),
             passes: Vec::new(),
             events: Vec::new(),
             track_events: true,

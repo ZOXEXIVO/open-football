@@ -1,10 +1,11 @@
 use crate::r#match::{
     MatchField, MatchObjectsPositions, PlayerDistanceClosure, Space
 };
+use std::rc::Rc;
 
 pub struct GameTickContext {
     pub positions: MatchObjectsPositions,
-    pub distances: PlayerDistanceClosure,
+    pub distances: Rc<PlayerDistanceClosure>,
     pub ball: BallMetadata,
     pub space: Space,
 }
