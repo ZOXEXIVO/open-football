@@ -10,7 +10,6 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use std::time::Instant;
-use tokio::task::JoinSet;
 
 #[derive(Deserialize)]
 pub struct ProcessQuery {
@@ -52,7 +51,7 @@ pub async fn game_process_action(
             let result = handle.block_on(FootballSimulator::simulate(&mut simulator_data));
             if result.has_match_results() {
                 if core::is_match_recordings_mode() {
-                    handle.spawn(write_match_results(result));
+                    handle.block_on(write_match_results(result));
                 }
 
                 simulator_data.match_played = true;
@@ -84,20 +83,15 @@ pub async fn game_processing_status_action(
 }
 
 async fn write_match_results(result: SimulationResult) {
-    let mut tasks = JoinSet::new();
+    let now = Instant::now();
 
     for match_result in result.match_results {
         if match_result.friendly {
             continue;
         }
-        tasks.spawn(MatchStore::store(match_result));
+
+        MatchStore::store(match_result).await;
     }
 
-    let now = Instant::now();
-
-    tasks.join_all().await;
-
-    let elapsed = now.elapsed().as_millis();
-
-    debug!("match results stored in {} ms", elapsed);
+    debug!("match results stored in {} ms", now.elapsed().as_millis());
 }
