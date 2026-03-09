@@ -13,7 +13,7 @@ use crate::{
 };
 use crate::Country;
 use chrono::{Datelike, NaiveDate};
-use log::info;
+use log::{debug};
 use std::collections::HashMap;
 
 #[derive(Clone)]
@@ -312,7 +312,7 @@ impl NationalTeam {
 
         self.schedule[fixture_idx].result = Some(result);
 
-        info!(
+        debug!(
             "International friendly: {} vs {} - {}:{}",
             self.country_name, opponent_name, home_score, away_score
         );
@@ -542,7 +542,7 @@ impl NationalTeam {
             }
         }
 
-        info!(
+        debug!(
             "National team {} (country {}) called up {} players ({} from clubs, {} synthetic)",
             self.country_name,
             country_id,
@@ -1225,7 +1225,7 @@ impl NationalTeam {
             }
         }
 
-        info!(
+        debug!(
             "National team {} (country {}) released {} players from international duty",
             self.country_name,
             self.country_id,

@@ -5515,3 +5515,257 @@ a:link, a:visited, a:hover, a:active {
 .fm-ai-save-btn:hover {
     background: #339944;
 }
+
+/* ============================================
+   FM DROPDOWN (tab-bar action menu)
+   ============================================ */
+
+.fm-tabbar-dropdown {
+    position: relative;
+    margin-left: auto;
+    display: flex;
+    align-items: stretch;
+}
+
+.fm-tabbar-dropdown-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 12px 18px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--tab-fg, #8a939b);
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    white-space: nowrap;
+    font-family: inherit;
+    transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.fm-tabbar-dropdown-toggle:hover,
+.fm-dd-open .fm-tabbar-dropdown-toggle {
+    color: var(--tab-fg-active, #1e272d);
+    background: var(--tab-hover-bg, #f5f6f7);
+}
+
+.fm-tabbar-dropdown-toggle .fm-dd-arrow {
+    font-size: 7px;
+    transition: transform 0.15s;
+}
+
+.fm-dd-open .fm-tabbar-dropdown-toggle .fm-dd-arrow {
+    transform: rotate(180deg);
+}
+
+.fm-tabbar:has(.fm-dd-open) {
+    overflow: visible;
+}
+
+.fm-tabbar-dropdown-menu {
+    display: none;
+    position: absolute;
+    right: 0;
+    top: 100%;
+    min-width: 160px;
+    background: var(--header-bg, #fff);
+    border: 1px solid var(--header-border, #e0e3e6);
+    border-top: none;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 200;
+    padding: 4px 0;
+}
+
+.fm-dd-open .fm-tabbar-dropdown-menu {
+    display: block;
+}
+
+.fm-tabbar-dropdown-menu button {
+    display: block;
+    width: 100%;
+    padding: 8px 18px;
+    font-size: 10px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    color: var(--tab-fg, #8a939b);
+    background: transparent;
+    border: none;
+    text-align: left;
+    cursor: pointer;
+    font-family: inherit;
+    transition: color 0.15s, background 0.15s;
+}
+
+.fm-tabbar-dropdown-menu button:hover {
+    color: var(--tab-fg-active, #1e272d);
+    background: var(--tab-hover-bg, #f5f6f7);
+}
+
+.fm-tabbar-dropdown-menu .fm-dd-sep {
+    height: 1px;
+    background: var(--header-border, #e0e3e6);
+    margin: 4px 0;
+}
+
+/* ============================================
+   FM DIALOG (reusable)
+   ============================================ */
+
+.fm-dlg-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.55);
+    z-index: 1100;
+    align-items: center;
+    justify-content: center;
+}
+
+.fm-dlg-backdrop.fm-dlg-open {
+    display: flex;
+}
+
+.fm-dlg {
+    background: #1e2830;
+    border: 1px solid #2a3640;
+    border-radius: 8px;
+    width: 400px;
+    max-width: 90vw;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+    animation: fm-dlg-in 0.15s ease-out;
+}
+
+@keyframes fm-dlg-in {
+    from { opacity: 0; transform: translateY(-10px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.fm-dlg-header {
+    padding: 16px 20px 12px;
+    font-size: 15px;
+    font-weight: 600;
+    color: #d0d6dc;
+    border-bottom: 1px solid #263340;
+}
+
+.fm-dlg-body {
+    padding: 16px 20px;
+}
+
+.fm-dlg-msg {
+    margin: 0 0 8px;
+    font-size: 13px;
+    color: #8a9aa6;
+    line-height: 1.45;
+}
+
+.fm-dlg-field {
+    margin-bottom: 14px;
+}
+
+.fm-dlg-field:last-child {
+    margin-bottom: 0;
+}
+
+.fm-dlg-field label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    color: #7a8a96;
+    margin-bottom: 5px;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+}
+
+.fm-dlg-field input,
+.fm-dlg-field select {
+    width: 100%;
+    padding: 8px 10px;
+    background: #151c22;
+    border: 1px solid #2a3640;
+    border-radius: 4px;
+    color: #d0d6dc;
+    font-size: 13px;
+    font-family: inherit;
+    box-sizing: border-box;
+    transition: border-color 0.15s;
+}
+
+.fm-dlg-field input:focus,
+.fm-dlg-field select:focus {
+    outline: none;
+    border-color: #4a9eff;
+}
+
+.fm-dlg-field select {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%237a8a96'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+}
+
+.fm-ac-wrap { position: relative; }
+.fm-ac-list {
+    display: none;
+    position: absolute;
+    left: 0; right: 0; top: 100%;
+    max-height: 200px;
+    overflow-y: auto;
+    background: #151c22;
+    border: 1px solid #2a3640;
+    border-top: none;
+    border-radius: 0 0 4px 4px;
+    z-index: 10;
+}
+.fm-ac-item {
+    padding: 7px 10px;
+    font-size: 13px;
+    color: #d0d6dc;
+    cursor: pointer;
+}
+.fm-ac-item:hover {
+    background: #1e2830;
+}
+
+.fm-dlg-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 12px 20px 16px;
+}
+
+.fm-dlg-btn {
+    padding: 8px 18px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    cursor: pointer;
+    border: 1px solid #2a3640;
+    transition: background 0.15s, color 0.15s;
+}
+
+.fm-dlg-cancel {
+    background: transparent;
+    color: #7a8a96;
+}
+
+.fm-dlg-cancel:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #a0aab4;
+}
+
+.fm-dlg-confirm {
+    background: #2a7d3f;
+    color: #e0ffe8;
+    border-color: #2a7d3f;
+}
+
+.fm-dlg-confirm:hover {
+    background: #339944;
+}

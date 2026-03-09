@@ -45,6 +45,21 @@ impl Player {
         // Normal snapshot — clear transfer flag
         self.last_transfer_date = None;
 
+        // If 0 games this season: keep only one entry per season (the current club).
+        // Remove any existing 0-game entries for this season and replace with ours,
+        // but if another entry has actual games, skip ours entirely.
+        if old_stats.total_games() == 0 {
+            let has_entry_with_games = self.statistics_history.items.iter()
+                .any(|e| e.season.start_year == season.start_year && e.statistics.total_games() > 0);
+            if has_entry_with_games {
+                return;
+            }
+            // Remove older 0-game entries for this season — keep only the current club
+            self.statistics_history.items.retain(|e| {
+                !(e.season.start_year == season.start_year && e.statistics.total_games() == 0)
+            });
+        }
+
         self.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
             season,
             team_name: team_name.to_string(),
@@ -156,7 +171,7 @@ mod tests {
         player.statistics = make_stats(10, 2);
 
         let loan_contract = crate::PlayerClubContract::new_loan(
-            500, make_date(2032, 5, 31), 99,
+            500, make_date(2032, 5, 31), 99, 100,
         );
         player.contract = Some(loan_contract);
 

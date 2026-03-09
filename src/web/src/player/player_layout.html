@@ -8,11 +8,137 @@
     <a class="fm-tab{% if active_tab == "transfers" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/transfers">{{ i18n.t("transfers") }}</a>
     <a class="fm-tab{% if active_tab == "decisions" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/decisions">{{ i18n.t("decisions") }}</a>
     <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
+    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}">
+        <button class="fm-tabbar-dropdown-toggle" onclick="this.parentElement.classList.toggle('fm-dd-open')">
+            {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
+        </button>
+        <div class="fm-tabbar-dropdown-menu" id="player-edit-menu"></div>
+    </div>
 </div>
 {% endblock %}
 
 {% block html_title %}{% endblock %}
 
 {% block content %}{% endblock %}
+
+{% block scripts_layout %}
+<script>
+(function() {
+    var dd = document.getElementById('player-edit-dd');
+    if (!dd) return;
+    var playerId = dd.dataset.playerId;
+    var menu = document.getElementById('player-edit-menu');
+
+    // Close dropdown on outside click
+    document.addEventListener('click', function(e) {
+        if (!dd.contains(e.target)) dd.classList.remove('fm-dd-open');
+    });
+
+    // Build menu from page data
+    var injuryEl = document.querySelector('.fm-ph-injury');
+    var loanEl = document.querySelector('.fm-ph-loan-label');
+    var isInjured = !!injuryEl;
+    var isLoan = !!loanEl;
+    var items = [];
+
+    if (isInjured) {
+        items.push('<button onclick="playerClearInjury(' + playerId + ')">Clear Injury</button>');
+    }
+
+    if (isLoan) {
+        items.push('<button onclick="playerCancelLoan(' + playerId + ')">Cancel Loan</button>');
+    }
+
+    if (!isLoan) {
+        if (items.length > 0) items.push('<div class="fm-dd-sep"></div>');
+        items.push('<button onclick="playerTransfer(' + playerId + ')">Transfer</button>');
+        items.push('<button onclick="playerLoan(' + playerId + ')">Loan</button>');
+    }
+
+    menu.innerHTML = items.join('');
+
+    window.playerClearInjury = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        FmDialog.confirm({
+            title: 'Clear Injury',
+            message: 'Remove injury from this player?',
+            confirmText: 'Clear',
+            onConfirm: function() {
+                fetch('/api/players/' + pid + '/clear-injury', { method: 'POST' })
+                    .then(function() { refreshContent(); });
+            }
+        });
+    };
+
+    window.playerCancelLoan = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        FmDialog.confirm({
+            title: 'Cancel Loan',
+            message: 'Cancel this player\'s loan and return to parent club?',
+            confirmText: 'Cancel Loan',
+            onConfirm: function() {
+                fetch('/api/players/' + pid + '/cancel-loan', { method: 'POST' })
+                    .then(function() { refreshContent(); });
+            }
+        });
+    };
+
+    window.playerTransfer = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        FmDialog.open({
+            title: 'Transfer Player',
+            fields: [
+                {
+                    name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
+                    placeholder: 'Search club...', url: '/api/clubs'
+                },
+                { name: 'fee', label: 'Transfer Fee ($)', type: 'number', placeholder: '0', value: '0' }
+            ],
+            confirmText: 'Transfer',
+            onConfirm: function(data) {
+                if (!data.to_club_id) return;
+                fetch('/api/players/' + pid + '/transfer', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to_club_id: parseInt(data.to_club_id), fee: parseInt(data.fee) || 0 })
+                }).then(function() { refreshContent(); });
+            }
+        });
+    };
+
+    window.playerLoan = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        FmDialog.open({
+            title: 'Loan Player',
+            fields: [
+                {
+                    name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
+                    placeholder: 'Search club...', url: '/api/clubs'
+                },
+                {
+                    name: 'seasons', label: 'Duration', type: 'select',
+                    options: [
+                        { value: '1', text: '1 Season' },
+                        { value: '2', text: '2 Seasons' },
+                        { value: '3', text: '3 Seasons' },
+                        { value: '4', text: '4 Seasons' },
+                        { value: '5', text: '5 Seasons' }
+                    ]
+                }
+            ],
+            confirmText: 'Loan',
+            onConfirm: function(data) {
+                if (!data.to_club_id) return;
+                fetch('/api/players/' + pid + '/loan', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ to_club_id: parseInt(data.to_club_id), seasons: parseInt(data.seasons) || 1 })
+                }).then(function() { refreshContent(); });
+            }
+        });
+    };
+})();
+</script>
+{% endblock %}
 
 {% block scripts %}{% endblock %}

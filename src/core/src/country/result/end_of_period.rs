@@ -114,7 +114,9 @@ impl CountryResult {
 
                 for player in &team.players.players {
                     if let Some(ref contract) = player.contract {
-                        if contract.contract_type == crate::ContractType::Loan {
+                        if contract.contract_type == crate::ContractType::Loan
+                            && contract.expiration <= date
+                        {
                             if let Some(parent_club_id) = contract.loan_from_club_id {
                                 loan_returns.push(LoanReturn {
                                     player_id: player.id,

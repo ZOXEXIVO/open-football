@@ -29,12 +29,13 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
             .tick_context
             .distances
             .opponents(self.ctx.player.id, distance)
-            .map(|(pid, _)| MatchPlayerLite {
-                id: pid,
-                position: self.ctx.tick_context.positions.players.position(pid),
-                tactical_positions: self.ctx.context.players.by_id(pid).expect(&format!(
-                    "unknown player = {}", pid
-                )).tactical_position.current_position
+            .filter_map(|(pid, _)| {
+                let player = self.ctx.context.players.by_id(pid)?;
+                Some(MatchPlayerLite {
+                    id: pid,
+                    position: self.ctx.tick_context.positions.players.position(pid),
+                    tactical_positions: player.tactical_position.current_position,
+                })
             })
     }
 

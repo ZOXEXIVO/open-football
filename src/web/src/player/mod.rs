@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod decisions;
 pub mod get;
 pub mod history;
@@ -18,4 +19,5 @@ pub fn player_routes() -> Router<GameAppData> {
         .merge(transfers::routes::routes())
         .merge(history::routes::routes())
         .merge(decisions::routes::routes())
+        .merge(actions::routes::routes())
 }

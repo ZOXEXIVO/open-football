@@ -264,7 +264,7 @@ impl SimulatorData {
             .teams.teams[ti].players.players.iter_mut().find(|p| p.id == id)
     }
 
-    fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
+    pub fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
         // Fast path: indexed lookup
         if let Some((pc, pco, pcl, pt)) =
             self.indexes.as_ref().and_then(|indexes| indexes.get_player_location(id))
@@ -299,6 +299,32 @@ impl SimulatorData {
             }
         }
         None
+    }
+
+    /// Find the array indices (continent, country, club, main team) for a club by ID.
+    pub fn find_club_main_team(&self, club_id: u32) -> Option<(usize, usize, usize, usize)> {
+        for (ci, continent) in self.continents.iter().enumerate() {
+            for (coi, country) in continent.countries.iter().enumerate() {
+                for (cli, club) in country.clubs.iter().enumerate() {
+                    if club.id == club_id {
+                        // Find the main team (first team, or index 0 as fallback)
+                        let ti = club.teams.teams.iter().position(|t| {
+                            t.team_type == crate::TeamType::Main
+                        }).unwrap_or(0);
+                        return Some((ci, coi, cli, ti));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Rebuild player indexes after a transfer/loan move.
+    pub fn rebuild_indexes(&mut self) {
+        if let Some(mut indexes) = self.indexes.take() {
+            indexes.refresh_player_indexes(self);
+            self.indexes = Some(indexes);
+        }
     }
 
     pub fn staff_with_team(&self, staff_id: u32) -> Option<(&Staff, &Team)> {

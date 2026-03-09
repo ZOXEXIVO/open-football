@@ -10,7 +10,6 @@ use core::ContractType;
 use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
-use core::transfers::TransferType;
 use core::utils::{DateUtils, FormattingUtils};
 use core::{SimulatorData, Team};
 use chrono::NaiveDate;
@@ -108,27 +107,6 @@ pub async fn team_get_action(
 
     let club_id = team.club_id;
 
-    // Build a set of player IDs currently loaned IN to this club
-    // Only include loans that haven't expired yet
-    let loaned_in_player_ids: Vec<u32> = simulator_data
-        .country_by_club(club_id)
-        .map(|country| {
-            country
-                .transfer_market
-                .transfer_history
-                .iter()
-                .filter(|t| {
-                    t.to_club_id == club_id
-                        && match &t.transfer_type {
-                            TransferType::Loan(end_date) => *end_date >= now,
-                            _ => false,
-                        }
-                })
-                .map(|t| t.player_id)
-                .collect()
-        })
-        .unwrap_or_default();
-
     let head_coach = team.staffs.head_coach();
     let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;
     let staff_id = head_coach.id;
@@ -143,8 +121,7 @@ pub async fn team_get_action(
 
             let is_loan = p.contract.as_ref()
                 .map(|c| c.contract_type == ContractType::Loan)
-                .unwrap_or(false)
-                || loaned_in_player_ids.contains(&p.id);
+                .unwrap_or(false);
 
             let is_youth = p.contract.as_ref()
                 .map(|c| c.contract_type == ContractType::Youth)
@@ -184,75 +161,62 @@ pub async fn team_get_action(
         })
         .collect();
 
-    // Collect current player IDs to avoid duplicates
-    let current_player_ids: Vec<u32> = players.iter().map(|p| p.id).collect();
+    // Find loaned-out players by scanning all clubs for players
+    // whose contract has loan_from_club_id == this club
+    for continent in &simulator_data.continents {
+        for country in &continent.countries {
+            for club in &country.clubs {
+                for team_iter in &club.teams.teams {
+                    for player in &team_iter.players.players {
+                        let is_loaned_from_us = player.contract.as_ref().map(|c| {
+                            c.contract_type == ContractType::Loan
+                                && c.loan_from_club_id == Some(club_id)
+                        }).unwrap_or(false);
 
-    // Find currently loaned-out players from transfer history
-    // Only include loans that haven't expired yet
-    if let Some(country) = simulator_data.country_by_club(club_id) {
-        let loan_records: Vec<_> = country
-            .transfer_market
-            .transfer_history
-            .iter()
-            .filter(|t| {
-                t.from_team_id == team_id
-                    && match &t.transfer_type {
-                        TransferType::Loan(end_date) => *end_date >= now,
-                        _ => false,
+                        if !is_loaned_from_us { continue; }
+
+                        let player_country = simulator_data.country(player.country_id);
+                        let position = player.positions.display_positions().join(", ");
+
+                        players.push(TeamPlayer {
+                            id: player.id,
+                            first_name: player.full_name.display_first_name().to_string(),
+                            position_sort: player.position(),
+                            position,
+                            behaviour: player.behaviour.as_str().to_string(),
+                            injured: player.player_attributes.is_injured,
+                            unhappy: !player.happiness.is_happy(),
+                            transfer_listed: false,
+                            loan_listed: false,
+                            is_loan: false,
+                            is_loaned_out: true,
+                            is_youth: false,
+                            country_slug: player_country.map(|c| c.slug.clone()).unwrap_or_default(),
+                            country_code: player_country.map(|c| c.code.clone()).unwrap_or_default(),
+                            country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),
+                            last_name: player.full_name.display_last_name().to_string(),
+                            conditions: get_conditions(player),
+                            value: FormattingUtils::format_money(player.value(now)),
+                            current_ability: get_current_ability_stars(player),
+                            potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
+                            age: DateUtils::age(player.birth_date, now),
+                            played: player.statistics.played + player.friendly_statistics.played,
+                            played_subs: player.statistics.played_subs + player.friendly_statistics.played_subs,
+                            goals: player.statistics.goals + player.friendly_statistics.goals,
+                            average_rating: player.statistics.combined_rating_str(&player.friendly_statistics),
+                            has_recent_decision: has_decision_within_days(player, now, 7),
+                            status: PlayerStatusDto::new(player.statuses.get()),
+                        });
                     }
-                    && !current_player_ids.contains(&t.player_id)
-            })
-            .collect();
-
-        for t in loan_records {
-            // Search globally — the player may have been loaned to a club in another country
-            // Use player_with_team to ensure the player is still active (not retired)
-            let found = simulator_data.player_with_team(t.player_id);
-
-            if let Some((player, _)) = found {
-                let player_country = simulator_data.country(player.country_id);
-                let position = player.positions.display_positions().join(", ");
-
-                players.push(TeamPlayer {
-                    id: player.id,
-                    first_name: player.full_name.display_first_name().to_string(),
-                    position_sort: player.position(),
-                    position,
-                    behaviour: player.behaviour.as_str().to_string(),
-                    injured: player.player_attributes.is_injured,
-                    unhappy: !player.happiness.is_happy(),
-                    transfer_listed: false,
-                    loan_listed: false,
-                    is_loan: false,
-                    is_loaned_out: true,
-                    is_youth: false,
-                    country_slug: player_country.map(|c| c.slug.clone()).unwrap_or_default(),
-                    country_code: player_country.map(|c| c.code.clone()).unwrap_or_default(),
-                    country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),
-                    last_name: player.full_name.display_last_name().to_string(),
-                    conditions: get_conditions(player),
-                    value: FormattingUtils::format_money(player.value(now)),
-                    current_ability: get_current_ability_stars(player),
-                    potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
-                    age: DateUtils::age(player.birth_date, now),
-                    played: player.statistics.played + player.friendly_statistics.played,
-                    played_subs: player.statistics.played_subs + player.friendly_statistics.played_subs,
-                    goals: player.statistics.goals + player.friendly_statistics.goals,
-                    average_rating: player.statistics.combined_rating_str(&player.friendly_statistics),
-                    has_recent_decision: has_decision_within_days(player, now, 7),
-                    status: PlayerStatusDto::new(player.statuses.get()),
-                });
+                }
             }
         }
     }
 
     players.sort_by(|a, b| {
-        // Sort loaned-out players to the end
-        a.is_loaned_out.cmp(&b.is_loaned_out).then_with(|| {
-            a.position_sort
-                .partial_cmp(&b.position_sort)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        a.position_sort
+            .partial_cmp(&b.position_sort)
+            .unwrap_or(std::cmp::Ordering::Equal)
     });
 
     let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;

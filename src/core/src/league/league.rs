@@ -517,13 +517,13 @@ impl League {
         // Check home team
         let home_losing_streak = self.dynamics.get_team_losing_streak(result.score.home_team.team_id);
         if home_losing_streak > 5 {
-            warn!("🔴 Manager under severe pressure at team {}", result.score.home_team.team_id);
+            debug!("🔴 Manager under severe pressure at team {}", result.score.home_team.team_id);
         }
 
         // Check away team
         let away_losing_streak = self.dynamics.get_team_losing_streak(result.score.away_team.team_id);
         if away_losing_streak > 5 {
-            warn!("🔴 Manager under severe pressure at team {}", result.score.away_team.team_id);
+            debug!("🔴 Manager under severe pressure at team {}", result.score.away_team.team_id);
         }
     }
 
@@ -594,7 +594,7 @@ impl League {
         let upcoming_matches = self.schedule.get_matches_in_next_days(current_date, 7);
         for match_item in upcoming_matches {
             if self.dynamics.is_derby(match_item.home_team_id, match_item.away_team_id) {
-                info!("🔥 Derby coming up: Team {} vs Team {}",
+                debug!("🔥 Derby coming up: Team {} vs Team {}",
                       match_item.home_team_id, match_item.away_team_id);
             }
         }
@@ -610,7 +610,7 @@ impl League {
         // Check Financial Fair Play violations
         for club in clubs {
             if self.regulations.check_ffp_violation(club) {
-                warn!("⚠️ FFP violation detected for club: {}", club.name);
+                debug!("⚠️ FFP violation detected for club: {}", club.name);
                 self.regulations.apply_ffp_sanctions(club.id, &mut self.table);
             }
         }
@@ -657,11 +657,11 @@ impl League {
     }
 
     fn process_season_end(&mut self, _clubs: &[Club], current_date: NaiveDate) {
-        info!("🏆 Season ended for league: {}", self.name);
+        debug!("🏆 Season ended for league: {}", self.name);
 
         let champion_id = self.table.rows.first().map(|r| r.team_id);
         if let Some(champion) = champion_id {
-            info!("🥇 Champions: Team {}", champion);
+            debug!("🥇 Champions: Team {}", champion);
             self.milestones.record_champion(champion, current_date);
         }
 
@@ -1118,15 +1118,15 @@ impl LeagueStatistics {
 
     pub fn archive_season_stats(&mut self) {
         // Archive current season statistics
-        info!("📊 Season Statistics Archived:");
-        info!("  Total Goals: {}", self.total_goals);
-        info!("  Total Matches: {}", self.total_matches);
-        info!("  Goals per Match: {:.2}",
+        debug!("📊 Season Statistics Archived:");
+        debug!("  Total Goals: {}", self.total_goals);
+        debug!("  Total Matches: {}", self.total_matches);
+        debug!("  Goals per Match: {:.2}",
               self.total_goals as f32 / self.total_matches.max(1) as f32);
-        info!("  Competitive Balance: {:.2}", self.competitive_balance_index);
+        debug!("  Competitive Balance: {:.2}", self.competitive_balance_index);
 
         if let Some((player_id, goals)) = self.top_scorer {
-            info!("  Top Scorer: Player {} with {} goals", player_id, goals);
+            debug!("  Top Scorer: Player {} with {} goals", player_id, goals);
         }
 
         // Reset for new season
@@ -1201,7 +1201,7 @@ impl LeagueMilestones {
                     matches_played,
                 };
                 self.season_milestones.push(milestone);
-                info!("🏆 {} wins the title with {} matches remaining!",
+                debug!("🏆 {} wins the title with {} matches remaining!",
                       leader.team_id, matches_remaining);
             }
         }
@@ -1221,7 +1221,7 @@ impl LeagueMilestones {
                         m.team_id == row.team_id
                 ) {
                     self.season_milestones.push(milestone);
-                    info!("💪 Team {} is unbeaten after {} matches!", row.team_id, matches_played);
+                    debug!("💪 Team {} is unbeaten after {} matches!", row.team_id, matches_played);
                 }
             }
         }
@@ -1238,7 +1238,7 @@ impl LeagueMilestones {
             .count();
 
         if consecutive_titles >= 3 {
-            info!("👑 Dynasty! Team {} wins {} consecutive titles!",
+            debug!("👑 Dynasty! Team {} wins {} consecutive titles!",
                   team_id, consecutive_titles);
         }
     }

@@ -369,7 +369,9 @@ impl MidfielderCreatingSpaceState {
             .opponents(ctx.player.id, 50.0)
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
-            let nearest_opponent = ctx.context.players.by_id(nearest_id).unwrap();
+            let Some(nearest_opponent) = ctx.context.players.by_id(nearest_id) else {
+                return target;
+            };
             // Curve away from opponent
             let to_target = (target - player_pos).normalize();
             let to_opponent = (nearest_opponent.position - player_pos).normalize();
@@ -894,7 +896,9 @@ impl MidfielderCreatingSpaceState {
             !ctx.tick_context.distances
                 .opponents(ball_holder.id, distance)
                 .any(|(opp_id, _)| {
-                    let opp = ctx.context.players.by_id(opp_id).unwrap();
+                    let Some(opp) = ctx.context.players.by_id(opp_id) else {
+                        return false;
+                    };
                     let to_opp = opp.position - ball_holder.position;
                     let projection = to_opp.dot(&to_player);
 

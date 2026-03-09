@@ -1,5 +1,5 @@
 use chrono::NaiveDate;
-use log::info;
+use log::{debug, info};
 use super::types::{TransferActivitySummary, can_club_accept_player};
 use crate::country::result::CountryResult;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
@@ -82,7 +82,7 @@ impl CountryResult {
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
-                        info!("Contract expired: player {} ({}) released from {}",
+                        debug!("Contract expired: player {} ({}) released from {}",
                               player.full_name, player_id, club.name);
                         player.contract = None;
                         break;
@@ -239,7 +239,7 @@ impl CountryResult {
             );
             summary.completed_transfers += 1;
 
-            info!(
+            debug!(
                 "Free agent signing: player {} from club {} to club {}",
                 signing.player_id, signing.from_club_id, signing.to_club_id
             );

@@ -157,7 +157,7 @@ pub(crate) fn execute_player_transfer(
             }
         }
 
-        info!(
+        debug!(
             "Transfer completed: player {} moved from club {} to club {} for {}",
             player_id, selling_club_id, buying_club_id, fee
         );
@@ -306,7 +306,7 @@ pub(crate) fn execute_loan_transfer(
             .unwrap_or(date);
 
         let salary = (loan_fee / 50.0).max(200.0) as u32;
-        player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id));
+        player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, buying_club_id));
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             if !can_club_accept_player(buying_club) {
@@ -327,7 +327,7 @@ pub(crate) fn execute_loan_transfer(
             }
         }
 
-        info!(
+        debug!(
             "Loan completed: player {} loaned from club {} to club {} (fee: {})",
             player_id, selling_club_id, buying_club_id, loan_fee
         );
