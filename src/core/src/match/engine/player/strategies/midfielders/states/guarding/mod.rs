@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 
 const GUARD_DISTANCE: f32 = 25.0; // Keep a realistic marking distance (don't sit on top of opponent)
 const MAX_GUARD_RANGE: f32 = 100.0; // Give up guarding if attacker moves too far
-const TACKLE_TRANSITION_DISTANCE: f32 = 8.0; // Tackle if opponent receives ball
+const TACKLE_TRANSITION_DISTANCE: f32 = 15.0; // Tackle if opponent receives ball nearby
 const STAMINA_THRESHOLD: f32 = 15.0;
 const PREDICTION_TIME: f32 = 0.25;
 const MAX_DISTANCE_FROM_START: f32 = 150.0; // Don't follow opponent too far from tactical zone
@@ -48,11 +48,11 @@ impl StateProcessingHandler for MidfielderGuardingState {
             ));
         }
 
-        // Press opponent with ball if nearby — only chase if best positioned
+        // Press opponent with ball if nearby — midfielders must engage
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let dist = opponent_with_ball.distance(ctx);
-            // Very close — tackle reactively
-            if dist < 15.0 {
+            // Close — tackle aggressively
+            if dist < 25.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));

@@ -15,22 +15,22 @@ impl Settings {
         let match_events = args.iter().any(|arg| arg == "--match-events");
 
         let match_recordings = !(args.iter().any(|arg| arg == "--skip-match-recording")
-            || env::var("SKIP_MATCH_RECORDING")
-                .map(|v| v == "true")
+            || env::var("MATCH_RECORD_ENABLED")
+                .map(|v| v == "false")
                 .unwrap_or(false));
 
         let match_threads = args.iter()
             .find(|arg| arg.starts_with("--match-threads="))
             .and_then(|arg| arg.strip_prefix("--match-threads="))
             .and_then(|v| v.parse().ok())
-            .or_else(|| env::var("MAX_MATCH_THREADS").ok().and_then(|v| v.parse().ok()))
+            .or_else(|| env::var("MATCH_PLAY_POOL_MAX_THREADS").ok().and_then(|v| v.parse().ok()))
             .unwrap_or_else(|| {
                 std::thread::available_parallelism()
                     .map(|n| n.get())
                     .unwrap_or(4)
             });
 
-        let match_store_threads = env::var("MAX_MATCH_STORE_THREADS")
+        let match_store_threads = env::var("MATCH_STORE_POOL_MAX_THREADS")
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(4);

@@ -26,15 +26,15 @@ impl StateProcessingHandler for MidfielderReturningState {
         }
 
         // CRITICAL: Tackle/press if an opponent has the ball nearby
-        if let Some(opponent) = ctx.players().opponents().nearby(80.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            if opponent_distance < 30.0 {
+            if opponent_distance < 40.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
             }
-            if opponent_distance < 80.0 {
+            if opponent_distance < 100.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));

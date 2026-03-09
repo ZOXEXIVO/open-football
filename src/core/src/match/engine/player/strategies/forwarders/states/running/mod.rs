@@ -218,6 +218,20 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
+            // Priority 0.7: Cross incoming — position to receive
+            // Detect crosses: ball in flight, coming from wide area, forward in or near the box
+            if ctx.ball().is_towards_player_with_angle(0.6)
+                && ctx.ball().distance() > 10.0
+                && ctx.ball().distance() < 100.0
+                && ctx.ball().distance_to_opponent_goal() < 150.0
+                && ctx.tick_context.positions.ball.position.z >= 1.0
+                && !ctx.ball().is_owned()
+            {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::CrossReceiving,
+                ));
+            }
+
             // Priority 1: Ball interception opportunity
             if self.can_intercept_ball(ctx) {
                 return Some(StateChangeResult::with_forward_state(
@@ -327,20 +341,19 @@ impl StateProcessingHandler for ForwardRunningState {
             let ball_distance = ctx.ball().distance();
 
             // ANTI-FOLLOWING: If very close to ball carrier, spread away
-            if ball_distance < 35.0 && ctx.team().is_control_ball() {
+            // Use hysteresis: start spreading at 25, stop at 45 to prevent oscillation
+            if ball_distance < 25.0 && ctx.team().is_control_ball() {
                 let away_from_ball = (ctx.player.position - ball_pos).normalize();
                 let lateral = Vector3::new(-away_from_ball.y, away_from_ball.x, 0.0);
-                let spread_target = ctx.player.position + away_from_ball * 25.0 + lateral * 15.0;
+                let spread_target = ctx.player.position + away_from_ball * 30.0 + lateral * 15.0;
                 let clamped = Vector3::new(
                     spread_target.x.clamp(30.0, field_width - 30.0),
                     spread_target.y.clamp(40.0, field_height - 40.0),
                     0.0,
                 );
-                return Some(
-                    (SteeringBehavior::Arrive { target: clamped, slowing_distance: 10.0 }
-                        .calculate(ctx.player).velocity
-                        + ctx.player().separation_velocity()) * fatigue_factor,
-                );
+                let direction = (clamped - ctx.player.position).normalize();
+                let speed = ctx.player.skills.physical.pace * 0.5;
+                return Some(direction * speed * fatigue_factor);
             }
 
             let attacking_direction = match ctx.player.side {
@@ -394,10 +407,14 @@ impl StateProcessingHandler for ForwardRunningState {
                 + start_pos.y * start_weight;
 
             // Per-forward organic drift for unique movement (smaller — slot handles spread)
+            // Dampen drift in attacking third to prevent shaking near goal
             let match_time = ctx.context.total_match_time as f32;
             let seed = ctx.player.id as f32 * 2.39;
-            let drift_x = (seed + match_time * 0.005).sin() * 8.0;
-            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 6.0;
+            let in_attacking_third = ctx.player.position.x > field_width * 0.66
+                || ctx.player.position.x < field_width * 0.33;
+            let drift_scale = if in_attacking_third { 0.3 } else { 1.0 };
+            let drift_x = (seed + match_time * 0.005).sin() * 8.0 * drift_scale;
+            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 6.0 * drift_scale;
 
             let target = Vector3::new(
                 (target_x + drift_x).clamp(30.0, field_width - 30.0),
@@ -409,7 +426,7 @@ impl StateProcessingHandler for ForwardRunningState {
 
             let arrive_velocity = SteeringBehavior::Arrive {
                 target,
-                slowing_distance: 25.0,
+                slowing_distance: 12.0,
             }
             .calculate(ctx.player)
             .velocity;

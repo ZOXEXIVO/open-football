@@ -6,12 +6,12 @@ pub struct DefensiveOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
-const THREAT_SCAN_DISTANCE: f32 = 70.0;
-const DANGEROUS_RUN_SPEED: f32 = 3.0;
-const DANGEROUS_RUN_ANGLE: f32 = 0.7;
+const THREAT_SCAN_DISTANCE: f32 = 100.0;
+const DANGEROUS_RUN_SPEED: f32 = 2.0;
+const DANGEROUS_RUN_ANGLE: f32 = 0.5;
 
 // Coordination constants
-const ENGAGEMENT_DISTANCE: f32 = 25.0; // Distance at which a defender is considered "engaging" an opponent
+const ENGAGEMENT_DISTANCE: f32 = 20.0; // Distance at which a defender is considered "engaging" an opponent
 #[allow(dead_code)]
 const MIN_MARKING_SEPARATION: f32 = 15.0; // Minimum distance between defenders marking different opponents
 
@@ -239,7 +239,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
     // ==================== DEFENDER COORDINATION ====================
 
     /// Check if an opponent is already being engaged by a teammate defender
-    /// Returns true if another defender is closer to the opponent and moving toward them
+    /// Returns true if another defender is closer AND actively moving toward them
     pub fn is_opponent_being_engaged(&self, opponent: &MatchPlayerLite) -> bool {
         let my_distance = (self.ctx.player.position - opponent.position).magnitude();
 
@@ -251,25 +251,31 @@ impl<'p> DefensiveOperationsImpl<'p> {
             .any(|teammate| {
                 let teammate_distance = (teammate.position - opponent.position).magnitude();
 
-                // Teammate is closer and within engagement distance
-                if teammate_distance < my_distance && teammate_distance < ENGAGEMENT_DISTANCE {
-                    return true;
+                // Teammate must be within engagement distance
+                if teammate_distance > ENGAGEMENT_DISTANCE {
+                    return false;
                 }
 
-                // Teammate is moving toward this opponent
+                // Teammate must be closer than us
+                if teammate_distance >= my_distance {
+                    return false;
+                }
+
+                // Teammate must be actively moving toward this opponent (not just standing nearby)
                 let teammate_velocity = teammate.velocity(self.ctx);
-                if teammate_velocity.norm() > 1.0 {
+                let speed = teammate_velocity.norm();
+
+                if speed > 0.5 {
                     let to_opponent = (opponent.position - teammate.position).normalize();
                     let velocity_dir = teammate_velocity.normalize();
                     let alignment = velocity_dir.dot(&to_opponent);
 
-                    // Teammate is actively pursuing this opponent
-                    if alignment > 0.7 && teammate_distance < my_distance * 1.2 {
-                        return true;
-                    }
+                    // Actively pursuing: moving toward opponent with reasonable alignment
+                    alignment > 0.3
+                } else {
+                    // Stationary but very close — counts as engaged (physically blocking)
+                    teammate_distance < 8.0
                 }
-
-                false
             })
     }
 
@@ -296,13 +302,13 @@ impl<'p> DefensiveOperationsImpl<'p> {
                 alignment.max(0.0) * 0.3 + (1.0 / (teammate_distance + 1.0)) * 0.7
             };
 
-            // Significant advantage threshold - 40% better positioning (loosened from 0.8)
-            if teammate_distance < my_distance * 0.6 {
+            // Teammate is significantly closer — they're better positioned
+            if teammate_distance < my_distance * 0.75 {
                 return false;
             }
 
-            // Teammate has much better goal coverage
-            if teammate_goal_coverage > my_goal_coverage * 1.3 && teammate_distance < my_distance * 1.1 {
+            // Teammate has better goal coverage AND is at least as close
+            if teammate_goal_coverage > my_goal_coverage * 1.2 && teammate_distance < my_distance * 1.05 {
                 return false;
             }
         }
@@ -381,8 +387,7 @@ impl<'p> DefensiveOperationsImpl<'p> {
     }
 
     /// Check if this defender can support the press as a second presser
-    /// Allows a second defender to press when within range, ball is on own side,
-    /// and there aren't already 2 pressers on the ball carrier
+    /// Allows a second defender to press when within range and ball is in own/middle third
     pub fn can_support_press(&self, opponent: &MatchPlayerLite) -> bool {
         let my_distance = (self.ctx.player.position - opponent.position).magnitude();
 
@@ -391,8 +396,10 @@ impl<'p> DefensiveOperationsImpl<'p> {
             return false;
         }
 
-        // Ball must be on own side for urgent support
-        if !self.ctx.ball().on_own_side() {
+        // Ball must not be deep in opponent's third — support pressing in own and middle third
+        let field_width = self.ctx.context.field_size.width as f32;
+        let ball_dist_to_opp_goal = self.ctx.ball().distance_to_opponent_goal();
+        if ball_dist_to_opp_goal < field_width * 0.25 {
             return false;
         }
 

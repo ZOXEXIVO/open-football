@@ -172,7 +172,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             .velocity;
 
             // Add separation to avoid clustering
-            return Some(base_velocity + ctx.player().separation_velocity() * 1.5);
+            return Some(base_velocity + ctx.player().separation_velocity() * 0.8);
         }
 
         // Fallback: use the existing complex logic when no teammate has ball

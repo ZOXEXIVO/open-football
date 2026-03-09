@@ -5,7 +5,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const HOLDING_DURATION: u64 = 50;
+const MIN_HOLDING_DURATION: u64 = 25;
+const MAX_HOLDING_DURATION: u64 = 60;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperHoldingState {}
@@ -19,8 +20,11 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
             ));
         }
 
-        // After holding for a specified duration, transition to distribute the ball
-        if ctx.in_state_time >= HOLDING_DURATION {
+        // After holding for a skill-based duration, transition to distribute the ball
+        // Better decision-makers distribute faster
+        let decision = ctx.player.skills.mental.decisions / 20.0;
+        let holding_duration = MAX_HOLDING_DURATION - ((MAX_HOLDING_DURATION - MIN_HOLDING_DURATION) as f32 * decision) as u64;
+        if ctx.in_state_time >= holding_duration {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,
             ));

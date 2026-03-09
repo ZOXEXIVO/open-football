@@ -13,6 +13,13 @@ pub struct MidfielderDistributingState {}
 
 impl StateProcessingHandler for MidfielderDistributingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Lost possession — transition out
+        if !ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         // Find the best passing option
         if let Some(teammate) = self.find_best_pass_option(ctx) {
             return Some(StateChangeResult::with_midfielder_state_and_event(
@@ -24,6 +31,13 @@ impl StateProcessingHandler for MidfielderDistributingState {
                         .with_reason("MID_DISTRIBUTING")
                         .build(ctx),
                 )),
+            ));
+        }
+
+        // Timeout: if no pass option found, transition to running with ball
+        if ctx.in_state_time > 30 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
             ));
         }
 

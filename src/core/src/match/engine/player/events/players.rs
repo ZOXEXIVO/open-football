@@ -989,23 +989,35 @@ impl PlayerEventDispatcher {
         } else if horizontal_distance > 50.0 {
             0.55
         } else if horizontal_distance > 30.0 {
-            0.70
+            0.75
+        } else if horizontal_distance > 15.0 {
+            0.88
         } else {
-            0.80
+            0.95
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Larger base error: elite players ±10-18 units, poor players ±40-80 units
+        // Base error: elite close-range ±3-8 units, poor long-range ±40-80 units
         let base_position_error = 65.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let max_y_error = base_position_error.clamp(10.0, 120.0);
+        let min_error = if horizontal_distance < 30.0 { 3.0 } else if horizontal_distance < 60.0 { 5.0 } else { 10.0 };
+        let max_y_error = base_position_error.clamp(min_error, 120.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
-        // Wide miss chance: even decent players miss the frame sometimes
-        // In real football ~65% of shots miss the target entirely
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + 0.35;
+        // Wide miss chance: distance-dependent — close range is much more accurate
+        // Real football: ~65% of all shots miss, but close-range misses are ~35-40%
+        let wide_miss_base = if horizontal_distance < 30.0 {
+            0.08 // Very close — skilled players rarely miss the frame
+        } else if horizontal_distance < 60.0 {
+            0.18
+        } else if horizontal_distance < 100.0 {
+            0.30
+        } else {
+            0.42 // Long range — high base miss rate
+        };
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1082,9 +1094,18 @@ impl PlayerEventDispatcher {
         // Add spin/environmental variation to height
         let vertical_spin_variation = rng.random_range(0.90..1.10);
 
-        // Over-the-bar miss chance: shots can balloon over the crossbar
-        // Combined with wide miss, total miss rate should be ~65%
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.4 + 0.22;
+        // Over-the-bar miss chance: distance-dependent
+        // Close range: players keep shots low. Long range: more ballooning
+        let over_bar_base = if horizontal_distance < 30.0 {
+            0.05 // Close range — very rarely sky it
+        } else if horizontal_distance < 60.0 {
+            0.12
+        } else if horizontal_distance < 100.0 {
+            0.18
+        } else {
+            0.25 // Long range — more likely to balloon over
+        };
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.4 + over_bar_base;
         let z_velocity = if rng.random_range(0.0f32..1.0) < over_bar_chance {
             // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
             // Ball needs to reach height > 8.0 during flight, so z_velocity must be significant

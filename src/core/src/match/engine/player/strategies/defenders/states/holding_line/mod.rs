@@ -37,9 +37,15 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // Priority: Press opponent with ball if close and we're the best positioned
+        // Priority: Tackle or press opponent with ball aggressively
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
+            // Very close — tackle immediately, don't wait
+            if distance < 25.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
             if distance < PRESSING_DISTANCE_THRESHOLD {
                 // Check if we're the best defender to press
                 if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
@@ -97,6 +103,32 @@ impl StateProcessingHandler for DefenderHoldingLineState {
                     // Another defender is closer but let's guard secondary threats
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Guarding,
+                    ));
+                }
+            }
+        }
+
+        // React to balls played behind the defensive line (through balls)
+        if !ctx.ball().is_owned() && ctx.ball().speed() > 1.0 {
+            let ball_pos = ctx.tick_context.positions.ball.position;
+            let ball_vel = ctx.tick_context.positions.ball.velocity;
+            let own_goal = ctx.ball().direction_to_own_goal();
+            let to_goal = (own_goal - ball_pos).normalize();
+            let ball_dir = ball_vel.normalize();
+            let heading_toward_goal = ball_dir.dot(&to_goal);
+
+            // Ball is moving toward our goal and is close enough to react
+            if heading_toward_goal > 0.4 && ctx.ball().distance() < 200.0 {
+                // Check if ball is behind us or at our level (through ball)
+                let is_behind_or_level = if own_goal.x < ctx.context.field_size.width as f32 / 2.0 {
+                    ball_pos.x < ctx.player.position.x + 15.0
+                } else {
+                    ball_pos.x > ctx.player.position.x - 15.0
+                };
+
+                if is_behind_or_level {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Intercepting,
                     ));
                 }
             }

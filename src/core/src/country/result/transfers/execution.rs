@@ -113,12 +113,14 @@ pub(crate) fn execute_player_transfer(
         player.last_transfer_date = Some(date);
 
         player.statuses.remove(PlayerStatusType::Lst);
+        player.statuses.remove(PlayerStatusType::Loa);
         player.statuses.remove(PlayerStatusType::Req);
         player.statuses.remove(PlayerStatusType::Unh);
         player.statuses.remove(PlayerStatusType::Trn);
         player.statuses.remove(PlayerStatusType::Bid);
         player.statuses.remove(PlayerStatusType::Wnt);
         player.statuses.remove(PlayerStatusType::Sct);
+        player.statuses.remove(PlayerStatusType::Enq);
 
         // Fresh start at new club — reset happiness to neutral
         player.happiness = crate::PlayerHappiness::new();
@@ -294,6 +296,7 @@ pub(crate) fn execute_loan_transfer(
         player.statuses.remove(PlayerStatusType::Bid);
         player.statuses.remove(PlayerStatusType::Wnt);
         player.statuses.remove(PlayerStatusType::Sct);
+        player.statuses.remove(PlayerStatusType::Enq);
 
         // Fresh start at new club — reset happiness to neutral
         player.happiness = crate::PlayerHappiness::new();

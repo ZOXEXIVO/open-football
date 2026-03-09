@@ -216,6 +216,23 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
+            // SWITCH PLAY: When congested on one side, look for a long pass to the other flank
+            if ownership_ticks > 25 && ctx.ball().has_stable_possession() {
+                let player_y = ctx.player.position.y;
+                let field_center_y = ctx.context.field_size.height as f32 / 2.0;
+                let distance_from_center = (player_y - field_center_y).abs();
+                // Only switch if we're wide (far from center) and congested
+                if distance_from_center > 60.0 && ctx.player().movement().is_congested() {
+                    let vision = ctx.player.skills.mental.vision / 20.0;
+                    let passing = ctx.player.skills.technical.passing / 20.0;
+                    if vision > 0.5 && passing > 0.5 {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::SwitchingPlay,
+                        ));
+                    }
+                }
+            }
+
             // Enhanced passing decision — carry the ball before looking for a pass
             if ownership_ticks > 40 && ctx.ball().has_stable_possession()
                 && self.should_pass(ctx)
@@ -239,8 +256,8 @@ impl StateProcessingHandler for MidfielderRunningState {
             if let Some(opponent) = ctx.players().opponents().nearby(150.0).with_ball(ctx).next() {
                 let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-                // Very close — tackle regardless (reactive)
-                if opponent_distance < 20.0 {
+                // Close — tackle regardless (reactive)
+                if opponent_distance < 30.0 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));
@@ -248,7 +265,7 @@ impl StateProcessingHandler for MidfielderRunningState {
 
                 // Only the best-positioned player presses — prevents team swarming
                 if ctx.team().is_best_player_to_chase_ball() {
-                    if opponent_distance < 40.0 {
+                    if opponent_distance < 50.0 {
                         return Some(StateChangeResult::with_midfielder_state(
                             MidfielderState::Tackling,
                         ));
@@ -321,6 +338,28 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Intercepting,
                 ));
+            }
+
+            // Track dangerous runners — opponent forwards sprinting toward our goal
+            if ctx.ball().on_own_side() {
+                let own_goal = ctx.ball().direction_to_own_goal();
+                let has_dangerous_runner = ctx.players().opponents().forwards()
+                    .any(|opp| {
+                        let dist = (opp.position - ctx.player.position).magnitude();
+                        if dist > 60.0 { return false; }
+                        let vel = opp.velocity(ctx);
+                        let speed = vel.norm();
+                        if speed < 2.0 { return false; }
+                        let to_goal = (own_goal - opp.position).normalize();
+                        let alignment = vel.normalize().dot(&to_goal);
+                        alignment > 0.5
+                    });
+
+                if has_dangerous_runner {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::TrackingRunner,
+                    ));
+                }
             }
 
             // Guard unmarked attackers on our side when we can't press/intercept

@@ -9,7 +9,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 15.0; // Increased — midfielders need to engage tackles earlier
+const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Midfielders engage tackles aggressively
 const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained midfielders foul less
 
 #[derive(Default, Clone)]
@@ -91,14 +91,19 @@ impl StateProcessingHandler for MidfielderTacklingState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
+        let pace = ctx.player.skills.physical.acceleration / 20.0;
+        // Explosive closing speed — skilled tacklers close gaps faster
+        let speed_boost = 1.3 + tackling_skill * 0.3 + pace * 0.3; // 1.3x - 1.9x
+
         Some(
             SteeringBehavior::Pursuit {
                 target: ctx.tick_context.positions.ball.position,
                 target_velocity: ctx.tick_context.positions.ball.velocity,
             }
             .calculate(ctx.player)
-            .velocity
-                + ctx.player().separation_velocity(),
+            .velocity * speed_boost
+                + ctx.player().separation_velocity() * 0.2,
         )
     }
 

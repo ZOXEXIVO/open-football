@@ -46,8 +46,7 @@ impl StateProcessingHandler for DefenderInterceptingState {
         // Only abandon interception if ball is moving away AND is far
         // Stationary balls (speed < 0.5) should not trigger this exit
         if ctx.ball().speed() > 0.5
-            && !ctx.ball().is_towards_player_with_angle(0.7)
-            || ball_distance > 130.0
+            && (!ctx.ball().is_towards_player_with_angle(0.7) || ball_distance > 130.0)
         {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Returning,

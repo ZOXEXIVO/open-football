@@ -5,7 +5,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLING_DISTANCE_THRESHOLD: f32 = 12.0; // Engage tackles earlier — real defenders close down fast
+const TACKLING_DISTANCE_THRESHOLD: f32 = 20.0; // Engage tackles aggressively — close down fast
 const BASE_PRESSING_DISTANCE: f32 = 45.0;
 const MAX_PRESSING_BONUS: f32 = 35.0; // effective range: 45-80
 const BASE_PRESSING_DISTANCE_DEFENSIVE_THIRD: f32 = 40.0;
@@ -124,7 +124,12 @@ impl StateProcessingHandler for DefenderPressingState {
             let intercept_offset = 5.0_f32.min(distance_to_opponent * 0.3);
             let intercept_target = opponent.position + opp_to_goal * intercept_offset;
             let direction = (intercept_target - ctx.player.position).normalize();
-            let speed = ctx.player.skills.physical.pace;
+            let pace = ctx.player.skills.physical.pace;
+            // Defenders press with urgency — acceleration and aggression drive closing speed
+            let aggression = ctx.player.skills.mental.aggression / 20.0;
+            let accel = ctx.player.skills.physical.acceleration / 20.0;
+            let press_boost = 1.1 + aggression * 0.2 + accel * 0.2; // 1.1x - 1.5x
+            let speed = pace * press_boost;
 
             let pressing_velocity = direction * speed;
 

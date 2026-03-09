@@ -6,7 +6,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MARKING_DISTANCE_THRESHOLD: f32 = 8.0; // Reduced from 10.0 - tighter marking
-const TACKLING_DISTANCE_THRESHOLD: f32 = 4.0; // Increased from 3.0 - tackle earlier
+const TACKLING_DISTANCE_THRESHOLD: f32 = 10.0; // Aggressive tackle when marking — don't let attacker turn
 const STAMINA_THRESHOLD: f32 = 20.0; // Minimum stamina to continue marking
 const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earlier to ball
 const HEADING_HEIGHT: f32 = 1.5;
@@ -53,15 +53,15 @@ impl StateProcessingHandler for DefenderMarkingState {
         if let Some(opponent) = opponent_to_mark {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // Priority: If opponent with ball is very close, press/tackle immediately
+            // Priority: If opponent with ball is close, press/tackle immediately
             if opponent.has_ball(ctx) {
                 if distance_to_opponent < TACKLING_DISTANCE_THRESHOLD {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
                 }
-                // Press the ball carrier if close enough
-                if distance_to_opponent < 20.0 && ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
+                // Press the ball carrier aggressively — any marking defender should engage
+                if distance_to_opponent < 30.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,
                     ));
@@ -123,8 +123,8 @@ impl StateProcessingHandler for DefenderMarkingState {
             let opponent_future_position = opponent_to_mark.position + opponent_velocity * prediction_time;
 
             // Calculate goal-side marking position
-            // Position between opponent and own goal
-            let to_goal = (opponent_future_position - own_goal).normalize();
+            // Position between opponent and own goal (goal-side = toward our goal)
+            let to_goal = (own_goal - opponent_future_position).normalize();
             let goal_side_offset = to_goal * MARKING_DISTANCE_THRESHOLD * GOAL_SIDE_WEIGHT;
 
             // Also consider ball-side positioning
@@ -144,11 +144,18 @@ impl StateProcessingHandler for DefenderMarkingState {
             }
 
             let direction = to_desired.normalize();
-            // Speed based on urgency - faster if far, slower if close
-            let urgency = (distance / MARKING_DISTANCE_THRESHOLD).clamp(0.5, 1.5);
+            // Speed based on urgency — must keep up with fast attackers
+            let urgency = (distance / MARKING_DISTANCE_THRESHOLD).clamp(0.6, 2.0);
             let speed = ctx.player.skills.physical.pace * urgency;
 
-            Some(direction * speed + ctx.player().separation_velocity() * 0.3)
+            // Extra burst when opponent has ball and is close
+            let threat_boost = if opponent_to_mark.has_ball(ctx) && distance < 20.0 {
+                1.3
+            } else {
+                1.0
+            };
+
+            Some(direction * speed * threat_boost + ctx.player().separation_velocity() * 0.2)
         } else {
             Some(Vector3::new(0.0, 0.0, 0.0))
         }

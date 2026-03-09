@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 
 const GUARD_DISTANCE: f32 = 20.0; // Keep a realistic marking distance (don't sit on top of opponent)
 const MAX_GUARD_RANGE: f32 = 80.0; // Give up guarding if attacker moves too far
-const TACKLE_TRANSITION_DISTANCE: f32 = 5.0; // Tackle if opponent receives ball and is close
+const TACKLE_TRANSITION_DISTANCE: f32 = 15.0; // Tackle immediately when guarded opponent receives ball
 const STAMINA_THRESHOLD: f32 = 15.0; // Guarding is tiring — need minimum stamina
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
@@ -156,11 +156,11 @@ impl StateProcessingHandler for DefenderGuardingState {
 
             let direction = to_desired.normalize();
 
-            // Speed based on how far off position we are
-            let base_speed = ctx.player.skills.physical.pace * 0.4;
-            let urgency = (distance / GUARD_DISTANCE).clamp(0.4, 1.0);
+            // Speed based on how far off position — must keep pace with fast attackers
+            let base_speed = ctx.player.skills.physical.pace * 0.8;
+            let urgency = (distance / GUARD_DISTANCE).clamp(0.6, 1.5);
 
-            Some(direction * base_speed * urgency + ctx.player().separation_velocity() * 0.3)
+            Some(direction * base_speed * urgency + ctx.player().separation_velocity() * 0.2)
         } else {
             Some(Vector3::zeros())
         }

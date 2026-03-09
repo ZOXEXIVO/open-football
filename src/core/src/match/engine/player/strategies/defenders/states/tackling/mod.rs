@@ -111,6 +111,8 @@ impl StateProcessingHandler for DefenderTacklingState {
             if ball_distance > PRESSING_DISTANCE {
                 return Some(StateChangeResult::with_defender_state(DefenderState::Returning));
             }
+            // Stuck in tackling too long without engaging — drop back to standing
+            return Some(StateChangeResult::with_defender_state(DefenderState::Standing));
         }
 
         None
@@ -124,14 +126,19 @@ impl StateProcessingHandler for DefenderTacklingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let target = self.calculate_intelligent_target(ctx);
 
+        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
+        let acceleration = ctx.player.skills.physical.acceleration / 20.0;
+        // Explosive closing speed — skilled defenders close gaps faster
+        let speed_boost = 1.4 + tackling_skill * 0.3 + acceleration * 0.3; // 1.4x - 2.0x
+
         Some(
             SteeringBehavior::Pursuit {
                 target,
-                target_velocity: Vector3::zeros(), // Static/calculated target position
+                target_velocity: Vector3::zeros(),
             }
                 .calculate(ctx.player)
-                .velocity
-                + ctx.player().separation_velocity(),
+                .velocity * speed_boost
+                + ctx.player().separation_velocity() * 0.15,
         )
     }
 

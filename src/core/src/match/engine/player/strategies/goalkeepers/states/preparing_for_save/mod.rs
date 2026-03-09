@@ -99,12 +99,13 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
 
         // Position on the line between goal and predicted ball position
         let goal_to_predicted = predicted_ball - goal_pos;
+        let agility = ctx.player.skills.physical.agility / 20.0;
         let intercept_distance = if ball_speed > 1.2 {
-            // Shot-speed ball — stay closer to goal to narrow angle
-            8.0 + reflexes * 6.0
+            // Shot-speed ball — skilled keepers narrow angle more aggressively
+            10.0 + reflexes * 8.0 + agility * 3.0
         } else {
-            // Slow ball — come out more
-            15.0 + reflexes * 10.0
+            // Slow ball — come out more, positioning skill matters
+            18.0 + reflexes * 10.0 + agility * 4.0
         };
 
         let target = if goal_to_predicted.norm() > 1.0 {
@@ -114,8 +115,8 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         };
 
         // Sprint speed boost — GK must react explosively to shots
-        let agility = ctx.player.skills.physical.agility / 20.0;
-        let speed_boost = 1.6 + agility * 0.6; // 1.6x - 2.2x
+        // Reflexes + agility determine reaction speed
+        let speed_boost = 1.6 + agility * 0.5 + reflexes * 0.4; // 1.6x - 2.5x
 
         Some(
             SteeringBehavior::Pursuit {
@@ -166,14 +167,14 @@ impl GoalkeeperPreparingForSaveState {
 
         // Dive decisions calibrated for actual shot speeds (max ~2.0/tick)
         if ball_speed > 1.5 {
-            // Strong shot — dive immediately if in range
-            ball_distance < (30.0 + reflexes * 10.0) && time_to_ball < (20.0 + reflexes * 10.0)
+            // Strong shot — dive immediately if in range (skilled keepers react further out)
+            ball_distance < (30.0 + reflexes * 12.0 + agility * 5.0) && time_to_ball < (20.0 + reflexes * 12.0)
         } else if ball_speed > 0.8 {
             // Medium speed — dive if reasonably close
-            ball_distance < (25.0 + agility * 8.0) && bravery > 0.2
+            ball_distance < (25.0 + agility * 10.0 + reflexes * 4.0) && bravery > 0.15
         } else {
             // Slow rolling ball — dive if close
-            ball_distance < 20.0 && (reflexes + agility) > 0.6
+            ball_distance < 22.0 && (reflexes + agility) > 0.5
         }
     }
 

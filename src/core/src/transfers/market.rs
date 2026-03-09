@@ -163,6 +163,7 @@ impl TransferMarket {
 
             let listing = self.listings.get(listing_idx).unwrap();
             let from_team_id = listing.team_id;
+            let player_id = negotiation.player_id;
 
             // Use negotiation's is_loan flag (not listing type) since a buying club
             // may approach a Transfer-listed player as a loan or vice versa
@@ -200,13 +201,38 @@ impl TransferMarket {
 
             self.transfer_history.push(completed.clone());
 
+            // Clear all remaining active negotiations for this player
+            self.cancel_negotiations_for_player(player_id, negotiation_id);
+
+            // Cancel all other listings for this player
+            for listing in &mut self.listings {
+                if listing.player_id == player_id
+                    && listing.status != TransferListingStatus::Completed
+                {
+                    listing.status = TransferListingStatus::Cancelled;
+                }
+            }
+
             Some(completed)
         } else {
             None
         }
     }
 
-    pub fn update(&mut self, current_date: NaiveDate) {
+    /// Cancel all active negotiations for a player, except the completed one
+    fn cancel_negotiations_for_player(&mut self, player_id: u32, except_negotiation_id: u32) {
+        for (id, negotiation) in &mut self.negotiations {
+            if negotiation.player_id == player_id
+                && *id != except_negotiation_id
+                && (negotiation.status == NegotiationStatus::Pending
+                    || negotiation.status == NegotiationStatus::Countered)
+            {
+                negotiation.status = NegotiationStatus::Rejected;
+            }
+        }
+    }
+
+    pub fn update(&mut self, current_date: NaiveDate) -> Vec<(u32, u32)> {
         // Check for expired negotiations
         let expired_ids: Vec<u32> = self.negotiations.iter_mut()
             .filter_map(|(id, negotiation)| {
@@ -218,9 +244,14 @@ impl TransferMarket {
             })
             .collect();
 
+        // Collect (buying_club_id, player_id) for pipeline cleanup
+        let mut expired_info: Vec<(u32, u32)> = Vec::new();
+
         // Update listings for expired negotiations
         for id in expired_ids {
             if let Some(negotiation) = self.negotiations.get(&id) {
+                expired_info.push((negotiation.buying_club_id, negotiation.player_id));
+
                 let listing_idx = negotiation.listing_id as usize;
                 if listing_idx < self.listings.len() {
                     let listing = &mut self.listings[listing_idx];
@@ -228,6 +259,8 @@ impl TransferMarket {
                 }
             }
         }
+
+        expired_info
     }
 
     /// Check if a specific player already has an active negotiation from a given buyer.

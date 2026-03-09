@@ -149,12 +149,21 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Guard unmarked attackers who are trying to find space
-        if ctx.ball().on_own_side() {
-            if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Guarding,
-                ));
+        // Mark or guard unmarked attackers in our area
+        if ctx.ball().on_own_side() || ctx.ball().distance() < 200.0 {
+            if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
+                let dist = unmarked.distance(ctx);
+                if dist < MARKING_DISTANCE {
+                    // Close enough to mark tightly
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Marking,
+                    ));
+                } else {
+                    // Further away — guard their space
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Guarding,
+                    ));
+                }
             }
         }
 
@@ -177,9 +186,10 @@ impl StateProcessingHandler for DefenderStandingState {
                 DefenderState::Walking,
             ));
         }
-        if ctx.in_state_time > 30 {
+        // Timeout: if no other transition triggered, reposition to defensive line
+        if ctx.in_state_time > 100 {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Walking,
+                DefenderState::HoldingLine,
             ));
         }
 

@@ -24,8 +24,8 @@ impl StateProcessingHandler for MidfielderWalkingState {
         if let Some(opponent) = ctx.players().opponents().nearby(100.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            // If opponent with ball is very close, tackle immediately
-            if opponent_distance < 30.0 {
+            // If opponent with ball is close, tackle immediately
+            if opponent_distance < 40.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));

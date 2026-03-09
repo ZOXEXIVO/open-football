@@ -8,7 +8,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 
 const MAX_DIVE_TIME: f32 = 1.5; // Maximum time to stay in diving state (in seconds)
-const BALL_CLAIM_DISTANCE: f32 = 8.0;
+const BALL_CLAIM_DISTANCE: f32 = 10.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperDivingState {}
@@ -80,14 +80,17 @@ impl GoalkeeperDivingState {
 
         // Predict ball position based on reflexes (better GK = better prediction)
         let reflexes = ctx.player.skills.mental.concentration / 20.0;
-        let prediction_time = 0.3 + reflexes * 0.3; // 0.3-0.6 seconds ahead
+        let anticipation = ctx.player.skills.mental.anticipation / 20.0;
+        let prediction_time = 0.3 + (reflexes * 0.3 + anticipation * 0.2); // 0.3-0.8 seconds ahead
         let future_ball_position = ball_position + ball_velocity * prediction_time;
 
         let to_future_ball = future_ball_position - ctx.player.position;
         let mut dive_direction = to_future_ball.normalize();
 
         // Small randomness based on skill — elite GKs barely deviate
-        let max_deviation = (1.0 - reflexes) * std::f32::consts::PI / 12.0; // 0-15 degrees max
+        // Squared so elite keepers are dramatically more accurate
+        let skill_factor = (1.0 - reflexes) * (1.0 - reflexes);
+        let max_deviation = skill_factor * std::f32::consts::PI / 10.0; // 0-18 degrees max, elite ~0
         let random_angle = (rand::random::<f32>() - 0.5) * max_deviation;
         dive_direction = nalgebra::Rotation3::new(Vector3::z() * random_angle) * dive_direction;
 
@@ -96,8 +99,11 @@ impl GoalkeeperDivingState {
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
-        // Explosive dive speed — GKs need to cover 3-5m in under a second
-        (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5 * urgency
+        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        // Explosive dive speed — reflexes are the primary driver for reaction saves
+        let base_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
+        let reflex_boost = 1.0 + reflexes * 0.5; // 1.0x - 1.5x boost for elite reflexes
+        base_speed * urgency * reflex_boost
     }
 
     fn calculate_urgency(&self, ctx: &StateProcessingContext) -> f32 {
@@ -125,19 +131,26 @@ impl GoalkeeperDivingState {
         // Catch distance based on GK reach (diving extends range significantly)
         let handling = ctx.player.skills.technical.first_touch / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
-        let catch_distance = 5.0 + agility * 4.0 + handling * 2.0; // 5-11 unit reach while diving
+        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        // Elite GK: 6 + 4.5 + 2 + 1.5 = 14, mediocre: 6 + 2 + 1 + 0.7 = 9.7
+        let catch_distance = 6.0 + agility * 4.5 + handling * 2.0 + reflexes * 1.5;
 
         if ball_distance > catch_distance {
             return false;
         }
 
-        // Catch probability: base from handling, small penalty for fast shots
-        // Shot speeds are ~1.0-2.0/tick, so scale accordingly
-        let speed_penalty = (ball_speed / 5.0).min(0.3); // Max 30% penalty
-        let base_catch = handling * 0.5 + agility * 0.3 + 0.3; // Base 30% + skill bonus
-        let catch_probability = base_catch * (1.0 - speed_penalty);
+        // Catch probability with stronger skill differentiation
+        // Skilled GKs parry/hold much more reliably
+        let skill_blend = handling * 0.4 + reflexes * 0.3 + agility * 0.3;
+        // Speed penalty — elite reflexes mitigate fast shot difficulty
+        let effective_speed_penalty = (ball_speed / 5.0).min(0.35) * (1.0 - reflexes * 0.4);
+        // Elite: 0.25 + 1.0*0.65 = 0.90, mediocre: 0.25 + 0.47*0.65 = 0.56
+        let base_catch = 0.25 + skill_blend * 0.65;
+        let catch_probability = base_catch * (1.0 - effective_speed_penalty);
 
-        rand::random::<f32>() < catch_probability.clamp(0.25, 0.90)
+        // Elite GK vs fast shot: ~0.90 * 0.86 = 0.77
+        // Mediocre GK vs fast shot: ~0.56 * 0.72 = 0.40
+        rand::random::<f32>() < catch_probability.clamp(0.20, 0.93)
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

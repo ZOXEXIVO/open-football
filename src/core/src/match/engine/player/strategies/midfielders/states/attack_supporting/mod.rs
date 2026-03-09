@@ -6,7 +6,7 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const TACKLE_RANGE: f32 = 30.0;
+const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
 const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 

@@ -41,10 +41,16 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
-        // Priority: Press ball carrier if we're closest and in range, or support press
+        // Priority: Tackle or press ball carrier aggressively
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
-            if distance < 40.0 {
+            // Very close — tackle immediately regardless
+            if distance < 20.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+            if distance < 50.0 {
                 if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Pressing,
@@ -60,19 +66,21 @@ impl StateProcessingHandler for DefenderCoveringState {
         }
 
         if ball_ops.on_own_side() {
-            // Stay active in covering if an opponent with ball is advancing nearby
-            // This prevents defenders from going passive when defense is most needed
-            let threat_nearby = ctx.players().opponents().with_ball()
+            // Stay active in covering if opponents are in the area
+            // Check both ball carrier AND unmarked attackers making runs
+            let ball_carrier_nearby = ctx.players().opponents().with_ball()
                 .next()
-                .map(|opp| opp.distance(ctx) < 120.0)
+                .map(|opp| opp.distance(ctx) < 150.0)
                 .unwrap_or(false);
 
-            if !threat_nearby {
+            let opponents_in_area = ctx.players().opponents().nearby(80.0).next().is_some();
+
+            if !ball_carrier_nearby && !opponents_in_area {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Standing,
                 ));
             }
-            // Threat nearby — fall through to active covering checks
+            // Threats in area — fall through to active covering checks
         }
 
         if ball_ops.distance_to_opponent_goal()
@@ -151,10 +159,10 @@ impl StateProcessingHandler for DefenderCoveringState {
                     }
 
                     let direction = to_target.normalize();
-                    let speed = ctx.player.skills.physical.pace * 0.6;
-                    let urgency = (distance / 30.0).clamp(0.4, 1.0);
+                    let speed = ctx.player.skills.physical.pace * 0.85;
+                    let urgency = (distance / 25.0).clamp(0.6, 1.3);
 
-                    return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.3);
+                    return Some(direction * speed * urgency + ctx.player().separation_velocity() * 0.2);
                 }
             }
         }

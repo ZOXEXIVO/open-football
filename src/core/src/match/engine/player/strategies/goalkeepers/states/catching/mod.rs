@@ -63,9 +63,10 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();
         let agility = ctx.player.skills.physical.agility / 20.0;
+        let reflexes = ctx.player.skills.mental.concentration / 20.0;
 
-        // GK sprints explosively to catch the ball
-        let speed_boost = 1.5 + agility * 0.5; // 1.5x - 2.0x
+        // GK sprints explosively to catch — reflexes + agility drive reaction speed
+        let speed_boost = 1.5 + agility * 0.4 + reflexes * 0.4; // 1.5x - 2.3x
 
         if ball_distance > 3.0 {
             // Sprint to ball using Pursuit with speed boost
@@ -98,19 +99,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
 
 impl GoalkeeperCatchingState {
     fn is_catch_successful(&self, ctx: &StateProcessingContext) -> bool {
-        // Maximum catch distance — goalkeeper's full reaching/stretching range
-        const MAX_CATCH_DISTANCE: f32 = 12.0; // Extended reach including stretch
         let distance_to_ball = ctx.ball().distance();
-
-        if distance_to_ball > MAX_CATCH_DISTANCE {
-            return false; // Ball too far away to physically catch
-        }
-
-        // Goalkeeper can only catch balls that are flying TOWARDS them or are stationary/slow
-        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
-        if ball_speed > 0.5 && !ctx.ball().is_towards_player_with_angle(0.6) {
-            return false; // Ball is flying away from goalkeeper
-        }
 
         // Use goalkeeper-specific skills
         let handling = ctx.player.skills.technical.first_touch;
@@ -124,43 +113,60 @@ impl GoalkeeperCatchingState {
         let scaled_positioning = (positioning - 1.0) / 19.0;
         let scaled_agility = (agility - 1.0) / 19.0;
 
+        // Maximum catch distance — skill-dependent reach
+        // Elite GK: 10 + 3 + 2 = 15, mediocre: 10 + 1.5 + 1 = 12.5
+        let max_catch_distance = 10.0 + scaled_agility * 3.0 + scaled_handling * 2.0;
+
+        if distance_to_ball > max_catch_distance {
+            return false; // Ball too far away to physically catch
+        }
+
+        // Goalkeeper can only catch balls that are flying TOWARDS them or are stationary/slow
+        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+        if ball_speed > 0.5 && !ctx.ball().is_towards_player_with_angle(0.6) {
+            return false; // Ball is flying away from goalkeeper
+        }
+
         // Base catch skill (weighted toward handling and reflexes)
-        let base_skill = scaled_handling * 0.4 + scaled_reflexes * 0.3 +
-                          scaled_positioning * 0.2 + scaled_agility * 0.1;
+        let base_skill = scaled_handling * 0.35 + scaled_reflexes * 0.30 +
+                          scaled_positioning * 0.20 + scaled_agility * 0.15;
 
         let ball_height = ctx.tick_context.positions.ball.position.z;
 
-        // Base success rate calibrated for real shot speeds (~1.0-2.0/tick)
-        // In real football, GKs save ~70% of shots on target
-        let mut catch_probability = 0.60 + (base_skill * 0.35);
+        // Base success rate — skilled keepers are significantly better
+        // Elite (~1.0): 0.50 + 0.45 = 0.95, mediocre (~0.47): 0.50 + 0.21 = 0.71
+        let mut catch_probability = 0.50 + (base_skill * 0.45);
 
         // Ball speed modifier calibrated for actual speeds
         if ball_speed < 0.8 {
             catch_probability += 0.15; // Very slow - easy catch
         } else if ball_speed < 1.2 {
             catch_probability += 0.08; // Moderate speed
-        } else if ball_speed > 1.8 {
-            catch_probability -= 0.10; // Strong shot - harder
+        } else if ball_speed > 2.0 {
+            // Strong shot - harder, but skilled keepers handle it better
+            catch_probability -= 0.15 * (1.0 - scaled_reflexes * 0.5);
+        } else if ball_speed > 1.5 {
+            catch_probability -= 0.08 * (1.0 - scaled_reflexes * 0.4);
         }
 
         // Distance modifier
         if distance_to_ball < 2.0 {
             catch_probability += 0.15; // Very close - easy
         } else if distance_to_ball < 5.0 {
-            catch_probability += 0.08; // Close
-        } else if distance_to_ball > 10.0 {
-            catch_probability -= 0.12; // Stretched
-        } else if distance_to_ball > 7.0 {
-            catch_probability -= 0.06; // Far
+            catch_probability += 0.10; // Close
+        } else if distance_to_ball > max_catch_distance * 0.85 {
+            catch_probability -= 0.12; // Fully stretched
+        } else if distance_to_ball > max_catch_distance * 0.6 {
+            catch_probability -= 0.06; // Extended
         }
 
-        // Height modifier
+        // Height modifier — agility helps with awkward heights
         if ball_height >= 0.5 && ball_height <= 1.8 {
             catch_probability += 0.08; // Ideal catching height
         } else if ball_height < 0.2 {
-            catch_probability -= 0.06; // Ground ball
+            catch_probability -= 0.06 * (1.0 - scaled_agility * 0.5); // Ground ball, agility helps
         } else if ball_height > 2.5 {
-            catch_probability -= 0.10; // High ball
+            catch_probability -= 0.10 * (1.0 - scaled_agility * 0.4); // High ball
         }
 
         // Direction modifier
@@ -170,12 +176,14 @@ impl GoalkeeperCatchingState {
             catch_probability -= 0.08;
         }
 
-        // Elite keeper bonus
+        // Elite keeper bonus — top GKs make the extraordinary saves
         if base_skill > 0.8 {
-            catch_probability += 0.06;
+            catch_probability += 0.08;
+        } else if base_skill > 0.65 {
+            catch_probability += 0.04;
         }
 
-        let clamped_catch_probability = catch_probability.clamp(0.20, 0.95);
+        let clamped_catch_probability = catch_probability.clamp(0.15, 0.96);
 
         rand::random::<f32>() < clamped_catch_probability
     }

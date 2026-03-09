@@ -71,6 +71,11 @@ impl StateProcessingHandler for ForwardStandingState {
                 }
             }
 
+            // Minimum time in standing state to prevent rapid state oscillation
+            if ctx.in_state_time < 10 {
+                return None;
+            }
+
             // If the forward doesn't have the ball, decide to move or press
             if self.should_press(ctx) {
                 // Transition to Pressing state

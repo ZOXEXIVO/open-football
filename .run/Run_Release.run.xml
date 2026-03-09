@@ -4,7 +4,9 @@
     <option name="command" value="run" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
-      <env name="SKIP_MATCH_RECORDING" value="true" />
+      <env name="MATCH_PLAY_POOL_MAX_THREADS" value="16" />
+      <env name="MATCH_RECORD_ENABLED" value="true" />
+      <env name="MATCH_STORE_POOL_MAX_THREADS" value="8" />
     </envs>
     <option name="emulateTerminal" value="false" />
     <option name="channel" value="DEFAULT" />

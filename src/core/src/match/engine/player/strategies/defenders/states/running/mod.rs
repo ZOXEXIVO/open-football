@@ -17,6 +17,26 @@ pub struct DefenderRunningState {}
 impl StateProcessingHandler for DefenderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            // EMERGENCY PASS: Opponent closing fast — pass immediately before they arrive
+            if self.is_opponent_closing_fast(ctx) {
+                if let Some(target) = self.find_emergency_pass_target(ctx) {
+                    return Some(StateChangeResult::with_defender_state_and_event(
+                        DefenderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target.id)
+                                .with_reason("DEF_EMERGENCY_PASS")
+                                .build(ctx),
+                        )),
+                    ));
+                }
+                // No pass target — clear the ball rather than lose it
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Clearing,
+                ));
+            }
+
             // Defenders should almost always pass — only shoot if very close with clear shot
             if self.is_in_shooting_range(ctx) {
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
@@ -231,8 +251,8 @@ impl DefenderRunningState {
             return false;
         }
 
-        // Check for immediate pressure: opponent very close = must pass/clear
-        if ctx.players().opponents().exists(10.0) {
+        // Check for immediate pressure: opponent closing in = must pass/clear
+        if ctx.players().opponents().exists(20.0) {
             return false;
         }
 
@@ -299,15 +319,20 @@ impl DefenderRunningState {
     }
 
     pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
-        // ANTI-LOOP: Don't pass immediately after entering Running state.
-        if ctx.in_state_time < 10 {
-            return false;
-        }
+        // Under direct pressure — skip wait timers and pass immediately
+        let under_pressure = ctx.players().opponents().exists(15.0);
 
-        // Hold the ball briefly after reclaiming
-        let ownership_duration = ctx.tick_context.ball.ownership_duration;
-        if ownership_duration < 5 {
-            return false;
+        if !under_pressure {
+            // ANTI-LOOP: Don't pass immediately after entering Running state (only when safe).
+            if ctx.in_state_time < 10 {
+                return false;
+            }
+
+            // Hold the ball briefly after reclaiming (only when safe)
+            let ownership_duration = ctx.tick_context.ball.ownership_duration;
+            if ownership_duration < 5 {
+                return false;
+            }
         }
 
         // In congested area — prefer carrying OUT of congestion instead of passing into it
@@ -454,6 +479,91 @@ impl DefenderRunningState {
             });
             Some(open_teammates[0])
         }
+    }
+
+    /// Detect if an opponent is sprinting toward this defender and will arrive soon.
+    /// Triggers emergency pass to avoid losing possession.
+    fn is_opponent_closing_fast(&self, ctx: &StateProcessingContext) -> bool {
+        let player_pos = ctx.player.position;
+        let player_id = ctx.player.id;
+
+        for (_opp_id, dist) in ctx.tick_context.distances.opponents(player_id, 35.0) {
+            if dist < 10.0 {
+                // Already very close — emergency
+                return true;
+            }
+
+            let opp_velocity = ctx.tick_context.positions.players.velocity(_opp_id);
+            let opp_speed = opp_velocity.magnitude();
+
+            // Must be moving fast (sprinting)
+            if opp_speed < 1.5 {
+                continue;
+            }
+
+            // Check if opponent is moving TOWARD the defender
+            let opp_pos = ctx.tick_context.positions.players.position(_opp_id);
+            let to_defender = (player_pos - opp_pos).normalize();
+            let alignment = opp_velocity.normalize().dot(&to_defender);
+
+            // alignment > 0.5 = roughly heading toward defender
+            if alignment > 0.5 {
+                // Estimate time to arrival: distance / closing_speed
+                let closing_speed = opp_speed * alignment;
+                let ticks_to_arrive = dist / closing_speed;
+
+                // If they'll arrive within ~20 ticks (~200ms), it's urgent
+                if ticks_to_arrive < 20.0 {
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    /// Find the best emergency pass target — any open teammate with a clear lane.
+    /// Allows shorter passes than normal build-up since urgency overrides preference.
+    fn find_emergency_pass_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+
+        for teammate in ctx.players().teammates().nearby(250.0) {
+            if teammate.tactical_positions.is_goalkeeper() {
+                continue;
+            }
+
+            let dist = (teammate.position - player_pos).magnitude();
+            if dist < 15.0 {
+                continue; // Too close — pass would be intercepted
+            }
+
+            if !ctx.player().has_clear_pass(teammate.id) {
+                continue;
+            }
+
+            // Prefer teammates with more space around them
+            let opponents_near = ctx.tick_context.distances
+                .opponents(teammate.id, 10.0).count();
+
+            let mut score = 100.0 - dist * 0.2; // Closer is slightly better for safety
+            if opponents_near == 0 {
+                score += 30.0;
+            }
+            if teammate.tactical_positions.is_midfielder() {
+                score += 15.0;
+            }
+
+            if let Some((_, best_score)) = &best {
+                if score > *best_score {
+                    best = Some((teammate, score));
+                }
+            } else {
+                best = Some((teammate, score));
+            }
+        }
+
+        best.map(|(t, _)| t)
     }
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {

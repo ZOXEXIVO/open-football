@@ -63,11 +63,11 @@ impl StateProcessingHandler for MidfielderPressingState {
         }
 
         // CRITICAL: Tackle if an opponent has the ball nearby
-        if let Some(opponent) = ctx.players().opponents().nearby(50.0).with_ball(ctx).next() {
+        if let Some(opponent) = ctx.players().opponents().nearby(60.0).with_ball(ctx).next() {
             let opponent_distance = (opponent.position - ctx.player.position).magnitude();
 
-            // Engage tackle from further out — midfielders need to win the ball
-            if opponent_distance < 40.0 {
+            // Engage tackle aggressively — midfielders must win the ball
+            if opponent_distance < 50.0 {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
                 ));
