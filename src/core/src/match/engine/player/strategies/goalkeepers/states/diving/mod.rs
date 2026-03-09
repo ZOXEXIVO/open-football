@@ -100,10 +100,12 @@ impl GoalkeeperDivingState {
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
         let reflexes = ctx.player.skills.mental.concentration / 20.0;
-        // Explosive dive speed — reflexes are the primary driver for reaction saves
+        let agility = ctx.player.skills.physical.agility / 20.0;
+        // Explosive dive speed — reflexes and agility are primary drivers
         let base_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
-        let reflex_boost = 1.0 + reflexes * 0.5; // 1.0x - 1.5x boost for elite reflexes
-        base_speed * urgency * reflex_boost
+        // Elite: 1.0 + 0.8 + 0.4 = 2.2x, mediocre: 1.0 + 0.36 + 0.18 = 1.54x
+        let skill_boost = 1.0 + reflexes * 0.8 + agility * 0.4;
+        base_speed * urgency * skill_boost
     }
 
     fn calculate_urgency(&self, ctx: &StateProcessingContext) -> f32 {
@@ -132,25 +134,25 @@ impl GoalkeeperDivingState {
         let handling = ctx.player.skills.technical.first_touch / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         let reflexes = ctx.player.skills.mental.concentration / 20.0;
-        // Elite GK: 6 + 4.5 + 2 + 1.5 = 14, mediocre: 6 + 2 + 1 + 0.7 = 9.7
-        let catch_distance = 6.0 + agility * 4.5 + handling * 2.0 + reflexes * 1.5;
+        // Elite GK: 5 + 6 + 3 + 2 = 16, mediocre: 5 + 2.7 + 1.3 + 0.9 = 9.9
+        let catch_distance = 5.0 + agility * 6.0 + handling * 3.0 + reflexes * 2.0;
 
         if ball_distance > catch_distance {
             return false;
         }
 
-        // Catch probability with stronger skill differentiation
-        // Skilled GKs parry/hold much more reliably
+        // Catch probability with strong skill differentiation
+        // Elite GKs make saves that mediocre keepers cannot
         let skill_blend = handling * 0.4 + reflexes * 0.3 + agility * 0.3;
         // Speed penalty — elite reflexes mitigate fast shot difficulty
-        let effective_speed_penalty = (ball_speed / 5.0).min(0.35) * (1.0 - reflexes * 0.4);
-        // Elite: 0.25 + 1.0*0.65 = 0.90, mediocre: 0.25 + 0.47*0.65 = 0.56
-        let base_catch = 0.25 + skill_blend * 0.65;
+        let effective_speed_penalty = (ball_speed / 5.0).min(0.40) * (1.0 - reflexes * 0.5);
+        // Elite: 0.10 + 1.0*0.85 = 0.95, mediocre: 0.10 + 0.47*0.85 = 0.50
+        let base_catch = 0.10 + skill_blend * 0.85;
         let catch_probability = base_catch * (1.0 - effective_speed_penalty);
 
-        // Elite GK vs fast shot: ~0.90 * 0.86 = 0.77
-        // Mediocre GK vs fast shot: ~0.56 * 0.72 = 0.40
-        rand::random::<f32>() < catch_probability.clamp(0.20, 0.93)
+        // Elite GK vs fast shot: ~0.95 * 0.80 = 0.76
+        // Mediocre GK vs fast shot: ~0.50 * 0.68 = 0.34
+        rand::random::<f32>() < catch_probability.clamp(0.10, 0.97)
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

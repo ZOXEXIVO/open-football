@@ -155,9 +155,9 @@ impl MidfielderCreatingSpaceState {
 
         let ball_on_left = ball_pos.y < field_height / 2.0;
         let opposite_y = if ball_on_left {
-            field_height * 0.75
+            field_height * 0.82
         } else {
-            field_height * 0.25
+            field_height * 0.18
         };
 
         Vector3::new(
@@ -176,11 +176,11 @@ impl MidfielderCreatingSpaceState {
         // Determine which side the ball is on
         let ball_on_left = ball_pos.y < field_height / 2.0;
 
-        // Calculate opposite side base position
+        // Calculate opposite side base position — push to wide areas
         let opposite_y = if ball_on_left {
-            field_height * 0.75 // Right side
+            field_height * 0.82 // Right flank
         } else {
-            field_height * 0.25 // Left side
+            field_height * 0.18 // Left flank
         };
 
         // Pre-collect nearby players once instead of iterating all players per grid cell
@@ -206,8 +206,8 @@ impl MidfielderCreatingSpaceState {
 
         let mut min_congestion = f32::MAX;
 
-        // Scan a coarser grid on the opposite side (30-unit step instead of 15)
-        let scan_width = 80.0;
+        // Scan a wide grid on the opposite side to find truly open space
+        let scan_width = 140.0;
         let scan_depth = 100.0;
         let grid_step = 30.0;
 

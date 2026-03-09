@@ -576,7 +576,7 @@ impl From<&MatchFieldSize> for GoalPosition {
     }
 }
 
-pub const GOAL_WIDTH: f32 = 29.0; // ~3.66m half-width = 7.32m full goal (real size)
+pub const GOAL_WIDTH: f32 = 45.0; // half-width in game units (full goal = 90 units)
 pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
 
 impl GoalPosition {

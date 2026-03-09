@@ -49,13 +49,40 @@ impl StateProcessingHandler for DefenderGuardingState {
             ));
         }
 
-        // 2. Find the opponent we should guard
+        // 2. Ball carrier nearby — engage directly instead of guarding off-ball player
+        if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
+            let dist_to_carrier = ball_carrier.distance(ctx);
+            if dist_to_carrier < TACKLE_TRANSITION_DISTANCE {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Tackling,
+                ));
+            }
+            if dist_to_carrier < 60.0 {
+                // Ball carrier is close — check if heading toward us or our goal
+                let carrier_vel = ctx.tick_context.positions.players.velocity(ball_carrier.id);
+                let carrier_speed = carrier_vel.magnitude();
+                if carrier_speed > 0.1 {
+                    let to_defender = (ctx.player.position - ball_carrier.position).normalize();
+                    let own_goal = ctx.ball().direction_to_own_goal();
+                    let to_goal = (own_goal - ball_carrier.position).normalize();
+                    let approaching_defender = carrier_vel.normalize().dot(&to_defender) > 0.2;
+                    let approaching_goal = carrier_vel.normalize().dot(&to_goal) > 0.3;
+                    if approaching_defender || approaching_goal {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // 3. Find the opponent we should guard
         let guard_target = self.find_guard_target(ctx);
 
         if let Some(opponent) = guard_target {
             let distance_to_opponent = opponent.distance(ctx);
 
-            // 3. If the guarded opponent receives the ball — react immediately
+            // 4. If the guarded opponent receives the ball — react immediately
             if opponent.has_ball(ctx) {
                 if distance_to_opponent < TACKLE_TRANSITION_DISTANCE {
                     return Some(StateChangeResult::with_defender_state(

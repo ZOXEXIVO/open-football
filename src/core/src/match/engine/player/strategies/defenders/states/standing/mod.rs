@@ -76,6 +76,21 @@ impl StateProcessingHandler for DefenderStandingState {
                 ));
             }
 
+            // Ball carrier heading toward this defender — engage regardless of "best" status
+            if distance_to_opponent < 80.0 {
+                let carrier_vel = ctx.tick_context.positions.players.velocity(opponent.id);
+                let carrier_speed = carrier_vel.magnitude();
+                if carrier_speed > 0.1 {
+                    let to_defender = (ctx.player.position - opponent.position).normalize();
+                    let approach = carrier_vel.normalize().dot(&to_defender);
+                    if approach > 0.3 {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                }
+            }
+
             // Context-aware pressing distance: tighter in defensive third
             let pressing_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {

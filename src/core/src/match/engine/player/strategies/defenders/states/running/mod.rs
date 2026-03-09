@@ -91,7 +91,7 @@ impl StateProcessingHandler for DefenderRunningState {
             }
 
             // Only tackle if an opponent has the ball nearby AND we're best positioned
-            if let Some(_opponent) = ctx.players().opponents().with_ball().next() {
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let ball_dist = ctx.ball().distance();
                 // Very close — tackle reactively
                 if ball_dist < 30.0 {
@@ -104,6 +104,21 @@ impl StateProcessingHandler for DefenderRunningState {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
+                }
+                // Ball carrier running toward this defender — engage even if not "best" chaser
+                if ball_dist < 80.0 {
+                    let carrier_vel = ctx.tick_context.positions.players.velocity(opponent.id);
+                    let carrier_speed = carrier_vel.magnitude();
+                    if carrier_speed > 0.1 {
+                        let to_defender = (ctx.player.position - opponent.position).normalize();
+                        let approach = carrier_vel.normalize().dot(&to_defender);
+                        // Carrier is heading toward this defender (dot > 0.3)
+                        if approach > 0.3 {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Tackling,
+                            ));
+                        }
+                    }
                 }
             }
 
@@ -224,8 +239,29 @@ impl StateProcessingHandler for DefenderRunningState {
                     + ctx.player().separation_velocity(),
             )
         } else {
-            // Without ball: return to tactical position
-            // Separation already has early-exit when nobody is nearby
+            // Without ball: close down on nearby ball carrier, or return to position
+
+            // Check if an opponent has the ball nearby — engage them instead of returning home
+            if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
+                let dist_to_carrier = (ctx.player.position - ball_carrier.position).magnitude();
+
+                if dist_to_carrier < 120.0 {
+                    // Get carrier's velocity for pursuit prediction
+                    let carrier_velocity = ctx.tick_context.positions.players.velocity(ball_carrier.id);
+
+                    // Use Pursuit to intercept the ball carrier's predicted path
+                    let base = SteeringBehavior::Pursuit {
+                        target: ball_carrier.position,
+                        target_velocity: carrier_velocity,
+                    }
+                    .calculate(ctx.player)
+                    .velocity;
+
+                    return Some(base + ctx.player().separation_velocity());
+                }
+            }
+
+            // No nearby ball carrier — return to tactical position
             let base = SteeringBehavior::Arrive {
                 target: ctx.player.start_position,
                 slowing_distance: 30.0,
@@ -282,13 +318,7 @@ impl DefenderRunningState {
         let composure = ctx.player.skills.mental.composure / 20.0;
         let carry_ability = dribbling * 0.6 + composure * 0.4;
 
-        if has_space_ahead && carry_ability > 0.3 {
-            return true;
-        }
-
-        // Also carry if opponents are only at medium distance and player has decent skills
-        let opponents_medium = ctx.players().opponents().exists(20.0);
-        if !opponents_medium && carry_ability > 0.2 {
+        if has_space_ahead && carry_ability > 0.55 {
             return true;
         }
 

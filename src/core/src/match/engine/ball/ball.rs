@@ -795,14 +795,15 @@ impl Ball {
             nearby_players
                 .iter()
                 .max_by(|player_a, player_b| {
-                    let player_a_full = context.players.by_id(player_a.id).unwrap();
-                    let player_b_full = context.players.by_id(player_b.id).unwrap();
+                    let score_a = context.players.by_id(player_a.id)
+                        .map(|p| Self::calculate_tackling_score(p))
+                        .unwrap_or(0.0);
+                    let score_b = context.players.by_id(player_b.id)
+                        .map(|p| Self::calculate_tackling_score(p))
+                        .unwrap_or(0.0);
 
-                    let tackling_score_a = Self::calculate_tackling_score(player_a_full);
-                    let tackling_score_b = Self::calculate_tackling_score(player_b_full);
-
-                    tackling_score_a
-                        .partial_cmp(&tackling_score_b)
+                    score_a
+                        .partial_cmp(&score_b)
                         .unwrap_or(std::cmp::Ordering::Equal)
                 })
                 .copied()
@@ -821,17 +822,19 @@ impl Ball {
                         if let Some(_current_owner) = nearby_players.iter()
                             .find(|p| p.id == current_owner_id)
                         {
-                            let current_owner_full = context.players.by_id(current_owner_id).unwrap();
-                            let challenger_full = context.players.by_id(player.id).unwrap();
+                            if let (Some(current_owner_full), Some(challenger_full)) = (
+                                context.players.by_id(current_owner_id),
+                                context.players.by_id(player.id),
+                            ) {
+                                let current_score = Self::calculate_tackling_score(current_owner_full);
+                                let challenger_score = Self::calculate_tackling_score(challenger_full);
 
-                            let current_score = Self::calculate_tackling_score(current_owner_full);
-                            let challenger_score = Self::calculate_tackling_score(challenger_full);
-
-                            // Require challenger to be significantly better
-                            if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
-                                // Challenger not strong enough - maintain current ownership
-                                self.ownership_duration += 1;
-                                return;
+                                // Require challenger to be significantly better
+                                if challenger_score < current_score * TAKEOVER_ADVANTAGE_THRESHOLD {
+                                    // Challenger not strong enough - maintain current ownership
+                                    self.ownership_duration += 1;
+                                    return;
+                                }
                             }
                         }
                     }
@@ -904,7 +907,9 @@ impl Ball {
             // Prefer current_owner (e.g. player carrying ball into goal)
             // Fall back to previous_owner (e.g. shooter or passer whose ball went in)
             if let Some(goalscorer) = self.current_owner.or(self.previous_owner) {
-                let player = context.players.by_id(goalscorer).unwrap();
+                let Some(player) = context.players.by_id(goalscorer) else {
+                    return;
+                };
                 let is_auto_goal = match player.side {
                     Some(PlayerSide::Left) => goal_side == GoalSide::Home,
                     Some(PlayerSide::Right) => goal_side == GoalSide::Away,
@@ -1220,6 +1225,12 @@ impl Ball {
         const MAX_OWNER_TELEPORT_DISTANCE: f32 = 15.0;
         const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = MAX_OWNER_TELEPORT_DISTANCE * MAX_OWNER_TELEPORT_DISTANCE;
 
+        // Ball moves toward owner at this speed (units/tick) instead of teleporting
+        const BALL_TRACK_SPEED: f32 = 1.5;
+        // Snap to owner if within this distance (avoids jitter)
+        const SNAP_DISTANCE: f32 = 2.0;
+        const SNAP_DISTANCE_SQUARED: f32 = SNAP_DISTANCE * SNAP_DISTANCE;
+
         let has_owner = self.current_owner.is_some();
 
         // Clear notifications when ball is no longer in a "take ball" scenario
@@ -1234,16 +1245,26 @@ impl Ball {
         if let Some(owner_player_id) = self.current_owner {
             let owner_position = tick_context.positions.players.position(owner_player_id);
 
-            // SANITY CHECK: Validate owner is actually close to ball before teleporting
             let dx = owner_position.x - self.position.x;
             let dy = owner_position.y - self.position.y;
             let distance_squared = dx * dx + dy * dy;
 
             if distance_squared <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
-                // Owner is close enough - ball follows owner
-                self.position = owner_position;
-                self.position.z = 0.0;
-                self.velocity = Vector3::zeros();
+                if distance_squared <= SNAP_DISTANCE_SQUARED {
+                    // Close enough - snap to owner
+                    self.position = owner_position;
+                    self.position.z = 0.0;
+                    self.velocity = Vector3::zeros();
+                } else {
+                    // Move ball toward owner smoothly instead of teleporting
+                    let distance = distance_squared.sqrt();
+                    let dir_x = dx / distance;
+                    let dir_y = dy / distance;
+                    self.position.x += dir_x * BALL_TRACK_SPEED;
+                    self.position.y += dir_y * BALL_TRACK_SPEED;
+                    self.position.z = 0.0;
+                    self.velocity = Vector3::zeros();
+                }
             } else {
                 // Owner is too far - this shouldn't happen but is a safety net
                 // Clear ownership and let ball move naturally

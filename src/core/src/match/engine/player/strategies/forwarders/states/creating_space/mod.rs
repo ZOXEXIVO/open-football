@@ -19,10 +19,10 @@ enum ForwardMovementPattern {
 use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
-const MIN_DISTANCE_FROM_BALL: f32 = 15.0;
-const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 15.0; // Wider ideal passing range start (was 20.0)
-const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 60.0; // Wider ideal passing range end (was 45.0)
-const SPACE_SCAN_RADIUS: f32 = 100.0;
+const MIN_DISTANCE_FROM_BALL: f32 = 30.0;
+const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0;
+const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 70.0;
+const SPACE_SCAN_RADIUS: f32 = 250.0;
 const CONGESTION_THRESHOLD: f32 = 3.0;
 const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lanes
 
@@ -98,81 +98,21 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             }
         }
 
-        // PRIORITY 2: When teammate has ball, make aggressive run toward goal
-        if let Some(ball_holder) = self.get_ball_holder(ctx) {
-            let holder_pos = ball_holder.position;
+        // PRIORITY 2: When teammate has ball, find open space on the field
+        if self.get_ball_holder(ctx).is_some() {
+            // Use intelligent zone-finding to locate best open space
+            let target_position = self.find_optimal_free_zone(ctx);
 
-            // Calculate attacking direction
-            let attacking_direction = match ctx.player.side {
-                Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),
-                Some(PlayerSide::Right) => Vector3::new(-1.0, 0.0, 0.0),
-                None => (goal_pos - player_pos).normalize(),
-            };
-
-            // Determine if we're ahead of or behind ball holder
-            let is_ahead = match ctx.player.side {
-                Some(PlayerSide::Left) => player_pos.x > holder_pos.x + 10.0,
-                Some(PlayerSide::Right) => player_pos.x < holder_pos.x - 10.0,
-                None => false,
-            };
-
-            // Calculate target: run TOWARD the goal with lateral spread
-            let target_position = if is_ahead {
-                // Already ahead - run further toward goal
-                let forward_distance = 80.0;
-                let lateral_offset = if player_pos.y < field_height / 2.0 {
-                    -25.0 // Stay on left side
-                } else {
-                    25.0 // Stay on right side
-                };
-
-                Vector3::new(
-                    (player_pos.x + attacking_direction.x * forward_distance)
-                        .clamp(50.0, field_width - 50.0),
-                    (player_pos.y + lateral_offset).clamp(50.0, field_height - 50.0),
-                    0.0,
-                )
-            } else {
-                // Behind ball holder - get ahead of them quickly
-                let overtake_distance = 100.0;
-                let lateral_spread = if player_pos.y < field_height / 2.0 {
-                    -40.0 // Spread to left
-                } else {
-                    40.0 // Spread to right
-                };
-
-                Vector3::new(
-                    (holder_pos.x + attacking_direction.x * overtake_distance)
-                        .clamp(50.0, field_width - 50.0),
-                    (holder_pos.y + lateral_spread).clamp(50.0, field_height - 50.0),
-                    0.0,
-                )
-            };
-
-            // Check for offside - if would be offside, come back slightly
-            let final_target = if self.would_be_offside(ctx, target_position) {
-                // Stay just onside
-                let defensive_line = self.get_defensive_line_position(ctx);
-                let safe_x = match ctx.player.side {
-                    Some(PlayerSide::Left) => defensive_line - 5.0,
-                    Some(PlayerSide::Right) => defensive_line + 5.0,
-                    None => defensive_line,
-                };
-                Vector3::new(safe_x, target_position.y, 0.0)
-            } else {
-                target_position
-            };
-
-            // Use Pursuit for aggressive movement
+            // Use Pursuit for aggressive movement toward open space
             let base_velocity = SteeringBehavior::Pursuit {
-                target: final_target,
+                target: target_position,
                 target_velocity: Vector3::zeros(),
             }
             .calculate(ctx.player)
             .velocity;
 
-            // Add separation to avoid clustering
-            return Some(base_velocity + ctx.player().separation_velocity() * 0.8);
+            // Strong separation to avoid clustering near ball handler
+            return Some(base_velocity + ctx.player().separation_velocity() * 1.5);
         }
 
         // Fallback: use the existing complex logic when no teammate has ball
@@ -329,13 +269,23 @@ impl ForwardCreatingSpaceState {
             candidate_positions.push(opp_pos + to_goal * 15.0);
         }
 
-        // Strategy 3: Grid-based open space detection
+        // Strategy 3: Grid-based open space detection — wide field scan
         let forward_direction = (goal_pos - player_pos).normalize();
-        for x_offset in [20.0, 35.0, 50.0] {
-            for y_offset in [-30.0, -15.0, 0.0, 15.0, 30.0] {
+        for x_offset in [25.0, 50.0, 80.0, 120.0] {
+            for y_offset in [-100.0, -60.0, -30.0, 0.0, 30.0, 60.0, 100.0] {
                 let lateral = Vector3::new(-forward_direction.y, forward_direction.x, 0.0);
                 let candidate = player_pos + forward_direction * x_offset + lateral * y_offset;
                 candidate_positions.push(candidate);
+            }
+        }
+
+        // Strategy 4: Wide channel positions (flanks and half-spaces)
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let atk_dir = self.get_attacking_direction(ctx);
+        for &wing_y in &[field_height * 0.10, field_height * 0.25, field_height * 0.75, field_height * 0.90] {
+            for &fwd in &[40.0, 80.0, 120.0] {
+                let x = (ball_pos.x + atk_dir.x * fwd).clamp(30.0, field_width - 30.0);
+                candidate_positions.push(Vector3::new(x, wing_y, 0.0));
             }
         }
 
@@ -453,9 +403,23 @@ impl ForwardCreatingSpaceState {
                 && holder_distance <= OPTIMAL_PASSING_DISTANCE_MAX {
                 score += 25.0;
             } else if holder_distance < OPTIMAL_PASSING_DISTANCE_MIN {
-                score -= (OPTIMAL_PASSING_DISTANCE_MIN - holder_distance) * 0.5;
+                // Strong penalty for being too close — prevents clustering
+                score -= (OPTIMAL_PASSING_DISTANCE_MIN - holder_distance) * 1.5;
             } else if holder_distance > OPTIMAL_PASSING_DISTANCE_MAX {
-                score -= (holder_distance - OPTIMAL_PASSING_DISTANCE_MAX) * 0.8;
+                score -= (holder_distance - OPTIMAL_PASSING_DISTANCE_MAX) * 0.5;
+            }
+
+            // WIDTH BONUS: reward lateral distance from ball holder
+            // Forwards that provide width are much more useful
+            let lateral_distance = (position.y - holder.position.y).abs();
+            if lateral_distance > 80.0 {
+                score += 30.0; // Excellent width
+            } else if lateral_distance > 50.0 {
+                score += 20.0; // Good width
+            } else if lateral_distance > 30.0 {
+                score += 10.0; // Moderate width
+            } else if lateral_distance < 15.0 {
+                score -= 15.0; // Too narrow — on same channel as holder
             }
 
             // Clear passing lane check using pre-collected opponents
@@ -1143,13 +1107,13 @@ impl ForwardCreatingSpaceState {
             .map(|f| f.position.y)
             .sum::<f32>() / other_forwards.len() as f32;
 
-        // Position ourselves on the opposite side for better width
+        // Position ourselves on the opposite side for better width — push to flanks
         let target_y = if avg_forward_y < field_height / 2.0 {
-            // Other forwards are on the left, move right
-            (field_height * 0.65).min(field_height - 50.0)
+            // Other forwards are on the left, move to right flank
+            (field_height * 0.80).min(field_height - 30.0)
         } else {
-            // Other forwards are on the right, move left
-            (field_height * 0.35).max(50.0)
+            // Other forwards are on the right, move to left flank
+            (field_height * 0.20).max(30.0)
         };
 
         // Stay in a dangerous attacking position
@@ -1179,12 +1143,50 @@ impl ForwardCreatingSpaceState {
         }
 
         let ball_holder_can_pass = self.ball_holder_can_make_forward_pass(ctx);
-        let space_ahead = self.has_space_ahead_for_run(ctx);
         let not_offside = !self.would_be_offside_now(ctx);
         let in_good_phase = self.is_in_good_attacking_phase(ctx);
         let not_too_far = ctx.ball().distance() < MAX_DISTANCE_FROM_BALL;
 
-        ball_holder_can_pass && space_ahead && not_offside && in_good_phase && not_too_far
+        if !ball_holder_can_pass || !not_offside || !in_good_phase || !not_too_far {
+            return false;
+        }
+
+        // Use the SAME space check that RunningInBehind uses to decide viability.
+        // This prevents oscillation: if RunningInBehind would immediately fail,
+        // don't start the run.
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        let blockers = ctx.players().opponents().nearby(30.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.3
+            })
+            .count();
+
+        if blockers >= 2 {
+            return false;
+        }
+        if blockers == 1 {
+            return ctx.player.skills.physical.pace > 12.0;
+        }
+
+        // Also check passing lane: runner must be ahead of the passer
+        if let Some(owner_id) = ctx.ball().owner_id() {
+            if let Some(owner) = ctx.context.players.by_id(owner_id) {
+                if owner.team_id == ctx.player.team_id {
+                    let passer_pos = ctx.tick_context.positions.players.position(owner_id);
+                    let to_goal_from_passer = (goal_pos - passer_pos).normalize();
+                    let to_runner = (player_pos - passer_pos).normalize();
+                    if to_runner.dot(&to_goal_from_passer) <= 0.0 {
+                        return false; // Behind the passer — run wouldn't be viable
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     fn is_in_good_support_position(&self, ctx: &StateProcessingContext) -> bool {

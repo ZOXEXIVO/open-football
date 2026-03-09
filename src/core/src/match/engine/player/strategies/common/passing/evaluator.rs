@@ -221,9 +221,9 @@ impl PassEvaluator {
         ctx: &StateProcessingContext,
         receiver: &MatchPlayerLite,
     ) -> f32 {
-        const VERY_CLOSE_RADIUS: f32 = 5.0;
-        const CLOSE_RADIUS: f32 = 10.0;
-        const MEDIUM_RADIUS: f32 = 18.0;
+        const VERY_CLOSE_RADIUS: f32 = 8.0;
+        const CLOSE_RADIUS: f32 = 18.0;
+        const MEDIUM_RADIUS: f32 = 30.0;
 
         // Check opponents at multiple distance ranges for nuanced space evaluation
         let all_opponents: Vec<(u32, f32)> = ctx.tick_context
@@ -247,13 +247,13 @@ impl PassEvaluator {
         // Calculate space quality with heavy penalties for nearby opponents
         let space_factor = if very_close_opponents > 0 {
             // Very tightly marked - poor option
-            0.2 - (very_close_opponents as f32 * 0.1).min(0.15)
+            0.15 - (very_close_opponents as f32 * 0.1).min(0.12)
         } else if close_opponents > 0 {
-            // Marked but manageable
-            0.6 - (close_opponents as f32 * 0.15).min(0.3)
+            // Marked — risky target
+            0.45 - (close_opponents as f32 * 0.15).min(0.3)
         } else if medium_opponents > 0 {
-            // Some pressure but good space
-            0.85 - (medium_opponents as f32 * 0.1).min(0.2)
+            // Some pressure but workable
+            0.75 - (medium_opponents as f32 * 0.1).min(0.2)
         } else {
             // Completely free - excellent option
             1.0
@@ -349,11 +349,17 @@ impl PassEvaluator {
             == crate::PlayerFieldPositionGroup::Defender;
 
         // Penalize pure sideways passes that don't progress the ball
+        // But exempt wide switches — lateral passes that spread the play are valuable
         let lateral_change = (receiver_position.y - passer_position.y).abs();
         let forward_change = ((receiver_position.x - passer_position.x) * forward_direction_multiplier).abs();
         let sideways_penalty = if forward_change < 10.0 && lateral_change > 20.0 {
-            // Nearly pure sideways pass — discourages cycling in a cluster
-            -0.3
+            if lateral_change > field_height * 0.25 {
+                // Wide switch — this is good, no penalty
+                0.0
+            } else {
+                // Short sideways pass in a cluster — discourage
+                -0.25
+            }
         } else {
             0.0
         };
@@ -417,20 +423,29 @@ impl PassEvaluator {
         // Width bonus - reward passes to wide areas
         // Extra bonus if passer is central and receiver is wide (spreading play)
         let spreading_play_bonus = if passer_width_ratio < 0.4 && receiver_width_ratio > 0.5 {
-            0.15 // Central player finding wide teammate
+            0.25 // Central player finding wide teammate — strong incentive
+        } else {
+            0.0
+        };
+
+        // Midfielder-specific width incentive — midfielders should distribute wide
+        let is_midfielder = ctx.player.tactical_position.current_position.position_group()
+            == crate::PlayerFieldPositionGroup::Midfielder;
+        let midfielder_width_bonus = if is_midfielder && receiver_width_ratio > 0.4 {
+            0.15 // Midfielders get extra reward for wide distribution
         } else {
             0.0
         };
 
         let width_bonus = if receiver_width_ratio > 0.7 {
             // Very wide (near touchline) - excellent for stretching play
-            0.4 + spreading_play_bonus
+            0.5 + spreading_play_bonus + midfielder_width_bonus
         } else if receiver_width_ratio > 0.5 {
             // Wide areas - good for creating space
-            0.25 + spreading_play_bonus
+            0.35 + spreading_play_bonus + midfielder_width_bonus
         } else if receiver_width_ratio > 0.3 {
             // Half-spaces - valuable attacking zones
-            0.15
+            0.2 + midfielder_width_bonus
         } else {
             // Central - no bonus (already gets forward progress bonus usually)
             0.0
@@ -444,7 +459,7 @@ impl PassEvaluator {
         let switch_play_bonus = if is_switching_play {
             let vision_skill = ctx.player.skills.mental.vision / 20.0;
             // Big bonus for switching play - opens up space
-            0.3 + (vision_skill * 0.2)
+            0.45 + (vision_skill * 0.25)
         } else {
             0.0
         };
@@ -461,9 +476,9 @@ impl PassEvaluator {
             })
             .count();
 
-        let overload_penalty = if ball_side == receiver_side && teammates_on_ball_side > 4 {
-            // Too many players on one side - encourage switching
-            -0.15
+        let overload_penalty = if ball_side == receiver_side && teammates_on_ball_side > 3 {
+            // Too many players on one side - strongly encourage switching
+            -0.25 - (teammates_on_ball_side as f32 - 3.0) * 0.05
         } else {
             0.0
         };
@@ -498,12 +513,12 @@ impl PassEvaluator {
 
         // Weighted combination - includes width and switching bonuses
         let tactical_value =
-            forward_value * 0.50 +         // Strongest factor: forward progression
-            distance_value * 0.15 +        // Pass distance quality
-            position_value * 0.12 +        // Receiver's tactical position (forwards > defenders)
-            long_pass_bonus * 0.05 +       // Reduced: long passes less encouraged
-            width_bonus * 0.09 +           // Reward wide passes
-            switch_play_bonus * 0.09 +     // Reward switching play
+            forward_value * 0.32 +         // Forward progression (reduced to make room for width)
+            distance_value * 0.10 +        // Pass distance quality
+            position_value * 0.08 +        // Receiver's tactical position (forwards > defenders)
+            long_pass_bonus * 0.05 +       // Long passes
+            width_bonus * 0.22 +           // Reward wide passes (major boost)
+            switch_play_bonus * 0.22 +     // Reward switching play (major boost)
             overload_penalty +             // Penalize crowded side
             sideways_penalty;              // Penalize pure sideways passes
 
@@ -514,15 +529,15 @@ impl PassEvaluator {
     /// Calculate overall success probability from factors
     fn calculate_success_probability(factors: &PassFactors) -> f32 {
         // Weighted combination of all factors
-        // Receiver positioning is critical - passing to free players is key
+        // Receiver positioning is the dominant factor — free players are far better targets
         let probability =
-            factors.distance_factor * 0.12 +
-                factors.angle_factor * 0.10 +
-                factors.pressure_factor * 0.10 +
-                factors.receiver_positioning * 0.33 +  // Increased: free receivers are much better targets
-                factors.passer_ability * 0.12 +
+            factors.distance_factor * 0.10 +
+                factors.angle_factor * 0.08 +
+                factors.pressure_factor * 0.08 +
+                factors.receiver_positioning * 0.40 +  // Dominant: free receivers are far better
+                factors.passer_ability * 0.10 +
                 factors.receiver_ability * 0.08 +
-                factors.tactical_value * 0.15;         // Increased to reward forward play and width
+                factors.tactical_value * 0.16;
 
         probability.clamp(0.1, 0.99)
     }
@@ -641,28 +656,28 @@ impl PassEvaluator {
             // Opponents near the receiver are weighted more heavily than teammates,
             // and close opponents are weighted much more than distant ones.
             let nearby_teammates_count = ctx.tick_context.distances
-                .teammates(teammate.id, 0.0, 20.0)
+                .teammates(teammate.id, 0.0, 50.0)
                 .count();
             let close_opponents_count = ctx.tick_context.distances
-                .opponents(teammate.id, 10.0)
+                .opponents(teammate.id, 30.0)
                 .count();
             let medium_opponents_count = ctx.tick_context.distances
-                .opponents(teammate.id, 20.0)
+                .opponents(teammate.id, 60.0)
                 .count() - close_opponents_count;
 
-            // Close opponents count double — passing into tight marking is very risky
+            // Close opponents count triple — passing into tight marking is very risky
             let weighted_nearby = nearby_teammates_count
-                + close_opponents_count * 2
+                + close_opponents_count * 3
                 + medium_opponents_count;
 
             let congestion_penalty = match weighted_nearby {
-                0 => 1.5,   // Completely isolated — excellent target
-                1 => 1.2,   // One nearby player — good
-                2 => 1.0,   // Normal
-                3 => 0.5,   // Getting crowded — discouraged
-                4 => 0.25,  // Congested — strongly discouraged
-                5 => 0.12,  // Huddle — almost never pass here
-                _ => 0.05,  // Extremely congested — effectively blocked
+                0 => 1.8,   // Completely isolated — excellent target
+                1 => 1.3,   // One nearby player — good
+                2 => 0.9,   // Normal
+                3 => 0.4,   // Getting crowded — discouraged
+                4 => 0.15,  // Congested — strongly discouraged
+                5 => 0.06,  // Huddle — almost never pass here
+                _ => 0.02,  // Extremely congested — effectively blocked
             };
 
             let evaluation = Self::evaluate_pass(ctx, ctx.player, &teammate);

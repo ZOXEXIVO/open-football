@@ -6,12 +6,12 @@ pub struct ShootingOperationsImpl<'p> {
 }
 
 // Realistic shooting distances (field is typically 840 units) — all +20%
-const MAX_SHOOTING_DISTANCE: f32 = 180.0; // ~90m - absolute max for long shots
+const MAX_SHOOTING_DISTANCE: f32 = 140.0; // ~80m - absolute max for long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot (penalty spot)
 const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
 const OPTIMAL_SHOOTING_DISTANCE: f32 = 96.0; // ~48m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 120.0; // ~60m - medium range shots
+const MEDIUM_RANGE_DISTANCE: f32 = 100.0; // ~50m - medium range shots
 
 // Shooting decision thresholds — all +20%
 const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 48.0; // Always prefer shooting if closer than this

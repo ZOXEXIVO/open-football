@@ -54,8 +54,8 @@ impl StateProcessingHandler for ForwardRunningState {
                 ));
             }
 
-            // Priority 0.6: Unopposed approach — shoot from further out when no defenders nearby
-            if distance_to_goal < 120.0 && !ctx.players().opponents().exists(25.0) {
+            // Priority 0.6: Unopposed approach — shoot from reasonable range when no defenders blocking
+            if distance_to_goal < CLOSE_RANGE_DISTANCE && self.has_open_space_ahead(ctx) {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
@@ -76,6 +76,23 @@ impl StateProcessingHandler for ForwardRunningState {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
+                }
+            }
+
+            // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
+            // Only brave/skilled players carry the ball forward; others prefer passing
+            if distance_to_goal > POINT_BLANK_DISTANCE
+                && distance_to_goal < 180.0
+                && self.has_open_space_ahead(ctx)
+            {
+                let dribbling = ctx.player.skills.technical.dribbling / 20.0;
+                let composure = ctx.player.skills.mental.composure / 20.0;
+                let determination = ctx.player.skills.mental.determination / 20.0;
+                let pace = ctx.player.skills.physical.pace / 20.0;
+                let carry_quality = dribbling * 0.35 + composure * 0.25
+                    + determination * 0.2 + pace * 0.2;
+                if carry_quality > 0.55 {
+                    return None;
                 }
             }
 
@@ -167,7 +184,7 @@ impl StateProcessingHandler for ForwardRunningState {
             // Evaluate best action based on game context
             // Require minimum carry time to prevent instant pass-after-receive
             let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-            if ownership_ticks > 25 && self.should_pass(ctx) {
+            if ownership_ticks > 12 && self.should_pass(ctx) {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
 
@@ -185,7 +202,8 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-            if ctx.in_state_time > 60 {
+            // But allow extended runs when advancing toward goal with open space
+            if ctx.in_state_time > 120 {
                 if distance_to_goal < SHOOTING_ZONE_DISTANCE {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
@@ -1312,10 +1330,10 @@ impl ForwardRunningState {
             return None;
         }
 
-        // Passer must be in open space (use pre-computed distances)
+        // Passer must be in open space (no opponents within 50 units)
         let opponents_near_passer = ctx.tick_context.distances
-            .opponents(passer_id, 12.0).count();
-        if opponents_near_passer >= 2 {
+            .opponents(passer_id, 50.0).count();
+        if opponents_near_passer >= 1 {
             return None;
         }
 

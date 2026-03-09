@@ -386,6 +386,7 @@ impl PlayerEventDispatcher {
         // Determine trajectory type based on context, not just distance
         let passer = field.get_player_mut(event_model.from_player_id).unwrap();
         let passer_team_id = passer.team_id;
+        let passer_is_goalkeeper = passer.tactical_position.current_position.is_goalkeeper();
 
         let trajectory_type = Self::select_trajectory_type_contextual(
             actual_horizontal_distance,
@@ -397,6 +398,13 @@ impl PlayerEventDispatcher {
             &field.players,
         );
 
+        // Goalkeeper long kicks must always be high arcs (goal kicks from penalty area)
+        let trajectory_type = if passer_is_goalkeeper && actual_horizontal_distance > 60.0 {
+            TrajectoryType::HighArc
+        } else {
+            trajectory_type
+        };
+
         // Calculate z-velocity to reach target with chosen trajectory type
         let z_velocity = Self::calculate_trajectory_to_target(
             actual_horizontal_distance,
@@ -406,7 +414,13 @@ impl PlayerEventDispatcher {
             &mut rng,
         );
 
-        let max_z_velocity = Self::calculate_max_z_velocity(actual_horizontal_distance, &skills);
+        let base_max_z = Self::calculate_max_z_velocity(actual_horizontal_distance, &skills);
+        // Goalkeeper long kicks get a higher z-cap — goal kicks should fly high
+        let max_z_velocity = if passer_is_goalkeeper && actual_horizontal_distance > 60.0 {
+            base_max_z * 1.5
+        } else {
+            base_max_z
+        };
         let final_z_velocity = z_velocity.min(max_z_velocity);
 
         // Calculate final velocity
@@ -417,7 +431,7 @@ impl PlayerEventDispatcher {
         );
 
         // CRITICAL: Validate velocity to prevent cosmic-speed passes
-        const MAX_PASS_VELOCITY: f32 = 5.0; // Cap for longest passes (~60m)
+        const MAX_PASS_VELOCITY: f32 = 7.0; // Cap for longest passes including lofted balls
 
         // Check for NaN or infinity
         if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
@@ -475,16 +489,30 @@ impl PlayerEventDispatcher {
         let horizontal_direction = Vector3::new(ball_pass_vector.x, ball_pass_vector.y, 0.0).normalize();
         let distance = (ball_pass_vector.x * ball_pass_vector.x + ball_pass_vector.y * ball_pass_vector.y).sqrt();
 
-        // Calculate velocity needed to reach target accounting for ground friction
-        // With friction factor 0.985/tick, total roll distance = v0 / 0.015
-        // So v0 = distance * 0.015
-        // Overshoot slightly (1.15x) so ball arrives with some remaining speed
+        // Calculate velocity needed to reach target accounting for friction and air drag
+        // With ground friction factor 0.985/tick, total roll distance = v0 / 0.015
+        // So v0 = distance * 0.015 for ground passes
+        // Lofted passes experience air drag (proportional to v²) which bleeds much more speed,
+        // plus 5% horizontal loss on each bounce — so longer passes need more overshoot
         const GROUND_FRICTION: f32 = 0.015;
-        let needed_velocity = distance * GROUND_FRICTION * 1.15;
+
+        // Distance-dependent overshoot: short passes need little extra,
+        // long passes need significantly more to compensate for air drag and bounce losses
+        let overshoot = if distance < 50.0 {
+            1.15 // Short: ground friction only
+        } else if distance < 100.0 {
+            1.25 // Medium: slight air drag on lofted balls
+        } else if distance < 200.0 {
+            1.45 // Long: significant air drag compensation
+        } else {
+            1.65 // Very long: heavy air drag + multiple bounces
+        };
+
+        let needed_velocity = distance * GROUND_FRICTION * overshoot;
 
         // pass_force (0.3-2.0) modulates: skilled players weight the pass better
-        // Normalize to 0.85-1.1 range so it fine-tunes rather than drives the physics
-        let skill_modifier = 0.85 + (pass_force.clamp(0.3, 2.0) - 0.3) * 0.15;
+        // Normalize to 0.90-1.1 range so it fine-tunes rather than drives the physics
+        let skill_modifier = 0.90 + (pass_force.clamp(0.3, 2.0) - 0.3) * 0.12;
 
         horizontal_direction * (needed_velocity * skill_modifier)
     }
@@ -902,7 +930,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
-        const GOAL_WIDTH: f32 = 29.0; // Half-width of goal (~3.66m, full width ~7.32m real size)
+        const GOAL_WIDTH: f32 = 45.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
         const MAX_SHOT_VELOCITY: f32 = 10.0; // Maximum realistic shot velocity per tick
@@ -977,47 +1005,47 @@ impl PlayerEventDispatcher {
         let distance_error_factor = (horizontal_distance / 80.0).clamp(0.8, 3.0);
 
         // Calculate positional error (how far from intended target)
-        // Distance penalty multiplier for base_accuracy — steeper dropoff at range
+        // Distance penalty multiplier for base_accuracy — close range should be very accurate
         let distance_penalty = if horizontal_distance > 200.0 {
-            0.10
+            0.12
         } else if horizontal_distance > 150.0 {
-            0.18
+            0.20
         } else if horizontal_distance > 100.0 {
-            0.28
+            0.32
         } else if horizontal_distance > 70.0 {
-            0.40
+            0.50
         } else if horizontal_distance > 50.0 {
-            0.55
+            0.68
         } else if horizontal_distance > 30.0 {
-            0.75
+            0.85
         } else if horizontal_distance > 15.0 {
-            0.88
+            0.93
         } else {
-            0.95
+            0.98
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±3-8 units, poor long-range ±40-80 units
-        let base_position_error = 65.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let min_error = if horizontal_distance < 30.0 { 3.0 } else if horizontal_distance < 60.0 { 5.0 } else { 10.0 };
-        let max_y_error = base_position_error.clamp(min_error, 120.0);
+        // Base error: elite close-range ±2-5 units, poor long-range ±30-60 units
+        let base_position_error = 45.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let min_error = if horizontal_distance < 30.0 { 2.0 } else if horizontal_distance < 60.0 { 4.0 } else { 8.0 };
+        let max_y_error = base_position_error.clamp(min_error, 90.0);
 
         // Add random error to y-coordinate
         let y_error = rng.random_range(-max_y_error..max_y_error);
         let mut actual_y_target = ideal_y_target + y_error;
 
         // Wide miss chance: distance-dependent — close range is much more accurate
-        // Real football: ~65% of all shots miss, but close-range misses are ~35-40%
+        // Real football: ~50% of all shots miss the frame, but close range (<15m) is ~25%
         let wide_miss_base = if horizontal_distance < 30.0 {
-            0.08 // Very close — skilled players rarely miss the frame
+            0.04 // Very close — skilled players rarely miss the frame
         } else if horizontal_distance < 60.0 {
-            0.18
+            0.10
         } else if horizontal_distance < 100.0 {
-            0.30
+            0.22
         } else {
-            0.42 // Long range — high base miss rate
+            0.35 // Long range — high base miss rate
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.5 + wide_miss_base;
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.4 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1097,15 +1125,15 @@ impl PlayerEventDispatcher {
         // Over-the-bar miss chance: distance-dependent
         // Close range: players keep shots low. Long range: more ballooning
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.05 // Close range — very rarely sky it
+            0.03 // Close range — very rarely sky it
         } else if horizontal_distance < 60.0 {
-            0.12
+            0.08
         } else if horizontal_distance < 100.0 {
-            0.18
+            0.14
         } else {
-            0.25 // Long range — more likely to balloon over
+            0.22 // Long range — more likely to balloon over
         };
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.4 + over_bar_base;
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.35 + over_bar_base;
         let z_velocity = if rng.random_range(0.0f32..1.0) < over_bar_chance {
             // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
             // Ball needs to reach height > 8.0 during flight, so z_velocity must be significant

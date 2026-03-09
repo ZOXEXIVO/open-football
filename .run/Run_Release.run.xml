@@ -5,8 +5,8 @@
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs>
       <env name="MATCH_PLAY_POOL_MAX_THREADS" value="16" />
-      <env name="MATCH_RECORD_ENABLED" value="true" />
-      <env name="MATCH_STORE_POOL_MAX_THREADS" value="8" />
+      <env name="MATCH_RECORD_ENABLED" value="false" />
+      <env name="MATCH_STORE_POOL_MAX_THREADS" value="16" />
     </envs>
     <option name="emulateTerminal" value="false" />
     <option name="channel" value="DEFAULT" />

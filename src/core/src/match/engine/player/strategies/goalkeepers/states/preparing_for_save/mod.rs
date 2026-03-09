@@ -166,15 +166,16 @@ impl GoalkeeperPreparingForSaveState {
         let time_to_ball = ball_distance / ball_speed.max(0.5);
 
         // Dive decisions calibrated for actual shot speeds (max ~2.0/tick)
+        // Elite GKs react from much further out and faster
         if ball_speed > 1.5 {
-            // Strong shot — dive immediately if in range (skilled keepers react further out)
-            ball_distance < (30.0 + reflexes * 12.0 + agility * 5.0) && time_to_ball < (20.0 + reflexes * 12.0)
+            // Strong shot — dive immediately (skilled keepers react further out)
+            ball_distance < (25.0 + reflexes * 20.0 + agility * 8.0) && time_to_ball < (15.0 + reflexes * 18.0)
         } else if ball_speed > 0.8 {
-            // Medium speed — dive if reasonably close
-            ball_distance < (25.0 + agility * 10.0 + reflexes * 4.0) && bravery > 0.15
+            // Medium speed — dive if in range
+            ball_distance < (20.0 + agility * 15.0 + reflexes * 8.0) && bravery > 0.15
         } else {
             // Slow rolling ball — dive if close
-            ball_distance < 22.0 && (reflexes + agility) > 0.5
+            ball_distance < (18.0 + agility * 8.0) && (reflexes + agility) > 0.3
         }
     }
 

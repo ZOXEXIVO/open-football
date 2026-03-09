@@ -30,6 +30,40 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
+        // OPPONENT ADVANCING: Break from line when opponent has ball and is heading toward our goal
+        // This prevents defenders from watching attackers run at them from midfield
+        if !ctx.team().is_control_ball() {
+            if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
+                let carrier_vel = ctx.tick_context.positions.players.velocity(ball_carrier.id);
+                let carrier_speed = carrier_vel.magnitude();
+                if carrier_speed > 0.1 {
+                    let own_goal = ctx.ball().direction_to_own_goal();
+                    let to_goal = (own_goal - ball_carrier.position).normalize();
+                    let advancing = carrier_vel.normalize().dot(&to_goal);
+                    // Opponent is advancing toward our goal
+                    if advancing > 0.3 {
+                        let dist = ball_carrier.distance(ctx);
+                        if dist < 25.0 {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Tackling,
+                            ));
+                        }
+                        if dist < PRESSING_DISTANCE_THRESHOLD
+                            && ctx.player().defensive().is_best_defender_for_opponent(&ball_carrier)
+                        {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Pressing,
+                            ));
+                        }
+                        // Even from far away — drop into active defense
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Running,
+                        ));
+                    }
+                }
+            }
+        }
+
         // COUNTER-PRESS: Break from line to immediately press when possession just lost
         if ctx.team().has_just_lost_possession() {
             let counter_press = ctx.team().tactics().counter_press_intensity();

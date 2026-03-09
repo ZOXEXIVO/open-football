@@ -8,6 +8,7 @@ use nalgebra::Vector3;
 
 const TACKLE_RANGE: f32 = 40.0;
 const ATTACK_SUPPORT_TIME_LIMIT: u64 = 300;
+const MIN_STAY_TIME: u64 = 60; // Minimum ticks before allowing non-urgent exit to Running
 const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 
 #[derive(Default, Clone)]
@@ -26,7 +27,7 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         if !ctx.team().is_control_ball() {
             let ball_distance = ctx.ball().distance();
 
-            // Very close — tackle reactively
+            // Very close — tackle reactively (always urgent, ignore min stay)
             if ball_distance < TACKLE_RANGE {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Tackling,
@@ -38,6 +39,12 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Pressing,
                 ));
+            }
+
+            // Non-urgent transitions: require minimum stay time to prevent
+            // rapid oscillation with Running state
+            if ctx.in_state_time < MIN_STAY_TIME {
+                return None;
             }
 
             // Guard unmarked attackers on our side

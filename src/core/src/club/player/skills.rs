@@ -57,7 +57,7 @@ impl PlayerSkills {
 
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
     /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch)
-    /// pace=1 → ~0.30 (~3.8 m/s), pace=20 → ~0.80 (~10 m/s)
+    /// pace=1 → ~0.255 (~3.2 m/s), pace=20 → ~0.68 (~8.5 m/s)
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
         let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
@@ -68,9 +68,9 @@ impl PlayerSkills {
             + 0.2 * acceleration_factor
             + 0.1 * agility_factor;
 
-        // Linear scale: min 0.30 (pace=1) to max 0.80 (pace=20)
-        let min_speed = 0.30;
-        let max_speed = 0.80;
+        // Linear scale: min 0.217 (pace=1) to max 0.578 (pace=20)
+        let min_speed = 0.217;
+        let max_speed = 0.578;
 
         min_speed + skill_blend * (max_speed - min_speed)
     }

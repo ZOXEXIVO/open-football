@@ -97,8 +97,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // Unopposed approach — shoot from further out when no defenders nearby
-            if goal_dist < 100.0 && !ctx.players().opponents().exists(25.0) {
+            // Unopposed approach — shoot from closer range when path to goal is clear
+            if goal_dist < STANDARD_SHOOTING_DISTANCE && self.has_open_space_ahead(ctx) {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
@@ -112,6 +112,24 @@ impl StateProcessingHandler for MidfielderRunningState {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
                 ));
+            }
+
+            // CARRY FORWARD: Open path to goal — only skilled/brave players carry forward
+            // Average midfielders should prefer passing to maintain team play
+            let field_width = ctx.context.field_size.width as f32;
+            if goal_dist > POINT_BLANK_DISTANCE
+                && goal_dist < field_width * 0.45
+                && self.has_open_space_ahead(ctx)
+            {
+                let dribbling = ctx.player.skills.technical.dribbling / 20.0;
+                let composure = ctx.player.skills.mental.composure / 20.0;
+                let determination = ctx.player.skills.mental.determination / 20.0;
+                let pace = ctx.player.skills.physical.pace / 20.0;
+                let carry_quality = dribbling * 0.35 + composure * 0.25
+                    + determination * 0.2 + pace * 0.2;
+                if carry_quality > 0.6 {
+                    return None;
+                }
             }
 
             // Minimum carry time before considering passes — let midfielders run with the ball
@@ -216,16 +234,27 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // SWITCH PLAY: When congested on one side, look for a long pass to the other flank
-            if ownership_ticks > 25 && ctx.ball().has_stable_possession() {
-                let player_y = ctx.player.position.y;
-                let field_center_y = ctx.context.field_size.height as f32 / 2.0;
-                let distance_from_center = (player_y - field_center_y).abs();
-                // Only switch if we're wide (far from center) and congested
-                if distance_from_center > 60.0 && ctx.player().movement().is_congested() {
+            // SWITCH PLAY: When teammates are overloaded on one side, switch to the other flank
+            if ownership_ticks > 20 && ctx.ball().has_stable_possession() {
+                let field_height = ctx.context.field_size.height as f32;
+                let field_center_y = field_height / 2.0;
+                let ball_side = if ctx.player.position.y > field_center_y { 1.0 } else { -1.0 };
+
+                // Count teammates on ball's side
+                let teammates_on_side = ctx.players().teammates().all()
+                    .filter(|t| {
+                        let t_side = if t.position.y > field_center_y { 1.0 } else { -1.0 };
+                        t_side == ball_side
+                    })
+                    .count();
+
+                // Switch if overloaded (3+ teammates on same side) or congested
+                let should_switch = teammates_on_side >= 3 || ctx.player().movement().is_congested();
+
+                if should_switch {
                     let vision = ctx.player.skills.mental.vision / 20.0;
                     let passing = ctx.player.skills.technical.passing / 20.0;
-                    if vision > 0.5 && passing > 0.5 {
+                    if vision > 0.4 && passing > 0.4 {
                         return Some(StateChangeResult::with_midfielder_state(
                             MidfielderState::SwitchingPlay,
                         ));
@@ -233,8 +262,8 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Enhanced passing decision — carry the ball before looking for a pass
-            if ownership_ticks > 40 && ctx.ball().has_stable_possession()
+            // Enhanced passing decision — look for a good pass
+            if ownership_ticks > 15 && ctx.ball().has_stable_possession()
                 && self.should_pass(ctx)
             {
                 if let Some((target_teammate, _reason)) = self.find_best_pass_option(ctx) {
@@ -306,13 +335,14 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
 
                 // Medium range: actively support (don't just drift)
-                if ctx.in_state_time > 20 {
+                // Require enough time in Running to avoid rapid oscillation with AttackSupporting
+                if ctx.in_state_time > 80 {
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::AttackSupporting,
                     ));
                 }
 
-                // First 20 ticks: stay in Running with active velocity
+                // First 80 ticks: stay in Running with active velocity
                 return None;
             }
 
@@ -535,9 +565,9 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Spread midfielders across 20%-80% of field height
-            let slot_y = field_height * 0.2
-                + (field_height * 0.6) * (slot_index as f32 + 0.5) / total_mids as f32;
+            // Spread midfielders across 10%-90% of field height for full width usage
+            let slot_y = field_height * 0.10
+                + (field_height * 0.80) * (slot_index as f32 + 0.5) / total_mids as f32;
 
             // X: push ahead of ball to offer passing options, stagger by slot
             let depth_stagger = attacking_direction * (20.0 + (slot_index as f32) * 15.0);
@@ -545,10 +575,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             let width_stagger = if is_wide { attacking_direction * 20.0 } else { 0.0 };
             let target_x = start_pos.x + (support_x - start_pos.x) * proximity + width_stagger;
 
-            // Y: blend between assigned slot, start position, and ball — heavy start_pos weight
-            let slot_weight = if is_wide { 0.5 } else { 0.35 };
-            let ball_weight = proximity * 0.3;
-            let start_weight = (1.0 - slot_weight - ball_weight).max(0.15);
+            // Y: blend between assigned slot, start position, and ball — slot dominant for width
+            let slot_weight = if is_wide { 0.65 } else { 0.55 };
+            let ball_weight = proximity * 0.2;
+            let start_weight = (1.0 - slot_weight - ball_weight).max(0.10);
             let target_y = slot_y * slot_weight
                 + ball_pos.y * ball_weight
                 + start_pos.y * start_weight;
@@ -669,16 +699,25 @@ impl MidfielderRunningState {
         }
 
         // 5. UNDER LIGHT PRESSURE: Decide based on skills and options
-        if pressing_intensity > 0.3 {
-            // Better decision-makers are more likely to pass when slightly pressed
+        if pressing_intensity > 0.2 {
             let pass_likelihood = (decisions * 0.4) + (vision * 0.3) + (passing * 0.3);
-            return pass_likelihood > 0.6;
+            return pass_likelihood > 0.5;
         }
 
-        // 6. NO PRESSURE: Continue running unless very close to goal
-        // Very skilled passers might still look for a pass if in midfield
-        if distance_to_goal > 300.0 && vision > 0.8 && passing > 0.8 {
-            return self.has_teammate_in_dangerous_position(ctx);
+        // 6. NO PRESSURE: Midfielders should still distribute — it's their primary role
+        // Look for a well-positioned teammate even without pressure
+        if distance_to_goal > 200.0 {
+            // Good passers actively look for passing options
+            let distribution_quality = vision * 0.4 + passing * 0.3 + teamwork * 0.3;
+            if distribution_quality > 0.5 {
+                return self.has_better_positioned_teammate(ctx, distance_to_goal);
+            }
+        }
+
+        // Even average midfielders should pass if they've been carrying too long
+        let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+        if ownership_ticks > 60 {
+            return true;
         }
 
         false
@@ -713,7 +752,7 @@ impl MidfielderRunningState {
                     return false;
                 }
                 let has_space = ctx.tick_context.distances
-                    .opponents(teammate.id, 15.0)
+                    .opponents(teammate.id, 30.0)
                     .count() < 2;
                 if !has_space {
                     return false;
@@ -797,11 +836,11 @@ impl MidfielderRunningState {
             return None; // Passer didn't run ahead enough
         }
 
-        // Passer must be in open space (fewer than 2 opponents within 12 units)
+        // Passer must be in open space (no opponents within 50 units)
         let opponents_near_passer = ctx.tick_context.distances
-            .opponents(passer_id, 12.0)
+            .opponents(passer_id, 50.0)
             .count();
-        if opponents_near_passer >= 2 {
+        if opponents_near_passer >= 1 {
             return None;
         }
 
@@ -887,6 +926,11 @@ impl MidfielderRunningState {
         // Don't retain under heavy pressure
         let pressing = self.calculate_pressing_intensity(ctx);
         if pressing > 0.5 {
+            return false;
+        }
+
+        // Don't retain if open space ahead — advance to create tension
+        if self.has_open_space_ahead(ctx) {
             return false;
         }
 
@@ -1023,6 +1067,23 @@ impl MidfielderRunningState {
     }
 
     /// Check if player is stuck in a corner/boundary with multiple players around
+    /// Check if there's open space ahead toward the opponent goal
+    fn has_open_space_ahead(&self, ctx: &StateProcessingContext) -> bool {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        // Check for opponents blocking the path ahead (within 30 units, roughly toward goal)
+        let blockers = ctx.players().opponents().nearby(30.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.4
+            })
+            .count();
+
+        blockers == 0
+    }
+
     fn is_congested_near_boundary(&self, ctx: &StateProcessingContext) -> bool {
         // Check if near any boundary (within 20 units)
         let field_width = ctx.context.field_size.width as f32;

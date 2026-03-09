@@ -141,58 +141,48 @@ impl ForwardRunningInBehindState {
     }
 
     fn space_ahead(&self, ctx: &StateProcessingContext) -> bool {
-        // Counter-attack: widen space threshold — be more willing to run
-        let ownership_duration = ctx.tick_context.ball.ownership_duration;
-        let is_counter = ownership_duration < 15;
-        let space_threshold = if is_counter { 15.0 } else { 8.0 };
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
 
-        let close_opponents = ctx.players().opponents().nearby(space_threshold).count();
+        // Check for opponents blocking the path ahead (within 30 units, in forward direction)
+        let blockers = ctx.players().opponents().nearby(30.0)
+            .filter(|opp| {
+                let to_opp = (opp.position - player_pos).normalize();
+                to_opp.dot(&to_goal) > 0.3
+            })
+            .count();
 
-        // Allow runs even with one defender if the forward is fast
-        if close_opponents == 0 {
+        // Allow runs with one blocker if the forward is fast
+        if blockers == 0 {
             return true;
         }
 
-        if close_opponents == 1 {
-            // Check if we're faster than the average defender
+        if blockers == 1 {
             let pace = ctx.player.skills.physical.pace;
-            return pace > 70.0;
-        }
-
-        // Counter-attack: allow runs even with 2 defenders if very fast
-        if is_counter && close_opponents == 2 {
-            let pace = ctx.player.skills.physical.pace;
-            return pace > 80.0;
+            return pace > 12.0;
         }
 
         false
     }
 
     fn in_passing_lane(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the player is in a good position to receive a pass
-        // This is a simplified version and may need to be more complex in practice
-        let teammate_with_ball = ctx
-            .tick_context
-            .positions
-            .players
-            .items
-            .iter()
-            .find(|p| {
-                p.side == ctx.player.side.unwrap() && ctx.ball().owner_id() == Some(p.player_id)
-            });
-
-        if let Some(teammate) = teammate_with_ball {
-            let direction_to_player = (ctx.player.position - teammate.position).normalize();
-            let direction_to_goal =
-                (ctx.ball().direction_to_opponent_goal() - teammate.position).normalize();
-
-            // Check if the player is running towards the opponent's goal
-            // More lenient angle check to allow diagonal runs
-            direction_to_player.dot(&direction_to_goal) > 0.5
-        } else {
-            // If no teammate has the ball, still allow the run if we're in a good position
-            true
+        // Check if the player is ahead of the ball holder (toward opponent goal)
+        // Diagonal runs are valid — only reject if player is behind the passer
+        if let Some(owner_id) = ctx.ball().owner_id() {
+            if let Some(owner) = ctx.context.players.by_id(owner_id) {
+                if owner.team_id == ctx.player.team_id {
+                    let passer_pos = ctx.tick_context.positions.players.position(owner_id);
+                    let goal_pos = ctx.player().opponent_goal_position();
+                    let to_goal = (goal_pos - passer_pos).normalize();
+                    let to_runner = (ctx.player.position - passer_pos).normalize();
+                    // Runner must be at least somewhat ahead of passer (dot > 0.0)
+                    // This allows wide diagonal runs while rejecting backward positions
+                    return to_runner.dot(&to_goal) > 0.0;
+                }
+            }
         }
+        true
     }
 
     fn can_break_offside_trap(&self, ctx: &StateProcessingContext) -> bool {

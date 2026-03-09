@@ -17,6 +17,20 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
+        // Ball coming toward this player (pass to us) — intercept it
+        if ctx.ball().is_towards_player_with_angle(0.8) && ctx.ball().distance() < 150.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Intercepting,
+            ));
+        }
+
+        // Loose ball very close — take it regardless of speed
+        if !ctx.ball().is_owned() && ctx.ball().distance() < 30.0 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::TakeBall,
+            ));
+        }
+
         // If team has possession, stop pressing and contribute to attack
         if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_midfielder_state(
