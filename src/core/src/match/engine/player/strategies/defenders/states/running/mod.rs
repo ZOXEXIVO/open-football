@@ -66,6 +66,24 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
         } else {
+            // COUNTER-PRESS: Just lost possession — press immediately to win ball back
+            if ctx.team().has_just_lost_possession() {
+                let counter_press = ctx.team().tactics().counter_press_intensity();
+                let ball_dist = ctx.ball().distance();
+                let counter_press_range = 40.0 + counter_press * 60.0;
+                if ball_dist < counter_press_range {
+                    if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                        if ctx.player().defensive().is_best_defender_for_opponent(&opponent)
+                            || opponent.distance(ctx) < 30.0
+                        {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Tackling,
+                            ));
+                        }
+                    }
+                }
+            }
+
             if ctx.player().position_to_distance() == PlayerDistanceFromStartPosition::Big {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Returning,

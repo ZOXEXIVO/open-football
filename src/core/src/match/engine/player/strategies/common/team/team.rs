@@ -87,6 +87,29 @@ impl<'b> TeamOperationsImpl<'b> {
         false
     }
 
+    /// Check if team has JUST lost possession (previous owner was teammate, ball now with opponent).
+    /// Used for counter-pressing triggers — defenders immediately press instead of retreating.
+    pub fn has_just_lost_possession(&self) -> bool {
+        // Already have ball — haven't lost it
+        if self.is_control_ball() {
+            return false;
+        }
+
+        // Check if previous owner was from our team
+        if let Some(prev_id) = self.ctx.tick_context.ball.last_owner {
+            if let Some(prev_player) = self.ctx.context.players.by_id(prev_id) {
+                if prev_player.team_id == self.ctx.player.team_id {
+                    // Previous owner was us, now we don't control ball
+                    // Only counts as "just lost" if within ~300ms
+                    let new_ownership = self.ctx.tick_context.ball.ownership_duration;
+                    return new_ownership < 30;
+                }
+            }
+        }
+
+        false
+    }
+
     pub fn is_leading(&self) -> bool {
         !self.is_loosing()
     }

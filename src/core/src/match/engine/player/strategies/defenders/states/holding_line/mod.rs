@@ -30,6 +30,24 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
+        // COUNTER-PRESS: Break from line to immediately press when possession just lost
+        if ctx.team().has_just_lost_possession() {
+            let counter_press = ctx.team().tactics().counter_press_intensity();
+            let ball_dist = ctx.ball().distance();
+            let counter_press_range = 40.0 + counter_press * 60.0;
+            if ball_dist < counter_press_range {
+                if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
+                    if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball)
+                        || opponent_with_ball.distance(ctx) < 25.0
+                    {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Loose ball nearby — go claim it directly
         if !ctx.ball().is_owned() && ctx.ball().distance() < 40.0 && ctx.ball().speed() < 3.0 {
             return Some(StateChangeResult::with_defender_state(
@@ -260,6 +278,9 @@ impl DefenderHoldingLineState {
         };
 
         // LATERAL (Y) CALCULATION
+        // Compactness: higher = defenders squeeze toward center/ball side
+        let compactness = ctx.team().tactics().compactness();
+
         let target_y = if let Some(opponent) = nearest_opponent_in_zone {
             // Track opponent laterally but don't go too far from zone
             let opponent_y = opponent.position.y;
@@ -267,9 +288,9 @@ impl DefenderHoldingLineState {
             let drift = (opponent_y - tactical_position.y).clamp(-max_drift, max_drift);
             tactical_position.y + drift
         } else {
-            // Shift toward ball side
+            // Shift toward ball side — compactness amplifies this shift
             let ball_offset = ball_position.y - field_center_y;
-            let shift = ball_offset * 0.12;
+            let shift = ball_offset * (0.08 + compactness * 0.12);
             tactical_position.y + shift
         };
 
@@ -277,12 +298,25 @@ impl DefenderHoldingLineState {
     }
 
     /// Calculates the defensive line position based on team tactics and defender positions.
-    /// Returns the average x-position (goal-to-goal axis) of defenders.
+    /// Uses tactical defensive line height to bias the position forward or deep.
     fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
         let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
 
-        let sum_x_positions: f32 = defenders.iter().map(|p| p.position.x).sum();
-        sum_x_positions / defenders.len() as f32
+        let avg_x: f32 = defenders.iter().map(|p| p.position.x).sum::<f32>()
+            / defenders.len() as f32;
+
+        // Apply tactical bias: high line pushes defenders forward, deep block pulls them back
+        let line_height = ctx.team().tactics().defensive_line_height();
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let field_width = ctx.context.field_size.width as f32;
+
+        // line_height 0.0 = stay near own goal, 1.0 = push toward halfway
+        // Bias range: ±40 units from average position
+        let halfway = field_width / 2.0;
+        let toward_halfway = (halfway - own_goal.x).signum();
+        let tactical_bias = (line_height - 0.5) * 80.0 * toward_halfway;
+
+        avg_x + tactical_bias
     }
 
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.

@@ -104,6 +104,49 @@ impl Tactics {
         }
     }
 
+    /// Returns defensive line height from 0.0 (deep block) to 1.0 (high line).
+    /// Controls how far up the pitch defenders position themselves.
+    pub fn defensive_line_height(&self) -> f32 {
+        match self.tactical_style() {
+            TacticalStyle::Attacking => 0.8,
+            TacticalStyle::Possession => 0.7,
+            TacticalStyle::Compact => 0.65,
+            TacticalStyle::Balanced | TacticalStyle::WingPlay | TacticalStyle::WidePlay => 0.5,
+            TacticalStyle::Counterattack => 0.35,
+            TacticalStyle::Defensive => 0.25,
+            TacticalStyle::Experimental => 0.5,
+        }
+    }
+
+    /// Returns team compactness from 0.0 (spread) to 1.0 (very compact).
+    /// Controls how tightly defenders stay together laterally.
+    pub fn compactness(&self) -> f32 {
+        match self.tactical_style() {
+            TacticalStyle::Compact => 1.0,
+            TacticalStyle::Defensive => 0.85,
+            TacticalStyle::Possession => 0.7,
+            TacticalStyle::Balanced => 0.6,
+            TacticalStyle::Counterattack => 0.55,
+            TacticalStyle::Attacking => 0.5,
+            TacticalStyle::WingPlay | TacticalStyle::WidePlay => 0.4,
+            TacticalStyle::Experimental => 0.5,
+        }
+    }
+
+    /// Returns counter-press intensity from 0.0 to 1.0.
+    /// Controls how aggressively team presses immediately after losing possession.
+    pub fn counter_press_intensity(&self) -> f32 {
+        match self.tactical_style() {
+            TacticalStyle::Attacking | TacticalStyle::Compact => 0.9,
+            TacticalStyle::Possession => 0.75,
+            TacticalStyle::Balanced => 0.5,
+            TacticalStyle::WingPlay | TacticalStyle::WidePlay => 0.45,
+            TacticalStyle::Counterattack => 0.3,
+            TacticalStyle::Defensive => 0.2,
+            TacticalStyle::Experimental => 0.5,
+        }
+    }
+
     pub fn tactical_style(&self) -> TacticalStyle {
         match self.tactic_type {
             MatchTacticType::T442

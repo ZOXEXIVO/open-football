@@ -68,78 +68,73 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Only do expensive grid scan every 15 ticks; otherwise keep current heading
+        // Use consistent target: scan every 15 ticks, hold direction otherwise
         let target_position = if ctx.in_state_time % 15 == 0 {
             self.find_opposite_side_free_zone(ctx)
         } else {
-            // Cheap fallback: continue toward opposite side without full scan
             self.calculate_simple_opposite_target(ctx)
         };
 
-        // Add dynamic avoidance of congested areas during movement
-        let avoidance_vector = self.calculate_congestion_avoidance(ctx);
+        // Dead zone: already at target — hold position
+        let dist_to_target = (target_position - ctx.player.position).magnitude();
+        if dist_to_target < 8.0 {
+            return Some(Vector3::zeros());
+        }
 
-        // Vary movement pattern to confuse markers and exploit space
         let movement_pattern = self.get_intelligent_movement_pattern(ctx);
 
         match movement_pattern {
             MovementPattern::Direct => {
-                // Direct run to free space with congestion avoidance
-                let base_velocity = SteeringBehavior::Arrive {
-                    target: target_position,
-                    slowing_distance: 15.0,
-                }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                Some(base_velocity + avoidance_vector + ctx.player().separation_velocity())
+                Some(
+                    SteeringBehavior::Arrive {
+                        target: target_position,
+                        slowing_distance: 15.0,
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                )
             }
             MovementPattern::Curved => {
-                // Curved run to lose markers and find space
                 let curved_target = self.add_intelligent_curve(ctx, target_position);
-                let base_velocity = SteeringBehavior::Arrive {
-                    target: curved_target,
-                    slowing_distance: 20.0,
-                }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                Some(base_velocity + avoidance_vector * 0.8)
+                Some(
+                    SteeringBehavior::Arrive {
+                        target: curved_target,
+                        slowing_distance: 20.0,
+                    }
+                        .calculate(ctx.player)
+                        .velocity,
+                )
             }
             MovementPattern::CheckToReceive => {
-                // Quick check toward ball then sprint to space
                 if ctx.in_state_time % 30 < 10 {
-                    // Check toward ball
                     let check_position = self.calculate_check_position(ctx);
                     Some(
                         SteeringBehavior::Seek {
                             target: check_position,
                         }
                             .calculate(ctx.player)
-                            .velocity
+                            .velocity,
                     )
                 } else {
-                    // Sprint to free space
                     Some(
-                        SteeringBehavior::Pursuit {
+                        SteeringBehavior::Arrive {
                             target: target_position,
-                            target_velocity: Vector3::zeros(), // Static target position
+                            slowing_distance: 15.0,
                         }
                             .calculate(ctx.player)
-                            .velocity + avoidance_vector
+                            .velocity,
                     )
                 }
             }
             MovementPattern::OppositeRun => {
-                // New pattern: Run opposite to ball movement to find space
                 let opposite_target = self.calculate_opposite_run_target(ctx);
                 Some(
                     SteeringBehavior::Arrive {
                         target: opposite_target,
-                        slowing_distance: 10.0,
+                        slowing_distance: 15.0,
                     }
                         .calculate(ctx.player)
-                        .velocity + avoidance_vector * 1.2
+                        .velocity,
                 )
             }
         }

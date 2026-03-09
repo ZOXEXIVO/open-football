@@ -41,6 +41,20 @@ impl StateProcessingHandler for DefenderCoveringState {
             ));
         }
 
+        // COUNTER-PRESS: Break from covering to press when possession just lost
+        if ctx.team().has_just_lost_possession() {
+            let counter_press = ctx.team().tactics().counter_press_intensity();
+            if counter_press > 0.4 {
+                let ball_dist = ctx.ball().distance();
+                let counter_press_range = 30.0 + counter_press * 50.0;
+                if ball_dist < counter_press_range {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Pressing,
+                    ));
+                }
+            }
+        }
+
         // Priority: Tackle or press ball carrier aggressively
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);

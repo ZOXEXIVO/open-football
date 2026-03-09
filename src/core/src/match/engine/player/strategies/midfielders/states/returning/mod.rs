@@ -77,14 +77,26 @@ impl StateProcessingHandler for MidfielderReturningState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        Some(
-            SteeringBehavior::Arrive {
-                target: ctx.player.start_position,
-                slowing_distance: 50.0,  // Increased from 10.0 to slow down earlier and prevent overshoot
-            }
-            .calculate(ctx.player)
-            .velocity  + ctx.player().separation_velocity(),
-        )
+        let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();
+
+        // Close enough — stop to prevent oscillation
+        if dist_to_start < 8.0 {
+            return Some(Vector3::zeros());
+        }
+
+        let arrive = SteeringBehavior::Arrive {
+            target: ctx.player.start_position,
+            slowing_distance: 50.0,
+        }
+        .calculate(ctx.player)
+        .velocity;
+
+        // Only add separation when far from target — prevents fighting near destination
+        if dist_to_start > 30.0 {
+            Some(arrive + ctx.player().separation_velocity() * 0.3)
+        } else {
+            Some(arrive)
+        }
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

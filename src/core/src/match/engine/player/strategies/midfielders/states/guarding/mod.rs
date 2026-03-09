@@ -152,7 +152,6 @@ impl StateProcessingHandler for MidfielderGuardingState {
             let opponent_future = opponent.position + opponent_velocity * PREDICTION_TIME;
 
             // Position between opponent and our goal at GUARD_DISTANCE away
-            // This keeps us goal-side at a realistic marking distance
             let to_goal = (own_goal - opponent_future).normalize();
             let desired_position = opponent_future + to_goal * GUARD_DISTANCE;
 
@@ -164,9 +163,9 @@ impl StateProcessingHandler for MidfielderGuardingState {
             let to_desired = desired_position - ctx.player.position;
             let distance = to_desired.magnitude();
 
-            if distance < 2.0 {
-                // Close enough — mirror opponent movement gently
-                return Some(opponent_velocity * 0.5 + ctx.player().separation_velocity() * 0.3);
+            // Dead zone: close enough — hold position, no jitter
+            if distance < 8.0 {
+                return Some(Vector3::zeros());
             }
 
             let direction = to_desired.normalize();
@@ -175,7 +174,7 @@ impl StateProcessingHandler for MidfielderGuardingState {
             let base_speed = ctx.player.skills.physical.pace * 0.4;
             let urgency = (distance / GUARD_DISTANCE).clamp(0.4, 1.0);
 
-            Some(direction * base_speed * urgency + ctx.player().separation_velocity() * 0.3)
+            Some(direction * base_speed * urgency)
         } else {
             Some(Vector3::zeros())
         }

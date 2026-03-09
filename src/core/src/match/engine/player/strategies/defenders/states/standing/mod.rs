@@ -46,6 +46,26 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
+        // COUNTER-PRESS: If we just lost the ball, immediately press to win it back
+        // Intensity depends on tactical instructions from staff
+        if ctx.team().has_just_lost_possession() {
+            let counter_press = ctx.team().tactics().counter_press_intensity();
+            let ball_dist = ctx.ball().distance();
+            // Press range scales with intensity: 40 (defensive) to 100 (gegenpressing)
+            let counter_press_range = 40.0 + counter_press * 60.0;
+            if ball_dist < counter_press_range {
+                if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                    if ctx.player().defensive().is_best_defender_for_opponent(&opponent)
+                        || opponent.distance(ctx) < 30.0
+                    {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                }
+            }
+        }
+
         // Check for nearby opponents with the ball - press them if we're best positioned
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);

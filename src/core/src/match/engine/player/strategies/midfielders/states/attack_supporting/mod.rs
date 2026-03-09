@@ -112,13 +112,17 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
                     let urgency_factor = self.calculate_urgency_factor(ctx);
                     let slowing_distance = 20.0 * (1.0 - urgency_factor * 0.3);
 
+                    let dist_to_target = (target_position - ctx.player.position).magnitude();
+                    if dist_to_target < 8.0 {
+                        return Some(Vector3::zeros());
+                    }
                     return Some(
                         SteeringBehavior::Arrive {
                             target: target_position,
                             slowing_distance,
                         }
                             .calculate(ctx.player)
-                            .velocity + ctx.player().separation_velocity() * 1.5, // Increase separation
+                            .velocity,
                     );
                 }
             }
@@ -142,6 +146,11 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         // Default: Make intelligent supporting run
         let target_position = self.calculate_optimal_support_position(ctx);
 
+        let dist_to_target = (target_position - ctx.player.position).magnitude();
+        if dist_to_target < 8.0 {
+            return Some(Vector3::zeros());
+        }
+
         // Adjust speed based on urgency
         let urgency_factor = self.calculate_urgency_factor(ctx);
         let slowing_distance = 30.0 * (1.0 - urgency_factor * 0.5);
@@ -152,7 +161,7 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
                 slowing_distance,
             }
                 .calculate(ctx.player)
-                .velocity + ctx.player().separation_velocity(),
+                .velocity,
         )
     }
 

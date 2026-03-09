@@ -5,7 +5,6 @@ use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
 };
-use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
@@ -135,12 +134,11 @@ impl StateProcessingHandler for MidfielderWalkingState {
             let waypoints = ctx.player.get_waypoints_as_vectors();
 
             if !waypoints.is_empty() {
-                // Player has waypoints defined, follow them
                 return Some(
                     SteeringBehavior::FollowPath {
                         waypoints,
                         current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 5.0, // Some randomness for natural movement
+                        path_offset: 5.0,
                     }
                         .calculate(ctx.player)
                         .velocity,
@@ -148,16 +146,20 @@ impl StateProcessingHandler for MidfielderWalkingState {
             }
         }
 
+        // Walk toward start position at reduced speed — no random jitter
+        let to_start = ctx.player.start_position - ctx.player.position;
+        let dist = to_start.magnitude();
+        if dist < 5.0 {
+            return Some(Vector3::zeros());
+        }
+
         Some(
-            SteeringBehavior::Wander {
+            SteeringBehavior::Arrive {
                 target: ctx.player.start_position,
-                radius: IntegerUtils::random(5, 150) as f32,
-                jitter: IntegerUtils::random(0, 2) as f32,
-                distance: IntegerUtils::random(10, 250) as f32,
-                angle: IntegerUtils::random(0, 110) as f32,
+                slowing_distance: 30.0,
             }
                 .calculate(ctx.player)
-                .velocity,
+                .velocity * 0.4, // Walking pace
         )
     }
 

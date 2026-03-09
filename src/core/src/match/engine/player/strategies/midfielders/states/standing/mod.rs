@@ -1,7 +1,7 @@
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
+    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -114,32 +114,10 @@ impl StateProcessingHandler for MidfielderStandingState {
         None
     }
 
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Check if player should follow waypoints even when standing
-        if ctx.player.should_follow_waypoints(ctx) {
-            let waypoints = ctx.player.get_waypoints_as_vectors();
-
-            if !waypoints.is_empty() {
-                return Some(
-                    SteeringBehavior::FollowPath {
-                        waypoints,
-                        current_waypoint: ctx.player.waypoint_manager.current_index,
-                        path_offset: 3.0,
-                    }
-                    .calculate(ctx.player)
-                    .velocity * 0.5, // Slower speed when standing
-                );
-            }
-        }
-
-        // Apply separation velocity to spread out from nearby players
-        // This prevents huddle formation even while standing
-        let separation = ctx.player().separation_velocity();
-        if separation.magnitude() > 1.0 {
-            return Some(separation * 0.4);
-        }
-
-        Some(Vector3::new(0.0, 0.0, 0.0))
+    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Standing = completely still. No separation, no drift.
+        // Midfielders transition out of Standing within 8 ticks anyway.
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {
