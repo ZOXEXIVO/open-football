@@ -362,8 +362,9 @@ impl Staff {
             self.fatigue -= 5.0;
         }
 
-        // Vacation periods provide significant recovery
-        if self.is_on_vacation(ctx.simulation.date.date()) {
+        // Vacation periods provide significant recovery (off-season)
+        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        if season.is_off_season(ctx.simulation.date.date()) {
             self.fatigue = (self.fatigue - 30.0).max(0.0);
         }
 
@@ -591,11 +592,6 @@ impl Staff {
         let training_load = self.training_schedule.len() as f32 * 0.3;
 
         position_load + training_load
-    }
-
-    fn is_on_vacation(&self, date: NaiveDate) -> bool {
-        // Summer break (simplified)
-        date.month() == 7 && date.day() <= 14
     }
 
     fn has_coaching_duties(&self) -> bool {

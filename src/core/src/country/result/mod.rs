@@ -23,6 +23,10 @@ impl CountryResult {
         let current_date = data.date.date();
         let country_id = self.get_country_id(data);
 
+        let season_dates = data.country(country_id)
+            .map(|c| c.season_dates())
+            .unwrap_or_default();
+
         // Phases that need &self.leagues / &self.clubs references run BEFORE the consuming loops
         Self::simulate_media_coverage(data, country_id, &self.leagues);
         Self::process_end_of_period(data, country_id, current_date, &self.clubs);
@@ -69,7 +73,7 @@ impl CountryResult {
         Self::process_loan_returns(data, country_id, current_date);
 
         // Phase 3: Pre-season activities (if applicable)
-        if Self::is_preseason(current_date) {
+        if season_dates.is_off_season(current_date) {
             Self::simulate_preseason_activities(data, country_id, current_date);
         }
 

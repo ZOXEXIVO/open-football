@@ -6,14 +6,48 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Datelike;
-use core::ContractType;
-use core::PlayerClubContract;
+use core::{ContractType, PlayerClubContract};
+use core::shared::{Currency, CurrencyValue};
+use core::transfers::{CompletedTransfer, TransferType};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 #[derive(Deserialize)]
 pub struct PlayerPathParam {
     pub player_id: u32,
+}
+
+/// Extended team info that includes club/team IDs for transfer history recording.
+struct ExtTeamInfo {
+    club_id: u32,
+    team_id: u32,
+    info: core::TeamInfo,
+}
+
+fn get_team_info(sim: &core::SimulatorData, ci: usize, coi: usize, cli: usize) -> Option<ExtTeamInfo> {
+    let club = &sim.continents[ci].countries[coi].clubs[cli];
+    let main_team = club.teams.teams.iter()
+        .find(|t| t.team_type == core::TeamType::Main)
+        .or(club.teams.teams.first())?;
+    let league = main_team.league_id
+        .and_then(|lid| sim.league(lid))
+        .map(|l| (l.name.clone(), l.slug.clone()));
+    Some(ExtTeamInfo {
+        club_id: club.id,
+        team_id: main_team.id,
+        info: core::TeamInfo {
+            name: main_team.name.clone(),
+            slug: main_team.slug.clone(),
+            reputation: main_team.reputation.world,
+            league_name: league.as_ref().map(|l| l.0.clone()).unwrap_or_default(),
+            league_slug: league.map(|l| l.1).unwrap_or_default(),
+        },
+    })
+}
+
+fn get_team_info_by_club_id(sim: &core::SimulatorData, club_id: u32) -> Option<ExtTeamInfo> {
+    let (ci, coi, cli, _) = sim.find_club_main_team(club_id)?;
+    get_team_info(sim, ci, coi, cli)
 }
 
 // ── Clear injury ────────────────────────────────────────────────
@@ -50,16 +84,59 @@ pub async fn cancel_loan_action(
 
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
-        if let Some(player) = sim.player_mut(params.player_id) {
-            if let Some(ref mut contract) = player.contract {
-                if contract.contract_type == ContractType::Loan {
-                    contract.contract_type = ContractType::FullTime;
-                    contract.loan_from_club_id = None;
-                    contract.loan_to_club_id = None;
-                    return StatusCode::OK;
-                }
+        let date = sim.date.date();
+
+        // Find player and validate loan
+        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
+            Some(pos) => pos,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let parent_club_id = {
+            let player = sim.continents[ci].countries[coi].clubs[cli]
+                .teams.teams[ti].players.players.iter()
+                .find(|p| p.id == params.player_id);
+            match player.and_then(|p| p.contract.as_ref()) {
+                Some(c) if c.contract_type == ContractType::Loan => c.loan_from_club_id,
+                _ => return StatusCode::NOT_FOUND,
             }
-        }
+        };
+
+        let parent_club_id = match parent_club_id {
+            Some(id) => id,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let borrowing = match get_team_info(sim, ci, coi, cli) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let parent = match get_team_info_by_club_id(sim, parent_club_id) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        // Take player
+        let mut player = match sim.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.take_player(&params.player_id)
+        {
+            Some(p) => p,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        player.on_cancel_loan(&borrowing.info, &parent.info, date);
+        player.contract = None;
+
+        let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(parent_club_id) {
+            Some(pos) => pos,
+            None => return StatusCode::NOT_FOUND,
+        };
+        sim.continents[dci].countries[dcoi].clubs[dcli]
+            .teams.teams[dti].players.add(player);
+
+        sim.rebuild_indexes();
+        return StatusCode::OK;
     }
 
     StatusCode::NOT_FOUND
@@ -70,7 +147,6 @@ pub async fn cancel_loan_action(
 #[derive(Deserialize)]
 pub struct TransferRequest {
     pub to_club_id: u32,
-    #[allow(dead_code)]
     pub fee: Option<u32>,
 }
 
@@ -85,22 +161,35 @@ pub async fn transfer_action(
     if let Some(ref mut arc_data) = *guard {
         let sim = Arc::make_mut(arc_data);
         let date = sim.date.date();
+        let fee = body.fee.unwrap_or(0) as f64;
 
-        // Find which team the player is currently on
-        let player_pos = sim.find_player_position(params.player_id);
-        let (ci, coi, cli, ti) = match player_pos {
+        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
         };
 
-        // Find destination club main team
-        let dest = sim.find_club_main_team(body.to_club_id);
-        let (dci, dcoi, dcli, dti) = match dest {
+        let source = match get_team_info(sim, ci, coi, cli) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(body.to_club_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
         };
 
-        // Take player from source
+        let dest = match get_team_info(sim, dci, dcoi, dcli) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        // Get player name before taking
+        let player_name = sim.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.players.iter()
+            .find(|p| p.id == params.player_id)
+            .map(|p| p.full_name.to_string())
+            .unwrap_or_default();
+
         let mut player = match sim.continents[ci].countries[coi].clubs[cli]
             .teams.teams[ti].players.take_player(&params.player_id)
         {
@@ -108,19 +197,37 @@ pub async fn transfer_action(
             None => return StatusCode::NOT_FOUND,
         };
 
-        // Give new contract
+        player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
+
         let expiration = chrono::NaiveDate::from_ymd_opt(date.year() + 3, 6, 30)
             .unwrap_or(date);
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
         player.contract = Some(PlayerClubContract::new(salary, expiration));
 
-        // Add to destination team
         sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.add(player);
 
-        // Rebuild indexes
-        sim.rebuild_indexes();
+        // Record in transfer history (both countries if cross-country)
+        let transfer_type = if fee > 0.0 { TransferType::Permanent } else { TransferType::Free };
+        let completed = CompletedTransfer::new(
+            params.player_id, player_name,
+            source.club_id, source.team_id, source.info.name.clone(),
+            dest.club_id, dest.info.name.clone(),
+            date,
+            CurrencyValue::new(fee, Currency::Usd),
+            transfer_type,
+        ).with_reason("Manual".to_string());
 
+        sim.continents[ci].countries[coi]
+            .transfer_market.transfer_history.push(completed.clone());
+
+        // Also record in dest country if different
+        if (dci, dcoi) != (ci, coi) {
+            sim.continents[dci].countries[dcoi]
+                .transfer_market.transfer_history.push(completed);
+        }
+
+        sim.rebuild_indexes();
         return StatusCode::OK;
     }
 
@@ -147,19 +254,49 @@ pub async fn loan_action(
         let sim = Arc::make_mut(arc_data);
         let date = sim.date.date();
 
-        let player_pos = sim.find_player_position(params.player_id);
-        let (ci, coi, cli, ti) = match player_pos {
+        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
         };
 
         let source_club_id = sim.continents[ci].countries[coi].clubs[cli].id;
 
-        let dest = sim.find_club_main_team(body.to_club_id);
-        let (dci, dcoi, dcli, dti) = match dest {
+        // Detect re-loan: preserve original parent
+        let parent_club_id = {
+            let player = sim.continents[ci].countries[coi].clubs[cli]
+                .teams.teams[ti].players.players.iter()
+                .find(|p| p.id == params.player_id);
+            player.and_then(|p| p.contract.as_ref()).and_then(|c| {
+                if c.contract_type == ContractType::Loan { c.loan_from_club_id } else { None }
+            }).unwrap_or(source_club_id)
+        };
+
+        let source = match get_team_info(sim, ci, coi, cli) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let parent = match get_team_info_by_club_id(sim, parent_club_id) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let dest_pos = match sim.find_club_main_team(body.to_club_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
         };
+
+        let dest = match get_team_info(sim, dest_pos.0, dest_pos.1, dest_pos.2) {
+            Some(t) => t,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        // Get player name before taking
+        let player_name = sim.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.players.iter()
+            .find(|p| p.id == params.player_id)
+            .map(|p| p.full_name.to_string())
+            .unwrap_or_default();
 
         let mut player = match sim.continents[ci].countries[coi].clubs[cli]
             .teams.teams[ti].players.take_player(&params.player_id)
@@ -168,17 +305,61 @@ pub async fn loan_action(
             None => return StatusCode::NOT_FOUND,
         };
 
-        let seasons = body.seasons.unwrap_or(1).clamp(1, 5) as i32;
-        let expiration = chrono::NaiveDate::from_ymd_opt(date.year() + seasons, 6, 30)
-            .unwrap_or(date);
-        let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        player.contract = Some(PlayerClubContract::new_loan(salary, expiration, source_club_id, body.to_club_id));
+        player.on_manual_loan(&source.info, &parent.info, &dest.info, date);
 
-        sim.continents[dci].countries[dcoi].clubs[dcli]
-            .teams.teams[dti].players.add(player);
+        // Loan contract with original parent — expiration from league season end
+        let seasons = body.seasons.unwrap_or(1).clamp(1, 5) as i32;
+        let expiration = {
+            let country = &sim.continents[ci].countries[coi];
+            let league_end = country.clubs[cli].teams.teams.iter()
+                .find(|t| t.team_type == core::TeamType::Main)
+                .and_then(|t| t.league_id)
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.settings.season_ending_half.to_month as u32, l.settings.season_ending_half.to_day as u32));
+            match league_end {
+                Some((end_month, end_day)) => {
+                    let base_year = if date.month() > end_month
+                        || (date.month() == end_month && date.day() > end_day)
+                    {
+                        date.year() + 1
+                    } else {
+                        date.year()
+                    };
+                    chrono::NaiveDate::from_ymd_opt(base_year + (seasons - 1), end_month, end_day)
+                        .unwrap_or(date)
+                }
+                None => {
+                    let base_year = if date.month() >= 6 { date.year() + 1 } else { date.year() };
+                    chrono::NaiveDate::from_ymd_opt(base_year + (seasons - 1), 5, 31)
+                        .unwrap_or(date)
+                }
+            }
+        };
+        let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
+        player.contract = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, body.to_club_id));
+
+        sim.continents[dest_pos.0].countries[dest_pos.1].clubs[dest_pos.2]
+            .teams.teams[dest_pos.3].players.add(player);
+
+        // Record in transfer history (both countries if cross-country)
+        let completed = CompletedTransfer::new(
+            params.player_id, player_name,
+            source.club_id, source.team_id, source.info.name.clone(),
+            dest.club_id, dest.info.name.clone(),
+            date,
+            CurrencyValue::new(0.0, Currency::Usd),
+            TransferType::Loan(expiration),
+        ).with_reason("Manual".to_string());
+
+        sim.continents[ci].countries[coi]
+            .transfer_market.transfer_history.push(completed.clone());
+
+        if (ci, coi) != (dest_pos.0, dest_pos.1) {
+            sim.continents[dest_pos.0].countries[dest_pos.1]
+                .transfer_market.transfer_history.push(completed);
+        }
 
         sim.rebuild_indexes();
-
         return StatusCode::OK;
     }
 

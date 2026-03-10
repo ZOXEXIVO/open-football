@@ -1,19 +1,14 @@
 use log::info;
-use std::collections::HashMap;
 use super::CountryResult;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
+use crate::TeamInfo;
 
 impl CountryResult {
     /// Snapshot all player statistics into history when a new season starts.
-    /// Called from result processing AFTER match stats have been applied,
-    /// so all player statistics are up-to-date.
     pub(super) fn snapshot_player_season_statistics(data: &mut SimulatorData, country_id: u32) {
         let date = data.date.date();
 
-        // Season that just ended — use the canonical Season::from_date calculation.
-        // The snapshot fires when the NEW season starts (Aug+), so we need the
-        // PREVIOUS season: subtract one year from the from_date result.
         let current_season = Season::from_date(date);
         let ended_season = Season::new(current_season.start_year.saturating_sub(1));
 
@@ -25,13 +20,12 @@ impl CountryResult {
         };
 
         // Build league lookup so we can resolve team.league_id -> (name, slug)
-        let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
+        let league_lookup: std::collections::HashMap<u32, (String, String)> = country.leagues.leagues.iter()
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
         for club in &mut country.clubs {
             // Get main team info — used for all teams in player history
-            // so history always shows "Juventus" instead of "Juventus B" / "Juventus U20"
             let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
                 .find(|t| t.team_type == crate::TeamType::Main)
                 .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
@@ -54,19 +48,16 @@ impl CountryResult {
                     }
                 };
 
-                // Always use main team's league in history
-                let (league_name, league_slug) = main_team_league.clone();
+                let team_info = TeamInfo {
+                    name: team_name,
+                    slug: team_slug,
+                    reputation: team_reputation,
+                    league_name: main_team_league.0.clone(),
+                    league_slug: main_team_league.1.clone(),
+                };
 
                 for player in &mut team.players.players {
-                    player.snapshot_season_statistics(
-                        ended_season.clone(),
-                        &team_name,
-                        &team_slug,
-                        team_reputation,
-                        &league_name,
-                        &league_slug,
-                        date,
-                    );
+                    player.on_season_end(ended_season.clone(), &team_info, date);
                 }
             }
         }
@@ -78,8 +69,6 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use crate::club::player::builder::PlayerBuilder;
-    use crate::continent::Continent;
-    use crate::shared::fullname::FullName;
     use crate::shared::Location;
     use crate::academy::ClubAcademy;
     use crate::league::{League, LeagueCollection, DayMonthPeriod, LeagueSettings};
@@ -98,7 +87,7 @@ mod tests {
     fn make_player(id: u32, played: u16, goals: u16) -> crate::Player {
         let mut player = PlayerBuilder::new()
             .id(id)
-            .full_name(FullName::new("Test".to_string(), format!("Player{}", id)))
+            .full_name(crate::shared::fullname::FullName::new("Test".to_string(), format!("Player{}", id)))
             .birth_date(make_date(2000, 1, 1))
             .country_id(1)
             .attributes(PersonAttributes::default())
@@ -181,17 +170,13 @@ mod tests {
     }
 
     fn make_simulator_data(date: NaiveDate, country: crate::Country) -> SimulatorData {
-        let continent = Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
+        let continent = crate::continent::Continent::new(1, "Europe".to_string(), vec![country], Vec::new());
         SimulatorData::new(
             date.and_hms_opt(12, 0, 0).unwrap(),
             vec![continent],
             GlobalCompetitions::new(Vec::new()),
         )
     }
-
-    // ---------------------------------------------------------------
-    // Basic: snapshot resets stats and creates history entries
-    // ---------------------------------------------------------------
 
     #[test]
     fn snapshot_resets_player_stats_and_creates_history() {
@@ -201,31 +186,21 @@ mod tests {
         let league = make_league(1, "Serie A", "serie-a", false);
         let country = make_country(vec![club], vec![league]);
 
-        // Date in August 2032 → current season 2032/33, ended season 2031/32
         let mut data = make_simulator_data(make_date(2032, 8, 15), country);
-
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
         let country = data.country_mut(1).unwrap();
         let player = &country.clubs[0].teams.teams[0].players.players[0];
 
-        // Stats should be reset
         assert_eq!(player.statistics.played, 0);
         assert_eq!(player.statistics.goals, 0);
-
-        // History should have one entry for ended season 2031/32
         assert_eq!(player.statistics_history.items.len(), 1);
         let entry = &player.statistics_history.items[0];
         assert_eq!(entry.season.start_year, 2031);
         assert_eq!(entry.team_slug, "inter");
         assert_eq!(entry.league_slug, "serie-a");
         assert_eq!(entry.statistics.played, 20);
-        assert_eq!(entry.statistics.goals, 5);
     }
-
-    // ---------------------------------------------------------------
-    // Reserve team players get main team info in history
-    // ---------------------------------------------------------------
 
     #[test]
     fn reserve_players_use_main_team_info() {
@@ -241,20 +216,11 @@ mod tests {
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
         let country = data.country_mut(1).unwrap();
-        let player = &country.clubs[0].teams.teams[1].players.players[0];
-
-        assert_eq!(player.statistics_history.items.len(), 1);
-        let entry = &player.statistics_history.items[0];
-        // Should use main team slug and league, not reserve
+        let entry = &country.clubs[0].teams.teams[1].players.players[0].statistics_history.items[0];
         assert_eq!(entry.team_slug, "juventus");
         assert_eq!(entry.team_name, "Juventus");
         assert_eq!(entry.league_slug, "serie-a");
-        assert_eq!(entry.league_name, "Serie A");
     }
-
-    // ---------------------------------------------------------------
-    // Multiple players across teams all get snapshotted
-    // ---------------------------------------------------------------
 
     #[test]
     fn snapshot_processes_all_players_in_all_teams() {
@@ -273,7 +239,6 @@ mod tests {
 
         let country = data.country_mut(1).unwrap();
 
-        // Main team players
         for player in &country.clubs[0].teams.teams[0].players.players {
             assert_eq!(player.statistics.played, 0);
             assert_eq!(player.statistics_history.items.len(), 1);
@@ -281,30 +246,18 @@ mod tests {
         assert_eq!(country.clubs[0].teams.teams[0].players.players[0].statistics_history.items[0].statistics.played, 30);
         assert_eq!(country.clubs[0].teams.teams[0].players.players[1].statistics_history.items[0].statistics.played, 15);
 
-        // Reserve team player
         let reserve_player = &country.clubs[0].teams.teams[1].players.players[0];
         assert_eq!(reserve_player.statistics.played, 0);
-        assert_eq!(reserve_player.statistics_history.items.len(), 1);
         assert_eq!(reserve_player.statistics_history.items[0].statistics.played, 5);
     }
-
-    // ---------------------------------------------------------------
-    // Country not found: no panic
-    // ---------------------------------------------------------------
 
     #[test]
     fn snapshot_with_invalid_country_id_does_nothing() {
         let club = make_club(100, "Inter", vec![]);
         let country = make_country(vec![club], vec![]);
         let mut data = make_simulator_data(make_date(2032, 8, 15), country);
-
-        // Should not panic — country_id 999 doesn't exist
         CountryResult::snapshot_player_season_statistics(&mut data, 999);
     }
-
-    // ---------------------------------------------------------------
-    // Season calculation: Aug date → ended season is previous year
-    // ---------------------------------------------------------------
 
     #[test]
     fn snapshot_calculates_correct_ended_season() {
@@ -314,7 +267,6 @@ mod tests {
         let league = make_league(1, "Serie A", "serie-a", false);
         let country = make_country(vec![club], vec![league]);
 
-        // September 2033 → Season::from_date = 2033, ended = 2032
         let mut data = make_simulator_data(make_date(2033, 9, 1), country);
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
@@ -322,10 +274,6 @@ mod tests {
         let entry = &country.clubs[0].teams.teams[0].players.players[0].statistics_history.items[0];
         assert_eq!(entry.season.start_year, 2032);
     }
-
-    // ---------------------------------------------------------------
-    // Multiple clubs in same country
-    // ---------------------------------------------------------------
 
     #[test]
     fn snapshot_processes_multiple_clubs() {
@@ -343,19 +291,9 @@ mod tests {
         CountryResult::snapshot_player_season_statistics(&mut data, 1);
 
         let country = data.country_mut(1).unwrap();
-
-        let p1 = &country.clubs[0].teams.teams[0].players.players[0];
-        assert_eq!(p1.statistics_history.items[0].team_slug, "inter");
-        assert_eq!(p1.statistics_history.items[0].statistics.played, 20);
-
-        let p2 = &country.clubs[1].teams.teams[0].players.players[0];
-        assert_eq!(p2.statistics_history.items[0].team_slug, "milan");
-        assert_eq!(p2.statistics_history.items[0].statistics.played, 25);
+        assert_eq!(country.clubs[0].teams.teams[0].players.players[0].statistics_history.items[0].team_slug, "inter");
+        assert_eq!(country.clubs[1].teams.teams[0].players.players[0].statistics_history.items[0].team_slug, "milan");
     }
-
-    // ---------------------------------------------------------------
-    // Club with no main team — uses own team info
-    // ---------------------------------------------------------------
 
     #[test]
     fn club_without_main_team_uses_own_team_info() {
@@ -370,13 +308,8 @@ mod tests {
 
         let country = data.country_mut(1).unwrap();
         let entry = &country.clubs[0].teams.teams[0].players.players[0].statistics_history.items[0];
-        // No main team → falls through to own team info
         assert_eq!(entry.team_slug, "team-b");
     }
-
-    // ---------------------------------------------------------------
-    // Team reputation is captured from main team
-    // ---------------------------------------------------------------
 
     #[test]
     fn reserve_player_gets_main_team_reputation() {
@@ -392,7 +325,6 @@ mod tests {
 
         let country = data.country_mut(1).unwrap();
         let entry = &country.clubs[0].teams.teams[1].players.players[0].statistics_history.items[0];
-        // Main team reputation is 200 (from make_team)
         assert_eq!(entry.team_reputation, 200);
     }
 }

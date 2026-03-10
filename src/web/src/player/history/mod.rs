@@ -62,7 +62,7 @@ pub struct PlayerHistorySeasonItem {
     pub country_slug: String,
     pub league_name: String,
     pub league_slug: String,
-    pub created_at: NaiveDate,
+    pub seq_id: u32,
 }
 
 pub struct PlayerHistoryStats {
@@ -90,18 +90,15 @@ fn find_team_location(simulator_data: &SimulatorData, team_slug: &str) -> Option
             for club in &country.clubs {
                 for t in &club.teams.teams {
                     if t.slug == team_slug {
-                        // Try league_id first
                         let league = t.league_id
                             .and_then(|lid| {
                                 country.leagues.leagues.iter().find(|l| l.id == lid)
                             })
-                            // Fallback: find league that has this team in its table
                             .or_else(|| {
                                 country.leagues.leagues.iter().find(|l| {
                                     l.table.rows.iter().any(|row| row.team_id == t.id)
                                 })
                             })
-                            // Fallback: use first league of the country
                             .or_else(|| {
                                 country.leagues.leagues.first()
                             });
@@ -162,133 +159,35 @@ pub async fn player_history_action(
         simulator_data.country_by_club(team.club_id)
             .map(|c| {
                 c.transfer_market.transfer_history.iter()
-                    .any(|t| t.player_id == player.id
-                        && t.to_club_id == team.club_id
-                        && matches!(&t.transfer_type, core::transfers::TransferType::Loan(_)))
+                    .rev()
+                    .find(|t| t.player_id == player.id && t.to_club_id == team.club_id)
+                    .map(|t| matches!(&t.transfer_type, core::transfers::TransferType::Loan(_)))
+                    .unwrap_or(false)
             })
     }).unwrap_or(false);
 
-    // Build team slug → location lookup cache
+    // Use view_items() for grouped/merged/sorted history
+    let view = player.statistics_history.view_items();
+
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> = std::collections::HashMap::new();
 
-    // Group history items by (season, team_slug) — merge duplicates from
-    // mid-season transfer snapshots + end-of-season snapshots.
-    struct GroupKey {
-        season_display: String,
-        start_year: u16,
-        team_slug: String,
-        team_name: String,
-        league_name: String,
-        league_slug: String,
-        is_loan: bool,
-        transfer_fee: Option<f64>,
-        created_at: NaiveDate,
-    }
-    struct GroupAccum {
-        played: u16,
-        played_subs: u16,
-        goals: u16,
-        assists: u16,
-        player_of_the_match: u8,
-        rating_sum: f32,
-        rating_count: u16,
-        conceded: u16,
-        clean_sheets: u16,
-    }
-
-    let mut grouped: Vec<(GroupKey, GroupAccum)> = Vec::new();
-
-    for item in &player.statistics_history.items {
-        let key_match = grouped.iter().position(|(k, _)| {
-            k.start_year == item.season.start_year
-                && k.team_slug == item.team_slug
-                && k.is_loan == item.is_loan
-        });
-
-        let games = item.statistics.total_games();
-
-        if let Some(idx) = key_match {
-            let (key, accum) = &mut grouped[idx];
-            accum.played += item.statistics.played;
-            accum.played_subs += item.statistics.played_subs;
-            accum.goals += item.statistics.goals;
-            accum.assists += item.statistics.assists;
-            accum.player_of_the_match += item.statistics.player_of_the_match;
-            accum.rating_sum += item.statistics.average_rating * games as f32;
-            accum.rating_count += games;
-            accum.conceded += item.statistics.conceded;
-            accum.clean_sheets += item.statistics.clean_sheets;
-            // Preserve transfer info from the entry that has it
-            if item.transfer_fee.is_some() && key.transfer_fee.is_none() {
-                key.transfer_fee = item.transfer_fee;
-            }
-            // Update league info from most recent entry
-            // (handles league changes from promotion/relegation)
-            if item.created_at > key.created_at {
-                if !item.league_name.is_empty() {
-                    key.league_name = item.league_name.clone();
-                    key.league_slug = item.league_slug.clone();
-                }
-                // Only update created_at if this entry has actual games;
-                // 0-game entries from season snapshots have later dates
-                // that would corrupt sort order for loan spells
-                if games > 0 {
-                    key.created_at = item.created_at;
-                }
-            }
-        } else {
-            grouped.push((
-                GroupKey {
-                    season_display: item.season.display.clone(),
-                    start_year: item.season.start_year,
-                    team_slug: item.team_slug.clone(),
-                    team_name: item.team_name.clone(),
-                    league_name: item.league_name.clone(),
-                    league_slug: item.league_slug.clone(),
-                    is_loan: item.is_loan,
-                    transfer_fee: item.transfer_fee,
-                    created_at: item.created_at,
-                },
-                GroupAccum {
-                    played: item.statistics.played,
-                    played_subs: item.statistics.played_subs,
-                    goals: item.statistics.goals,
-                    assists: item.statistics.assists,
-                    player_of_the_match: item.statistics.player_of_the_match,
-                    rating_sum: item.statistics.average_rating * games as f32,
-                    rating_count: games,
-                    conceded: item.statistics.conceded,
-                    clean_sheets: item.statistics.clean_sheets,
-                },
-            ));
-        }
-    }
-
-    let mut items: Vec<PlayerHistorySeasonItem> = grouped
+    let mut items: Vec<PlayerHistorySeasonItem> = view
         .into_iter()
-        .map(|(key, accum)| {
-            // Lookup country info (country doesn't change with promotion/relegation)
-            let location = if !key.team_slug.is_empty() {
-                if !location_cache.contains_key(&key.team_slug) {
-                    if let Some(info) = find_team_location(simulator_data, &key.team_slug) {
-                        location_cache.insert(key.team_slug.clone(), info);
+        .map(|item| {
+            let location = if !item.team_slug.is_empty() {
+                if !location_cache.contains_key(&item.team_slug) {
+                    if let Some(info) = find_team_location(simulator_data, &item.team_slug) {
+                        location_cache.insert(item.team_slug.clone(), info);
                     }
                 }
-                location_cache.get(&key.team_slug)
+                location_cache.get(&item.team_slug)
             } else {
                 None
             };
 
-            let avg_rating = if accum.rating_count > 0 {
-                accum.rating_sum / accum.rating_count as f32
-            } else {
-                0.0
-            };
-
-            // If league name is empty (e.g. youth teams without own league),
-            // fall back to the team's current league from location lookup
-            let (league_name, league_slug) = if !key.league_name.is_empty() {
-                (key.league_name, key.league_slug)
+            // If league name is empty, fall back to team's current league
+            let (league_name, league_slug) = if !item.league_name.is_empty() {
+                (item.league_name, item.league_slug)
             } else {
                 location
                     .map(|l| (l.league_name.clone(), l.league_slug.clone()))
@@ -296,49 +195,37 @@ pub async fn player_history_action(
             };
 
             PlayerHistorySeasonItem {
-                season: key.season_display,
-                start_year: key.start_year,
-                team_name: key.team_name,
-                team_slug: key.team_slug,
-                is_loan: key.is_loan,
-                transfer_fee: match key.transfer_fee {
+                season: item.season.display,
+                start_year: item.season.start_year,
+                team_name: item.team_name,
+                team_slug: item.team_slug,
+                is_loan: item.is_loan,
+                transfer_fee: match item.transfer_fee {
                     Some(f) if f > 0.0 => FormattingUtils::format_money(f),
                     Some(_) => "Free".to_string(),
                     None => String::new(),
                 },
                 stats: PlayerHistoryStats {
-                    played: accum.played,
-                    played_subs: accum.played_subs,
-                    goals: accum.goals,
-                    assists: accum.assists,
-                    player_of_the_match: accum.player_of_the_match,
-                    average_rating: core::PlayerStatistics::format_rating(avg_rating),
-                    conceded: accum.conceded,
-                    clean_sheets: accum.clean_sheets,
+                    played: item.statistics.played,
+                    played_subs: item.statistics.played_subs,
+                    goals: item.statistics.goals,
+                    assists: item.statistics.assists,
+                    player_of_the_match: item.statistics.player_of_the_match,
+                    average_rating: core::PlayerStatistics::format_rating(item.statistics.average_rating),
+                    conceded: item.statistics.conceded,
+                    clean_sheets: item.statistics.clean_sheets,
                 },
                 country_code: location.map(|l| l.country_code.clone()).unwrap_or_default(),
                 country_name: location.map(|l| l.country_name.clone()).unwrap_or_default(),
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
                 league_name,
                 league_slug,
-                created_at: key.created_at,
+                seq_id: item.seq_id,
             }
         })
         .collect();
 
-    // Most recent first: sort by season year descending, then by created_at
-    // descending within same season. When created_at is equal (mid-season
-    // transfer creates selling + buying entries on the same date), show the
-    // new club (the one with transfer fee info) first.
-    items.sort_by(|a, b| {
-        b.start_year.cmp(&a.start_year)
-            .then(b.created_at.cmp(&a.created_at))
-            .then_with(|| {
-                let a_has_fee = !a.transfer_fee.is_empty();
-                let b_has_fee = !b.transfer_fee.is_empty();
-                b_has_fee.cmp(&a_has_fee)
-            })
-    });
+    // Already sorted by view_items(), but items is already sorted
 
     let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
@@ -352,7 +239,6 @@ pub async fn player_history_action(
     };
 
     if is_retired {
-        // Retired player: show only history, no current season row
         Ok(PlayerHistoryTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
             title,
@@ -416,7 +302,6 @@ pub async fn player_history_action(
         };
         let current_display_slug = main_team_slug.as_deref().unwrap_or(&team.slug);
 
-        // Current team's country/league info (use main team for non-main teams)
         let current_location = find_team_location(simulator_data, current_display_slug);
 
         let current_is_loan = player.contract.as_ref()

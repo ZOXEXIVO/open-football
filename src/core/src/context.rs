@@ -52,9 +52,9 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_country_and_names(&self, country_id: u32, people_names: crate::PeopleNameGeneratorData) -> Self {
+    pub fn with_country_and_names(&self, country_id: u32, people_names: crate::PeopleNameGeneratorData, season_dates: crate::country::SeasonDates) -> Self {
         let mut ctx = GlobalContext::clone(self);
-        ctx.country = Some(CountryContext::with_people_names(country_id, people_names));
+        ctx.country = Some(CountryContext::with_people_names(country_id, people_names).with_season_dates(season_dates));
         ctx
     }
 
@@ -140,8 +140,10 @@ impl SimulationContext {
     }
 
     #[inline]
-    pub fn is_season_start(&self) -> bool {
-        self.day == 1u8 && self.date.month() == 7 && self.hour == 0
+    pub fn is_season_start(&self, season: &crate::country::SeasonDates) -> bool {
+        self.hour == 0
+            && self.day == season.start_day
+            && self.date.month() as u8 == season.start_month
     }
 
     #[inline]

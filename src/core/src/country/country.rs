@@ -1,3 +1,4 @@
+use chrono::{Datelike, NaiveDate};
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
 use crate::country::national_team::{NationalTeam, CallUpCandidate};
@@ -41,9 +42,59 @@ pub struct Country {
     pub retired_players: Vec<Player>,
 }
 
+/// Season boundary dates derived from a country's primary league settings.
+#[derive(Debug, Clone, Copy)]
+pub struct SeasonDates {
+    /// Day/month when the season ends (from season_ending_half.to_day/to_month)
+    pub end_day: u8,
+    pub end_month: u8,
+    /// Day/month when the new season starts (from season_starting_half.from_day/from_month)
+    pub start_day: u8,
+    pub start_month: u8,
+}
+
+impl Default for SeasonDates {
+    fn default() -> Self {
+        SeasonDates { end_day: 31, end_month: 5, start_day: 20, start_month: 8 }
+    }
+}
+
+impl SeasonDates {
+    /// Check if the given date is the season end day.
+    pub fn is_season_end(&self, date: NaiveDate) -> bool {
+        date.day() as u8 == self.end_day && date.month() as u8 == self.end_month
+    }
+
+    /// Check if the given date falls in the off-season (between season end and season start).
+    pub fn is_off_season(&self, date: NaiveDate) -> bool {
+        let m = date.month() as u8;
+        let d = date.day() as u8;
+        let after_end = m > self.end_month
+            || (m == self.end_month && d > self.end_day);
+        let before_start = m < self.start_month
+            || (m == self.start_month && d < self.start_day);
+        after_end && before_start
+    }
+}
+
 impl Country {
     pub fn builder() -> CountryBuilder {
         CountryBuilder::default()
+    }
+
+    /// Get season dates from the country's primary (tier-1, non-friendly) league.
+    /// Falls back to May 31 / Aug 20 if no league is found.
+    pub fn season_dates(&self) -> SeasonDates {
+        self.leagues.leagues.iter()
+            .find(|l| !l.friendly && l.settings.tier == 1)
+            .or_else(|| self.leagues.leagues.iter().find(|l| !l.friendly))
+            .map(|l| SeasonDates {
+                end_day: l.settings.season_ending_half.to_day,
+                end_month: l.settings.season_ending_half.to_month,
+                start_day: l.settings.season_starting_half.from_day,
+                start_month: l.settings.season_starting_half.from_month,
+            })
+            .unwrap_or_default()
     }
 
     pub(crate) fn simulate(

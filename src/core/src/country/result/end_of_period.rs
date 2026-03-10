@@ -1,9 +1,8 @@
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use super::CountryResult;
-use crate::league::Season;
 use crate::utils::IntegerUtils;
-use crate::{ClubResult, Country, Person, PlayerStatisticsHistoryItem, PlayerStatusType};
+use crate::{ClubResult, Country, Person, PlayerStatusType, TeamInfo};
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
 
@@ -14,8 +13,13 @@ impl CountryResult {
         date: NaiveDate,
         club_results: &[ClubResult],
     ) {
-        if date.month() == 5 && date.day() == 31 {
-            info!("End of season processing");
+        // Get season dates from league settings
+        let season = data.country(country_id)
+            .map(|c| c.season_dates())
+            .unwrap_or_default();
+
+        if season.is_season_end(date) {
+            debug!("End of season processing");
 
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_season_awards(country, club_results);
@@ -26,14 +30,16 @@ impl CountryResult {
         }
 
         // Monthly check: retire players who are past max retirement age
-        // so they don't linger on teams until the next May 31
-        if date.day() == 1 && date.month() != 5 {
+        // so they don't linger on teams until season end
+        if date.day() == 1 && date.month() as u8 != season.end_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_overdue_retirements(country, date);
             }
         }
 
-        if date.month() == 7 && date.day() == 1 {
+        // Promotion/relegation: runs on the 1st of the month after season end
+        let promo_month = if season.end_month == 12 { 1u8 } else { season.end_month + 1 };
+        if date.day() == 1 && date.month() as u8 == promo_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_promotion_relegation(country);
             }
@@ -57,7 +63,8 @@ impl CountryResult {
         country_id: u32,
         date: NaiveDate,
     ) {
-        if !(date.month() == 5 && date.day() == 31) {
+        // Only check on the 1st and last day of each month to avoid daily scans
+        if date.day() != 1 && date.day() < 28 {
             return;
         }
 
@@ -74,23 +81,17 @@ impl CountryResult {
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
-        // Phase 1: Collect expired loan returns (player_id, from_club_idx, to_club_id)
-        // Also collect borrowing club info for history snapshots
+        // Phase 1: Collect expired loan returns
         struct LoanReturn {
             player_id: u32,
             borrowing_club_idx: usize,
             parent_club_id: u32,
-            team_name: String,
-            team_slug: String,
-            team_reputation: u16,
-            league_name: String,
-            league_slug: String,
+            borrowing_info: TeamInfo,
         }
 
         let mut loan_returns: Vec<LoanReturn> = Vec::new();
 
         for (club_idx, club) in country.clubs.iter().enumerate() {
-            // Get main team info for history (show club name, not sub-team)
             let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
                 .find(|t| t.team_type == crate::TeamType::Main)
                 .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
@@ -122,11 +123,13 @@ impl CountryResult {
                                     player_id: player.id,
                                     borrowing_club_idx: club_idx,
                                     parent_club_id,
-                                    team_name: team_name.clone(),
-                                    team_slug: team_slug.clone(),
-                                    team_reputation,
-                                    league_name: main_team_league.0.clone(),
-                                    league_slug: main_team_league.1.clone(),
+                                    borrowing_info: TeamInfo {
+                                        name: team_name.clone(),
+                                        slug: team_slug.clone(),
+                                        reputation: team_reputation,
+                                        league_name: main_team_league.0.clone(),
+                                        league_slug: main_team_league.1.clone(),
+                                    },
                                 });
                             }
                         }
@@ -135,18 +138,16 @@ impl CountryResult {
             }
         }
 
-        // Phase 2: Execute loan returns — only if parent club exists in this country
+        // Phase 2: Execute loan returns
         for loan_return in loan_returns {
-            // Verify parent club exists in this country before removing the player
             let parent_exists = country.clubs.iter().any(|c| c.id == loan_return.parent_club_id)
                 && country.clubs.iter().any(|c| c.id == loan_return.parent_club_id && !c.teams.teams.is_empty());
 
             if !parent_exists {
-                info!("Loan return skipped: parent club {} not found in country for player {}", loan_return.parent_club_id, loan_return.player_id);
+                debug!("Loan return skipped: parent club {} not found in country for player {}", loan_return.parent_club_id, loan_return.player_id);
                 continue;
             }
 
-            // Take player from borrowing club
             let mut player_opt = None;
             for team in &mut country.clubs[loan_return.borrowing_club_idx].teams.teams {
                 if let Some(p) = team.players.take_player(&loan_return.player_id) {
@@ -156,47 +157,12 @@ impl CountryResult {
             }
 
             if let Some(mut player) = player_opt {
-                // Merge remaining stats into the existing loan history entry
-                // (season-end snapshot may have already captured them)
-                let season = Season::from_date(date);
-                let remaining_stats = std::mem::take(&mut player.statistics);
+                player.on_loan_return(&loan_return.borrowing_info, date);
 
-                if let Some(existing) = player.statistics_history.items.iter_mut().find(|e| {
-                    e.season.start_year == season.start_year
-                        && e.team_slug == loan_return.team_slug
-                        && e.is_loan
-                }) {
-                    // Only overwrite if existing has 0 games and remaining has stats
-                    let existing_games = existing.statistics.played + existing.statistics.played_subs;
-                    let new_games = remaining_stats.played + remaining_stats.played_subs;
-                    if existing_games == 0 && new_games > 0 {
-                        existing.statistics = remaining_stats;
-                    }
-                } else {
-                    // No existing entry — create one
-                    player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                        season,
-                        team_name: loan_return.team_name.clone(),
-                        team_slug: loan_return.team_slug.clone(),
-                        team_reputation: loan_return.team_reputation,
-                        league_name: loan_return.league_name.clone(),
-                        league_slug: loan_return.league_slug.clone(),
-                        is_loan: true,
-                        transfer_fee: None,
-                        statistics: remaining_stats,
-                        created_at: date,
-                    });
-                }
-
-                // Clear loan contract — parent club's original contract was lost during
-                // loan creation, so set no contract; the renewal system will offer a new one
                 player.contract = None;
                 player.happiness = crate::PlayerHappiness::new();
                 player.statuses.statuses.clear();
-                player.last_transfer_date = Some(date);
 
-                // Return to parent club's first team — weekly Club::simulate
-                // will move them to reserve via move_loan_returns_to_reserve()
                 if let Some(parent_club) = country.clubs.iter_mut().find(|c| c.id == loan_return.parent_club_id) {
                     if !parent_club.teams.teams.is_empty() {
                         info!("Loan return: player {} returns to club {}", loan_return.player_id, loan_return.parent_club_id);
@@ -227,7 +193,7 @@ impl CountryResult {
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
                 .players.take_player(&player_id)
             {
-                info!("Overdue retirement: {} (age {})", player.full_name, player.age(date));
+                debug!("Overdue retirement: {} (age {})", player.full_name, player.age(date));
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
                 country.retired_players.push(player);
@@ -291,7 +257,7 @@ impl CountryResult {
             if let Some(mut player) = country.clubs[club_idx].teams.teams[team_idx]
                 .players.take_player(&player_id)
             {
-                info!("Player retired: {} (age {})", player.full_name, player.age(date));
+                debug!("Player retired: {} (age {})", player.full_name, player.age(date));
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
                 country.retired_players.push(player);

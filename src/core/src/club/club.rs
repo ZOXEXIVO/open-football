@@ -144,7 +144,8 @@ impl Club {
         }
 
         // Academy graduations at season start
-        if ctx.simulation.is_season_start() {
+        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        if ctx.simulation.is_season_start(&season) {
             result.academy_transfers = self.process_academy_graduations(date);
         }
 

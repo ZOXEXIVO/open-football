@@ -1,10 +1,8 @@
-use chrono::NaiveDate;
-use log::{debug, info};
+use chrono::{Datelike, NaiveDate};
+use log::debug;
 use super::types::can_club_accept_player;
-use crate::league::Season;
 use crate::{
-    Country, Person, PlayerClubContract, PlayerStatistics,
-    PlayerStatisticsHistoryItem, PlayerStatusType,
+    Country, Person, PlayerClubContract, PlayerStatusType, TeamInfo,
 };
 
 pub(crate) fn execute_player_transfer(
@@ -16,21 +14,22 @@ pub(crate) fn execute_player_transfer(
     date: NaiveDate,
 ) {
     let mut player = None;
-    let mut selling_team_name = String::new();
-    let mut selling_team_slug = String::new();
-    let mut selling_team_reputation: u16 = 0;
+    let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
 
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        selling_team_name = selling_club.name.clone();
-
         // Use main team info for history (consistent with season snapshot)
         if let Some(main_team) = selling_club.teams.teams.iter()
             .find(|t| t.team_type == crate::TeamType::Main)
         {
-            selling_team_slug = main_team.slug.clone();
-            selling_team_reputation = main_team.reputation.world;
             selling_league_id = main_team.league_id;
+            from_info = Some(TeamInfo {
+                name: selling_club.name.clone(),
+                slug: main_team.slug.clone(),
+                reputation: main_team.reputation.world,
+                league_name: String::new(), // filled below
+                league_slug: String::new(),
+            });
         }
 
         for team in &mut selling_club.teams.teams {
@@ -45,72 +44,46 @@ pub(crate) fn execute_player_transfer(
     }
 
     if let Some(mut player) = player {
-        let season = Season::from_date(date);
-
-        // If the team's league is friendly (reserves etc.), use the club's main league instead
-        let (selling_league_name, selling_league_slug) = selling_league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .and_then(|l| {
-                if l.friendly {
-                    country.leagues.leagues.iter().find(|ml| !ml.friendly)
-                } else {
-                    Some(l)
-                }
-            })
-            .map(|l| (l.name.clone(), l.slug.clone()))
-            .unwrap_or_default();
-
-        let old_stats = std::mem::take(&mut player.statistics);
-
-        // Skip 0-game selling team entry unless it's the player's only history
-        // (a player must always have at least one record)
-        let has_games = old_stats.played + old_stats.played_subs > 0;
-        if has_games || player.statistics_history.items.is_empty() {
-            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: selling_team_name,
-                team_slug: selling_team_slug,
-                team_reputation: selling_team_reputation,
-                league_name: selling_league_name,
-                league_slug: selling_league_slug,
-                is_loan: false,
-                transfer_fee: None,
-                statistics: old_stats,
-                created_at: date,
-            });
+        // Resolve league name (skip friendly leagues, use main league)
+        if let Some(ref mut from) = from_info {
+            let (league_name, league_slug) = selling_league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .and_then(|l| {
+                    if l.friendly {
+                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                    } else {
+                        Some(l)
+                    }
+                })
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+            from.league_name = league_name;
+            from.league_slug = league_slug;
         }
 
-        player.statistics = PlayerStatistics::default();
-
-        let buying_info = country.clubs.iter()
+        // Resolve buying club info
+        let to_info = country.clubs.iter()
             .find(|c| c.id == buying_club_id)
             .and_then(|c| {
                 let main_team = c.teams.teams.iter()
                     .find(|t| t.team_type == crate::TeamType::Main)
                     .or(c.teams.teams.first())?;
-                let league = main_team.league_id
+                let (league_name, league_slug) = main_team.league_id
                     .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                     .map(|l| (l.name.clone(), l.slug.clone()))
                     .unwrap_or_default();
-                Some((main_team.name.clone(), main_team.slug.clone(), main_team.reputation.world, league.0, league.1))
+                Some(TeamInfo {
+                    name: main_team.name.clone(),
+                    slug: main_team.slug.clone(),
+                    reputation: main_team.reputation.world,
+                    league_name,
+                    league_slug,
+                })
             });
 
-        if let Some((buy_team_name, buy_team_slug, buy_team_rep, buy_league_name, buy_league_slug)) = buying_info {
-            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: buy_team_name,
-                team_slug: buy_team_slug,
-                team_reputation: buy_team_rep,
-                league_name: buy_league_name,
-                league_slug: buy_league_slug,
-                is_loan: false,
-                transfer_fee: Some(fee),
-                statistics: PlayerStatistics::default(),
-                created_at: date,
-            });
+        if let (Some(from), Some(to)) = (from_info, to_info) {
+            player.on_transfer(&from, &to, fee, date);
         }
-
-        player.last_transfer_date = Some(date);
 
         player.statuses.remove(PlayerStatusType::Lst);
         player.statuses.remove(PlayerStatusType::Loa);
@@ -122,7 +95,6 @@ pub(crate) fn execute_player_transfer(
         player.statuses.remove(PlayerStatusType::Sct);
         player.statuses.remove(PlayerStatusType::Enq);
 
-        // Fresh start at new club — reset happiness to neutral
         player.happiness = crate::PlayerHappiness::new();
 
         let contract_years = if player.age(date) < 24 { 5 }
@@ -173,26 +145,25 @@ pub(crate) fn execute_loan_transfer(
     date: NaiveDate,
 ) {
     let mut player = None;
-    let mut selling_team_name = String::new();
-    let mut selling_team_slug = String::new();
-    let mut selling_team_reputation: u16 = 0;
+    let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
 
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        selling_team_name = selling_club.name.clone();
-
         // Capture main team info for history entries BEFORE moving to reserve
-        // (consistent with season snapshot which always uses main team slug)
         if let Some(main_team) = selling_club.teams.teams.iter()
             .find(|t| t.team_type == crate::TeamType::Main)
         {
-            selling_team_slug = main_team.slug.clone();
-            selling_team_reputation = main_team.reputation.world;
             selling_league_id = main_team.league_id;
+            from_info = Some(TeamInfo {
+                name: selling_club.name.clone(),
+                slug: main_team.slug.clone(),
+                reputation: main_team.reputation.world,
+                league_name: String::new(),
+                league_slug: String::new(),
+            });
         }
 
         // Move player to reserve team before loaning out
-        // so the loan record originates from reserve, not main
         let main_idx = selling_club.teams.teams.iter()
             .position(|t| t.team_type == crate::TeamType::Main);
         let reserve_idx = selling_club.teams.teams.iter()
@@ -220,73 +191,46 @@ pub(crate) fn execute_loan_transfer(
     }
 
     if let Some(mut player) = player {
-        let season = Season::from_date(date);
-
-        // If the team's league is friendly (reserves etc.), use the club's main league instead
-        let (selling_league_name, selling_league_slug) = selling_league_id
-            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
-            .and_then(|l| {
-                if l.friendly {
-                    country.leagues.leagues.iter().find(|ml| !ml.friendly)
-                } else {
-                    Some(l)
-                }
-            })
-            .map(|l| (l.name.clone(), l.slug.clone()))
-            .unwrap_or_default();
-
-        let old_stats = std::mem::take(&mut player.statistics);
-
-        // Skip 0-game selling team entry unless it's the player's only history
-        let has_games = old_stats.played + old_stats.played_subs > 0;
-        if has_games || player.statistics_history.items.is_empty() {
-            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: selling_team_name,
-                team_slug: selling_team_slug,
-                team_reputation: selling_team_reputation,
-                league_name: selling_league_name,
-                league_slug: selling_league_slug,
-                is_loan: false,
-                transfer_fee: None,
-                statistics: old_stats,
-                created_at: date,
-            });
+        // Resolve league name
+        if let Some(ref mut from) = from_info {
+            let (league_name, league_slug) = selling_league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .and_then(|l| {
+                    if l.friendly {
+                        country.leagues.leagues.iter().find(|ml| !ml.friendly)
+                    } else {
+                        Some(l)
+                    }
+                })
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+            from.league_name = league_name;
+            from.league_slug = league_slug;
         }
 
-        // Reset current stats for the new club — history entry for the loan spell
-        // will be created when the player moves again or the season ends
-        player.statistics = PlayerStatistics::default();
-
-        let buying_info = country.clubs.iter()
+        // Resolve buying club info
+        let to_info = country.clubs.iter()
             .find(|c| c.id == buying_club_id)
             .and_then(|c| {
                 let main_team = c.teams.teams.iter()
                     .find(|t| t.team_type == crate::TeamType::Main)
                     .or(c.teams.teams.first())?;
-                let league = main_team.league_id
+                let (league_name, league_slug) = main_team.league_id
                     .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                     .map(|l| (l.name.clone(), l.slug.clone()))
                     .unwrap_or_default();
-                Some((main_team.name.clone(), main_team.slug.clone(), main_team.reputation.world, league.0, league.1))
+                Some(TeamInfo {
+                    name: main_team.name.clone(),
+                    slug: main_team.slug.clone(),
+                    reputation: main_team.reputation.world,
+                    league_name,
+                    league_slug,
+                })
             });
 
-        if let Some((buy_team_name, buy_team_slug, buy_team_rep, buy_league_name, buy_league_slug)) = buying_info {
-            player.statistics_history.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: buy_team_name,
-                team_slug: buy_team_slug,
-                team_reputation: buy_team_rep,
-                league_name: buy_league_name,
-                league_slug: buy_league_slug,
-                is_loan: true,
-                transfer_fee: Some(loan_fee),
-                statistics: PlayerStatistics::default(),
-                created_at: date,
-            });
+        if let (Some(from), Some(to)) = (from_info, to_info) {
+            player.on_loan(&from, &to, loan_fee, date);
         }
-
-        player.last_transfer_date = Some(date);
 
         player.statuses.remove(PlayerStatusType::Loa);
         player.statuses.remove(PlayerStatusType::Lst);
@@ -298,12 +242,30 @@ pub(crate) fn execute_loan_transfer(
         player.statuses.remove(PlayerStatusType::Sct);
         player.statuses.remove(PlayerStatusType::Enq);
 
-        // Fresh start at new club — reset happiness to neutral
         player.happiness = crate::PlayerHappiness::new();
 
-        let loan_end = date
-            .checked_add_signed(chrono::Duration::days(180))
-            .unwrap_or(date);
+        // Loan expires at end of current season, derived from league settings.
+        let loan_end = selling_league_id
+            .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+            .map(|league| {
+                let end = &league.settings.season_ending_half;
+                let end_month = end.to_month as u32;
+                let end_day = end.to_day as u32;
+                // If we're already past the season end date, loan expires next year
+                let year = if date.month() > end_month
+                    || (date.month() == end_month && date.day() > end_day)
+                {
+                    date.year() + 1
+                } else {
+                    date.year()
+                };
+                NaiveDate::from_ymd_opt(year, end_month, end_day).unwrap_or(date)
+            })
+            .unwrap_or_else(|| {
+                // Fallback if no league found: end of May
+                let year = if date.month() >= 6 { date.year() + 1 } else { date.year() };
+                NaiveDate::from_ymd_opt(year, 5, 31).unwrap_or(date)
+            });
 
         let salary = (loan_fee / 50.0).max(200.0) as u32;
         player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, buying_club_id));

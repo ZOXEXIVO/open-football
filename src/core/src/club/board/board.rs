@@ -45,7 +45,8 @@ impl ClubBoard {
         }
 
         // Season start: calculate season targets
-        if ctx.simulation.is_season_start() {
+        let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
+        if ctx.simulation.is_season_start(&season) {
             if let Some(board_ctx) = &ctx.board {
                 self.calculate_season_targets(board_ctx);
             }

@@ -1,15 +1,10 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use log::debug;
 use super::CountryResult;
 use crate::Country;
 use crate::simulator::SimulatorData;
 
 impl CountryResult {
-    pub(super) fn is_preseason(date: NaiveDate) -> bool {
-        let month = date.month();
-        month == 6 || month == 7
-    }
-
     pub(super) fn simulate_preseason_activities(data: &mut SimulatorData, country_id: u32, date: NaiveDate) {
         debug!("Running preseason activities...");
 

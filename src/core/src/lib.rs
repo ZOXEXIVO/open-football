@@ -86,7 +86,7 @@ pub use club::{
     PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
     PlayerSkills, Technical, Mental, Physical,
     PlayerPositions, PlayerPosition, PlayerStatus, StatusData,
-    PlayerStatistics, PlayerStatisticsHistory, PlayerStatisticsHistoryItem,
+    PlayerStatistics, PlayerStatisticsHistory, PlayerStatisticsHistoryItem, TeamInfo,
     PlayerHappiness, PositiveHappiness, NegativeHappiness,
     HappinessFactors, HappinessEvent, HappinessEventType,
     PlayerClubContract, ContractType, PlayerSquadStatus, PlayerTransferStatus,
