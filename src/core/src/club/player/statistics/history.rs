@@ -293,12 +293,11 @@ impl PlayerStatisticsHistory {
         }
 
         // Wipe stale 0-game placeholders for current season
-        // (keep source club entry, keep entries with transfer_fee)
+        // (keep entries with transfer_fee or actual games)
         self.items.retain(|e| {
             !(e.season.start_year == season.start_year
                 && e.statistics.total_games() == 0
-                && e.transfer_fee.is_none()
-                && e.team_slug != from.slug)
+                && e.transfer_fee.is_none())
         });
 
         // Create destination placeholder
@@ -394,19 +393,6 @@ impl PlayerStatisticsHistory {
             });
         }
 
-        // Clean up oldest season if all its entries are 0-game non-loan placeholders
-        // (stale bootstrap entries superseded by newer season-end entries).
-        // Loan entries are preserved — they represent real transfer history.
-        if let Some(oldest) = self.items.iter().map(|e| e.season.start_year).min() {
-            if oldest < season.start_year {
-                let all_stale = self.items.iter()
-                    .filter(|e| e.season.start_year == oldest)
-                    .all(|e| e.statistics.total_games() == 0 && e.transfer_fee.is_none() && !e.is_loan);
-                if all_stale {
-                    self.items.retain(|e| e.season.start_year != oldest);
-                }
-            }
-        }
     }
 
     /// Record season-end snapshot. Saves current stats to history.
