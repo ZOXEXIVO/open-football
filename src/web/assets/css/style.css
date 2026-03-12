@@ -102,6 +102,10 @@
    OPEN FOOTBALL - FM2017 STYLE
    ============================================ */
 
+html {
+    scrollbar-gutter: stable;
+}
+
 body {
     background-color: #1a2228;
     color: #d0d6dc;
@@ -336,8 +340,7 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     align-items: center;
     justify-content: center;
-    min-width: 130px;
-    padding: 0 24px;
+    width: 130px;
     margin-bottom: -1px;
     background: #232e35;
     color: #fff;
@@ -361,7 +364,6 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-header-colored .fm-process-btn:hover {
     background: var(--tab-fg-active, #fff);
-    opacity: 0.85;
 }
 
 .fm-date {
@@ -4799,8 +4801,7 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-process-btn {
-        min-width: 100px;
-        padding: 0 16px;
+        width: 100px;
         font-size: 12px;
     }
 
@@ -5103,8 +5104,7 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-process-btn {
-        min-width: 60px;
-        padding: 0 8px;
+        width: 70px;
         font-size: 10px;
         letter-spacing: 0.3px;
     }
