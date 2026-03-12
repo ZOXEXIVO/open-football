@@ -261,14 +261,19 @@ pub async fn loan_action(
 
         let source_club_id = sim.continents[ci].countries[coi].clubs[cli].id;
 
-        // Detect re-loan: preserve original parent
-        let parent_club_id = {
+        // Detect re-loan: preserve original parent club and team
+        let source_team_id = sim.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].id;
+        let (parent_club_id, parent_team_id) = {
             let player = sim.continents[ci].countries[coi].clubs[cli]
                 .teams.teams[ti].players.players.iter()
                 .find(|p| p.id == params.player_id);
             player.and_then(|p| p.contract.as_ref()).and_then(|c| {
-                if c.contract_type == ContractType::Loan { c.loan_from_club_id } else { None }
-            }).unwrap_or(source_club_id)
+                if c.contract_type == ContractType::Loan {
+                    Some((c.loan_from_club_id.unwrap_or(source_club_id),
+                          c.loan_from_team_id.unwrap_or(source_team_id)))
+                } else { None }
+            }).unwrap_or((source_club_id, source_team_id))
         };
 
         let source = match get_team_info(sim, ci, coi, cli) {
@@ -336,7 +341,7 @@ pub async fn loan_action(
             }
         };
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        player.contract = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, body.to_club_id));
+        player.contract = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, parent_team_id, body.to_club_id));
 
         sim.continents[dest_pos.0].countries[dest_pos.1].clubs[dest_pos.2]
             .teams.teams[dest_pos.3].players.add(player);

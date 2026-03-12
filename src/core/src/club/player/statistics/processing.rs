@@ -257,7 +257,7 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(10, 2);
         player.contract = Some(crate::PlayerClubContract::new_loan(
-            500, make_date(2032, 5, 31), 99, 100,
+            500, make_date(2032, 5, 31), 99, 0, 100,
         ));
 
         let team = make_team("Torino", "torino");

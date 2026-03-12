@@ -48,6 +48,7 @@ pub struct PlayerClubContract {
     pub expiration: NaiveDate,
 
     pub loan_from_club_id: Option<u32>,
+    pub loan_from_team_id: Option<u32>,
     pub loan_to_club_id: Option<u32>,
 
     pub bonuses: Vec<ContractBonus>,
@@ -66,6 +67,7 @@ impl PlayerClubContract {
             started: Option::None,
             expiration: expired,
             loan_from_club_id: None,
+            loan_from_team_id: None,
             loan_to_club_id: None,
             bonuses: vec![],
             clauses: vec![],
@@ -83,13 +85,14 @@ impl PlayerClubContract {
             started: Option::None,
             expiration,
             loan_from_club_id: None,
+            loan_from_team_id: None,
             loan_to_club_id: None,
             bonuses: vec![],
             clauses: vec![],
         }
     }
 
-    pub fn new_loan(salary: u32, expiration: NaiveDate, from_club_id: u32, to_club_id: u32) -> Self {
+    pub fn new_loan(salary: u32, expiration: NaiveDate, from_club_id: u32, from_team_id: u32, to_club_id: u32) -> Self {
         PlayerClubContract {
             shirt_number: None,
             salary,
@@ -100,6 +103,7 @@ impl PlayerClubContract {
             started: Option::None,
             expiration,
             loan_from_club_id: Some(from_club_id),
+            loan_from_team_id: Some(from_team_id),
             loan_to_club_id: Some(to_club_id),
             bonuses: vec![],
             clauses: vec![],

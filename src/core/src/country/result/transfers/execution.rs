@@ -147,6 +147,7 @@ pub(crate) fn execute_loan_transfer(
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
+    let mut from_team_id = 0u32;
 
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
         // Capture main team info for history entries BEFORE moving to reserve
@@ -162,6 +163,12 @@ pub(crate) fn execute_loan_transfer(
                 league_slug: String::new(),
             });
         }
+
+        // Remember which team the player is on before moving
+        from_team_id = selling_club.teams.teams.iter()
+            .find(|t| t.players.players.iter().any(|p| p.id == player_id))
+            .map(|t| t.id)
+            .unwrap_or(0);
 
         // Move player to reserve team before loaning out
         let main_idx = selling_club.teams.teams.iter()
@@ -268,7 +275,7 @@ pub(crate) fn execute_loan_transfer(
             });
 
         let salary = (loan_fee / 50.0).max(200.0) as u32;
-        player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, buying_club_id));
+        player.contract = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id));
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             if !can_club_accept_player(buying_club) {

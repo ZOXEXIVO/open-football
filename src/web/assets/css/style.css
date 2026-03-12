@@ -427,7 +427,7 @@ a:link, a:visited, a:hover, a:active {
     background: var(--header-bg, #fff);
     border-bottom: 1px solid var(--header-border, #e0e3e6);
     display: flex;
-    padding: 0 0;
+    padding: 0 0;loan
     overflow-x: auto;
 }
 
