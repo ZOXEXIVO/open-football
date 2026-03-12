@@ -37,13 +37,17 @@ impl PlayerStatistics {
         self.played + self.played_subs
     }
 
-    /// Format any rating value for display (e.g. "6.75")
+    /// Format any rating value for display (e.g. "6.75"), returns "-" for zero
     #[inline]
     pub fn format_rating(value: f32) -> String {
-        format!("{:.2}", value)
+        if value == 0.0 {
+            "-".to_string()
+        } else {
+            format!("{:.2}", value)
+        }
     }
 
-    /// Average rating formatted for display (e.g. "6.75")
+    /// Average rating formatted for display (e.g. "6.75"), returns "-" for zero
     #[inline]
     pub fn average_rating_str(&self) -> String {
         Self::format_rating(self.average_rating)
@@ -123,7 +127,7 @@ mod tests {
     fn format_rating_two_decimals() {
         assert_eq!(PlayerStatistics::format_rating(6.5), "6.50");
         assert_eq!(PlayerStatistics::format_rating(7.123), "7.12");
-        assert_eq!(PlayerStatistics::format_rating(0.0), "0.00");
+        assert_eq!(PlayerStatistics::format_rating(0.0), "-");
     }
 
     #[test]
