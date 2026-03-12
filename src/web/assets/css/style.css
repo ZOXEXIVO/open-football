@@ -427,7 +427,7 @@ a:link, a:visited, a:hover, a:active {
     background: var(--header-bg, #fff);
     border-bottom: 1px solid var(--header-border, #e0e3e6);
     display: flex;
-    padding: 0 16px;
+    padding: 0 0;
     overflow-x: auto;
 }
 
@@ -5582,10 +5582,8 @@ a:link, a:visited, a:hover, a:active {
     transform: rotate(180deg);
 }
 
-@media (min-width: 576px) {
-    .fm-tabbar:has(.fm-dd-open) {
-        overflow: visible;
-    }
+.fm-tabbar:has(.fm-dd-open) {
+    overflow: visible;
 }
 
 .fm-tabbar-dropdown-menu {
