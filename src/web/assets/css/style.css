@@ -427,8 +427,9 @@ a:link, a:visited, a:hover, a:active {
     background: var(--header-bg, #fff);
     border-bottom: 1px solid var(--header-border, #e0e3e6);
     display: flex;
-    padding: 0 0;loan
+    padding: 0;
     overflow-x: auto;
+    max-width: 100%;
 }
 
 .fm-tab {
@@ -5120,14 +5121,12 @@ a:link, a:visited, a:hover, a:active {
 
     .fm-dd-open .fm-tabbar-dropdown-menu {
         display: block;
-        position: fixed;
         left: 0;
         right: 0;
         min-width: 0;
         width: 100%;
         border-left: none;
         border-right: none;
-        z-index: 200;
     }
 
     .fm-tabbar-dropdown-toggle {
@@ -5582,15 +5581,9 @@ a:link, a:visited, a:hover, a:active {
     transform: rotate(180deg);
 }
 
-.fm-tabbar:has(.fm-dd-open) {
-    overflow: visible;
-}
-
 .fm-tabbar-dropdown-menu {
     display: none;
-    position: absolute;
-    right: 0;
-    top: 100%;
+    position: fixed;
     min-width: 160px;
     background: var(--header-bg, #fff);
     border: 1px solid var(--header-border, #e0e3e6);
