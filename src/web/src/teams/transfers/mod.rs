@@ -126,7 +126,7 @@ pub async fn team_transfers_action(
 
     // Compute season options
     let sim_date = simulator_data.date.date();
-    let current_season_year = if sim_date.month() >= 7 {
+    let current_season_year = if sim_date.month() >= 8 {
         sim_date.year() as u16
     } else {
         (sim_date.year() - 1) as u16

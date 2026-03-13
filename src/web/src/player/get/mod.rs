@@ -225,13 +225,13 @@ pub async fn player_get_action(
         let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
         let contract = player.contract.as_ref().map(|c| PlayerContractDto {
-            salary: FormattingUtils::format_money(c.salary as f64),
+            salary: format_salary(c.salary),
             expiration: c.expiration.format("%d.%m.%Y").to_string(),
             squad_status: format_squad_status(&c.squad_status),
         });
 
         let contract_loan = player.contract_loan.as_ref().map(|c| PlayerContractDto {
-            salary: FormattingUtils::format_money(c.salary as f64),
+            salary: format_salary(c.salary),
             expiration: c.expiration.format("%d.%m.%Y").to_string(),
             squad_status: String::new(),
         });
@@ -533,6 +533,16 @@ pub fn get_potential_ability_stars_by_staff(player: &Player, staff_judging: u8, 
     let noise = (hash & 0xFFFF) as f32 / 32768.0 - 1.0;
 
     (raw_stars + noise * noise_scale).round().clamp(0.0, 5.0) as u8
+}
+
+fn format_salary(salary: u32) -> String {
+    if salary >= 1_000_000 {
+        format!("{:.1}M", salary as f64 / 1_000_000.0)
+    } else if salary >= 1_000 {
+        format!("{}K", salary / 1_000)
+    } else {
+        format!("{}", salary)
+    }
 }
 
 fn format_squad_status(status: &PlayerSquadStatus) -> String {

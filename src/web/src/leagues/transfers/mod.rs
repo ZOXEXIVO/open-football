@@ -128,7 +128,7 @@ pub async fn league_transfers_action(
 
     // Compute current season year and available seasons
     let sim_date = simulator_data.date.date();
-    let current_season_year = if sim_date.month() >= 7 {
+    let current_season_year = if sim_date.month() >= 8 {
         sim_date.year() as u16
     } else {
         (sim_date.year() - 1) as u16
@@ -228,11 +228,13 @@ pub async fn league_transfers_action(
         .map(|n| n.player_id)
         .collect();
 
-    // Current listings from league clubs, excluding those in active negotiations
+    // Current listings from league clubs, excluding completed/cancelled and those in active negotiations
     let current_listings: Vec<ListingItem> = country
         .transfer_market
         .listings
         .iter()
+        .filter(|l| l.status == core::transfers::TransferListingStatus::Available
+            || l.status == core::transfers::TransferListingStatus::InNegotiation)
         .filter(|l| league_club_ids.contains(&l.club_id))
         .filter(|l| !negotiating_player_ids.contains(&l.player_id))
         .filter_map(|l| {

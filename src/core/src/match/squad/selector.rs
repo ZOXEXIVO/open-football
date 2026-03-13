@@ -523,7 +523,7 @@ fn is_available(player: &Player, is_friendly: bool) -> bool {
     }
 
     // Hard condition floor — a player below 10% condition physically cannot play
-    if player.player_attributes.condition_percentage() < 10 {
+    if player.player_attributes.condition_percentage() < 40 {
         return false;
     }
 
@@ -536,6 +536,7 @@ fn is_available(player: &Player, is_friendly: bool) -> bool {
             return false;
         }
     }
+    
     true
 }
 
