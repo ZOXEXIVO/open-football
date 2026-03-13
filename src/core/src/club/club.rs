@@ -399,11 +399,8 @@ impl Club {
                     continue;
                 }
 
-                // Skip loan contracts
-                if player.contract.as_ref()
-                    .map(|c| c.contract_type == ContractType::Loan)
-                    .unwrap_or(false)
-                {
+                // Skip loan players
+                if player.is_on_loan() {
                     continue;
                 }
 

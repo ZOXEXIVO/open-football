@@ -55,11 +55,9 @@ impl ClubResult {
         if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
             let player = data.player(result.player_id).expect(&format!("player {} not found", result.player_id));
 
-            // Don't auto-renew loan contracts — those expire and the player returns
-            if let Some(ref contract) = player.contract {
-                if contract.contract_type == crate::ContractType::Loan {
-                    return;
-                }
+            // Don't auto-renew contracts for players on loan — those expire and the player returns
+            if player.is_on_loan() {
+                return;
             }
 
             let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);

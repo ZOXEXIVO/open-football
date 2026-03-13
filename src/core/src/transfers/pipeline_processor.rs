@@ -858,10 +858,7 @@ impl PipelineProcessor {
             };
 
             // Skip players already on loan from another club
-            let is_on_loan = player.contract.as_ref()
-                .map(|c| c.contract_type == crate::ContractType::Loan)
-                .unwrap_or(false);
-            if is_on_loan {
+            if player.is_on_loan() {
                 continue;
             }
 
@@ -1661,10 +1658,7 @@ impl PipelineProcessor {
             for team in &club.teams.teams {
                 for player in &team.players.players {
                     // Skip loan players — they belong to another club and can't be bought
-                    let is_on_loan = player.contract.as_ref()
-                        .map(|c| c.contract_type == crate::ContractType::Loan)
-                        .unwrap_or(false);
-                    if is_on_loan {
+                    if player.is_on_loan() {
                         continue;
                     }
 
@@ -2191,8 +2185,7 @@ impl PipelineProcessor {
 
                 // Skip players on loan contracts — they belong to another club
                 let is_on_loan = Self::find_player_in_country(country, player_id)
-                    .and_then(|p| p.contract.as_ref())
-                    .map(|c| c.contract_type == crate::ContractType::Loan)
+                    .map(|p| p.is_on_loan())
                     .unwrap_or(false);
                 if is_on_loan {
                     continue;

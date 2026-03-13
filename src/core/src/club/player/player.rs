@@ -31,6 +31,7 @@ pub struct Player {
     pub statuses: PlayerStatus,
     pub skills: PlayerSkills,
     pub contract: Option<PlayerClubContract>,
+    pub contract_loan: Option<PlayerClubContract>,
     pub positions: PlayerPositions,
     pub preferred_foot: PlayerPreferredFoot,
     pub player_attributes: PlayerAttributes,
@@ -126,6 +127,10 @@ impl Player {
             PlayerPreferredFoot::Right => "Right",
             PlayerPreferredFoot::Both => "Both",
         }
+    }
+
+    pub fn is_on_loan(&self) -> bool {
+        self.contract_loan.is_some()
     }
 
     pub fn is_ready_for_match(&self) -> bool {

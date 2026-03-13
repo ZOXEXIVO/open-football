@@ -1,7 +1,7 @@
 use chrono::NaiveDate;
 use crate::club::player::player::Player;
 use crate::league::Season;
-use crate::{ContractType, TeamInfo};
+use crate::TeamInfo;
 
 impl Player {
     /// Record a permanent transfer (called by transfer execution).
@@ -33,9 +33,7 @@ impl Player {
     /// Record season-end snapshot (called when new season starts).
     /// Saves stats to history and resets for new season.
     pub fn on_season_end(&mut self, season: Season, team: &TeamInfo, date: NaiveDate) {
-        let is_loan = self.contract.as_ref()
-            .map(|c| c.contract_type == ContractType::Loan)
-            .unwrap_or(false);
+        let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.statistics_history.record_season_end(
@@ -52,9 +50,7 @@ impl Player {
         parent: &TeamInfo,
         date: NaiveDate,
     ) {
-        let is_loan = self.contract.as_ref()
-            .map(|c| c.contract_type == ContractType::Loan)
-            .unwrap_or(false);
+        let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.statistics_history.record_cancel_loan(stats, borrowing, parent, is_loan, date);
@@ -70,9 +66,7 @@ impl Player {
         fee: Option<f64>,
         date: NaiveDate,
     ) {
-        let is_loan = self.contract.as_ref()
-            .map(|c| c.contract_type == ContractType::Loan)
-            .unwrap_or(false);
+        let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.statistics_history.record_departure_transfer(stats, from, to, fee, is_loan, date);
@@ -88,9 +82,7 @@ impl Player {
         to: &TeamInfo,
         date: NaiveDate,
     ) {
-        let is_loan = self.contract.as_ref()
-            .map(|c| c.contract_type == ContractType::Loan)
-            .unwrap_or(false);
+        let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
         self.statistics_history.record_departure_loan(stats, from, parent, to, is_loan, date);
@@ -256,7 +248,7 @@ mod tests {
     fn on_season_end_marks_loan() {
         let mut player = make_player();
         player.statistics = make_stats(10, 2);
-        player.contract = Some(crate::PlayerClubContract::new_loan(
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
             500, make_date(2032, 5, 31), 99, 0, 100,
         ));
 

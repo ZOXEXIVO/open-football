@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::FormattingUtils;
 use chrono::{Datelike, NaiveDate};
-use core::{ContractType, SimulatorData};
+use core::SimulatorData;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -304,10 +304,7 @@ pub async fn player_history_action(
 
         let current_location = find_team_location(simulator_data, current_display_slug);
 
-        let current_is_loan = player.contract.as_ref()
-            .map(|c| c.contract_type == ContractType::Loan)
-            .unwrap_or(false)
-            || is_loaned_in;
+        let current_is_loan = player.is_on_loan() || is_loaned_in;
 
         // Current season transfer info from history entries
         let current_season_year = if month >= 7 { year as u16 } else { (year - 1) as u16 };

@@ -19,6 +19,7 @@ pub struct PlayerBuilder {
     statuses: Option<PlayerStatus>,
     skills: Option<PlayerSkills>,
     contract: Option<Option<PlayerClubContract>>,
+    contract_loan: Option<Option<PlayerClubContract>>,
     positions: Option<PlayerPositions>,
     preferred_foot: Option<PlayerPreferredFoot>,
     player_attributes: Option<PlayerAttributes>,
@@ -87,6 +88,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn contract_loan(mut self, contract_loan: Option<PlayerClubContract>) -> Self {
+        self.contract_loan = Some(contract_loan);
+        self
+    }
+
     pub fn positions(mut self, positions: PlayerPositions) -> Self {
         self.positions = Some(positions);
         self
@@ -149,6 +155,7 @@ impl PlayerBuilder {
             statuses: self.statuses.unwrap_or_else(PlayerStatus::new),
             skills: self.skills.ok_or("skills is required")?,
             contract: self.contract.unwrap_or(None),
+            contract_loan: self.contract_loan.unwrap_or(None),
             positions: self.positions.ok_or("positions is required")?,
             preferred_foot: self.preferred_foot.unwrap_or(PlayerPreferredFoot::Right),
             player_attributes: self.player_attributes.ok_or("player_attributes is required")?,

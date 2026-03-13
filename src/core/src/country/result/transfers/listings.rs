@@ -159,10 +159,8 @@ impl CountryResult {
         date: NaiveDate,
     ) -> bool {
         // Loan players belong to another club — cannot be listed by the loan club
-        if let Some(ref contract) = player.contract {
-            if contract.contract_type == crate::ContractType::Loan {
-                return false;
-            }
+        if player.is_on_loan() {
+            return false;
         }
 
         let statuses = player.statuses.get();

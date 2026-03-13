@@ -38,7 +38,7 @@ impl CountryResult {
                     };
 
                     // Skip loan players
-                    if contract.contract_type == crate::club::player::contract::ContractType::Loan {
+                    if player.is_on_loan() {
                         continue;
                     }
 

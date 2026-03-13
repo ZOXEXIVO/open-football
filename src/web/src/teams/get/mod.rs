@@ -119,9 +119,7 @@ pub async fn team_get_action(
             let country = simulator_data.country(p.country_id)?;
             let position = p.positions.display_positions().join(", ");
 
-            let is_loan = p.contract.as_ref()
-                .map(|c| c.contract_type == ContractType::Loan)
-                .unwrap_or(false);
+            let is_loan = p.is_on_loan();
 
             let is_youth = p.contract.as_ref()
                 .map(|c| c.contract_type == ContractType::Youth)
@@ -162,16 +160,15 @@ pub async fn team_get_action(
         .collect();
 
     // Find loaned-out players by scanning all clubs for players
-    // whose contract has loan_from_team_id == this team
+    // whose contract_loan has loan_from_team_id == this team
     let team_id = team.id;
     for continent in &simulator_data.continents {
         for country in &continent.countries {
             for club in &country.clubs {
                 for team_iter in &club.teams.teams {
                     for player in &team_iter.players.players {
-                        let is_loaned_from_this_team = player.contract.as_ref().map(|c| {
-                            c.contract_type == ContractType::Loan
-                                && c.loan_from_team_id == Some(team_id)
+                        let is_loaned_from_this_team = player.contract_loan.as_ref().map(|c| {
+                            c.loan_from_team_id == Some(team_id)
                         }).unwrap_or(false);
 
                         if !is_loaned_from_this_team { continue; }

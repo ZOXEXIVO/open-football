@@ -376,6 +376,7 @@ impl PlayerGenerator {
             statuses: PlayerStatus { statuses: vec![] },
             skills,
             contract: Some(contract),
+            contract_loan: None,
             positions,
             preferred_foot,
             player_attributes: PlayerAttributes {

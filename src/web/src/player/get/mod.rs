@@ -5,7 +5,6 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::ContractType;
 use core::Person;
 use core::Player;
 use core::PlayerPositionType;
@@ -50,6 +49,7 @@ pub struct PlayerViewModel {
     pub last_name: String,
     pub position: String,
     pub contract: Option<PlayerContractDto>,
+    pub contract_loan: Option<PlayerContractDto>,
     pub birth_date: String,
     pub age: u8,
     pub team_slug: String,
@@ -123,7 +123,7 @@ pub struct PlayerStatistics {
 }
 
 pub struct PlayerContractDto {
-    pub salary: u32,
+    pub salary: String,
     pub expiration: String,
     pub squad_status: String,
 }
@@ -225,9 +225,15 @@ pub async fn player_get_action(
         let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
         let contract = player.contract.as_ref().map(|c| PlayerContractDto {
-            salary: c.salary / 1000,
+            salary: FormattingUtils::format_money(c.salary as f64),
             expiration: c.expiration.format("%d.%m.%Y").to_string(),
             squad_status: format_squad_status(&c.squad_status),
+        });
+
+        let contract_loan = player.contract_loan.as_ref().map(|c| PlayerContractDto {
+            salary: FormattingUtils::format_money(c.salary as f64),
+            expiration: c.expiration.format("%d.%m.%Y").to_string(),
+            squad_status: String::new(),
         });
 
         let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
@@ -249,6 +255,7 @@ pub async fn player_get_action(
             last_name: player.full_name.display_last_name().to_string(),
             position: player.position().get_short_name().to_string(),
             contract,
+            contract_loan,
             birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
             team_slug: main_team_slug,
@@ -317,6 +324,7 @@ pub async fn player_get_action(
             last_name: player.full_name.display_last_name().to_string(),
             position: player.position().get_short_name().to_string(),
             contract: None,
+            contract_loan: None,
             birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
             team_slug: String::new(),
@@ -542,15 +550,13 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
 }
 
 fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
-    let is_loan_contract = player.contract.as_ref()
-        .map(|c| c.contract_type == ContractType::Loan)
-        .unwrap_or(false);
+    let is_on_loan = player.is_on_loan();
 
     let club_id = team.club_id;
     let now = data.date.date();
 
     if let Some(country) = data.country_by_club(club_id) {
-        // Check if player is loaned IN (contract is Loan type with active end date)
+        // Check if player is loaned IN (has loan contract with active end date)
         let loan_in_record = country.transfer_market.transfer_history.iter().find(|t| {
             t.player_id == player.id
                 && t.to_club_id == club_id
@@ -570,9 +576,9 @@ fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option
             });
         }
 
-        // Fallback: contract says Loan but no transfer record found
-        if is_loan_contract {
-            if let Some(from_club_id) = player.contract.as_ref().and_then(|c| c.loan_from_club_id) {
+        // Fallback: contract_loan exists but no transfer record found
+        if is_on_loan {
+            if let Some(from_club_id) = player.contract_loan.as_ref().and_then(|c| c.loan_from_club_id) {
                 let (club_name, club_slug) = data.club(from_club_id)
                     .and_then(|c| c.teams.teams.first())
                     .map(|t| (t.name.clone(), t.slug.clone()))

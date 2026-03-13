@@ -902,6 +902,7 @@ impl NationalTeam {
                 },
             },
             contract: None,
+            contract_loan: None,
             positions: PlayerPositions {
                 positions: vec![PlayerPosition {
                     position,

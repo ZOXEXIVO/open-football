@@ -208,16 +208,13 @@ pub async fn team_transfers_action(
         })
         .collect();
 
-    // Incoming loans: players on this team with a Loan contract
+    // Incoming loans: players on this team with a loan contract
     let incoming_loans: Vec<LoanHistoryItem> = team
         .players()
         .iter()
         .filter_map(|p| {
-            let contract = p.contract.as_ref()?;
-            if contract.contract_type != core::ContractType::Loan {
-                return None;
-            }
-            let from_club_id = contract.loan_from_club_id?;
+            let loan_contract = p.contract_loan.as_ref()?;
+            let from_club_id = loan_contract.loan_from_club_id?;
             let from_club = simulator_data.club(from_club_id);
             let from_team_name = from_club
                 .and_then(|c| c.teams.teams.first())
@@ -240,26 +237,25 @@ pub async fn team_transfers_action(
                 date: p.last_transfer_date
                     .map(|d| d.format("%d.%m.%Y").to_string())
                     .unwrap_or_default(),
-                end_date: contract.expiration.format("%d.%m.%Y").to_string(),
+                end_date: loan_contract.expiration.format("%d.%m.%Y").to_string(),
             })
         })
         .collect();
 
-    // Outgoing loans: players on other teams whose contract has loan_from_club_id == this club
+    // Outgoing loans: players on other teams whose contract_loan has loan_from_club_id == this club
     let mut outgoing_loans: Vec<LoanHistoryItem> = Vec::new();
     for continent in &simulator_data.continents {
         for country_iter in &continent.countries {
             for club in &country_iter.clubs {
                 for team_iter in &club.teams.teams {
                     for player in &team_iter.players.players {
-                        let is_loaned_from_us = player.contract.as_ref().map(|c| {
-                            c.contract_type == core::ContractType::Loan
-                                && c.loan_from_club_id == Some(club_id)
+                        let is_loaned_from_us = player.contract_loan.as_ref().map(|c| {
+                            c.loan_from_club_id == Some(club_id)
                         }).unwrap_or(false);
 
                         if !is_loaned_from_us { continue; }
 
-                        let contract = player.contract.as_ref().unwrap();
+                        let contract = player.contract_loan.as_ref().unwrap();
                         outgoing_loans.push(LoanHistoryItem {
                             player_id: player.id,
                             player_name: format!(

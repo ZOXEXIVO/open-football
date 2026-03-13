@@ -6,7 +6,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Datelike;
-use core::{ContractType, PlayerClubContract};
+use core::PlayerClubContract;
 use core::shared::{Currency, CurrencyValue};
 use core::transfers::{CompletedTransfer, TransferType};
 use serde::{Deserialize, Serialize};
@@ -96,8 +96,8 @@ pub async fn cancel_loan_action(
             let player = sim.continents[ci].countries[coi].clubs[cli]
                 .teams.teams[ti].players.players.iter()
                 .find(|p| p.id == params.player_id);
-            match player.and_then(|p| p.contract.as_ref()) {
-                Some(c) if c.contract_type == ContractType::Loan => c.loan_from_club_id,
+            match player.and_then(|p| p.contract_loan.as_ref()) {
+                Some(c) => c.loan_from_club_id,
                 _ => return StatusCode::NOT_FOUND,
             }
         };
@@ -126,7 +126,7 @@ pub async fn cancel_loan_action(
         };
 
         player.on_cancel_loan(&borrowing.info, &parent.info, date);
-        player.contract = None;
+        player.contract_loan = None;
 
         let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(parent_club_id) {
             Some(pos) => pos,
@@ -203,6 +203,7 @@ pub async fn transfer_action(
             .unwrap_or(date);
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
         player.contract = Some(PlayerClubContract::new(salary, expiration));
+        player.contract_loan = None;
 
         sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.add(player);
@@ -268,11 +269,9 @@ pub async fn loan_action(
             let player = sim.continents[ci].countries[coi].clubs[cli]
                 .teams.teams[ti].players.players.iter()
                 .find(|p| p.id == params.player_id);
-            player.and_then(|p| p.contract.as_ref()).and_then(|c| {
-                if c.contract_type == ContractType::Loan {
-                    Some((c.loan_from_club_id.unwrap_or(source_club_id),
-                          c.loan_from_team_id.unwrap_or(source_team_id)))
-                } else { None }
+            player.and_then(|p| p.contract_loan.as_ref()).map(|c| {
+                (c.loan_from_club_id.unwrap_or(source_club_id),
+                 c.loan_from_team_id.unwrap_or(source_team_id))
             }).unwrap_or((source_club_id, source_team_id))
         };
 
@@ -341,7 +340,7 @@ pub async fn loan_action(
             }
         };
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        player.contract = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, parent_team_id, body.to_club_id));
+        player.contract_loan = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, parent_team_id, body.to_club_id));
 
         sim.continents[dest_pos.0].countries[dest_pos.1].clubs[dest_pos.2]
             .teams.teams[dest_pos.3].players.add(player);
