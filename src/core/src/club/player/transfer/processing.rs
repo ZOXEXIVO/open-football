@@ -30,12 +30,12 @@ impl Player {
 
         let mut wants_transfer = false;
 
-        // Existing logic: poor behaviour
+        // Poor behaviour
         if self.behaviour.is_poor() {
             wants_transfer = true;
         }
 
-        // Unhappy for extended period (check if Unh status exists)
+        // Unhappy for extended period (Unh status > 30 days)
         let has_unh = self.statuses.statuses.iter().any(|s| {
             s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 30
         });
@@ -43,9 +43,11 @@ impl Player {
             wants_transfer = true;
         }
 
-        // Overall unhappiness
-        if !self.happiness.is_happy() && self.behaviour.is_poor() {
-            wants_transfer = true;
+        // Salary unhappy for a long time with no resolution → wants to leave
+        if let Some(first_request) = self.happiness.last_salary_negotiation {
+            if (now - first_request).num_days() > 120 && self.happiness.factors.salary_satisfaction <= -5.0 {
+                wants_transfer = true;
+            }
         }
 
         if wants_transfer {
@@ -55,6 +57,11 @@ impl Player {
             }
             result.wants_to_leave = true;
             result.request_transfer(self.id);
+        } else {
+            // Conditions improved — remove transfer request if it was set
+            if self.statuses.get().contains(&PlayerStatusType::Req) {
+                self.statuses.remove(PlayerStatusType::Req);
+            }
         }
     }
 }

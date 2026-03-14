@@ -360,4 +360,60 @@ impl SimulatorData {
         }
         None
     }
+
+    /// Find all clubs that have this player in their scouting assignments,
+    /// shortlists, or scouting reports (i.e. clubs interested in signing the player).
+    /// Returns Vec of (club_id, club_name, team_slug).
+    pub fn clubs_interested_in_player(&self, player_id: u32) -> Vec<(u32, String, String)> {
+        let mut interested = Vec::new();
+
+        for continent in &self.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    let mut is_interested = false;
+
+                    // Check scouting assignments for observations of this player
+                    for assignment in &club.transfer_plan.scouting_assignments {
+                        if assignment.observations.iter().any(|o| o.player_id == player_id) {
+                            is_interested = true;
+                            break;
+                        }
+                    }
+
+                    // Check scouting reports
+                    if !is_interested {
+                        if club.transfer_plan.scouting_reports.iter().any(|r| r.player_id == player_id) {
+                            is_interested = true;
+                        }
+                    }
+
+                    // Check shortlists
+                    if !is_interested {
+                        for shortlist in &club.transfer_plan.shortlists {
+                            if shortlist.candidates.iter().any(|c| c.player_id == player_id) {
+                                is_interested = true;
+                                break;
+                            }
+                        }
+                    }
+
+                    // Check staff recommendations
+                    if !is_interested {
+                        if club.transfer_plan.staff_recommendations.iter().any(|r| r.player_id == player_id) {
+                            is_interested = true;
+                        }
+                    }
+
+                    if is_interested {
+                        let team_slug = club.teams.teams.first()
+                            .map(|t| t.slug.clone())
+                            .unwrap_or_default();
+                        interested.push((club.id, club.name.clone(), team_slug));
+                    }
+                }
+            }
+        }
+
+        interested
+    }
 }

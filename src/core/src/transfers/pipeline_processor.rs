@@ -99,12 +99,25 @@ struct PlayerSummary {
     club_id: u32,
     position: PlayerPositionType,
     position_group: PlayerFieldPositionGroup,
-    current_ability: u8,
-    potential_ability: u8,
     age: u8,
     estimated_value: f64,
     is_listed: bool,
     is_loan_listed: bool,
+    // Observable data — what scouts can see from watching
+    skill_ability: u8,         // position-weighted skill average (visible from watching)
+    average_rating: f32,       // match performance
+    goals: u16,
+    assists: u16,
+    appearances: u16,
+    // Mental character traits (observable through behaviour)
+    determination: f32,
+    work_rate: f32,
+    composure: f32,
+    anticipation: f32,
+    // Skill group averages (visible from watching)
+    technical_avg: f32,
+    mental_avg: f32,
+    physical_avg: f32,
 }
 
 /// Info about a player in the squad for formation-based analysis.
@@ -531,6 +544,73 @@ impl PipelineProcessor {
                         ));
                         next_id += 1;
                         budget_used += alloc;
+                    }
+                }
+            }
+        }
+
+        // ──────────────────────────────────────────────────────────
+        // STEP 4b: Youth development signings (philosophy-driven)
+        // DevelopAndSell clubs actively scout for young talent to buy,
+        // develop, and loan out for experience — like Ajax, Benfica, Dortmund.
+        // ──────────────────────────────────────────────────────────
+
+        if club.philosophy == ClubPhilosophy::DevelopAndSell
+            && matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National)
+        {
+            // Identify position groups where we lack young players with room to grow
+            let position_groups = [
+                PlayerFieldPositionGroup::Defender,
+                PlayerFieldPositionGroup::Midfielder,
+                PlayerFieldPositionGroup::Forward,
+            ];
+
+            let mut youth_requests = 0u32;
+            let max_youth_requests = match rep_level {
+                ReputationLevel::Elite => 3,
+                ReputationLevel::Continental => 2,
+                _ => 1,
+            };
+
+            for group in &position_groups {
+                if youth_requests >= max_youth_requests {
+                    break;
+                }
+
+                // Count young players (<=21) in this position group
+                let young_in_group = squad
+                    .iter()
+                    .filter(|p| p.primary_position.position_group() == *group && p.age <= 21)
+                    .count();
+
+                // If we have fewer than 2 young players in this group, scout for youth
+                if young_in_group < 2 {
+                    let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
+                    if alloc <= 0.0 {
+                        break;
+                    }
+
+                    let pos = match group {
+                        PlayerFieldPositionGroup::Defender => PlayerPositionType::DefenderCenter,
+                        PlayerFieldPositionGroup::Midfielder => PlayerPositionType::MidfielderCenter,
+                        PlayerFieldPositionGroup::Forward => PlayerPositionType::Striker,
+                        _ => continue,
+                    };
+
+                    // Don't duplicate if we already have a request for this position
+                    if !requests.iter().any(|r| r.position.position_group() == *group) {
+                        requests.push(TransferRequest::new(
+                            next_id,
+                            pos,
+                            TransferNeedPriority::Optional,
+                            TransferNeedReason::DevelopmentSigning,
+                            avg_ability.saturating_sub(25),
+                            avg_ability.saturating_sub(10),
+                            alloc,
+                        ));
+                        next_id += 1;
+                        budget_used += alloc;
+                        youth_requests += 1;
                     }
                 }
             }
@@ -1480,12 +1560,31 @@ impl PipelineProcessor {
                     let ability_error = ((base_ability_error * 0.6) / sqrt_count) as i32;
                     let potential_error = ((base_potential_error * 0.6) / sqrt_count) as i32;
 
-                    let assessed_ability = (player.player_attributes.current_ability as i32
+                    // Assess from visible skills and match performance, not hidden CA/PA
+                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let match_bonus = if match_rating > 7.5 { 5i32 }
+                        else if match_rating > 7.0 { 3 }
+                        else if match_rating > 6.5 { 1 }
+                        else if match_rating < 5.5 { -3 }
+                        else { 0 };
+
+                    let assessed_ability = (skill_ability as i32
+                        + match_bonus
                         + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 100) as u8;
-                    let assessed_potential = (player.player_attributes.potential_ability as i32
+                        .clamp(1, 200) as u8;
+
+                    let growth_potential = Self::estimate_growth_potential(
+                        player_age,
+                        player.skills.mental.determination,
+                        player.skills.mental.work_rate,
+                        player.skills.mental.composure,
+                        player.skills.mental.anticipation,
+                        skill_ability,
+                    );
+                    let assessed_potential = (skill_ability as i32
+                        + growth_potential as i32
                         + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 100) as u8;
+                        .clamp(1, 200) as u8;
 
                     let is_new = !assignment.has_observation_for(player.id);
 
@@ -1673,12 +1772,23 @@ impl PipelineProcessor {
                         club_id: club.id,
                         position: player.position(),
                         position_group: player.position().position_group(),
-                        current_ability: player.player_attributes.current_ability,
-                        potential_ability: player.player_attributes.potential_ability,
                         age: player.age(date),
                         estimated_value: value.amount,
                         is_listed: statuses.contains(&PlayerStatusType::Lst),
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        // Observable skills and performance
+                        skill_ability: player.skills.calculate_ability_for_position(player.position()),
+                        average_rating: player.statistics.average_rating,
+                        goals: player.statistics.goals,
+                        assists: player.statistics.assists,
+                        appearances: player.statistics.total_games(),
+                        determination: player.skills.mental.determination,
+                        work_rate: player.skills.mental.work_rate,
+                        composure: player.skills.mental.composure,
+                        anticipation: player.skills.mental.anticipation,
+                        technical_avg: player.skills.technical.average(),
+                        mental_avg: player.skills.mental.average(),
+                        physical_avg: player.skills.physical.average(),
                     });
                 }
             }
@@ -1687,6 +1797,7 @@ impl PipelineProcessor {
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
+        let mut wanted_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
@@ -1713,17 +1824,41 @@ impl PipelineProcessor {
 
                 // Find matching players from OTHER clubs
                 // Scouts look at position GROUP match, not just exact position
-                // Value filter is intentionally loose — scouts assess talent broadly,
-                // the shortlist/negotiation phase handles affordability
+                // Scouts evaluate visible skills and performance, not hidden CA/PA
                 let target_group = assignment.target_position.position_group();
+                let philosophy = &club.philosophy;
+
+                // DevelopAndSell clubs widen the net for young promising players
+                let (age_min, age_max, ability_floor) = match philosophy {
+                    ClubPhilosophy::DevelopAndSell => {
+                        // Also consider very young players below the threshold
+                        let youth_floor = assignment.min_ability.saturating_sub(20);
+                        (assignment.preferred_age_min.min(16), assignment.preferred_age_max, youth_floor)
+                    }
+                    ClubPhilosophy::SignToCompete => {
+                        // Focus on proven performers — keep strict thresholds
+                        (assignment.preferred_age_min, assignment.preferred_age_max, assignment.min_ability)
+                    }
+                    _ => {
+                        (assignment.preferred_age_min, assignment.preferred_age_max, assignment.min_ability)
+                    }
+                };
+
                 let matching: Vec<&PlayerSummary> = all_players
                     .iter()
                     .filter(|p| {
-                        p.club_id != club.id
-                            && p.position_group == target_group
-                            && p.age >= assignment.preferred_age_min
-                            && p.age <= assignment.preferred_age_max
-                            && p.current_ability >= assignment.min_ability
+                        if p.club_id == club.id || p.position_group != target_group {
+                            return false;
+                        }
+                        // Young players (<=21) get a relaxed ability floor for development clubs
+                        let effective_min = if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                            ability_floor
+                        } else {
+                            assignment.min_ability
+                        };
+                        p.age >= age_min
+                            && p.age <= age_max
+                            && p.skill_ability >= effective_min
                     })
                     .collect();
 
@@ -1781,12 +1916,36 @@ impl PipelineProcessor {
                     let ability_error = (base_ability_error / sqrt_count) as i32;
                     let potential_error = (base_potential_error / sqrt_count) as i32;
 
-                    let assessed_ability = (target.current_ability as i32
+                    // Assess ability from visible skills, boosted by match performance
+                    let performance_bonus = if target.appearances >= 10 && target.average_rating > 7.0 {
+                        3i32
+                    } else if target.appearances >= 5 && target.average_rating > 6.5 {
+                        1
+                    } else if target.average_rating > 0.0 && target.average_rating < 5.5 {
+                        -2
+                    } else {
+                        0
+                    };
+
+                    let assessed_ability = (target.skill_ability as i32
+                        + performance_bonus
                         + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 100) as u8;
-                    let assessed_potential = (target.potential_ability as i32
+                        .clamp(1, 200) as u8;
+
+                    // Estimate potential from age, mental attributes, and current skill level
+                    // Young players with strong mentals (determination, work rate) suggest higher ceiling
+                    let growth_potential = Self::estimate_growth_potential(
+                        target.age,
+                        target.determination,
+                        target.work_rate,
+                        target.composure,
+                        target.anticipation,
+                        target.skill_ability,
+                    );
+                    let assessed_potential = (target.skill_ability as i32
+                        + growth_potential as i32
                         + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 100) as u8;
+                        .clamp(1, 200) as u8;
 
                     let is_new = !assignment.has_observation_for(target.player_id);
 
@@ -1808,6 +1967,10 @@ impl PipelineProcessor {
                         is_new,
                     });
 
+                    if is_new && !wanted_player_ids.contains(&target.player_id) {
+                        wanted_player_ids.push(target.player_id);
+                    }
+
                     // Generate report after just 1 observation (with lower confidence)
                     let final_obs_count = obs_count + 1;
                     let confidence = if final_obs_count == 1 {
@@ -1816,16 +1979,36 @@ impl PipelineProcessor {
                         1.0 - (1.0 / (final_obs_count as f32 + 1.0))
                     };
 
+                    // Young players with high potential gap get boosted recommendations
+                    let youth_bonus: i16 = if target.age <= 21 && assessed_potential > assessed_ability + 15 {
+                        10
+                    } else if target.age <= 23 && assessed_potential > assessed_ability + 10 {
+                        5
+                    } else {
+                        0
+                    };
+
+                    // Strong match stats boost recommendation
+                    let stats_bonus: i16 = if target.appearances >= 10 && target.average_rating >= 7.0 {
+                        5
+                    } else if target.appearances >= 5 && target.average_rating >= 6.5 {
+                        2
+                    } else {
+                        0
+                    };
+
+                    let effective_ability = assessed_ability as i16 + youth_bonus + stats_bonus;
+
                     let recommendation =
-                        if assessed_ability as i16 >= assignment.min_ability as i16 + 10
+                        if effective_ability >= assignment.min_ability as i16 + 10
                             && assessed_potential > assessed_ability + 5
                         {
                             ScoutingRecommendation::StrongBuy
-                        } else if assessed_ability >= assignment.min_ability
+                        } else if effective_ability >= assignment.min_ability as i16
                             && assessed_potential >= assessed_ability
                         {
                             ScoutingRecommendation::Buy
-                        } else if assessed_ability >= assignment.min_ability.saturating_sub(5) {
+                        } else if effective_ability >= assignment.min_ability as i16 - 5 {
                             ScoutingRecommendation::Consider
                         } else {
                             ScoutingRecommendation::Pass
@@ -1900,6 +2083,19 @@ impl PipelineProcessor {
             }
         }
 
+        // Set Wnt status on newly scouted players
+        for player_id in &wanted_player_ids {
+            for club in &mut country.clubs {
+                for team in &mut club.teams.teams {
+                    if let Some(player) = team.players.players.iter_mut().find(|p| p.id == *player_id) {
+                        if !player.statuses.get().contains(&PlayerStatusType::Wnt) {
+                            player.statuses.add(date, PlayerStatusType::Wnt);
+                        }
+                    }
+                }
+            }
+        }
+
         // Push staff events for scouts
         for (club_id, staff_id, event_type) in staff_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
@@ -1960,8 +2156,8 @@ impl PipelineProcessor {
                     .iter()
                     .filter(|r| r.estimated_value <= budget_alloc * 5.0)
                     .map(|r| {
-                        let ability_score = r.assessed_ability as f32 / 100.0;
-                        let potential_score = r.assessed_potential as f32 / 100.0;
+                        let ability_score = r.assessed_ability as f32 / 200.0;
+                        let potential_score = r.assessed_potential as f32 / 200.0;
                         let value_fit = if budget_alloc > 0.0 {
                             1.0 - (r.estimated_value / budget_alloc).min(1.0) as f32
                         } else {
@@ -2031,12 +2227,12 @@ impl PipelineProcessor {
                         Self::find_player_summary_in_country(country, l.player_id, date).and_then(
                             |p| {
                                 if p.position_group == request.position.position_group()
-                                    && p.current_ability >= request.min_ability
+                                    && p.skill_ability >= request.min_ability
                                     && p.estimated_value <= request.budget_allocation * 5.0
                                 {
                                     Some(ShortlistCandidate {
                                         player_id: p.player_id,
-                                        score: p.current_ability as f32 / 100.0,
+                                        score: p.skill_ability as f32 / 200.0,
                                         estimated_fee: p.estimated_value,
                                         status: ShortlistCandidateStatus::Available,
                                     })
@@ -2999,14 +3195,17 @@ impl PipelineProcessor {
             club_id: u32,
             position: PlayerPositionType,
             position_group: PlayerFieldPositionGroup,
-            ability: u8,
-            potential: u8,
+            ability: u8,           // skill-based, not CA
+            estimated_potential: u8, // estimated from age + mentals, not PA
             age: u8,
             estimated_value: f64,
             contract_months_remaining: u32,
             club_in_debt: bool,
             parent_club_reputation: ReputationLevel,
             is_loan_listed: bool,
+            // Observable performance
+            average_rating: f32,
+            appearances: u16,
         }
 
         let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
@@ -3038,19 +3237,32 @@ impl PipelineProcessor {
 
                     let statuses = player.statuses.get();
 
+                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let player_age = player.age(date);
+                    let estimated_potential = skill_ability + Self::estimate_growth_potential(
+                        player_age,
+                        player.skills.mental.determination,
+                        player.skills.mental.work_rate,
+                        player.skills.mental.composure,
+                        player.skills.mental.anticipation,
+                        skill_ability,
+                    );
+
                     all_snapshots.push(PlayerSnapshot {
                         id: player.id,
                         club_id: club.id,
                         position: player.position(),
                         position_group: player.position().position_group(),
-                        ability: player.player_attributes.current_ability,
-                        potential: player.player_attributes.potential_ability,
-                        age: player.age(date),
+                        ability: skill_ability,
+                        estimated_potential,
+                        age: player_age,
                         estimated_value: value.amount,
                         contract_months_remaining: contract_months,
                         club_in_debt,
                         parent_club_reputation: rep_level.clone(),
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        average_rating: player.statistics.average_rating,
+                        appearances: player.statistics.total_games(),
                     });
                 }
             }
@@ -3150,9 +3362,9 @@ impl PipelineProcessor {
                     }
 
                     // High potential gap
-                    if cand.potential > cand.ability + 15 {
+                    if cand.estimated_potential > cand.ability + 15 {
                         score += 2.5;
-                    } else if cand.potential > cand.ability + 8 {
+                    } else if cand.estimated_potential > cand.ability + 8 {
                         score += 1.5;
                     }
 
@@ -3186,10 +3398,10 @@ impl PipelineProcessor {
 
                     let assessed_ability = (cand.ability as i32
                         + IntegerUtils::random(-ability_error, ability_error))
-                    .clamp(1, 100) as u8;
-                    let assessed_potential = (cand.potential as i32
+                    .clamp(1, 200) as u8;
+                    let assessed_potential = (cand.estimated_potential as i32
                         + IntegerUtils::random(-potential_error, potential_error))
-                    .clamp(1, 100) as u8;
+                    .clamp(1, 200) as u8;
 
                     let confidence = (0.3 + (judging as f32 * 0.035)).min(0.95);
 
@@ -3197,7 +3409,7 @@ impl PipelineProcessor {
                         RecommendationType::ExpiringContract
                     } else if cand.club_in_debt {
                         RecommendationType::FinancialDistress
-                    } else if cand.potential > cand.ability + 15 && cand.age <= 22 {
+                    } else if cand.estimated_potential > cand.ability + 15 && cand.age <= 22 {
                         RecommendationType::HiddenGem
                     } else if cand.is_loan_listed {
                         RecommendationType::LoanOpportunity
@@ -3249,10 +3461,10 @@ impl PipelineProcessor {
 
                         let assessed_ability = (best.ability as i32
                             + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 100) as u8;
-                        let assessed_potential = (best.potential as i32
+                        .clamp(1, 200) as u8;
+                        let assessed_potential = (best.estimated_potential as i32
                             + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 100) as u8;
+                        .clamp(1, 200) as u8;
 
                         let confidence = (0.4 + (judging as f32 * 0.035)).min(0.95);
 
@@ -3321,10 +3533,10 @@ impl PipelineProcessor {
 
                         let assessed_ability = (target.ability as i32
                             + IntegerUtils::random(-ability_error, ability_error))
-                        .clamp(1, 100) as u8;
-                        let assessed_potential = (target.potential as i32
+                        .clamp(1, 200) as u8;
+                        let assessed_potential = (target.estimated_potential as i32
                             + IntegerUtils::random(-potential_error, potential_error))
-                        .clamp(1, 100) as u8;
+                        .clamp(1, 200) as u8;
 
                         let rec_type = if target.ability > avg_ability + 5 {
                             RecommendationType::BigClubSurplus
@@ -3380,10 +3592,10 @@ impl PipelineProcessor {
 
                             let assessed_ability = (target.ability as i32
                                 + IntegerUtils::random(-ability_error, ability_error))
-                            .clamp(1, 100) as u8;
-                            let assessed_potential = (target.potential as i32
+                            .clamp(1, 200) as u8;
+                            let assessed_potential = (target.estimated_potential as i32
                                 + IntegerUtils::random(-potential_error, potential_error))
-                            .clamp(1, 100) as u8;
+                            .clamp(1, 200) as u8;
 
                             let confidence = (0.5 + (coach_judging as f32 * 0.03)).min(0.9);
 
@@ -3417,7 +3629,7 @@ impl PipelineProcessor {
                             .filter(|p| {
                                 p.club_id != club.id
                                     && p.age <= 23
-                                    && p.potential > p.ability + 5
+                                    && p.estimated_potential > p.ability + 5
                                     && p.ability >= avg_ability.saturating_sub(5)
                                     && Self::rep_level_value(&p.parent_club_reputation)
                                         > Self::rep_level_value(&club_rep)
@@ -3429,7 +3641,7 @@ impl PipelineProcessor {
                                     })
                             })
                             .collect();
-                        game_time_seekers.sort_by(|a, b| b.potential.cmp(&a.potential));
+                        game_time_seekers.sort_by(|a, b| b.estimated_potential.cmp(&a.estimated_potential));
 
                         for target in game_time_seekers.iter().take(remaining_after_free.min(2))
                         {
@@ -3439,10 +3651,10 @@ impl PipelineProcessor {
 
                             let assessed_ability = (target.ability as i32
                                 + IntegerUtils::random(-ability_error, ability_error))
-                            .clamp(1, 100) as u8;
-                            let assessed_potential = (target.potential as i32
+                            .clamp(1, 200) as u8;
+                            let assessed_potential = (target.estimated_potential as i32
                                 + IntegerUtils::random(-potential_error, potential_error))
-                            .clamp(1, 100) as u8;
+                            .clamp(1, 200) as u8;
 
                             let confidence = (0.3 + (coach_judging as f32 * 0.025)).min(0.8);
 
@@ -3762,17 +3974,28 @@ impl PipelineProcessor {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+                    let skill_ability = player.skills.calculate_ability_for_position(player.position());
                     return Some(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
                         position: player.position(),
                         position_group: player.position().position_group(),
-                        current_ability: player.player_attributes.current_ability,
-                        potential_ability: player.player_attributes.potential_ability,
                         age: player.age(date),
-                        estimated_value: player.player_attributes.current_ability as f64 * 10000.0,
+                        estimated_value: skill_ability as f64 * 10000.0,
                         is_listed: player.statuses.get().contains(&PlayerStatusType::Lst),
                         is_loan_listed: player.statuses.get().contains(&PlayerStatusType::Loa),
+                        skill_ability,
+                        average_rating: player.statistics.average_rating,
+                        goals: player.statistics.goals,
+                        assists: player.statistics.assists,
+                        appearances: player.statistics.total_games(),
+                        determination: player.skills.mental.determination,
+                        work_rate: player.skills.mental.work_rate,
+                        composure: player.skills.mental.composure,
+                        anticipation: player.skills.mental.anticipation,
+                        technical_avg: player.skills.technical.average(),
+                        mental_avg: player.skills.mental.average(),
+                        physical_avg: player.skills.physical.average(),
                     });
                 }
             }
@@ -3790,6 +4013,48 @@ impl PipelineProcessor {
             }
         }
         (10, 10)
+    }
+
+    /// Estimate a player's growth potential from observable attributes.
+    /// Scouts can't see PA — they judge ceiling from age, character, and current skill level.
+    /// Young players with strong determination, work rate, composure show higher ceiling.
+    fn estimate_growth_potential(
+        age: u8,
+        determination: f32,
+        work_rate: f32,
+        composure: f32,
+        anticipation: f32,
+        current_skill_ability: u8,
+    ) -> u8 {
+        // Mental quality score: how much this player's character suggests growth (0.0-1.0)
+        let mental_quality = ((determination + work_rate + composure + anticipation) / 4.0 - 1.0) / 19.0;
+        let mental_factor = mental_quality.clamp(0.0, 1.0);
+
+        // Age-based growth window: younger = more room to grow
+        let base_growth = match age {
+            0..=17 => 35.0,
+            18 => 30.0,
+            19 => 25.0,
+            20 => 20.0,
+            21 => 15.0,
+            22 => 12.0,
+            23 => 8.0,
+            24 => 5.0,
+            25 => 3.0,
+            26..=27 => 1.0,
+            _ => 0.0,
+        };
+
+        // Players already at high skill level have less room to grow
+        let ceiling_factor = if current_skill_ability > 160 {
+            0.3
+        } else if current_skill_ability > 120 {
+            0.6
+        } else {
+            1.0
+        };
+
+        (base_growth * mental_factor * ceiling_factor) as u8
     }
 
     fn calculate_asking_price(

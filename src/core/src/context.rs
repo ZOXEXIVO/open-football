@@ -76,6 +76,12 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    pub fn with_team_reputation(&self, team_id: u32, reputation: f32) -> Self {
+        let mut ctx = GlobalContext::clone(self);
+        ctx.team = Some(TeamContext::with_reputation(team_id, reputation));
+        ctx
+    }
+
     pub fn with_board(&self) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.board = Some(BoardContext::new());

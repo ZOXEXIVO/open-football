@@ -6,7 +6,7 @@ use chrono::NaiveDate;
 
 impl Player {
     /// Weekly happiness evaluation with 6 real-world factors
-    pub(crate) fn process_happiness(&mut self, result: &mut PlayerResult, now: NaiveDate) {
+    pub(crate) fn process_happiness(&mut self, result: &mut PlayerResult, now: NaiveDate, team_reputation: f32) {
         let age = DateUtils::age(self.birth_date, now);
         let age_sensitivity = if age >= 24 && age <= 30 { 1.3 } else { 1.0 };
 
@@ -30,7 +30,7 @@ impl Player {
         self.happiness.factors.injury_frustration = injury_factor;
 
         // 5. Ambition vs club level
-        let ambition_factor = self.calculate_ambition_fit();
+        let ambition_factor = self.calculate_ambition_fit(team_reputation);
         self.happiness.factors.ambition_fit = ambition_factor;
 
         // 6. Praise/discipline from recent events (tracked separately)
@@ -50,15 +50,32 @@ impl Player {
         self.happiness.recalculate_morale();
 
         // Salary unhappy: player wants contract renegotiation (with 90-day cooldown)
+        // After 2 failed requests (180+ days unhappy), player accepts situation
+        // and salary frustration dampens — prevents permanent unhappiness loops
         if salary_factor <= -5.0 {
-            let cooldown_passed = self.happiness.last_salary_negotiation
-                .map(|d| (now - d).num_days() >= 90)
-                .unwrap_or(true);
+            let days_since_first_request = self.happiness.last_salary_negotiation
+                .map(|d| (now - d).num_days())
+                .unwrap_or(0);
 
-            if cooldown_passed {
-                result.contract.want_improve_contract = true;
-                self.happiness.last_salary_negotiation = Some(now);
+            if days_since_first_request > 180 {
+                // Player gives up on salary demands — dampen frustration
+                self.happiness.factors.salary_satisfaction =
+                    (self.happiness.factors.salary_satisfaction * 0.5).clamp(-5.0, 0.0);
+            } else {
+                let cooldown_passed = self.happiness.last_salary_negotiation
+                    .map(|d| (now - d).num_days() >= 90)
+                    .unwrap_or(true);
+
+                if cooldown_passed {
+                    result.contract.want_improve_contract = true;
+                    if self.happiness.last_salary_negotiation.is_none() {
+                        self.happiness.last_salary_negotiation = Some(now);
+                    }
+                }
             }
+        } else {
+            // Salary is acceptable now — reset negotiation tracking
+            self.happiness.last_salary_negotiation = None;
         }
 
         // Set Unh status if morale < 35
@@ -80,6 +97,16 @@ impl Player {
         if total < 5 {
             return 0.0;
         }
+
+        // Only skilled players care strongly about playing time.
+        // Low-ability players (bench warmers) accept their role more easily.
+        let ability = self.player_attributes.current_ability as f32;
+        // ability_factor: 0.0 at ability 40, 1.0 at ability 120+
+        // Players below 40 CA don't get upset about playing time at all
+        if ability < 40.0 {
+            return 0.0;
+        }
+        let ability_factor = ((ability - 40.0) / 80.0).clamp(0.0, 1.0);
 
         let play_ratio = self.statistics.played as f32 / total as f32;
 
@@ -103,14 +130,14 @@ impl Player {
             let excess = (play_ratio - expected_ratio) / (1.0 - expected_ratio).max(0.01);
             excess * 20.0
         } else if play_ratio < unhappy_threshold {
-            // Below unhappy threshold
+            // Below unhappy threshold — scaled by ability
             let deficit = (unhappy_threshold - play_ratio) / unhappy_threshold.max(0.01);
-            -deficit * 20.0 * age_sensitivity
+            -deficit * 20.0 * age_sensitivity * ability_factor
         } else {
-            // Between unhappy and expected - mild dissatisfaction
+            // Between unhappy and expected - mild dissatisfaction, scaled by ability
             let range = expected_ratio - unhappy_threshold;
             let position = (play_ratio - unhappy_threshold) / range.max(0.01);
-            (position - 0.5) * 10.0
+            (position - 0.5) * 10.0 * ability_factor
         };
 
         factor.clamp(-20.0, 20.0)
@@ -179,15 +206,13 @@ impl Player {
         -(5.0 + severity * 5.0)
     }
 
-    fn calculate_ambition_fit(&self) -> f32 {
+    fn calculate_ambition_fit(&self, team_reputation: f32) -> f32 {
         // Compare player ambition against their club's reputation
         // High ambition (>15) at a low-rep club creates unhappiness
         let ambition = self.attributes.ambition;
 
-        // Use club reputation from latest statistics history entry
-        let club_rep = self.statistics_history.items.last()
-            .map(|h| h.team_reputation as f32)
-            .unwrap_or(0.0);
+        // Use main club reputation (overall_score 0.0-1.0, scale to 0-10000)
+        let club_rep = team_reputation * 10000.0;
 
         if ambition <= 10.0 {
             return 0.0; // Low ambition players don't care much

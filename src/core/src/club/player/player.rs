@@ -75,8 +75,9 @@ impl Player {
         self.process_match_readiness_decay();
 
         // Player happiness & morale evaluation (weekly)
+        let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
         if ctx.simulation.is_week_beginning() {
-            self.process_happiness(&mut result, now.date());
+            self.process_happiness(&mut result, now.date(), team_reputation);
             // Natural skill development (weekly)
             self.process_development(now.date());
         }

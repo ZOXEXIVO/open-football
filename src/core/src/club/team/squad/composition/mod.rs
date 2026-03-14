@@ -3,7 +3,7 @@ use crate::Team;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
-use super::{execute_moves, record_player_decisions, record_moves, MIN_FIRST_TEAM_SQUAD};
+use super::{execute_moves, record_moves, record_player_decisions, MIN_FIRST_TEAM_SQUAD};
 
 // ─── AI prompt data types ──────────────────────────────────────────
 
@@ -151,7 +151,7 @@ impl SquadComposition {
                 let type_name = match teams[idx].team_type {
                     crate::TeamType::Main => "Main",
                     crate::TeamType::B => "B Team",
-                    crate::TeamType::Reserve => "Reserve",
+                    crate::TeamType::Reserve => "U20",
                     crate::TeamType::U18 => "Under 18s",
                     crate::TeamType::U19 => "Under 19s",
                     crate::TeamType::U20 => "Under 20s",

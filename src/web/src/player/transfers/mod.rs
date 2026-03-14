@@ -37,6 +37,7 @@ pub struct PlayerTransfersTemplate {
     pub player_id: u32,
     pub transfer_status: PlayerTransferStatusDto,
     pub listing: Option<PlayerListingDto>,
+    pub interested_clubs: Vec<PlayerInterestedClubDto>,
     pub negotiations: Vec<PlayerNegotiationDto>,
     pub completed: Vec<PlayerCompletedTransferDto>,
 }
@@ -70,6 +71,11 @@ pub struct PlayerNegotiationDto {
     pub status_key: String,
     pub started_date: String,
     pub is_loan: bool,
+}
+
+pub struct PlayerInterestedClubDto {
+    pub club_name: String,
+    pub club_slug: String,
 }
 
 pub struct PlayerCompletedTransferDto {
@@ -260,6 +266,16 @@ pub async fn player_transfers_action(
         })
         .unwrap_or_default();
 
+    // Get clubs interested in this player (scouting/shortlisted)
+    let interested_clubs: Vec<PlayerInterestedClubDto> = simulator_data
+        .clubs_interested_in_player(player.id)
+        .into_iter()
+        .map(|(_club_id, club_name, team_slug)| PlayerInterestedClubDto {
+            club_name,
+            club_slug: team_slug,
+        })
+        .collect();
+
     // Get completed transfers for this player (all seasons)
     let completed: Vec<PlayerCompletedTransferDto> = country
         .map(|c| {
@@ -335,6 +351,7 @@ pub async fn player_transfers_action(
         player_id: route_params.player_id,
         transfer_status,
         listing,
+        interested_clubs,
         negotiations,
         completed,
     })

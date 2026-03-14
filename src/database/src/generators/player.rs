@@ -71,11 +71,10 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 // ── Age curve per skill (peak tier system) ──────────────────────────────
 
-/// Returns a multiplier based on the skill's peak tier and the player's age.
-/// Young players ramp up from 0.75; old players decline to 0.65.
-/// - Early-peak (18-24): acceleration, pace, agility, jumping, balance, natural_fitness
-/// - Mid-peak   (22-28): most technical + tackling/marking/heading + stamina/strength + most mental
-/// - Late-peak  (26-34): decisions, positioning, vision, leadership, composure, passing
+/// Subtle per-skill peak timing modifier within a group.
+/// The main age development is already handled by per-group age ratios in generate_skills.
+/// This only shifts individual skills slightly based on early/mid/late peak timing.
+/// Range: 0.92 to 1.05 (not a major multiplier, just fine-tuning).
 fn age_curve(skill_idx: usize, age: u32) -> f32 {
     let (peak_start, peak_end) = match skill_idx {
         // Early peak
@@ -92,16 +91,17 @@ fn age_curve(skill_idx: usize, age: u32) -> f32 {
 
     let age_f = age as f32;
     if age < peak_start {
-        // Ramp up over 6 years before peak; young players start at 0.75
+        // Slight ramp before peak: 0.92 → 1.0
         let ramp_start = peak_start.saturating_sub(6) as f32;
         let t = ((age_f - ramp_start) / (peak_start as f32 - ramp_start)).clamp(0.0, 1.0);
-        lerp(0.75, 1.0, t)
+        lerp(0.92, 1.0, t)
     } else if age <= peak_end {
-        1.0
+        // At peak: slight bonus
+        1.03
     } else {
-        // Decline: 1.0 at peak_end → 0.65 at age 40
+        // Post-peak: 1.03 → 0.92
         let t = ((age_f - peak_end as f32) / (40.0 - peak_end as f32)).clamp(0.0, 1.0);
-        lerp(1.0, 0.65, t)
+        lerp(1.03, 0.92, t)
     }
 }
 
@@ -232,19 +232,6 @@ fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
         }
     }
     w
-}
-
-// ── Age group weighting (broad category multipliers) ────────────────────
-
-/// Returns (technical_mult, mental_mult, physical_mult) based on age bracket.
-fn age_group_weights(age: u32) -> (f32, f32, f32) {
-    if age <= 21 {
-        (0.95, 0.93, 1.1)
-    } else if age <= 29 {
-        (1.0, 1.0, 1.0)
-    } else {
-        (1.0, 1.1, 0.8)
-    }
 }
 
 /// Which broad group a skill index belongs to: 0=technical, 1=mental, 2=physical
@@ -443,68 +430,122 @@ impl PlayerGenerator {
     // ── Skill generation pipeline ───────────────────────────────────────
 
     fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8) -> PlayerSkills {
-        // PA-implied skill level: what average skill should a player with this PA have at this age?
-        // Young players have CA below PA; peak-age players are near PA.
-        let age_ratio = match age {
-            0..=17 =>  0.45,
-            18..=19 => 0.55,
+        // ── PA is the anchor ───────────────────────────────────────────────
+        // PA maps to a "fully developed" skill level: what this player's average
+        // skill would be at peak. Each skill group develops differently with age:
+        //   Mental:    barely changes over career → starts near final level
+        //   Physical:  changes ~10-20% over career → starts close to final level
+        //   Technical: grows the most → young players start much lower
+
+        let pa = potential_ability as f32;
+        // Final skill level this PA implies (PA 1→1, PA 100→10.5, PA 200→20)
+        let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
+
+        // Age-dependent development ratio per skill group (how close to final level)
+        let tech_age_ratio = match age {
+            0..=17 =>  0.40,
+            18..=19 => 0.50,
             20..=22 => 0.65,
             23..=26 => 0.80,
-            27..=29 => 0.90,
+            27..=29 => 0.92,
             30..=32 => 0.95,
-            _ =>       0.88, // slight decline for 33+
+            _ =>       0.90,
         };
-        let target_ca = (potential_ability as f32 * age_ratio).clamp(1.0, 200.0);
-        // Reverse skill_to_ability: avg = (CA - 1) / 199 * 19 + 1
-        let pa_mean = (target_ca - 1.0) / 199.0 * 19.0 + 1.0;
-        let rep_mean = 5.0 + rep_factor * 13.0;
-        // Blend: PA drives 60%, team context 40% (better teams develop skills better)
-        let mean_skill = pa_mean * 0.6 + rep_mean * 0.4;
-        let max_possible = 20.0 * lerp(0.7, 1.0, rep_factor);
-        // Higher rep = wider spread between skills (more distinct profiles)
-        let noise_std = 2.0 + rep_factor * 1.0;
-        // Youth players get wider technical spread for distinct individual profiles
-        let youth_tech_noise = if age <= 18 { noise_std + 2.5 } else { noise_std };
+        let mental_age_ratio = match age {
+            0..=17 =>  0.82,
+            18..=19 => 0.85,
+            20..=22 => 0.90,
+            23..=26 => 0.95,
+            27..=29 => 0.98,
+            30..=32 => 1.0,
+            _ =>       1.0, // mental doesn't decline
+        };
+        let physical_age_ratio = match age {
+            0..=17 =>  0.70,
+            18..=19 => 0.78,
+            20..=22 => 0.88,
+            23..=26 => 0.95,
+            27..=29 => 1.0,  // physical peak
+            30..=32 => 0.93,
+            _ =>       0.82, // decline after 32
+        };
+
+        // Group means: PA-driven (85%) with small team context bonus (15%)
+        let rep_bonus = rep_factor * 1.5; // 0.0 to 1.5 extra skill points
+        let tech_mean   = pa_final * tech_age_ratio + rep_bonus;
+        let mental_mean = pa_final * mental_age_ratio + rep_bonus;
+        let phys_mean   = pa_final * physical_age_ratio + rep_bonus;
+
+        let max_possible = 20.0_f32;
         let pos_w = position_weights(position);
-        let (tech_gw, mental_gw, phys_gw) = age_group_weights(age);
+
+        // Noise per group:
+        //   Technical — widest spread (distinct skill profiles), extra for youth
+        //   Mental — narrow (personality is consistent)
+        //   Physical — moderate (cohesion applied later)
+        let base_noise = 1.5 + rep_factor * 1.0;
+        let tech_noise = if age <= 18 { base_noise + 2.0 } else { base_noise + 0.5 };
+        let mental_noise = base_noise * 0.5;
+        let phys_noise = base_noise * 0.7;
 
         let mut skills = [0.0f32; SKILL_COUNT];
 
         for i in 0..SKILL_COUNT {
-            // 1. base = mean + normal noise (wider spread for youth technical skills)
-            let effective_noise = if skill_group(i) == 0 { youth_tech_noise } else { noise_std };
-            let base = mean_skill + random_normal() * effective_noise;
-
-            // 2. group weight
-            let gw = match skill_group(i) {
-                0 => tech_gw,
-                1 => mental_gw,
-                _ => phys_gw,
+            // 1. Pick the correct group mean and noise
+            let (group_mean, noise) = match skill_group(i) {
+                0 => (tech_mean, tech_noise),
+                1 => (mental_mean, mental_noise),
+                _ => (phys_mean, phys_noise),
             };
 
-            // 3. raw = base × age_curve × position_weight × group_weight
-            let raw = base * age_curve(i, age) * pos_w[i] * gw;
+            // 2. base = group_mean + noise
+            let base = group_mean + random_normal() * noise;
 
-            // 4. clamp
+            // 3. Apply position weight (floored at 0.4 to prevent crushing)
+            let effective_pos_w = pos_w[i].max(0.4);
+
+            // 4. Apply per-skill age curve for individual peak timing
+            let raw = base * age_curve(i, age) * effective_pos_w;
+
+            // 5. Clamp
             skills[i] = raw.min(max_possible).clamp(1.0, 20.0);
         }
 
-        // 5. position-based minimums: key skills must not be 1-4
-        let key_floor = (mean_skill * 0.5).clamp(3.0, 8.0);
+        // 6. Mental cohesion: pull toward group mean (mentality is unified)
+        let m_start = 14; // SK_AGGRESSION
+        let m_end = 28;   // through SK_WORK_RATE
+        let m_count = (m_end - m_start) as f32;
+        let m_avg: f32 = skills[m_start..m_end].iter().sum::<f32>() / m_count;
+        for i in m_start..m_end {
+            skills[i] = skills[i] * 0.70 + m_avg * 0.30;
+        }
+
+        // 7. Physical cohesion: pull toward group mean (body is one unit)
+        let p_start = 28; // SK_ACCELERATION
+        let p_end = SKILL_COUNT;
+        let p_count = (p_end - p_start) as f32;
+        let p_avg: f32 = skills[p_start..p_end].iter().sum::<f32>() / p_count;
+        for i in p_start..p_end {
+            skills[i] = skills[i] * 0.65 + p_avg * 0.35;
+        }
+
+        // 8. PA-based floor: high-PA players can't have garbage skills
+        //    PA 180 → floor ~8, PA 100 → floor ~4, PA 40 → floor 3
+        let pa_floor = ((pa - 40.0) / 160.0 * 6.0 + 3.0).clamp(3.0, 10.0);
+        let key_floor = (pa_final * 0.55).clamp(pa_floor, 12.0);
         for i in 0..SKILL_COUNT {
             if pos_w[i] >= 1.0 {
                 skills[i] = skills[i].max(key_floor);
             }
-            // No professional player should have 1 in any skill
-            skills[i] = skills[i].max(2.0);
+            skills[i] = skills[i].max(pa_floor);
         }
 
-        // 6. apply affinities
+        // 9. Apply affinities
         apply_affinities(&mut skills);
 
-        // 7. final clamp
+        // 10. Final clamp
         for v in skills.iter_mut() {
-            *v = v.clamp(2.0, 20.0);
+            *v = v.clamp(3.0, 20.0);
         }
 
         skills_from_array(&skills)
@@ -649,20 +690,20 @@ impl PlayerGenerator {
 
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
         let gem_roll = rand::random::<f32>();
-        let gem_chance = 0.08 + rep_factor * 0.15; // 8-23% chance per player
+        let gem_chance = 0.05 + rep_factor * 0.10; // 5-15% chance per player
         let is_gem = gem_roll < gem_chance;
 
         if is_gem {
             // High-potential player
-            let gem_min = (100.0 + rep_factor * 40.0) as i32;
-            let gem_max = (160 + (rep_factor * 40.0) as i32).min(200);
+            let gem_min = (95.0 + rep_factor * 35.0) as i32;
+            let gem_max = (150 + (rep_factor * 40.0) as i32).min(195);
             IntegerUtils::random(gem_min, gem_max).min(200) as u8
         } else {
             // Normal player: PA based on rep with age-dependent variance
-            let base = 40.0 + rep_factor * 120.0; // rep 0.0 → 40, rep 1.0 → 160
-            let youth_bonus = if age <= 21 { 15.0 } else if age <= 25 { 8.0 } else { 0.0 };
-            let pa = base + youth_bonus + random_normal() * 15.0;
-            pa.clamp(30.0, 200.0) as u8
+            let base = 35.0 + rep_factor * 110.0; // rep 0.0 → 35, rep 1.0 → 145
+            let youth_bonus = if age <= 21 { 12.0 } else if age <= 25 { 6.0 } else { 0.0 };
+            let pa = base + youth_bonus + random_normal() * 14.0;
+            pa.clamp(30.0, 195.0) as u8
         }
     }
 

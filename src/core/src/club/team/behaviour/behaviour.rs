@@ -922,6 +922,20 @@ impl TeamBehaviour {
                 talk_candidates.push((player.id, talk_type, 90));
             }
 
+            // Proactive: coach talks to high-ability players showing early playing time
+            // frustration BEFORE they become fully unhappy — persuade them to stay patient.
+            // Only for players with developed skills (CA >= 80).
+            let ability = player.player_attributes.current_ability;
+            if ability >= 80
+                && player.happiness.factors.playing_time < -3.0
+                && !statuses.contains(&PlayerStatusType::Unh)
+                && !statuses.contains(&PlayerStatusType::Req)
+            {
+                // Higher ability = higher priority for proactive talk
+                let priority = 75 + (ability.saturating_sub(80) / 10).min(15);
+                talk_candidates.push((player.id, ManagerTalkType::PlayingTimeTalk, priority));
+            }
+
             // Medium priority: very low morale
             if player.happiness.morale < 30.0
                 && !statuses.contains(&PlayerStatusType::Unh)
@@ -1064,6 +1078,13 @@ impl TeamBehaviour {
                 continue;
             }
 
+            // Only skilled players complain about lack of playing time.
+            // Low-ability squad fillers accept their role.
+            let ability = player.player_attributes.current_ability;
+            if ability < 60 {
+                continue;
+            }
+
             // Skip players marked as NotNeeded
             if let Some(ref contract) = player.contract {
                 if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
@@ -1081,16 +1102,17 @@ impl TeamBehaviour {
 
             let days = player.player_attributes.days_since_last_match;
 
+            // Higher ability players complain sooner — they expect to play
+            let ability_modifier = (ability as f32 - 60.0) / 140.0; // 0.0 at 60, 1.0 at 200
             // Ambition modifies threshold: ambitious players complain sooner
             let ambition_modifier = 1.0 - player.attributes.ambition / 30.0;
-            let threshold = (21.0 * ambition_modifier.max(0.5)) as u16;
+            let combined_modifier = (ambition_modifier * 0.5 + (1.0 - ability_modifier) * 0.5).max(0.4);
+            let threshold = (21.0 * combined_modifier) as u16;
 
             let playing_time_factor =
                 Self::calculate_playing_time_factor_for_complaint(player);
 
             if days > threshold || playing_time_factor < -10.0 {
-                let age = DateUtils::age(player.birth_date, current_date);
-
                 let talk_type = if age < 23 {
                     ManagerTalkType::LoanRequest
                 } else {
@@ -1098,11 +1120,6 @@ impl TeamBehaviour {
                 };
 
                 candidates.push((player.id, talk_type, days));
-
-                // Add frustration event
-                if let Some(p) = players.players.iter().find(|p| p.id == player.id) {
-                    let _ = p; // We can't mutate here; the event will be applied via talk result
-                }
             }
         }
 

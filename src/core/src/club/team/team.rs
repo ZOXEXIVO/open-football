@@ -1,11 +1,11 @@
 use crate::club::team::behaviour::TeamBehaviour;
+use crate::club::team::builder::TeamBuilder;
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
 use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
-use crate::club::team::builder::TeamBuilder;
 
 #[derive(Debug, Clone)]
 pub struct Team {
@@ -35,9 +35,11 @@ impl Team {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
+        // Pass team reputation to players via context
+        let player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
         let result = TeamResult::new(
             self.id,
-            self.players.simulate(ctx.with_player(None)),
+            self.players.simulate(player_ctx.with_player(None)),
             self.staffs.simulate(ctx.with_staff(None)),
             self.behaviour
                 .simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
@@ -135,12 +137,12 @@ impl fmt::Display for TeamType {
         match self {
             TeamType::Main => write!(f, "First team"),
             TeamType::B => write!(f, "B Team"),
-            TeamType::Reserve => write!(f, "Reserve"),
-            TeamType::U18 => write!(f, "Under 18s"),
-            TeamType::U19 => write!(f, "Under 19s"),
-            TeamType::U20 => write!(f, "Under 20s"),
-            TeamType::U21 => write!(f, "Under 21s"),
-            TeamType::U23 => write!(f, "Under 23s"),
+            TeamType::Reserve => write!(f, "Reserve team"),
+            TeamType::U18 => write!(f, "U18"),
+            TeamType::U19 => write!(f, "U19"),
+            TeamType::U20 => write!(f, "U20"),
+            TeamType::U21 => write!(f, "U21"),
+            TeamType::U23 => write!(f, "U23"),
         }
     }
 }

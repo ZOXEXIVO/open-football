@@ -660,6 +660,10 @@ a:link, a:visited, a:hover, a:active {
     padding: 14px 16px;
 }
 
+.fm-pt-clubs, .fm-pt-clubs a {
+    color: #fff;
+}
+
 .fm-pt-status-grid {
     display: flex;
     flex-direction: column;
