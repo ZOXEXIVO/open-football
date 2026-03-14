@@ -6,9 +6,9 @@ use chrono::{NaiveDate, NaiveDateTime};
 impl Player {
     pub(crate) fn process_contract(&mut self, result: &mut PlayerResult, now: NaiveDateTime) {
         if let Some(ref mut contract) = self.contract {
-            const HALF_YEAR_DAYS: i64 = 30 * 6;
+            const ONE_YEAR_DAYS: i64 = 365;
 
-            if contract.days_to_expiration(now) < HALF_YEAR_DAYS {
+            if contract.days_to_expiration(now) < ONE_YEAR_DAYS {
                 result.contract.want_extend_contract = true;
             }
         } else {

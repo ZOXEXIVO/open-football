@@ -106,6 +106,14 @@ impl PlayerHappiness {
         }
     }
 
+    /// Reset happiness to neutral state (fresh start at a new club)
+    pub fn clear(&mut self) {
+        self.morale = 50.0;
+        self.factors = HappinessFactors::default();
+        self.recent_events.clear();
+        self.last_salary_negotiation = None;
+    }
+
     /// Backward compatible: morale >= 40 means happy (not visibly unhappy)
     pub fn is_happy(&self) -> bool {
         self.morale >= 40.0

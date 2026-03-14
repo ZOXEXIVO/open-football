@@ -19,6 +19,8 @@ pub enum PlayerMessageType {
 pub struct PlayerContractProposal {
     pub salary: u32,
     pub years: u8,
+    /// Staff negotiation skill (man_management, 0-20). Higher = more persuasive.
+    pub negotiation_skill: u8,
 }
 
 #[derive(Debug)]

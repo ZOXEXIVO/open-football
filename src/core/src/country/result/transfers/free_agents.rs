@@ -50,8 +50,8 @@ impl CountryResult {
                         continue;
                     }
 
-                    // Contract expiring within 6 months
-                    if days_left <= 180 {
+                    // Contract expiring within 3 months — free agent signings only when very close to expiry
+                    if days_left <= 90 {
                         // Skip if already listed or in negotiation
                         let statuses = player.statuses.get();
                         if statuses.contains(&PlayerStatusType::Lst)

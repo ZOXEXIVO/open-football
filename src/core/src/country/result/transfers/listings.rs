@@ -218,10 +218,10 @@ impl CountryResult {
             return true;
         }
 
-        // Contract expiring within 6 months — club prefers selling to losing for free
+        // Contract expiring within 12 months — club lists for sale early to get real transfer fees
         if let Some(ref contract) = player.contract {
             let days_remaining = (contract.expiration - date).num_days();
-            if days_remaining < 180 && days_remaining > 0 {
+            if days_remaining < 365 && days_remaining > 0 {
                 return true;
             }
         }
