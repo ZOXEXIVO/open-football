@@ -59,20 +59,24 @@ impl LeagueResult {
             );
         }
 
-        let home_team = data.team_mut(result.score.home_team.team_id).unwrap();
+        let home_team_id = result.score.home_team.team_id;
+        let home_team = data.team_mut(home_team_id)
+            .expect(&format!("home team not found: {}", home_team_id));
         home_team.match_history.add(MatchHistoryItem::new(
             now,
-            result.score.home_team.team_id,
+            home_team_id,
             (
                 TeamScore::from(&result.score.home_team),
                 TeamScore::from(&result.score.away_team),
             ),
         ));
 
-        let away_team = data.team_mut(result.score.away_team.team_id).unwrap();
+        let away_team_id = result.score.away_team.team_id;
+        let away_team = data.team_mut(away_team_id)
+            .expect(&format!("away team not found: {}", away_team_id));
         away_team.match_history.add(MatchHistoryItem::new(
             now,
-            result.score.away_team.team_id,
+            away_team_id,
             (
                 TeamScore::from(&result.score.away_team),
                 TeamScore::from(&result.score.home_team),
