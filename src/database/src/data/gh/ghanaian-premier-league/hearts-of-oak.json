@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700003,
-      "name": "Hearts of Oak",
-      "slug": "hearts-of-oak-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1320,
-        "national": 1320,
-        "world": 1320
-      }
-    },
-    {
       "id": 93700004,
       "name": "Hearts of Oak",
       "slug": "hearts-of-oak-u18",

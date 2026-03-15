@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300005,
-      "name": "Orlando Pirates",
-      "slug": "orlando-pirates-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1680,
-        "national": 1680,
-        "world": 1680
-      }
-    },
-    {
       "id": 93300006,
       "name": "Orlando Pirates",
       "slug": "orlando-pirates-u18",

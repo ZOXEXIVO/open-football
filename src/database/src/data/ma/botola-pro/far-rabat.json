@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100007,
-      "name": "FAR Rabat",
-      "slug": "far-rabat-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1440,
-        "national": 1440,
-        "world": 1440
-      }
-    },
-    {
       "id": 93100008,
       "name": "FAR Rabat",
       "slug": "far-rabat-u18",

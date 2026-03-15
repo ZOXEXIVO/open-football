@@ -3,8 +3,9 @@
         'fm-badge-inj': 0,
         'fm-badge-unh': 1,
         'fm-badge-lst': 2,
-        'fm-badge-loa': 3,
-        'fm-badge-yth': 4
+        'fm-badge-wnt': 3,
+        'fm-badge-loa': 4,
+        'fm-badge-yth': 5
     };
 
     function initDecks() {

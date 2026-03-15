@@ -38,6 +38,9 @@
                             {% if player.transfer_listed %}
                             <span class="fm-badge fm-badge-lst">{{ i18n.t("lst") }}</span>
                             {% endif %}
+                            {% if player.is_wanted %}
+                            <span class="fm-badge fm-badge-wnt">Wnt</span>
+                            {% endif %}
                             {% if player.loan_listed %}
                             <span class="fm-badge fm-badge-loa">Loa</span>
                             {% endif %}

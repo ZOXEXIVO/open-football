@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400035,
-      "name": "Military Production",
-      "slug": "military-production-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 93400036,
       "name": "Military Production",
       "slug": "military-production-u18",

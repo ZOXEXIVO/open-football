@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100031,
-      "name": "CRA",
-      "slug": "cra-hoceima-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1080,
-        "national": 1080,
-        "world": 1080
-      }
-    },
-    {
       "id": 93100032,
       "name": "CRA",
       "slug": "cra-hoceima-u18",

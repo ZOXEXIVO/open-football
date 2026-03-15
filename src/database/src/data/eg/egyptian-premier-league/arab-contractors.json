@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400013,
-      "name": "Arab Contractors",
-      "slug": "arab-contractors-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1320,
-        "national": 1320,
-        "world": 1320
-      }
-    },
-    {
       "id": 93400014,
       "name": "Arab Contractors",
       "slug": "arab-contractors-u18",

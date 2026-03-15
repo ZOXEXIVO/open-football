@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300003,
-      "name": "Kaizer Chiefs",
-      "slug": "kaizer-chiefs-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1680,
-        "national": 1680,
-        "world": 1680
-      }
-    },
-    {
       "id": 93300004,
       "name": "Kaizer Chiefs",
       "slug": "kaizer-chiefs-u18",

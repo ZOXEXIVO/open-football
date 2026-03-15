@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400029,
-      "name": "Masr El Makasa",
-      "slug": "masr-el-makasa-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1020,
-        "national": 1020,
-        "world": 1020
-      }
-    },
-    {
       "id": 93400030,
       "name": "Masr El Makasa",
       "slug": "masr-el-makasa-u18",

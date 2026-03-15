@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 113103742,
-      "name": "Elect Sport",
-      "slug": "elect-sport-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 450,
-        "national": 450,
-        "world": 450
-      }
-    },
-    {
       "id": 213103742,
       "name": "Elect Sport",
       "slug": "elect-sport-u18",

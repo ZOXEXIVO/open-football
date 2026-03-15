@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100029,
-      "name": "OCS",
-      "slug": "ocs-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93100030,
       "name": "OCS",
       "slug": "ocs-u18",

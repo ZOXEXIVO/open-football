@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340072,
-      "name": "JS Kabylie",
-      "slug": "js-kabylie-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1650,
-        "national": 1650,
-        "world": 1650
-      }
-    },
-    {
       "id": 205340072,
       "name": "JS Kabylie",
       "slug": "js-kabylie-u18",

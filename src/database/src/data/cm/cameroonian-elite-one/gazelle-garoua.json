@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 2100208430,
-      "name": "Gazelle Garoua",
-      "slug": "gazelle-garoua-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 750,
-        "national": 750,
-        "world": 750
-      }
-    },
-    {
       "id": 2200208430,
       "name": "Gazelle Garoua",
       "slug": "gazelle-garoua-u18",

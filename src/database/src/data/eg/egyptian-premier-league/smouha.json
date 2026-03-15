@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400009,
-      "name": "Smouha",
-      "slug": "smouha-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93400010,
       "name": "Smouha",
       "slug": "smouha-u18",

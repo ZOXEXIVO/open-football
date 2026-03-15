@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340785,
-      "name": "Unisport Bafang",
-      "slug": "unisport-bafang-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 205340785,
       "name": "Unisport Bafang",
       "slug": "unisport-bafang-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700001,
-      "name": "Asante Kotoko",
-      "slug": "asante-kotoko-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1320,
-        "national": 1320,
-        "world": 1320
-      }
-    },
-    {
       "id": 93700002,
       "name": "Asante Kotoko",
       "slug": "asante-kotoko-u18",

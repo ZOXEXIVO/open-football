@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 112015976,
-      "name": "Bandari",
-      "slug": "bandari-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 840,
-        "national": 840,
-        "world": 840
-      }
-    },
-    {
       "id": 212015976,
       "name": "Bandari",
       "slug": "bandari-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700019,
-      "name": "Bechem United",
-      "slug": "bechem-united-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 840,
-        "national": 840,
-        "world": 840
-      }
-    },
-    {
       "id": 93700020,
       "name": "Bechem United",
       "slug": "bechem-united-u18",

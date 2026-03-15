@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400033,
-      "name": "Police Union",
-      "slug": "police-union-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 93400034,
       "name": "Police Union",
       "slug": "police-union-u18",

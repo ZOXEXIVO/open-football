@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700029,
-      "name": "WAFA",
-      "slug": "wafa-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 840,
-        "national": 840,
-        "world": 840
-      }
-    },
-    {
       "id": 93700030,
       "name": "WAFA",
       "slug": "wafa-u18",

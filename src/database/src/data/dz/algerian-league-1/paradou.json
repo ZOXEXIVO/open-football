@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 108628594,
-      "name": "Paradou",
-      "slug": "paradou-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 208628594,
       "name": "Paradou",
       "slug": "paradou-u18",

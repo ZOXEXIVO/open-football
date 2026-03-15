@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 100529013,
-      "name": "MC Oran",
-      "slug": "mc-oran-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1350,
-        "national": 1350,
-        "world": 1350
-      }
-    },
-    {
       "id": 200529013,
       "name": "MC Oran",
       "slug": "mc-oran-u18",

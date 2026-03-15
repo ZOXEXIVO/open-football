@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300023,
-      "name": "Polokwane City",
-      "slug": "polokwane-city-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93300024,
       "name": "Polokwane City",
       "slug": "polokwane-city-u18",

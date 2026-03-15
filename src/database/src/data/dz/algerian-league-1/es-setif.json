@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340079,
-      "name": "ES Setif",
-      "slug": "es-setif-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1560,
-        "national": 1560,
-        "world": 1560
-      }
-    },
-    {
       "id": 205340079,
       "name": "ES Setif",
       "slug": "es-setif-u18",

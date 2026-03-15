@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300019,
-      "name": "Free State Stars",
-      "slug": "free-state-stars-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93300020,
       "name": "Free State Stars",
       "slug": "free-state-stars-u18",

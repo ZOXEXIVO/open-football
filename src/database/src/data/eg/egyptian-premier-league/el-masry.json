@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400007,
-      "name": "El Masry",
-      "slug": "el-masry-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93400008,
       "name": "El Masry",
       "slug": "el-masry-u18",

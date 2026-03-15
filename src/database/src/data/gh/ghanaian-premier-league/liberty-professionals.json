@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700015,
-      "name": "Liberty Professionals",
-      "slug": "liberty-professionals-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 93700016,
       "name": "Liberty Professionals",
       "slug": "liberty-professionals-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 108626868,
-      "name": "US Forces Armees",
-      "slug": "us-forces-armees-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 600,
-        "national": 600,
-        "world": 600
-      }
-    },
-    {
       "id": 208626868,
       "name": "US Forces Armees",
       "slug": "us-forces-armees-u18",

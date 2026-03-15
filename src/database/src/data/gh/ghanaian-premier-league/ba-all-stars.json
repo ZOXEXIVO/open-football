@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700031,
-      "name": "BA All Stars",
-      "slug": "ba-all-stars-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 720,
-        "national": 720,
-        "world": 720
-      }
-    },
-    {
       "id": 93700032,
       "name": "BA All Stars",
       "slug": "ba-all-stars-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300011,
-      "name": "Ajax Cape Town",
-      "slug": "ajax-cape-town-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93300012,
       "name": "Ajax Cape Town",
       "slug": "ajax-cape-town-u18",

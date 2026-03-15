@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 112026363,
-      "name": "Panthere du Nde",
-      "slug": "panthere-du-nde-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 750,
-        "national": 750,
-        "world": 750
-      }
-    },
-    {
       "id": 212026363,
       "name": "Panthere du Nde",
       "slug": "panthere-du-nde-u18",

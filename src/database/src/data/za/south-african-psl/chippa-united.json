@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300021,
-      "name": "Chippa United",
-      "slug": "chippa-united-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1200,
-        "national": 1200,
-        "world": 1200
-      }
-    },
-    {
       "id": 93300022,
       "name": "Chippa United",
       "slug": "chippa-united-u18",

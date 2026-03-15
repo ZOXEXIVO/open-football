@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340779,
-      "name": "Cotonsport Garoua",
-      "slug": "cotonsport-garoua-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1200,
-        "national": 1200,
-        "world": 1200
-      }
-    },
-    {
       "id": 205340779,
       "name": "Cotonsport Garoua",
       "slug": "cotonsport-garoua-u18",

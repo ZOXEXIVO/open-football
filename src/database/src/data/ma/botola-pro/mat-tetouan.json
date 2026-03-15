@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100019,
-      "name": "MAT",
-      "slug": "mat-tetouan-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1200,
-        "national": 1200,
-        "world": 1200
-      }
-    },
-    {
       "id": 93100020,
       "name": "MAT",
       "slug": "mat-tetouan-u18",

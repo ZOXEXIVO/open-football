@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700017,
-      "name": "Great Olympics",
-      "slug": "great-olympics-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 93700018,
       "name": "Great Olympics",
       "slug": "great-olympics-u18",

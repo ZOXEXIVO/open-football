@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400015,
-      "name": "Ittihad",
-      "slug": "ittihad-alexandria-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1320,
-        "national": 1320,
-        "world": 1320
-      }
-    },
-    {
       "id": 93400016,
       "name": "Ittihad",
       "slug": "ittihad-alexandria-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100005,
-      "name": "DHJ",
-      "slug": "dhj-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93100006,
       "name": "DHJ",
       "slug": "dhj-u18",

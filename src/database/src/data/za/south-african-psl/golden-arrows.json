@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300015,
-      "name": "Golden Arrows",
-      "slug": "golden-arrows-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1260,
-        "national": 1260,
-        "world": 1260
-      }
-    },
-    {
       "id": 93300016,
       "name": "Golden Arrows",
       "slug": "golden-arrows-u18",

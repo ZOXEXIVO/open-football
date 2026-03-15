@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400001,
-      "name": "Al Ahly",
-      "slug": "al-ahly-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1980,
-        "national": 1980,
-        "world": 1980
-      }
-    },
-    {
       "id": 93400002,
       "name": "Al Ahly",
       "slug": "al-ahly-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100001,
-      "name": "Raja",
-      "slug": "raja-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1740,
-        "national": 1740,
-        "world": 1740
-      }
-    },
-    {
       "id": 93100002,
       "name": "Raja",
       "slug": "raja-u18",

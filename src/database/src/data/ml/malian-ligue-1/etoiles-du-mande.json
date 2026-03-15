@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 112078407,
-      "name": "Etoiles du Mande",
-      "slug": "etoiles-du-mande-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 600,
-        "national": 600,
-        "world": 600
-      }
-    },
-    {
       "id": 212078407,
       "name": "Etoiles du Mande",
       "slug": "etoiles-du-mande-u18",

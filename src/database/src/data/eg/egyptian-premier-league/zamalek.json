@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400003,
-      "name": "Zamalek",
-      "slug": "zamalek-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1920,
-        "national": 1920,
-        "world": 1920
-      }
-    },
-    {
       "id": 93400004,
       "name": "Zamalek",
       "slug": "zamalek-u18",

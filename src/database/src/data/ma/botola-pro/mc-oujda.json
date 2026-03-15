@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100027,
-      "name": "MCO",
-      "slug": "mc-oujda-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93100028,
       "name": "MCO",
       "slug": "mc-oujda-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700011,
-      "name": "Berekum Chelsea",
-      "slug": "berekum-chelsea-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 93700012,
       "name": "Berekum Chelsea",
       "slug": "berekum-chelsea-u18",

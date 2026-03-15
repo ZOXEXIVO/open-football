@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340975,
-      "name": "CotonTchad",
-      "slug": "cotontchad-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 540,
-        "national": 540,
-        "world": 540
-      }
-    },
-    {
       "id": 205340975,
       "name": "CotonTchad",
       "slug": "cotontchad-u18",

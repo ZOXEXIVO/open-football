@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340078,
-      "name": "CR Belouizdad",
-      "slug": "cr-belouizdad-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1500,
-        "national": 1500,
-        "world": 1500
-      }
-    },
-    {
       "id": 205340078,
       "name": "CR Belouizdad",
       "slug": "cr-belouizdad-u18",

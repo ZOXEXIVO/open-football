@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 113137121,
-      "name": "Kakamega Homeboyz",
-      "slug": "kakamega-homeboyz-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 840,
-        "national": 840,
-        "world": 840
-      }
-    },
-    {
       "id": 213137121,
       "name": "Kakamega Homeboyz",
       "slug": "kakamega-homeboyz-u18",

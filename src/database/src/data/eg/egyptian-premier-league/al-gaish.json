@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400011,
-      "name": "Al Gaish",
-      "slug": "al-gaish-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93400012,
       "name": "Al Gaish",
       "slug": "al-gaish-u18",

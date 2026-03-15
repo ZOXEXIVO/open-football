@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400021,
-      "name": "Ghazl El Mahalla",
-      "slug": "ghazl-el-mahalla-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93400022,
       "name": "Ghazl El Mahalla",
       "slug": "ghazl-el-mahalla-u18",

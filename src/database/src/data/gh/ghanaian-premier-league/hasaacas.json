@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700021,
-      "name": "Hasaacas",
-      "slug": "hasaacas-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 840,
-        "national": 840,
-        "world": 840
-      }
-    },
-    {
       "id": 93700022,
       "name": "Hasaacas",
       "slug": "hasaacas-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700027,
-      "name": "Inter Allies",
-      "slug": "international-allies-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 780,
-        "national": 780,
-        "world": 780
-      }
-    },
-    {
       "id": 93700028,
       "name": "Inter Allies",
       "slug": "international-allies-u18",

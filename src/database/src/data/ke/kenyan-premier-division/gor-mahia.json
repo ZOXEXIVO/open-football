@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340913,
-      "name": "Gor Mahia",
-      "slug": "gor-mahia-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1050,
-        "national": 1050,
-        "world": 1050
-      }
-    },
-    {
       "id": 205340913,
       "name": "Gor Mahia",
       "slug": "gor-mahia-u18",

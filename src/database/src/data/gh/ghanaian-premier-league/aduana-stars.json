@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700007,
-      "name": "Aduana Stars",
-      "slug": "aduana-stars-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1020,
-        "national": 1020,
-        "world": 1020
-      }
-    },
-    {
       "id": 93700008,
       "name": "Aduana Stars",
       "slug": "aduana-stars-u18",

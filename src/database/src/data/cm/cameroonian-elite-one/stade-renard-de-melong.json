@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 113177528,
-      "name": "Stade Renard de Melong",
-      "slug": "stade-renard-de-melong-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 750,
-        "national": 750,
-        "world": 750
-      }
-    },
-    {
       "id": 213177528,
       "name": "Stade Renard de Melong",
       "slug": "stade-renard-de-melong-u18",

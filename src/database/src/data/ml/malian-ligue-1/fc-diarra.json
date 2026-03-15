@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 113194047,
-      "name": "FC Diarra",
-      "slug": "fc-diarra-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 600,
-        "national": 600,
-        "world": 600
-      }
-    },
-    {
       "id": 213194047,
       "name": "FC Diarra",
       "slug": "fc-diarra-u18",

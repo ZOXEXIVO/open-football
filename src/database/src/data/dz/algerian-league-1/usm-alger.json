@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340080,
-      "name": "USM Alger",
-      "slug": "usm-alger-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1560,
-        "national": 1560,
-        "world": 1560
-      }
-    },
-    {
       "id": 205340080,
       "name": "USM Alger",
       "slug": "usm-alger-u18",

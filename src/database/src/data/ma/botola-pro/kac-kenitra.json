@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100025,
-      "name": "KAC Kenitra",
-      "slug": "kac-kenitra-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93100026,
       "name": "KAC Kenitra",
       "slug": "kac-kenitra-u18",

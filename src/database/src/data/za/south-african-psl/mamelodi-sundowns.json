@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300001,
-      "name": "Mamelodi Sundowns",
-      "slug": "mamelodi-sundowns-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1740,
-        "national": 1740,
-        "world": 1740
-      }
-    },
-    {
       "id": 93300002,
       "name": "Mamelodi Sundowns",
       "slug": "mamelodi-sundowns-u18",

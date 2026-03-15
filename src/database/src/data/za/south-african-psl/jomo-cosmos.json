@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300027,
-      "name": "Jomo Cosmos",
-      "slug": "jomo-cosmos-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1080,
-        "national": 1080,
-        "world": 1080
-      }
-    },
-    {
       "id": 93300028,
       "name": "Jomo Cosmos",
       "slug": "jomo-cosmos-u18",

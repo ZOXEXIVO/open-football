@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105684694,
-      "name": "Victoria United",
-      "slug": "victoria-united-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 205684694,
       "name": "Victoria United",
       "slug": "victoria-united-u18",

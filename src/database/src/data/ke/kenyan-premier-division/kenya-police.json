@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 112084360,
-      "name": "Kenya Police",
-      "slug": "kenya-police-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 750,
-        "national": 750,
-        "world": 750
-      }
-    },
-    {
       "id": 212084360,
       "name": "Kenya Police",
       "slug": "kenya-police-u18",

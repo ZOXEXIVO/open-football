@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700009,
-      "name": "Medeama",
-      "slug": "medeama-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1020,
-        "national": 1020,
-        "world": 1020
-      }
-    },
-    {
       "id": 93700010,
       "name": "Medeama",
       "slug": "medeama-u18",

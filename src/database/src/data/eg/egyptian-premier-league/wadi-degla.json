@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400025,
-      "name": "Wadi Degla",
-      "slug": "wadi-degla-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1200,
-        "national": 1200,
-        "world": 1200
-      }
-    },
-    {
       "id": 93400026,
       "name": "Wadi Degla",
       "slug": "wadi-degla-u18",

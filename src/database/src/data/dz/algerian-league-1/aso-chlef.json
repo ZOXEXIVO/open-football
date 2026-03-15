@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 107600575,
-      "name": "ASO Chlef",
-      "slug": "aso-chlef-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1050,
-        "national": 1050,
-        "world": 1050
-      }
-    },
-    {
       "id": 207600575,
       "name": "ASO Chlef",
       "slug": "aso-chlef-u18",

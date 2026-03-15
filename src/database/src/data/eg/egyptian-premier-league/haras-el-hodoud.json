@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400023,
-      "name": "Haras El Hodoud",
-      "slug": "haras-el-hodoud-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1140,
-        "national": 1140,
-        "world": 1140
-      }
-    },
-    {
       "id": 93400024,
       "name": "Haras El Hodoud",
       "slug": "haras-el-hodoud-u18",

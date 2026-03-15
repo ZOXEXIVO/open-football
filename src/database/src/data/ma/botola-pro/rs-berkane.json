@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100015,
-      "name": "RS Berkane",
-      "slug": "rs-berkane-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1380,
-        "national": 1380,
-        "world": 1380
-      }
-    },
-    {
       "id": 93100016,
       "name": "RS Berkane",
       "slug": "rs-berkane-u18",

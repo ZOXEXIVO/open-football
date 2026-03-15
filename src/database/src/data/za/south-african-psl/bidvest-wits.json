@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300009,
-      "name": "Bidvest Wits",
-      "slug": "bidvest-wits-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1440,
-        "national": 1440,
-        "world": 1440
-      }
-    },
-    {
       "id": 93300010,
       "name": "Bidvest Wits",
       "slug": "bidvest-wits-u18",

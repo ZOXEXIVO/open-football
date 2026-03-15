@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 2100422211,
-      "name": "AS Etat Major",
-      "slug": "as-etat-major-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 360,
-        "national": 360,
-        "world": 360
-      }
-    },
-    {
       "id": 2200422211,
       "name": "AS Etat Major",
       "slug": "as-etat-major-u18",

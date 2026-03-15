@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400005,
-      "name": "Ismaily",
-      "slug": "ismaily-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1500,
-        "national": 1500,
-        "world": 1500
-      }
-    },
-    {
       "id": 93400006,
       "name": "Ismaily",
       "slug": "ismaily-u18",

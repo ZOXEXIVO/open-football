@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300031,
-      "name": "Black Aces",
-      "slug": "black-aces-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1020,
-        "national": 1020,
-        "world": 1020
-      }
-    },
-    {
       "id": 93300032,
       "name": "Black Aces",
       "slug": "black-aces-u18",

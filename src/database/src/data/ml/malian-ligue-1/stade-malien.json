@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 100131266,
-      "name": "Stade Malien",
-      "slug": "stade-malien-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 200131266,
       "name": "Stade Malien",
       "slug": "stade-malien-u18",

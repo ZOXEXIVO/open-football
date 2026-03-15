@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105341651,
-      "name": "Djoliba",
-      "slug": "djoliba-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 205341651,
       "name": "Djoliba",
       "slug": "djoliba-u18",

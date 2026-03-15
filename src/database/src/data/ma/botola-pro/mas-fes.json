@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93100021,
-      "name": "MAS Fes",
-      "slug": "mas-fes-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1200,
-        "national": 1200,
-        "world": 1200
-      }
-    },
-    {
       "id": 93100022,
       "name": "MAS Fes",
       "slug": "mas-fes-u18",

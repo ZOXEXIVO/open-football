@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 112012364,
-      "name": "AS Korofina",
-      "slug": "as-korofina-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 600,
-        "national": 600,
-        "world": 600
-      }
-    },
-    {
       "id": 212012364,
       "name": "AS Korofina",
       "slug": "as-korofina-u18",

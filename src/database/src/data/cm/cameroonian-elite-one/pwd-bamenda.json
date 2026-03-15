@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 100000395,
-      "name": "PWD Bamenda",
-      "slug": "pwd-bamenda-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 200000395,
       "name": "PWD Bamenda",
       "slug": "pwd-bamenda-u18",

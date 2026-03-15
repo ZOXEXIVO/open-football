@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93400027,
-      "name": "Aswan",
-      "slug": "aswan-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1080,
-        "national": 1080,
-        "world": 1080
-      }
-    },
-    {
       "id": 93400028,
       "name": "Aswan",
       "slug": "aswan-u18",

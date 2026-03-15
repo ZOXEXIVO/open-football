@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93300029,
-      "name": "University of Pretoria",
-      "slug": "university-of-pretoria-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 1020,
-        "national": 1020,
-        "world": 1020
-      }
-    },
-    {
       "id": 93300030,
       "name": "University of Pretoria",
       "slug": "university-of-pretoria-u18",

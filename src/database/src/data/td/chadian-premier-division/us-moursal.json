@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 2100510597,
-      "name": "US Moursal",
-      "slug": "us-moursal-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 360,
-        "national": 360,
-        "world": 360
-      }
-    },
-    {
       "id": 2200510597,
       "name": "US Moursal",
       "slug": "us-moursal-u18",

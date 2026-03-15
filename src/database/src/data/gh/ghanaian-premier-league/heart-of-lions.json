@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700023,
-      "name": "Heart of Lions",
-      "slug": "heart-of-lions-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 780,
-        "national": 780,
-        "world": 780
-      }
-    },
-    {
       "id": 93700024,
       "name": "Heart of Lions",
       "slug": "heart-of-lions-u18",

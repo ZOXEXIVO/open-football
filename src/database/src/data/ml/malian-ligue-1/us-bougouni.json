@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 113134414,
-      "name": "US Bougouni",
-      "slug": "us-bougouni-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 600,
-        "national": 600,
-        "world": 600
-      }
-    },
-    {
       "id": 213134414,
       "name": "US Bougouni",
       "slug": "us-bougouni-u18",

@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340906,
-      "name": "AFC Leopards",
-      "slug": "afc-leopards-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 960,
-        "national": 960,
-        "world": 960
-      }
-    },
-    {
       "id": 205340906,
       "name": "AFC Leopards",
       "slug": "afc-leopards-u18",

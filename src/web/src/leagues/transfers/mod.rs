@@ -40,7 +40,7 @@ pub struct LeagueTransfersTemplate {
     pub completed_transfers: Vec<CompletedTransferItem>,
     pub has_permanent_transfers: bool,
     pub has_loan_transfers: bool,
-    pub current_listings: Vec<ListingItem>,
+
     pub active_negotiations: Vec<NegotiationItem>,
     pub seasons: Vec<SeasonOption>,
 }
@@ -63,15 +63,6 @@ pub struct CompletedTransferItem {
     pub date: String,
 }
 
-#[allow(dead_code)]
-pub struct ListingItem {
-    pub player_id: u32,
-    pub player_name: String,
-    pub team_name: String,
-    pub team_slug: String,
-    pub asking_price: String,
-    pub status: String,
-}
 
 pub struct NegotiationItem {
     pub player_id: u32,
@@ -222,44 +213,6 @@ pub async fn league_transfers_action(
         })
         .collect();
 
-    // Collect player IDs that have active negotiations
-    let negotiating_player_ids: Vec<u32> = active_negotiations
-        .iter()
-        .map(|n| n.player_id)
-        .collect();
-
-    // Current listings from league clubs, excluding completed/cancelled and those in active negotiations
-    let current_listings: Vec<ListingItem> = country
-        .transfer_market
-        .listings
-        .iter()
-        .filter(|l| l.status == core::transfers::TransferListingStatus::Available
-            || l.status == core::transfers::TransferListingStatus::InNegotiation)
-        .filter(|l| league_club_ids.contains(&l.club_id))
-        .filter(|l| !negotiating_player_ids.contains(&l.player_id))
-        .filter_map(|l| {
-            let club = country.clubs.iter().find(|c| c.id == l.club_id)?;
-            let player = club
-                .teams
-                .teams
-                .iter()
-                .flat_map(|t| &t.players.players)
-                .find(|p| p.id == l.player_id)?;
-
-            let team_slug = club.teams.teams.first()
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
-            Some(ListingItem {
-                player_id: player.id,
-                player_name: player.full_name.to_string(),
-                team_name: club.name.clone(),
-                team_slug,
-                asking_price: FormattingUtils::format_money(l.asking_price.amount),
-                status: format!("{:?}", l.status),
-            })
-        })
-        .collect();
-
     Ok(LeagueTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: format!("{} - Transfers", league.name),
@@ -282,7 +235,7 @@ pub async fn league_transfers_action(
         has_permanent_transfers: completed_transfers.iter().any(|t| !t.is_loan),
         has_loan_transfers: completed_transfers.iter().any(|t| t.is_loan),
         completed_transfers,
-        current_listings,
+
         active_negotiations,
         seasons,
         lang: route_params.lang,

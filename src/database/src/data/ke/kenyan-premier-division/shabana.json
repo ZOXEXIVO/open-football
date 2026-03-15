@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 105340908,
-      "name": "Shabana",
-      "slug": "shabana-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 750,
-        "national": 750,
-        "world": 750
-      }
-    },
-    {
       "id": 205340908,
       "name": "Shabana",
       "slug": "shabana-u18",

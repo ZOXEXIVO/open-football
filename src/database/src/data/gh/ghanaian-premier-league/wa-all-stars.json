@@ -20,17 +20,6 @@
       }
     },
     {
-      "id": 93700013,
-      "name": "Wa All Stars",
-      "slug": "wa-all-stars-u20",
-      "team_type": "U20",
-      "reputation": {
-        "home": 900,
-        "national": 900,
-        "world": 900
-      }
-    },
-    {
       "id": 93700014,
       "name": "Wa All Stars",
       "slug": "wa-all-stars-u18",
