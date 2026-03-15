@@ -1,0 +1,27 @@
+{
+  "id": 2000431962,
+  "name": "Uni-X Labs",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 2000431962,
+      "name": "Uni-X Labs",
+      "slug": "uni-x-labs",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 13172357,
+  "name": "Colombe du Dja et Lobo",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 13172357,
+      "name": "Colombe du Dja et Lobo",
+      "slug": "colombe-du-dja-et-lobo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 5341652,
+  "name": "Real Bamako",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 5341652,
+      "name": "Real Bamako",
+      "slug": "real-bamako",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

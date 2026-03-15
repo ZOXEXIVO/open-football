@@ -1,0 +1,27 @@
+{
+  "id": 1957,
+  "name": "Vojvodina",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 5000000
+  },
+  "teams": [
+    {
+      "id": 1957,
+      "name": "Vojvodina",
+      "slug": "vojvodina",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

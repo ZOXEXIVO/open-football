@@ -1,0 +1,27 @@
+{
+  "id": 5340073,
+  "name": "MC Alger",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 6000000
+  },
+  "teams": [
+    {
+      "id": 5340073,
+      "name": "MC Alger",
+      "slug": "mc-alger",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5500,
+        "national": 5500,
+        "world": 5500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#cc0000"
+  }
+}

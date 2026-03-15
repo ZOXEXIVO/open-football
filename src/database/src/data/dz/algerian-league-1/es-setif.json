@@ -1,0 +1,27 @@
+{
+  "id": 5340079,
+  "name": "ES Setif",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 5000000
+  },
+  "teams": [
+    {
+      "id": 5340079,
+      "name": "ES Setif",
+      "slug": "es-setif",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

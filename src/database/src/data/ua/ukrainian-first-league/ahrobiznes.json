@@ -1,0 +1,27 @@
+{
+  "id": 71100093,
+  "name": "Ahrobiznes",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 71100093,
+      "name": "Ahrobiznes",
+      "slug": "ahrobiznes",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

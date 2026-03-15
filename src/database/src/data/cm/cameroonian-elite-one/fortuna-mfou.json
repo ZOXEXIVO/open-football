@@ -1,0 +1,27 @@
+{
+  "id": 12028915,
+  "name": "Fortuna Mfou",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 12028915,
+      "name": "Fortuna Mfou",
+      "slug": "fortuna-mfou",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

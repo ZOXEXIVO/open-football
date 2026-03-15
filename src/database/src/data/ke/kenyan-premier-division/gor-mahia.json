@@ -1,0 +1,27 @@
+{
+  "id": 5340913,
+  "name": "Gor Mahia",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 5340913,
+      "name": "Gor Mahia",
+      "slug": "gor-mahia",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

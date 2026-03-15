@@ -1,0 +1,27 @@
+{
+  "id": 5622746,
+  "name": "Persita",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 5622746,
+      "name": "Persita",
+      "slug": "persita",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#800080",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 12031159,
+  "name": "USM Khenchela",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 12031159,
+      "name": "USM Khenchela",
+      "slug": "usm-khenchela",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

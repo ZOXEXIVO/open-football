@@ -1,0 +1,27 @@
+{
+  "id": 529013,
+  "name": "MC Oran",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 529013,
+      "name": "MC Oran",
+      "slug": "mc-oran",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4500,
+        "national": 4500,
+        "world": 4500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 751587,
+  "name": "Mathare United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 751587,
+      "name": "Mathare United",
+      "slug": "mathare-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006633"
+  }
+}

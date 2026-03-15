@@ -1,0 +1,27 @@
+{
+  "id": 41051597,
+  "name": "Madura United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2500000
+  },
+  "teams": [
+    {
+      "id": 41051597,
+      "name": "Madura United",
+      "slug": "madura-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

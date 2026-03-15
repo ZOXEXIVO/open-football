@@ -1,0 +1,27 @@
+{
+  "id": 2000354849,
+  "name": "Nairobi United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 300000
+  },
+  "teams": [
+    {
+      "id": 2000354849,
+      "name": "Nairobi United",
+      "slug": "nairobi-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

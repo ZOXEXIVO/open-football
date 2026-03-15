@@ -1,0 +1,23 @@
+{
+  "id": 7483354,
+  "slug": "belarusian-highest-league",
+  "name": "Highest League",
+  "reputation": 3800,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 3,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 10,
+      "from_month": 7,
+      "to_day": 25,
+      "to_month": 11
+    }
+  }
+}

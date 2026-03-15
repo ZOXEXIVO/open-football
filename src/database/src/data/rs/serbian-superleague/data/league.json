@@ -1,0 +1,23 @@
+{
+  "id": 132321,
+  "slug": "serbian-superleague",
+  "name": "SuperLeague",
+  "reputation": 5000,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 20,
+      "from_month": 7,
+      "to_day": 10,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 2,
+      "to_day": 25,
+      "to_month": 5
+    }
+  }
+}

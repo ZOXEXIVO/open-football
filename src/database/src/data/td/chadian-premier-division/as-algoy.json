@@ -1,0 +1,27 @@
+{
+  "id": 2000429313,
+  "name": "AS Algoy",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 200000
+  },
+  "teams": [
+    {
+      "id": 2000429313,
+      "name": "AS Algoy",
+      "slug": "as-algoy",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

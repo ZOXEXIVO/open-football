@@ -1,0 +1,27 @@
+{
+  "id": 130879,
+  "name": "Slavia Mozyr",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 130879,
+      "name": "Slavia Mozyr",
+      "slug": "slavia-mozyr",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

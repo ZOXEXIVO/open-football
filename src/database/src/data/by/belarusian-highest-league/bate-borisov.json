@@ -1,0 +1,27 @@
+{
+  "id": 130875,
+  "name": "BATE Borisov",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 8000000
+  },
+  "teams": [
+    {
+      "id": 130875,
+      "name": "BATE Borisov",
+      "slug": "bate-borisov",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5500,
+        "national": 5500,
+        "world": 5500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

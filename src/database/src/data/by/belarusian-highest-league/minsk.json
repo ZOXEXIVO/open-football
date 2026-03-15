@@ -1,0 +1,27 @@
+{
+  "id": 17000059,
+  "name": "Minsk",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2500000
+  },
+  "teams": [
+    {
+      "id": 17000059,
+      "name": "Minsk",
+      "slug": "minsk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

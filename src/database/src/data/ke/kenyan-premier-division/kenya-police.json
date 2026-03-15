@@ -1,0 +1,27 @@
+{
+  "id": 12084360,
+  "name": "Kenya Police",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 400000
+  },
+  "teams": [
+    {
+      "id": 12084360,
+      "name": "Kenya Police",
+      "slug": "kenya-police",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

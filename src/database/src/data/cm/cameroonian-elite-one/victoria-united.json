@@ -1,0 +1,27 @@
+{
+  "id": 5684694,
+  "name": "Victoria United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 800000
+  },
+  "teams": [
+    {
+      "id": 5684694,
+      "name": "Victoria United",
+      "slug": "victoria-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

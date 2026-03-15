@@ -1,0 +1,27 @@
+{
+  "id": 135534,
+  "name": "Semen Padang",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 135534,
+      "name": "Semen Padang",
+      "slug": "semen-padang",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

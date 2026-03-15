@@ -1,0 +1,27 @@
+{
+  "id": 351,
+  "name": "Lokomotiv Plovdiv",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 351,
+      "name": "Lokomotiv Plovdiv",
+      "slug": "lokomotiv-plovdiv",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4500,
+        "national": 4500,
+        "world": 4500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#cc0000"
+  }
+}

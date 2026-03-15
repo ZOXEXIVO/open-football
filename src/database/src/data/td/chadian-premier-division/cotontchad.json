@@ -1,0 +1,27 @@
+{
+  "id": 5340975,
+  "name": "CotonTchad",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 5340975,
+      "name": "CotonTchad",
+      "slug": "cotontchad",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

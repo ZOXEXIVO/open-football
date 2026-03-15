@@ -1,0 +1,27 @@
+{
+  "id": 5340908,
+  "name": "Shabana",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 400000
+  },
+  "teams": [
+    {
+      "id": 5340908,
+      "name": "Shabana",
+      "slug": "shabana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

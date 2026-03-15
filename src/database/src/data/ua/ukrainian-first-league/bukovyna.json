@@ -1,0 +1,27 @@
+{
+  "id": 484458,
+  "name": "Bukovyna",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 484458,
+      "name": "Bukovyna",
+      "slug": "bukovyna",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

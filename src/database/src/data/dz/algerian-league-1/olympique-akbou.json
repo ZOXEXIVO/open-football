@@ -1,0 +1,27 @@
+{
+  "id": 2000353406,
+  "name": "Olympique Akbou",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 2000353406,
+      "name": "Olympique Akbou",
+      "slug": "olympique-akbou",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

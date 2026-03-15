@@ -1,0 +1,27 @@
+{
+  "id": 349,
+  "name": "Levski",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 8000000
+  },
+  "teams": [
+    {
+      "id": 349,
+      "name": "Levski",
+      "slug": "levski",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5500,
+        "national": 5500,
+        "world": 5500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 13104763,
+  "name": "Bidco United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 400000
+  },
+  "teams": [
+    {
+      "id": 13104763,
+      "name": "Bidco United",
+      "slug": "bidco-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006633"
+  }
+}

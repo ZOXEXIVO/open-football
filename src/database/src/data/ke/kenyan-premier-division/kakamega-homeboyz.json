@@ -1,0 +1,27 @@
+{
+  "id": 13137121,
+  "name": "Kakamega Homeboyz",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 13137121,
+      "name": "Kakamega Homeboyz",
+      "slug": "kakamega-homeboyz",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

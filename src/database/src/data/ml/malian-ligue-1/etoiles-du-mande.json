@@ -1,0 +1,27 @@
+{
+  "id": 12078407,
+  "name": "Etoiles du Mande",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 300000
+  },
+  "teams": [
+    {
+      "id": 12078407,
+      "name": "Etoiles du Mande",
+      "slug": "etoiles-du-mande",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006633"
+  }
+}

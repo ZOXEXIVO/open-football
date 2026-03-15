@@ -1,0 +1,27 @@
+{
+  "id": 12031147,
+  "name": "JS Saoura",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 12031147,
+      "name": "JS Saoura",
+      "slug": "js-saoura",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#cc0000"
+  }
+}

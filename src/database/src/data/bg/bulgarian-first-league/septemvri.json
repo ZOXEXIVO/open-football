@@ -1,0 +1,27 @@
+{
+  "id": 116384,
+  "name": "Septemvri",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 116384,
+      "name": "Septemvri",
+      "slug": "septemvri",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#000000"
+  }
+}

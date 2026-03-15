@@ -1,0 +1,27 @@
+{
+  "id": 8628594,
+  "name": "Paradou",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 8628594,
+      "name": "Paradou",
+      "slug": "paradou",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

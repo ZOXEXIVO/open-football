@@ -1,0 +1,27 @@
+{
+  "id": 1300134,
+  "name": "Naftan",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2500000
+  },
+  "teams": [
+    {
+      "id": 1300134,
+      "name": "Naftan",
+      "slug": "naftan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3300,
+        "national": 3300,
+        "world": 3300
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

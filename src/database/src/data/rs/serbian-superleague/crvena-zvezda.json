@@ -1,0 +1,27 @@
+{
+  "id": 1955,
+  "name": "Crvena Zvezda",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 25000000
+  },
+  "teams": [
+    {
+      "id": 1955,
+      "name": "Crvena Zvezda",
+      "slug": "crvena-zvezda",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7500,
+        "national": 7500,
+        "world": 7500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 5622879,
+  "name": "Persik",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 5622879,
+      "name": "Persik",
+      "slug": "persik",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#800080",
+    "foreground": "#ffffff"
+  }
+}

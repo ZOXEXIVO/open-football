@@ -1,0 +1,27 @@
+{
+  "id": 1952,
+  "name": "Partizan",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 20000000
+  },
+  "teams": [
+    {
+      "id": 1952,
+      "name": "Partizan",
+      "slug": "partizan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

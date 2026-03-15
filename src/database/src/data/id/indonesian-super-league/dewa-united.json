@@ -1,0 +1,27 @@
+{
+  "id": 2000090667,
+  "name": "Dewa United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 2000090667,
+      "name": "Dewa United",
+      "slug": "dewa-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffd700"
+  }
+}

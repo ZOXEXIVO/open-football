@@ -1,0 +1,27 @@
+{
+  "id": 17041311,
+  "name": "Dnepr Mogilev",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 800000
+  },
+  "teams": [
+    {
+      "id": 17041311,
+      "name": "Dnepr Mogilev",
+      "slug": "dnepr-mogilev",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

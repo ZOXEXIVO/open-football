@@ -1,0 +1,27 @@
+{
+  "id": 6400020,
+  "name": "Novi Pazar",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 6400020,
+      "name": "Novi Pazar",
+      "slug": "novi-pazar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

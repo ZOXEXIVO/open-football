@@ -1,0 +1,27 @@
+{
+  "id": 22019542,
+  "name": "Dobrudzha 1919",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 22019542,
+      "name": "Dobrudzha 1919",
+      "slug": "dobrudzha-1919",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

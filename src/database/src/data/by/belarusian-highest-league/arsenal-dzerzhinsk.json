@@ -1,0 +1,27 @@
+{
+  "id": 17040498,
+  "name": "Arsenal Dzerzhinsk",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 17040498,
+      "name": "Arsenal Dzerzhinsk",
+      "slug": "arsenal-dzerzhinsk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

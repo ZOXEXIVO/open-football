@@ -1,0 +1,23 @@
+{
+  "id": 12015290,
+  "slug": "algerian-league-1",
+  "name": "League 1",
+  "reputation": 4000,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 9,
+      "to_day": 20,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 1,
+      "to_day": 30,
+      "to_month": 6
+    }
+  }
+}

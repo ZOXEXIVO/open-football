@@ -1,0 +1,27 @@
+{
+  "id": 393,
+  "name": "Canon Yaounde",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 393,
+      "name": "Canon Yaounde",
+      "slug": "canon-yaounde",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

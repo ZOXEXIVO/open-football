@@ -1,0 +1,27 @@
+{
+  "id": 485671,
+  "name": "Volna Pinsk",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 600000
+  },
+  "teams": [
+    {
+      "id": 485671,
+      "name": "Volna Pinsk",
+      "slug": "volna-pinsk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

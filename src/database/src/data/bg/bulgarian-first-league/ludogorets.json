@@ -1,0 +1,27 @@
+{
+  "id": 22003969,
+  "name": "Ludogorets",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 15000000
+  },
+  "teams": [
+    {
+      "id": 22003969,
+      "name": "Ludogorets",
+      "slug": "ludogorets",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6500,
+        "national": 6500,
+        "world": 6500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

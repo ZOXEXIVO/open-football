@@ -1,0 +1,27 @@
+{
+  "id": 12078985,
+  "name": "Afrique Foot Elite",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 300000
+  },
+  "teams": [
+    {
+      "id": 12078985,
+      "name": "Afrique Foot Elite",
+      "slug": "afrique-foot-elite",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

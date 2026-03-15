@@ -1,0 +1,27 @@
+{
+  "id": 1951,
+  "name": "OFK Beograd",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 2500000
+  },
+  "teams": [
+    {
+      "id": 1951,
+      "name": "OFK Beograd",
+      "slug": "ofk-beograd",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 5340915,
+  "name": "Ulinzi Stars",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 500000
+  },
+  "teams": [
+    {
+      "id": 5340915,
+      "name": "Ulinzi Stars",
+      "slug": "ulinzi-stars",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 12075828,
+  "name": "Binga",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 300000
+  },
+  "teams": [
+    {
+      "id": 12075828,
+      "name": "Binga",
+      "slug": "binga",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 7742801,
+  "name": "Bali United",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 7742801,
+      "name": "Bali United",
+      "slug": "bali-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 12012364,
+  "name": "AS Korofina",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 300000
+  },
+  "teams": [
+    {
+      "id": 12012364,
+      "name": "AS Korofina",
+      "slug": "as-korofina",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

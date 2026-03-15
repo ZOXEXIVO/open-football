@@ -1,0 +1,27 @@
+{
+  "id": 22070174,
+  "name": "CSKA 1948",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 22070174,
+      "name": "CSKA 1948",
+      "slug": "cska-1948",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

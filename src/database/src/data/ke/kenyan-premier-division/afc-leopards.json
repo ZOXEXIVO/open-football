@@ -1,0 +1,27 @@
+{
+  "id": 5340906,
+  "name": "AFC Leopards",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 5340906,
+      "name": "AFC Leopards",
+      "slug": "afc-leopards",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

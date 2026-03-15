@@ -1,0 +1,27 @@
+{
+  "id": 2000422212,
+  "name": "Stars Jeunes Talents",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 200000
+  },
+  "teams": [
+    {
+      "id": 2000422212,
+      "name": "Stars Jeunes Talents",
+      "slug": "stars-jeunes-talents",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 1301293,
+  "name": "Vorskla",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 1301293,
+      "name": "Vorskla",
+      "slug": "vorskla",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4500,
+        "national": 4500,
+        "world": 4500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

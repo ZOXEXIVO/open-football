@@ -1,0 +1,27 @@
+{
+  "id": 71100095,
+  "name": "Nyva Ternopil",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 800000
+  },
+  "teams": [
+    {
+      "id": 71100095,
+      "name": "Nyva Ternopil",
+      "slug": "nyva-ternopil",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "id": 341,
+  "name": "Beroe",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 341,
+      "name": "Beroe",
+      "slug": "beroe",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006633",
+    "foreground": "#ffffff"
+  }
+}

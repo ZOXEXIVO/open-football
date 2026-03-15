@@ -1,0 +1,27 @@
+{
+  "id": 5622736,
+  "name": "Arema",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 5622736,
+      "name": "Arema",
+      "slug": "arema",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

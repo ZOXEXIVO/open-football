@@ -1,0 +1,27 @@
+{
+  "id": 131266,
+  "name": "Stade Malien",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 131266,
+      "name": "Stade Malien",
+      "slug": "stade-malien",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#cc0000"
+  }
+}

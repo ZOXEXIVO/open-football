@@ -1,0 +1,27 @@
+{
+  "id": 5341651,
+  "name": "Djoliba",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 5341651,
+      "name": "Djoliba",
+      "slug": "djoliba",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

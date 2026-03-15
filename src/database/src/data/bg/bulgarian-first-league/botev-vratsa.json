@@ -1,0 +1,27 @@
+{
+  "id": 22003932,
+  "name": "Botev Vratsa",
+  "location": {
+    "city_id": 0
+  },
+  "finance": {
+    "balance": 1500000
+  },
+  "teams": [
+    {
+      "id": 22003932,
+      "name": "Botev Vratsa",
+      "slug": "botev-vratsa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3500,
+        "national": 3500,
+        "world": 3500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006633"
+  }
+}

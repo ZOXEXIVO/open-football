@@ -1,0 +1,23 @@
+{
+  "id": 5314302,
+  "slug": "ukrainian-first-league",
+  "name": "First League",
+  "reputation": 3500,
+  "tier": 2,
+  "promotion_spots": 2,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 26,
+      "from_month": 7,
+      "to_day": 12,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 2,
+      "to_day": 25,
+      "to_month": 5
+    }
+  }
+}
