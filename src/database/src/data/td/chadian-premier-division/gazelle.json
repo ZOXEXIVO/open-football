@@ -18,6 +18,28 @@
         "national": 1800,
         "world": 1800
       }
+    },
+    {
+      "id": 105341568,
+      "name": "Gazelle",
+      "slug": "gazelle-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 540,
+        "national": 540,
+        "world": 540
+      }
+    },
+    {
+      "id": 205341568,
+      "name": "Gazelle",
+      "slug": "gazelle-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 360,
+        "national": 360,
+        "world": 360
+      }
     }
   ],
   "colors": {

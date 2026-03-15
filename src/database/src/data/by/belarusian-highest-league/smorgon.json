@@ -18,6 +18,28 @@
         "national": 3000,
         "world": 3000
       }
+    },
+    {
+      "id": 100485674,
+      "name": "Smorgon",
+      "slug": "smorgon-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 200485674,
+      "name": "Smorgon",
+      "slug": "smorgon-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
     }
   ],
   "colors": {

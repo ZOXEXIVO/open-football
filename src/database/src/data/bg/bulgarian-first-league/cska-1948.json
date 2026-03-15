@@ -18,6 +18,28 @@
         "national": 4000,
         "world": 4000
       }
+    },
+    {
+      "id": 122070174,
+      "name": "CSKA 1948",
+      "slug": "cska-1948-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 222070174,
+      "name": "CSKA 1948",
+      "slug": "cska-1948-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
     }
   ],
   "colors": {

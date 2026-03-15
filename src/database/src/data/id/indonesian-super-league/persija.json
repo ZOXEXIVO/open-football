@@ -18,6 +18,28 @@
         "national": 4800,
         "world": 4800
       }
+    },
+    {
+      "id": 100116144,
+      "name": "Persija",
+      "slug": "persija-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 200116144,
+      "name": "Persija",
+      "slug": "persija-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
     }
   ],
   "colors": {

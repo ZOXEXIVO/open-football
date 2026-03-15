@@ -18,6 +18,28 @@
         "national": 1500,
         "world": 1500
       }
+    },
+    {
+      "id": 2100431962,
+      "name": "Uni-X Labs",
+      "slug": "uni-x-labs-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 450,
+        "national": 450,
+        "world": 450
+      }
+    },
+    {
+      "id": 2200431962,
+      "name": "Uni-X Labs",
+      "slug": "uni-x-labs-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 300,
+        "national": 300,
+        "world": 300
+      }
     }
   ],
   "colors": {

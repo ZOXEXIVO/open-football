@@ -18,6 +18,28 @@
         "national": 3300,
         "world": 3300
       }
+    },
+    {
+      "id": 101300134,
+      "name": "Naftan",
+      "slug": "naftan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 990,
+        "national": 990,
+        "world": 990
+      }
+    },
+    {
+      "id": 201300134,
+      "name": "Naftan",
+      "slug": "naftan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 660,
+        "national": 660,
+        "world": 660
+      }
     }
   ],
   "colors": {

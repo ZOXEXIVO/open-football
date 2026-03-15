@@ -18,6 +18,28 @@
         "national": 3200,
         "world": 3200
       }
+    },
+    {
+      "id": 100130879,
+      "name": "Slavia Mozyr",
+      "slug": "slavia-mozyr-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 200130879,
+      "name": "Slavia Mozyr",
+      "slug": "slavia-mozyr-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
     }
   ],
   "colors": {

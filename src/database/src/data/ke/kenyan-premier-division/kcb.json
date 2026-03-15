@@ -18,6 +18,28 @@
         "national": 3000,
         "world": 3000
       }
+    },
+    {
+      "id": 105340905,
+      "name": "KCB",
+      "slug": "kcb-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 205340905,
+      "name": "KCB",
+      "slug": "kcb-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
     }
   ],
   "colors": {

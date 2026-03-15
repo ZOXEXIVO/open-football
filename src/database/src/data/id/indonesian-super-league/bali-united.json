@@ -18,6 +18,28 @@
         "national": 4200,
         "world": 4200
       }
+    },
+    {
+      "id": 107742801,
+      "name": "Bali United",
+      "slug": "bali-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 207742801,
+      "name": "Bali United",
+      "slug": "bali-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
     }
   ],
   "colors": {

@@ -18,6 +18,28 @@
         "national": 1200,
         "world": 1200
       }
+    },
+    {
+      "id": 113103748,
+      "name": "AS DGSSIE",
+      "slug": "as-dgssie-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 360,
+        "national": 360,
+        "world": 360
+      }
+    },
+    {
+      "id": 213103748,
+      "name": "AS DGSSIE",
+      "slug": "as-dgssie-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 240,
+        "national": 240,
+        "world": 240
+      }
     }
   ],
   "colors": {

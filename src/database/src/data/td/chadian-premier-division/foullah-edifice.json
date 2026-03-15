@@ -18,6 +18,28 @@
         "national": 1500,
         "world": 1500
       }
+    },
+    {
+      "id": 113103749,
+      "name": "Foullah Edifice",
+      "slug": "foullah-edifice-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 450,
+        "national": 450,
+        "world": 450
+      }
+    },
+    {
+      "id": 213103749,
+      "name": "Foullah Edifice",
+      "slug": "foullah-edifice-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 300,
+        "national": 300,
+        "world": 300
+      }
     }
   ],
   "colors": {

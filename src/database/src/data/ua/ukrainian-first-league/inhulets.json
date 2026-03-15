@@ -18,6 +18,28 @@
         "national": 3200,
         "world": 3200
       }
+    },
+    {
+      "id": 171076802,
+      "name": "Inhulets",
+      "slug": "inhulets-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 271076802,
+      "name": "Inhulets",
+      "slug": "inhulets-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
     }
   ],
   "colors": {

@@ -18,6 +18,28 @@
         "national": 2500,
         "world": 2500
       }
+    },
+    {
+      "id": 113104763,
+      "name": "Bidco United",
+      "slug": "bidco-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 750,
+        "national": 750,
+        "world": 750
+      }
+    },
+    {
+      "id": 213104763,
+      "name": "Bidco United",
+      "slug": "bidco-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 500,
+        "national": 500,
+        "world": 500
+      }
     }
   ],
   "colors": {

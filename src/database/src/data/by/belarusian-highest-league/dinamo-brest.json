@@ -18,6 +18,28 @@
         "national": 4500,
         "world": 4500
       }
+    },
+    {
+      "id": 101300113,
+      "name": "Dinamo Brest",
+      "slug": "dinamo-brest-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1350,
+        "national": 1350,
+        "world": 1350
+      }
+    },
+    {
+      "id": 201300113,
+      "name": "Dinamo Brest",
+      "slug": "dinamo-brest-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
     }
   ],
   "colors": {

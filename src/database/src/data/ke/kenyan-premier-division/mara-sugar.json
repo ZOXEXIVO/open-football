@@ -18,6 +18,28 @@
         "national": 2000,
         "world": 2000
       }
+    },
+    {
+      "id": 2100200690,
+      "name": "Mara Sugar",
+      "slug": "mara-sugar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 2200200690,
+      "name": "Mara Sugar",
+      "slug": "mara-sugar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
     }
   ],
   "colors": {

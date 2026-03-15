@@ -18,6 +18,28 @@
         "national": 5000,
         "world": 5000
       }
+    },
+    {
+      "id": 100001957,
+      "name": "Vojvodina",
+      "slug": "vojvodina-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 200001957,
+      "name": "Vojvodina",
+      "slug": "vojvodina-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
     }
   ],
   "colors": {

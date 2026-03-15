@@ -18,6 +18,28 @@
         "national": 6500,
         "world": 6500
       }
+    },
+    {
+      "id": 122003969,
+      "name": "Ludogorets",
+      "slug": "ludogorets-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1950,
+        "national": 1950,
+        "world": 1950
+      }
+    },
+    {
+      "id": 222003969,
+      "name": "Ludogorets",
+      "slug": "ludogorets-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1300,
+        "national": 1300,
+        "world": 1300
+      }
     }
   ],
   "colors": {

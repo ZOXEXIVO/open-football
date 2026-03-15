@@ -18,6 +18,28 @@
         "national": 1200,
         "world": 1200
       }
+    },
+    {
+      "id": 2100429313,
+      "name": "AS Algoy",
+      "slug": "as-algoy-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 360,
+        "national": 360,
+        "world": 360
+      }
+    },
+    {
+      "id": 2200429313,
+      "name": "AS Algoy",
+      "slug": "as-algoy-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 240,
+        "national": 240,
+        "world": 240
+      }
     }
   ],
   "colors": {

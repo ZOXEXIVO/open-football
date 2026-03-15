@@ -18,6 +18,28 @@
         "national": 2500,
         "world": 2500
       }
+    },
+    {
+      "id": 108632779,
+      "name": "Aigle Royal de la Menoua",
+      "slug": "aigle-royal-de-la-menoua-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 750,
+        "national": 750,
+        "world": 750
+      }
+    },
+    {
+      "id": 208632779,
+      "name": "Aigle Royal de la Menoua",
+      "slug": "aigle-royal-de-la-menoua-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 500,
+        "national": 500,
+        "world": 500
+      }
     }
   ],
   "colors": {

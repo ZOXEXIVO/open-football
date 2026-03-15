@@ -18,6 +18,28 @@
         "national": 3500,
         "world": 3500
       }
+    },
+    {
+      "id": 100000353,
+      "name": "Montana 1921",
+      "slug": "montana-1921-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1050,
+        "national": 1050,
+        "world": 1050
+      }
+    },
+    {
+      "id": 200000353,
+      "name": "Montana 1921",
+      "slug": "montana-1921-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 700,
+        "national": 700,
+        "world": 700
+      }
     }
   ],
   "colors": {

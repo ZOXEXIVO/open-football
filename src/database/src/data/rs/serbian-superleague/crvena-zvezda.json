@@ -18,6 +18,28 @@
         "national": 7500,
         "world": 7500
       }
+    },
+    {
+      "id": 100001955,
+      "name": "Crvena Zvezda",
+      "slug": "crvena-zvezda-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2250,
+        "national": 2250,
+        "world": 2250
+      }
+    },
+    {
+      "id": 200001955,
+      "name": "Crvena Zvezda",
+      "slug": "crvena-zvezda-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
     }
   ],
   "colors": {

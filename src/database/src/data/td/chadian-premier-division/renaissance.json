@@ -18,6 +18,28 @@
         "national": 1500,
         "world": 1500
       }
+    },
+    {
+      "id": 112008339,
+      "name": "Renaissance",
+      "slug": "renaissance-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 450,
+        "national": 450,
+        "world": 450
+      }
+    },
+    {
+      "id": 212008339,
+      "name": "Renaissance",
+      "slug": "renaissance-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 300,
+        "national": 300,
+        "world": 300
+      }
     }
   ],
   "colors": {

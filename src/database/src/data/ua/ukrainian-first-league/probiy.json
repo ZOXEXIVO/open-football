@@ -18,6 +18,28 @@
         "national": 2000,
         "world": 2000
       }
+    },
+    {
+      "id": 171016622,
+      "name": "Probiy",
+      "slug": "probiy-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 271016622,
+      "name": "Probiy",
+      "slug": "probiy-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
     }
   ],
   "colors": {

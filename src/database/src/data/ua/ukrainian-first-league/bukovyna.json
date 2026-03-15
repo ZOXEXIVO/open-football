@@ -18,6 +18,28 @@
         "national": 3000,
         "world": 3000
       }
+    },
+    {
+      "id": 100484458,
+      "name": "Bukovyna",
+      "slug": "bukovyna-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 200484458,
+      "name": "Bukovyna",
+      "slug": "bukovyna-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
     }
   ],
   "colors": {

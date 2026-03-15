@@ -18,6 +18,28 @@
         "national": 3800,
         "world": 3800
       }
+    },
+    {
+      "id": 107506471,
+      "name": "Arda 1924",
+      "slug": "arda-1924-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 207506471,
+      "name": "Arda 1924",
+      "slug": "arda-1924-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
     }
   ],
   "colors": {

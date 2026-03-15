@@ -18,6 +18,28 @@
         "national": 1500,
         "world": 1500
       }
+    },
+    {
+      "id": 117037713,
+      "name": "Bumprom Gomel",
+      "slug": "bumprom-gomel-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 450,
+        "national": 450,
+        "world": 450
+      }
+    },
+    {
+      "id": 217037713,
+      "name": "Bumprom Gomel",
+      "slug": "bumprom-gomel-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 300,
+        "national": 300,
+        "world": 300
+      }
     }
   ],
   "colors": {

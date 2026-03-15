@@ -18,6 +18,28 @@
         "national": 2200,
         "world": 2200
       }
+    },
+    {
+      "id": 101300111,
+      "name": "Belshina",
+      "slug": "belshina-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 660,
+        "national": 660,
+        "world": 660
+      }
+    },
+    {
+      "id": 201300111,
+      "name": "Belshina",
+      "slug": "belshina-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 440,
+        "national": 440,
+        "world": 440
+      }
     }
   ],
   "colors": {

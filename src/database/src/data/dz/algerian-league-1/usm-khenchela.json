@@ -18,6 +18,28 @@
         "national": 3500,
         "world": 3500
       }
+    },
+    {
+      "id": 112031159,
+      "name": "USM Khenchela",
+      "slug": "usm-khenchela-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1050,
+        "national": 1050,
+        "world": 1050
+      }
+    },
+    {
+      "id": 212031159,
+      "name": "USM Khenchela",
+      "slug": "usm-khenchela-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 700,
+        "national": 700,
+        "world": 700
+      }
     }
   ],
   "colors": {

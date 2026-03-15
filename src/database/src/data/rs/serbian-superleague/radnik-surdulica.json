@@ -18,6 +18,28 @@
         "national": 3500,
         "world": 3500
       }
+    },
+    {
+      "id": 105748006,
+      "name": "Radnik Surdulica",
+      "slug": "radnik-surdulica-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1050,
+        "national": 1050,
+        "world": 1050
+      }
+    },
+    {
+      "id": 205748006,
+      "name": "Radnik Surdulica",
+      "slug": "radnik-surdulica-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 700,
+        "national": 700,
+        "world": 700
+      }
     }
   ],
   "colors": {

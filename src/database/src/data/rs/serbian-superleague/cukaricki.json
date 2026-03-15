@@ -18,6 +18,28 @@
         "national": 4200,
         "world": 4200
       }
+    },
+    {
+      "id": 101301372,
+      "name": "Cukaricki",
+      "slug": "cukaricki-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 201301372,
+      "name": "Cukaricki",
+      "slug": "cukaricki-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
     }
   ],
   "colors": {

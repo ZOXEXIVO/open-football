@@ -18,6 +18,28 @@
         "national": 4500,
         "world": 4500
       }
+    },
+    {
+      "id": 105747642,
+      "name": "TSC",
+      "slug": "tsc-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1350,
+        "national": 1350,
+        "world": 1350
+      }
+    },
+    {
+      "id": 205747642,
+      "name": "TSC",
+      "slug": "tsc-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
     }
   ],
   "colors": {

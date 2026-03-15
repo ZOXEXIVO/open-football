@@ -18,6 +18,28 @@
         "national": 2000,
         "world": 2000
       }
+    },
+    {
+      "id": 112075828,
+      "name": "Binga",
+      "slug": "binga-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 212075828,
+      "name": "Binga",
+      "slug": "binga-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
     }
   ],
   "colors": {

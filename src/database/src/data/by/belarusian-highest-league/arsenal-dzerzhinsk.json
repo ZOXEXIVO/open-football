@@ -18,6 +18,28 @@
         "national": 3000,
         "world": 3000
       }
+    },
+    {
+      "id": 117040498,
+      "name": "Arsenal Dzerzhinsk",
+      "slug": "arsenal-dzerzhinsk-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 217040498,
+      "name": "Arsenal Dzerzhinsk",
+      "slug": "arsenal-dzerzhinsk-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
     }
   ],
   "colors": {
