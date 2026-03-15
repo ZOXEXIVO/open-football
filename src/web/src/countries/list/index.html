@@ -4,6 +4,7 @@
 
 {% block content %}
 <div class="fm-page">
+    <div class="fm-stats-bar">Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</div>
     {% for continent in continents %}
     <section class="fm-panel {% if !loop.first %}mt-3{% endif %}">
         <div class="fm-panel-head">

@@ -3222,6 +3222,13 @@ a:link, a:visited, a:hover, a:active {
    COUNTRY PAGES
    ============================================ */
 
+.fm-stats-bar {
+    color: #7a8c98;
+    font-size: 13px;
+    padding: 8px 12px;
+    margin-bottom: 10px;
+}
+
 .fm-country-grid {
     display: flex;
     flex-wrap: wrap;

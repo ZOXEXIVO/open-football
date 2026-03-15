@@ -28,6 +28,9 @@ pub struct CountryListTemplate {
     pub i18n: crate::I18n,
     pub lang: String,
     pub continents: Vec<ContinentDto>,
+    pub total_countries: usize,
+    pub total_clubs: usize,
+    pub total_players: usize,
 }
 
 pub struct ContinentDto {
@@ -74,6 +77,20 @@ pub async fn country_list_action(
         })
         .collect();
 
+    let total_countries = continents.iter().map(|c| c.countries.len()).sum();
+    let mut total_clubs = 0usize;
+    let mut total_players = 0usize;
+    for continent in &simulator_data.continents {
+        for country in &continent.countries {
+            total_clubs += country.clubs.len();
+            for club in &country.clubs {
+                for team in &club.teams.teams {
+                    total_players += team.players.players.len();
+                }
+            }
+        }
+    }
+
     Ok(CountryListTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title: i18n.t("select_country").to_string(),
@@ -88,5 +105,8 @@ pub async fn country_list_action(
         lang: route_params.lang,
         i18n,
         continents,
+        total_countries,
+        total_clubs,
+        total_players,
     })
 }
