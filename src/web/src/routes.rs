@@ -28,17 +28,40 @@ async fn root_redirect(headers: HeaderMap) -> impl IntoResponse {
     Redirect::temporary(&format!("/{}", lang))
 }
 
-async fn sitemap_xml() -> impl IntoResponse {
+async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
     let date = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
     let mut xml = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n");
 
+    // Language root pages — monthly
     for lang in SUPPORTED_LANG_CODES {
         xml.push_str(&format!(
-            "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>daily</changefreq>\n  </url>\n",
+            "  <url>\n    <loc>https://open-football.org/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>monthly</changefreq>\n  </url>\n",
             lang, date
         ));
+    }
+
+    // All club team pages — daily
+    let guard = state.data.read().await;
+    if let Some(ref sim) = *guard {
+        for continent in &sim.continents {
+            for country in &continent.countries {
+                for club in &country.clubs {
+                    for team in &club.teams.teams {
+                        if team.team_type != core::TeamType::Main {
+                            continue;
+                        }
+                        for lang in SUPPORTED_LANG_CODES {
+                            xml.push_str(&format!(
+                                "  <url>\n    <loc>https://open-football.org/{}/teams/{}</loc>\n    <lastmod>{}</lastmod>\n    <changefreq>daily</changefreq>\n  </url>\n",
+                                lang, team.slug, date
+                            ));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     xml.push_str("</urlset>\n");
