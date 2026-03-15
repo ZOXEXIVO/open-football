@@ -1,0 +1,49 @@
+{
+  "id": 700198,
+  "name": "Mantova",
+  "location": {
+    "city_id": 700196
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 700198,
+      "name": "Mantova",
+      "slug": "mantova",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3900,
+        "national": 3900,
+        "world": 3900
+      }
+    },
+    {
+      "id": 98042599,
+      "name": "Mantova",
+      "slug": "mantova-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1170,
+        "national": 1170,
+        "world": 1170
+      }
+    },
+    {
+      "id": 98042600,
+      "name": "Mantova",
+      "slug": "mantova-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 780,
+        "national": 780,
+        "world": 780
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff0707",
+    "foreground": "#111111"
+  }
+}

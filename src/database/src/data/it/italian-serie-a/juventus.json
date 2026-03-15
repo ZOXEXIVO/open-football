@@ -1,0 +1,49 @@
+{
+  "id": 1139,
+  "name": "Juventus",
+  "location": {
+    "city_id": 1
+  },
+  "finance": {
+    "balance": 66040000
+  },
+  "teams": [
+    {
+      "id": 1139,
+      "name": "Juventus",
+      "slug": "juventus",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8900,
+        "national": 8900,
+        "world": 8900
+      }
+    },
+    {
+      "id": 98036631,
+      "name": "Juventus",
+      "slug": "juventus-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2670,
+        "national": 2670,
+        "world": 2670
+      }
+    },
+    {
+      "id": 98036632,
+      "name": "Juventus",
+      "slug": "juventus-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1780,
+        "national": 1780,
+        "world": 1780
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  }
+}

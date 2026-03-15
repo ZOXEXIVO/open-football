@@ -1,0 +1,49 @@
+{
+  "id": 600,
+  "name": "AFC Bournemouth",
+  "location": {
+    "city_id": 513
+  },
+  "finance": {
+    "balance": 44450000
+  },
+  "teams": [
+    {
+      "id": 600,
+      "name": "AFC Bournemouth",
+      "slug": "bournemouth",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6800,
+        "national": 6800,
+        "world": 6800
+      }
+    },
+    {
+      "id": 99500027,
+      "name": "AFC Bournemouth",
+      "slug": "bournemouth-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2040,
+        "national": 2040,
+        "world": 2040
+      }
+    },
+    {
+      "id": 99500028,
+      "name": "AFC Bournemouth",
+      "slug": "bournemouth-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1360,
+        "national": 1360,
+        "world": 1360
+      }
+    }
+  ],
+  "colors": {
+    "background": "#da291c",
+    "foreground": "#000000"
+  }
+}

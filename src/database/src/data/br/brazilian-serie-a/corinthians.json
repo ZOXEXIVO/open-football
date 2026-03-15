@@ -1,0 +1,49 @@
+{
+  "id": 319,
+  "name": "Corinthians",
+  "location": {
+    "city_id": 704
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 319,
+      "name": "Corinthians",
+      "slug": "corinthians",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7800,
+        "national": 7800,
+        "world": 7800
+      }
+    },
+    {
+      "id": 99800009,
+      "name": "Corinthians",
+      "slug": "corinthians-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2340,
+        "national": 2340,
+        "world": 2340
+      }
+    },
+    {
+      "id": 99800010,
+      "name": "Corinthians",
+      "slug": "corinthians-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

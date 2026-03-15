@@ -1,0 +1,49 @@
+{
+  "id": 1714,
+  "name": "Granada",
+  "location": {
+    "city_id": 622
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 1714,
+      "name": "Granada",
+      "slug": "granada",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 99700005,
+      "name": "Granada",
+      "slug": "granada-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 99700006,
+      "name": "Granada",
+      "slug": "granada-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

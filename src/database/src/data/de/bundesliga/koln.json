@@ -1,0 +1,49 @@
+{
+  "id": 916,
+  "name": "1. FC Köln",
+  "location": {
+    "city_id": 816
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 916,
+      "name": "1. FC Köln",
+      "slug": "koln",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99900033,
+      "name": "1. FC Köln",
+      "slug": "koln-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99900034,
+      "name": "1. FC Köln",
+      "slug": "koln-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

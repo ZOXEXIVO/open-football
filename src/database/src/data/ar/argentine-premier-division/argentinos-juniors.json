@@ -1,0 +1,49 @@
+{
+  "id": 78,
+  "name": "Argentinos Juniors",
+  "location": {
+    "city_id": 307
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 78,
+      "name": "Argentinos Juniors",
+      "slug": "argentinos-juniors",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 99300015,
+      "name": "Argentinos Juniors",
+      "slug": "argentinos-juniors-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 99300016,
+      "name": "Argentinos Juniors",
+      "slug": "argentinos-juniors-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

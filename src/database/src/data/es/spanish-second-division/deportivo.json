@@ -1,0 +1,49 @@
+{
+  "id": 1705,
+  "name": "Deportivo La Coruña",
+  "location": {
+    "city_id": 628
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1705,
+      "name": "Deportivo La Coruña",
+      "slug": "deportivo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 99700017,
+      "name": "Deportivo La Coruña",
+      "slug": "deportivo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 99700018,
+      "name": "Deportivo La Coruña",
+      "slug": "deportivo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

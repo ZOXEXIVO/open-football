@@ -1,0 +1,49 @@
+{
+  "id": 866,
+  "name": "Olympique de Marseille",
+  "location": {
+    "city_id": 403
+  },
+  "finance": {
+    "balance": 63500000
+  },
+  "teams": [
+    {
+      "id": 866,
+      "name": "Olympique de Marseille",
+      "slug": "olympique-marseille",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8000,
+        "national": 8000,
+        "world": 8000
+      }
+    },
+    {
+      "id": 99400007,
+      "name": "Olympique de Marseille",
+      "slug": "olympique-marseille-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 99400008,
+      "name": "Olympique de Marseille",
+      "slug": "olympique-marseille-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1600,
+        "national": 1600,
+        "world": 1600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#2faee0",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1708,
+  "name": "Barcelona",
+  "location": {
+    "city_id": 601
+  },
+  "finance": {
+    "balance": 228600000
+  },
+  "teams": [
+    {
+      "id": 1708,
+      "name": "Barcelona",
+      "slug": "barcelona",
+      "team_type": "Main",
+      "reputation": {
+        "home": 9400,
+        "national": 9400,
+        "world": 9400
+      }
+    },
+    {
+      "id": 99600003,
+      "name": "Barcelona",
+      "slug": "barcelona-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2820,
+        "national": 2820,
+        "world": 2820
+      }
+    },
+    {
+      "id": 99600004,
+      "name": "Barcelona",
+      "slug": "barcelona-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1880,
+        "national": 1880,
+        "world": 1880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a50044",
+    "foreground": "#004d98"
+  }
+}

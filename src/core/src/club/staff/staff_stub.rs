@@ -61,6 +61,7 @@ impl StaffStub {
                     judging_player_ability: 1,
                     judging_player_potential: 1,
                     tactical_knowledge: 1,
+                    known_regions: Vec::new(),
                 },
                 data_analysis: StaffDataAnalysis {
                     judging_player_data: 1,

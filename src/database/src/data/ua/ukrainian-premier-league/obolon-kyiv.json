@@ -1,0 +1,49 @@
+{
+  "id": 71075348,
+  "name": "Obolon",
+  "location": {
+    "city_id": 1711
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 71075348,
+      "name": "Obolon",
+      "slug": "obolon-kyiv",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 88700023,
+      "name": "Obolon",
+      "slug": "obolon-kyiv-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 88700024,
+      "name": "Obolon",
+      "slug": "obolon-kyiv-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

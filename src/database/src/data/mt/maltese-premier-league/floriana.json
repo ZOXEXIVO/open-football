@@ -1,0 +1,38 @@
+{
+  "id": 1241,
+  "name": "Floriana",
+  "location": {
+    "city_id": 904
+  },
+  "finance": {
+    "balance": 1778000
+  },
+  "teams": [
+    {
+      "id": 1241,
+      "name": "Floriana",
+      "slug": "floriana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    },
+    {
+      "id": 99010009,
+      "name": "Floriana",
+      "slug": "floriana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 750,
+        "national": 750,
+        "world": 750
+      }
+    }
+  ],
+  "colors": {
+    "background": "#3c614a",
+    "foreground": "#ffffff"
+  }
+}

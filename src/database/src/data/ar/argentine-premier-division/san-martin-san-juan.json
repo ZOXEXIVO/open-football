@@ -1,0 +1,49 @@
+{
+  "id": 108546,
+  "name": "San Martín SJ",
+  "location": {
+    "city_id": 328
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 108546,
+      "name": "San Martín SJ",
+      "slug": "san-martin-san-juan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 99300057,
+      "name": "San Martín SJ",
+      "slug": "san-martin-san-juan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 99300058,
+      "name": "San Martín SJ",
+      "slug": "san-martin-san-juan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#006400"
+  }
+}

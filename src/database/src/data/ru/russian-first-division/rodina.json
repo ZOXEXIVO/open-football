@@ -1,0 +1,49 @@
+{
+  "id": 58126754,
+  "name": "Rodina",
+  "location": {
+    "city_id": 208
+  },
+  "finance": {
+    "balance": 21590000
+  },
+  "teams": [
+    {
+      "id": 58126754,
+      "name": "Rodina",
+      "slug": "rodina",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 99200017,
+      "name": "Rodina",
+      "slug": "rodina-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 99200018,
+      "name": "Rodina",
+      "slug": "rodina-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#8b0000",
+    "foreground": "#ffd700"
+  }
+}

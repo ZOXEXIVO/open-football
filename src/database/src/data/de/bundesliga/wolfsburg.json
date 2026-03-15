@@ -1,0 +1,49 @@
+{
+  "id": 961,
+  "name": "VfL Wolfsburg",
+  "location": {
+    "city_id": 806
+  },
+  "finance": {
+    "balance": 57150000
+  },
+  "teams": [
+    {
+      "id": 961,
+      "name": "VfL Wolfsburg",
+      "slug": "wolfsburg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 99900013,
+      "name": "VfL Wolfsburg",
+      "slug": "wolfsburg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 99900014,
+      "name": "VfL Wolfsburg",
+      "slug": "wolfsburg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#65b32e",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 326,
+  "name": "Internacional",
+  "location": {
+    "city_id": 705
+  },
+  "finance": {
+    "balance": 25400000
+  },
+  "teams": [
+    {
+      "id": 326,
+      "name": "Internacional",
+      "slug": "internacional",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7600,
+        "national": 7600,
+        "world": 7600
+      }
+    },
+    {
+      "id": 99800011,
+      "name": "Internacional",
+      "slug": "internacional-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2280,
+        "national": 2280,
+        "world": 2280
+      }
+    },
+    {
+      "id": 99800012,
+      "name": "Internacional",
+      "slug": "internacional-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1520,
+        "national": 1520,
+        "world": 1520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

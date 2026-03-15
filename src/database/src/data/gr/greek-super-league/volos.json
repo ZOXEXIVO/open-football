@@ -1,0 +1,49 @@
+{
+  "id": 36136195,
+  "name": "Volos NPS",
+  "location": {
+    "city_id": 1308
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 36136195,
+      "name": "Volos NPS",
+      "slug": "volos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 88300017,
+      "name": "Volos NPS",
+      "slug": "volos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 88300018,
+      "name": "Volos NPS",
+      "slug": "volos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

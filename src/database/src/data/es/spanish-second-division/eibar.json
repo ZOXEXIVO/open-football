@@ -1,0 +1,49 @@
+{
+  "id": 1753,
+  "name": "Eibar",
+  "location": {
+    "city_id": 630
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1753,
+      "name": "Eibar",
+      "slug": "eibar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5600,
+        "national": 5600,
+        "world": 5600
+      }
+    },
+    {
+      "id": 99700021,
+      "name": "Eibar",
+      "slug": "eibar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1680,
+        "national": 1680,
+        "world": 1680
+      }
+    },
+    {
+      "id": 99700022,
+      "name": "Eibar",
+      "slug": "eibar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1120,
+        "national": 1120,
+        "world": 1120
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

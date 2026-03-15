@@ -2,7 +2,7 @@
  * fm-dialog.js — Reusable dialog component for Open Football
  *
  * Usage:
- *   FmDialog.open({
+ *   OpenFootballDialog.open({
  *     title: 'Transfer Player',
  *     fields: [
  *       { name: 'club_id', label: 'Club', type: 'select', options: [{value:'1', text:'Arsenal'}] },
@@ -13,7 +13,7 @@
  *     onConfirm: (data) => { console.log(data); },
  *   });
  *
- *   FmDialog.confirm({
+ *   OpenFootballDialog.confirm({
  *     title: 'Clear Injury',
  *     message: 'Remove this player\'s injury?',
  *     confirmText: 'Clear',
@@ -197,5 +197,5 @@
         });
     }
 
-    window.FmDialog = { open: open, confirm: confirm, close: close };
+    window.OpenFootballDialog = { open: open, confirm: confirm, close: close };
 })();

@@ -1,0 +1,16 @@
+{
+  "first_names": [
+    "Abdullah", "Ahmet", "Ali", "Alper", "Baris", "Burak", "Can", "Caner", "Cenk",
+    "Cengiz", "Deniz", "Emre", "Enes", "Erdem", "Erkan", "Fatih", "Gokhan", "Halil",
+    "Hakan", "Ibrahim", "Irfan", "Kenan", "Kerem", "Mahmut", "Mehmet", "Mert", "Merih",
+    "Muhammed", "Murat", "Mustafa", "Oguzhan", "Okay", "Omer", "Ozan", "Recep", "Salih",
+    "Selcuk", "Semih", "Serdar", "Sinan", "Tolga", "Ufuk", "Umut", "Volkan", "Yusuf"
+  ],
+  "last_names": [
+    "Akgun", "Aktorkoglu", "Bayindir", "Calhanoglu", "Celik", "Demiral", "Dervisoglu",
+    "Dursun", "Erkin", "Guler", "Gunok", "Inan", "Kabak", "Kahveci", "Karaman", "Kokcu",
+    "Muldur", "Omur", "Ozan", "Ozcan", "Ozdemir", "Ozil", "Sahin", "Sinik", "Soyuncu",
+    "Tasci", "Tekdemir", "Tokoz", "Topcu", "Torun", "Tosun", "Tufan", "Turuc", "Ucar",
+    "Unai", "Unal", "Under", "Yazici", "Yildiz", "Yildirim", "Yilmaz"
+  ]
+}

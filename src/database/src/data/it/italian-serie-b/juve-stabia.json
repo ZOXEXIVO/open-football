@@ -1,0 +1,49 @@
+{
+  "id": 1138,
+  "name": "Juve Stabia",
+  "location": {
+    "city_id": 512
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1138,
+      "name": "Juve Stabia",
+      "slug": "juve-stabia",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4950,
+        "national": 4950,
+        "world": 4950
+      }
+    },
+    {
+      "id": 98036629,
+      "name": "Juve Stabia",
+      "slug": "juve-stabia-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1485,
+        "national": 1485,
+        "world": 1485
+      }
+    },
+    {
+      "id": 98036630,
+      "name": "Juve Stabia",
+      "slug": "juve-stabia-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 990,
+        "national": 990,
+        "world": 990
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ddc512",
+    "foreground": "#023386"
+  }
+}

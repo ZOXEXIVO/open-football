@@ -1,0 +1,38 @@
+{
+  "id": 8457492,
+  "name": "Adelaide United",
+  "location": {
+    "city_id": 1005
+  },
+  "finance": {
+    "balance": 4445000
+  },
+  "teams": [
+    {
+      "id": 8457492,
+      "name": "Adelaide United",
+      "slug": "adelaide-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 99020012,
+      "name": "Adelaide United",
+      "slug": "adelaide-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

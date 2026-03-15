@@ -1,0 +1,49 @@
+{
+  "id": 814089,
+  "name": "Girona",
+  "location": {
+    "city_id": 609
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 814089,
+      "name": "Girona",
+      "slug": "girona",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99600019,
+      "name": "Girona",
+      "slug": "girona-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99600020,
+      "name": "Girona",
+      "slug": "girona-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cd2534",
+    "foreground": "#ffffff"
+  }
+}

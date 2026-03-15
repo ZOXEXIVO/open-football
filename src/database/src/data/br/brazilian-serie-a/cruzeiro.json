@@ -1,0 +1,49 @@
+{
+  "id": 321,
+  "name": "Cruzeiro",
+  "location": {
+    "city_id": 711
+  },
+  "finance": {
+    "balance": 17780000
+  },
+  "teams": [
+    {
+      "id": 321,
+      "name": "Cruzeiro",
+      "slug": "cruzeiro",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99800023,
+      "name": "Cruzeiro",
+      "slug": "cruzeiro-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99800024,
+      "name": "Cruzeiro",
+      "slug": "cruzeiro-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

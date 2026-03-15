@@ -1,0 +1,49 @@
+{
+  "id": 1129,
+  "name": "Fiorentina",
+  "location": {
+    "city_id": 499
+  },
+  "finance": {
+    "balance": 38100000
+  },
+  "teams": [
+    {
+      "id": 1129,
+      "name": "Fiorentina",
+      "slug": "fiorentina",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7800,
+        "national": 7800,
+        "world": 7800
+      }
+    },
+    {
+      "id": 98036617,
+      "name": "Fiorentina",
+      "slug": "fiorentina-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2340,
+        "national": 2340,
+        "world": 2340
+      }
+    },
+    {
+      "id": 98036618,
+      "name": "Fiorentina",
+      "slug": "fiorentina-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#710aa9",
+    "foreground": "#ffffff"
+  }
+}

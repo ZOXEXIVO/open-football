@@ -1,0 +1,49 @@
+{
+  "id": 676,
+  "name": "Liverpool",
+  "location": {
+    "city_id": 502
+  },
+  "finance": {
+    "balance": 165100000
+  },
+  "teams": [
+    {
+      "id": 676,
+      "name": "Liverpool",
+      "slug": "liverpool",
+      "team_type": "Main",
+      "reputation": {
+        "home": 9200,
+        "national": 9200,
+        "world": 9200
+      }
+    },
+    {
+      "id": 99500005,
+      "name": "Liverpool",
+      "slug": "liverpool-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2760,
+        "national": 2760,
+        "world": 2760
+      }
+    },
+    {
+      "id": 99500006,
+      "name": "Liverpool",
+      "slug": "liverpool-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1840,
+        "national": 1840,
+        "world": 1840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c8102e",
+    "foreground": "#ffffff"
+  }
+}

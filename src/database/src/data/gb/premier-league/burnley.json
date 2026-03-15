@@ -1,0 +1,49 @@
+{
+  "id": 622,
+  "name": "Burnley",
+  "location": {
+    "city_id": 518
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 622,
+      "name": "Burnley",
+      "slug": "burnley",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6600,
+        "national": 6600,
+        "world": 6600
+      }
+    },
+    {
+      "id": 99500037,
+      "name": "Burnley",
+      "slug": "burnley-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1980,
+        "national": 1980,
+        "world": 1980
+      }
+    },
+    {
+      "id": 99500038,
+      "name": "Burnley",
+      "slug": "burnley-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#6c1d45",
+    "foreground": "#99d6ea"
+  }
+}

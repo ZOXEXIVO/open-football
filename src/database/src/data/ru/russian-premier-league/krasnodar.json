@@ -1,0 +1,49 @@
+{
+  "id": 58029064,
+  "name": "Krasnodar",
+  "location": {
+    "city_id": 102
+  },
+  "finance": {
+    "balance": 153670000
+  },
+  "teams": [
+    {
+      "id": 58029064,
+      "name": "Krasnodar",
+      "slug": "krasnodar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99100005,
+      "name": "Krasnodar",
+      "slug": "krasnodar-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99100006,
+      "name": "Krasnodar",
+      "slug": "krasnodar-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006850",
+    "foreground": "#ffffff"
+  }
+}

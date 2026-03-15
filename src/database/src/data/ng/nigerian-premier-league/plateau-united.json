@@ -1,0 +1,38 @@
+{
+  "id": 5340760,
+  "name": "Plateau United",
+  "location": {
+    "city_id": 1805
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 5340760,
+      "name": "Plateau United",
+      "slug": "plateau-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 88800012,
+      "name": "Plateau United",
+      "slug": "plateau-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

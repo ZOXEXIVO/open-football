@@ -1,0 +1,37 @@
+{
+  "id": 60,
+  "slug": "argentine-premier-division",
+  "name": "Premier Division",
+  "reputation": 7500,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 2,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 7,
+      "to_day": 15,
+      "to_month": 12
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1651,
+      "weight": 5
+    },
+    {
+      "country_id": 776,
+      "weight": 1
+    },
+    {
+      "country_id": 791,
+      "weight": 1
+    }
+  ]
+}

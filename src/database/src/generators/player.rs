@@ -689,21 +689,31 @@ impl PlayerGenerator {
     // ── Potential ability (generated before skills) ─────────────────────
 
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
-        let gem_roll = rand::random::<f32>();
-        let gem_chance = 0.05 + rep_factor * 0.10; // 5-15% chance per player
-        let is_gem = gem_roll < gem_chance;
+        // Gem chance scales steeply with reputation:
+        //   rep <3000 (0.3): ~1% — very rare for small clubs
+        //   rep  5000 (0.5): ~3%
+        //   rep  7000 (0.7): ~7%
+        //   rep  9000 (0.9): ~12%
+        //   rep 10000 (1.0): ~15%
+        let gem_chance = if rep_factor < 0.6 {
+            rep_factor * rep_factor * 0.08 // quadratic: low-rep clubs almost never produce stars
+        } else {
+            0.03 + (rep_factor - 0.6) * 0.30 // linear ramp for good+ clubs
+        };
+        let is_gem = rand::random::<f32>() < gem_chance;
 
         if is_gem {
-            // High-potential player
-            let gem_min = (95.0 + rep_factor * 35.0) as i32;
-            let gem_max = (150 + (rep_factor * 40.0) as i32).min(195);
+            // High-potential player — PA ceiling tied to club reputation
+            // Elite clubs can produce 190+ PA; small clubs cap around 130
+            let gem_min = (70.0 + rep_factor * 50.0) as i32;  // 0.3→85, 0.6→100, 1.0→120
+            let gem_max = (100.0 + rep_factor * 90.0).min(195.0) as i32; // 0.3→127, 0.6→154, 1.0→190
             IntegerUtils::random(gem_min, gem_max).min(200) as u8
         } else {
             // Normal player: PA based on rep with age-dependent variance
-            let base = 35.0 + rep_factor * 110.0; // rep 0.0 → 35, rep 1.0 → 145
-            let youth_bonus = if age <= 21 { 12.0 } else if age <= 25 { 6.0 } else { 0.0 };
-            let pa = base + youth_bonus + random_normal() * 14.0;
-            pa.clamp(30.0, 195.0) as u8
+            let base = 30.0 + rep_factor * 100.0; // rep 0.0 → 30, rep 0.6 → 90, rep 1.0 → 130
+            let youth_bonus = if age <= 21 { 10.0 } else if age <= 25 { 5.0 } else { 0.0 };
+            let pa = base + youth_bonus + random_normal() * 12.0;
+            pa.clamp(25.0, 190.0) as u8
         }
     }
 

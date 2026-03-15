@@ -1,0 +1,38 @@
+{
+  "id": 1300491,
+  "name": "Central Coast Mariners",
+  "location": {
+    "city_id": 1004
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1300491,
+      "name": "Central Coast Mariners",
+      "slug": "central-coast-mariners",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 99020010,
+      "name": "Central Coast Mariners",
+      "slug": "central-coast-mariners-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#f2a900",
+    "foreground": "#003da5"
+  }
+}

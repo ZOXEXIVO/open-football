@@ -1,0 +1,49 @@
+{
+  "id": 868,
+  "name": "Paris Saint-Germain",
+  "location": {
+    "city_id": 400
+  },
+  "finance": {
+    "balance": 355600000
+  },
+  "teams": [
+    {
+      "id": 868,
+      "name": "Paris Saint-Germain",
+      "slug": "paris-saint-germain",
+      "team_type": "Main",
+      "reputation": {
+        "home": 9200,
+        "national": 9200,
+        "world": 9200
+      }
+    },
+    {
+      "id": 99400001,
+      "name": "Paris Saint-Germain",
+      "slug": "paris-saint-germain-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2760,
+        "national": 2760,
+        "world": 2760
+      }
+    },
+    {
+      "id": 99400002,
+      "name": "Paris Saint-Germain",
+      "slug": "paris-saint-germain-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1840,
+        "national": 1840,
+        "world": 1840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#004170",
+    "foreground": "#e30613"
+  }
+}

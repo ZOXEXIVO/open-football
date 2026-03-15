@@ -1,7 +1,5 @@
 use serde::Deserialize;
 
-const STATIC_LEAGUES_JSON: &str = include_str!("../data/leagues.json");
-
 #[derive(Deserialize)]
 pub struct ForeignPlayerEntry {
     pub country_id: u32,
@@ -13,6 +11,8 @@ pub struct LeagueEntity {
     pub id: u32,
     pub slug: String,
     pub name: String,
+    /// Populated by the loader from the directory path, not present in JSON.
+    #[serde(default)]
     pub country_id: u32,
     pub settings: LeagueSettingsEntity,
     pub reputation: u16,
@@ -39,12 +39,4 @@ pub struct DayMonthPeriodEntity {
 
     pub to_day: u8,
     pub to_month: u8,
-}
-
-pub struct LeagueLoader;
-
-impl LeagueLoader {
-    pub fn load() -> Vec<LeagueEntity> {
-        serde_json::from_str(STATIC_LEAGUES_JSON).unwrap()
-    }
 }

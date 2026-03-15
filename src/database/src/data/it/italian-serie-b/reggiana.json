@@ -1,0 +1,49 @@
+{
+  "id": 1164,
+  "name": "Reggiana",
+  "location": {
+    "city_id": 550
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1164,
+      "name": "Reggiana",
+      "slug": "reggiana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 98036673,
+      "name": "Reggiana",
+      "slug": "reggiana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 98036674,
+      "name": "Reggiana",
+      "slug": "reggiana-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#9d0707",
+    "foreground": "#000000"
+  }
+}

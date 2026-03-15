@@ -1,0 +1,49 @@
+{
+  "id": 5512793,
+  "name": "Boston River",
+  "location": {
+    "city_id": 1114
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 5512793,
+      "name": "Boston River",
+      "slug": "boston-river",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 88100029,
+      "name": "Boston River",
+      "slug": "boston-river-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 88100030,
+      "name": "Boston River",
+      "slug": "boston-river-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

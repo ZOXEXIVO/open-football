@@ -1,0 +1,38 @@
+{
+  "id": 120286,
+  "name": "Shooting Stars",
+  "location": {
+    "city_id": 1806
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 120286,
+      "name": "Shooting Stars",
+      "slug": "shooting-stars",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 88800014,
+      "name": "Shooting Stars",
+      "slug": "shooting-stars-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

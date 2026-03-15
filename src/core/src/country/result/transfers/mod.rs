@@ -23,6 +23,17 @@ impl CountryResult {
         let window_manager = TransferWindowManager::new();
         let window_open = window_manager.is_window_open(country_id, current_date);
 
+        // Collect foreign player pool from other countries (for cross-country scouting)
+        let foreign_players = if window_open {
+            data.continents.iter()
+                .flat_map(|cont| &cont.countries)
+                .filter(|c| c.id != country_id)
+                .flat_map(|c| PipelineProcessor::collect_player_pool(c, current_date))
+                .collect()
+        } else {
+            Vec::new()
+        };
+
         if let Some(country) = data.country_mut(country_id) {
             // Always resolve pending negotiations and expire stale ones,
             // even outside the window — negotiations started during the window
@@ -70,8 +81,8 @@ impl CountryResult {
                 // Process match-day scouting observations
                 PipelineProcessor::process_match_scouting(country, current_date);
 
-                // Process scouting observations
-                PipelineProcessor::process_scouting(country, current_date);
+                // Process scouting observations (domestic + foreign from scout known regions)
+                PipelineProcessor::process_scouting(country, &foreign_players, current_date);
 
                 // Build shortlists from scouting + market listings
                 PipelineProcessor::build_shortlists(country, current_date);

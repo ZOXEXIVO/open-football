@@ -1,0 +1,49 @@
+{
+  "id": 322,
+  "name": "Flamengo",
+  "location": {
+    "city_id": 700
+  },
+  "finance": {
+    "balance": 57150000
+  },
+  "teams": [
+    {
+      "id": 322,
+      "name": "Flamengo",
+      "slug": "flamengo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8400,
+        "national": 8400,
+        "world": 8400
+      }
+    },
+    {
+      "id": 99800001,
+      "name": "Flamengo",
+      "slug": "flamengo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2520,
+        "national": 2520,
+        "world": 2520
+      }
+    },
+    {
+      "id": 99800002,
+      "name": "Flamengo",
+      "slug": "flamengo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1680,
+        "national": 1680,
+        "world": 1680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

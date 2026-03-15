@@ -1,0 +1,49 @@
+{
+  "id": 2093,
+  "name": "Cultural Leonesa",
+  "location": {
+    "city_id": 638
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 2093,
+      "name": "Cultural Leonesa",
+      "slug": "cultural-leonesa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 99700037,
+      "name": "Cultural Leonesa",
+      "slug": "cultural-leonesa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 99700038,
+      "name": "Cultural Leonesa",
+      "slug": "cultural-leonesa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

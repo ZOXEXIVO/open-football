@@ -1,0 +1,49 @@
+{
+  "id": 104386,
+  "name": "Union Magdalena",
+  "location": {
+    "city_id": 1515
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 104386,
+      "name": "Union Magdalena",
+      "slug": "union-magdalena",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 88500031,
+      "name": "Union Magdalena",
+      "slug": "union-magdalena-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 88500032,
+      "name": "Union Magdalena",
+      "slug": "union-magdalena-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

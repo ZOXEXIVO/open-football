@@ -1,0 +1,49 @@
+{
+  "id": 983,
+  "name": "Panathinaikos",
+  "location": {
+    "city_id": 1301
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 983,
+      "name": "Panathinaikos",
+      "slug": "panathinaikos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 88300003,
+      "name": "Panathinaikos",
+      "slug": "panathinaikos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 88300004,
+      "name": "Panathinaikos",
+      "slug": "panathinaikos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

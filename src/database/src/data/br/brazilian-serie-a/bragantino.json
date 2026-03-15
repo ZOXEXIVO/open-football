@@ -1,0 +1,49 @@
+{
+  "id": 317,
+  "name": "Bragantino",
+  "location": {
+    "city_id": 714
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 317,
+      "name": "Bragantino",
+      "slug": "bragantino",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6800,
+        "national": 6800,
+        "world": 6800
+      }
+    },
+    {
+      "id": 99800029,
+      "name": "Bragantino",
+      "slug": "bragantino-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2040,
+        "national": 2040,
+        "world": 2040
+      }
+    },
+    {
+      "id": 99800030,
+      "name": "Bragantino",
+      "slug": "bragantino-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1360,
+        "national": 1360,
+        "world": 1360
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#006400"
+  }
+}

@@ -143,13 +143,41 @@ impl Club {
             self.audit_squad_utilization(date);
         }
 
-        // Academy graduations at season start
+        // Season start: reset player states and graduate academy players
         let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
+            self.process_pre_season_reset();
             result.academy_transfers = self.process_academy_graduations(date);
         }
 
         result
+    }
+
+    /// Pre-season reset: restore player conditions and clear lingering statuses.
+    /// Called once at season start so teams begin with full healthy squads.
+    fn process_pre_season_reset(&mut self) {
+        for team in &mut self.teams.teams {
+            for player in &mut team.players.players {
+                // Restore condition to pre-season fitness level (85%)
+                if player.player_attributes.condition < 8500 && !player.player_attributes.is_injured {
+                    player.player_attributes.condition = 8500;
+                }
+
+                // Clear stale Int status (should have been released by national team,
+                // but safety net in case tournament release was missed)
+                player.statuses.remove(PlayerStatusType::Int);
+
+                // Reset ban flags for new season
+                player.player_attributes.is_banned = false;
+
+                // Reset statistics for new season
+                player.statistics = Default::default();
+                player.friendly_statistics = Default::default();
+
+                // Reset days since last match (pre-season training counts)
+                player.player_attributes.days_since_last_match = 7;
+            }
+        }
     }
 
     /// Graduate best academy players to U18 team (5-10 per year).

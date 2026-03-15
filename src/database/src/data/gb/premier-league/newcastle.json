@@ -1,0 +1,49 @@
+{
+  "id": 688,
+  "name": "Newcastle United",
+  "location": {
+    "city_id": 506
+  },
+  "finance": {
+    "balance": 114300000
+  },
+  "teams": [
+    {
+      "id": 688,
+      "name": "Newcastle United",
+      "slug": "newcastle",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8200,
+        "national": 8200,
+        "world": 8200
+      }
+    },
+    {
+      "id": 99500013,
+      "name": "Newcastle United",
+      "slug": "newcastle-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2460,
+        "national": 2460,
+        "world": 2460
+      }
+    },
+    {
+      "id": 99500014,
+      "name": "Newcastle United",
+      "slug": "newcastle-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1640,
+        "national": 1640,
+        "world": 1640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#241f20",
+    "foreground": "#ffffff"
+  }
+}

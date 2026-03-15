@@ -1,0 +1,49 @@
+{
+  "id": 618,
+  "name": "Brighton & Hove Albion",
+  "location": {
+    "city_id": 509
+  },
+  "finance": {
+    "balance": 69850000
+  },
+  "teams": [
+    {
+      "id": 618,
+      "name": "Brighton & Hove Albion",
+      "slug": "brighton",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 99500019,
+      "name": "Brighton & Hove Albion",
+      "slug": "brighton-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 99500020,
+      "name": "Brighton & Hove Albion",
+      "slug": "brighton-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0057b8",
+    "foreground": "#ffffff"
+  }
+}

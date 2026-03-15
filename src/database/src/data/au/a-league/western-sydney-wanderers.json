@@ -1,0 +1,38 @@
+{
+  "id": 15035999,
+  "name": "Western Sydney Wanderers",
+  "location": {
+    "city_id": 1003
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 15035999,
+      "name": "Western Sydney Wanderers",
+      "slug": "western-sydney-wanderers",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 99020008,
+      "name": "Western Sydney Wanderers",
+      "slug": "western-sydney-wanderers-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

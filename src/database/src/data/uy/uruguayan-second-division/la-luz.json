@@ -1,0 +1,49 @@
+{
+  "id": 5512782,
+  "name": "La Luz",
+  "location": {
+    "city_id": 1128
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 5512782,
+      "name": "La Luz",
+      "slug": "la-luz",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 88150017,
+      "name": "La Luz",
+      "slug": "la-luz-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 88150018,
+      "name": "La Luz",
+      "slug": "la-luz-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

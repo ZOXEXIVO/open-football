@@ -1,0 +1,49 @@
+{
+  "id": 872,
+  "name": "RC Strasbourg",
+  "location": {
+    "city_id": 408
+  },
+  "finance": {
+    "balance": 22860000
+  },
+  "teams": [
+    {
+      "id": 872,
+      "name": "RC Strasbourg",
+      "slug": "strasbourg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6800,
+        "national": 6800,
+        "world": 6800
+      }
+    },
+    {
+      "id": 99400017,
+      "name": "RC Strasbourg",
+      "slug": "strasbourg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2040,
+        "national": 2040,
+        "world": 2040
+      }
+    },
+    {
+      "id": 99400018,
+      "name": "RC Strasbourg",
+      "slug": "strasbourg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1360,
+        "national": 1360,
+        "world": 1360
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

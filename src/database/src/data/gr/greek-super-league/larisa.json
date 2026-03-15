@@ -1,0 +1,49 @@
+{
+  "id": 978,
+  "name": "AEL Larisa",
+  "location": {
+    "city_id": 1309
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 978,
+      "name": "AEL Larisa",
+      "slug": "larisa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 88300019,
+      "name": "AEL Larisa",
+      "slug": "larisa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 88300020,
+      "name": "AEL Larisa",
+      "slug": "larisa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

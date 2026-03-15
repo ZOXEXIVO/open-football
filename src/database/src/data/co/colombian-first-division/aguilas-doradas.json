@@ -1,0 +1,49 @@
+{
+  "id": 8830831,
+  "name": "Aguilas Doradas",
+  "location": {
+    "city_id": 1519
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 8830831,
+      "name": "Aguilas Doradas",
+      "slug": "aguilas-doradas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 88500039,
+      "name": "Aguilas Doradas",
+      "slug": "aguilas-doradas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 88500040,
+      "name": "Aguilas Doradas",
+      "slug": "aguilas-doradas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

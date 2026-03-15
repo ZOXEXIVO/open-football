@@ -1,0 +1,49 @@
+{
+  "id": 1728,
+  "name": "Racing Santander",
+  "location": {
+    "city_id": 629
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1728,
+      "name": "Racing Santander",
+      "slug": "racing-santander",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 99700019,
+      "name": "Racing Santander",
+      "slug": "racing-santander-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 99700020,
+      "name": "Racing Santander",
+      "slug": "racing-santander-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

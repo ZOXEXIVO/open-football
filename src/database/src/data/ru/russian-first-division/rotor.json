@@ -1,0 +1,49 @@
+{
+  "id": 1527,
+  "name": "Rotor",
+  "location": {
+    "city_id": 209
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1527,
+      "name": "Rotor",
+      "slug": "rotor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 99200019,
+      "name": "Rotor",
+      "slug": "rotor-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 99200020,
+      "name": "Rotor",
+      "slug": "rotor-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

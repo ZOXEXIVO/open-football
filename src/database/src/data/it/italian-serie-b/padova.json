@@ -1,0 +1,49 @@
+{
+  "id": 1154,
+  "name": "Padova",
+  "location": {
+    "city_id": 537
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1154,
+      "name": "Padova",
+      "slug": "padova",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4550,
+        "national": 4550,
+        "world": 4550
+      }
+    },
+    {
+      "id": 98036655,
+      "name": "Padova",
+      "slug": "padova-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1365,
+        "national": 1365,
+        "world": 1365
+      }
+    },
+    {
+      "id": 98036656,
+      "name": "Padova",
+      "slug": "padova-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 910,
+        "national": 910,
+        "world": 910
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#dc0000"
+  }
+}

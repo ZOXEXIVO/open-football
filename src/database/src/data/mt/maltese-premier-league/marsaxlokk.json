@@ -1,0 +1,38 @@
+{
+  "id": 138209,
+  "name": "Marsaxlokk",
+  "location": {
+    "city_id": 908
+  },
+  "finance": {
+    "balance": 889000
+  },
+  "teams": [
+    {
+      "id": 138209,
+      "name": "Marsaxlokk",
+      "slug": "marsaxlokk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99010017,
+      "name": "Marsaxlokk",
+      "slug": "marsaxlokk-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 630,
+        "national": 630,
+        "world": 630
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1747,
+  "name": "Real Valladolid",
+  "location": {
+    "city_id": 624
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 1747,
+      "name": "Real Valladolid",
+      "slug": "valladolid",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 99700009,
+      "name": "Real Valladolid",
+      "slug": "valladolid-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 99700010,
+      "name": "Real Valladolid",
+      "slug": "valladolid-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

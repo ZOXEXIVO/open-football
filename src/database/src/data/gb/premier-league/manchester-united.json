@@ -1,0 +1,49 @@
+{
+  "id": 680,
+  "name": "Manchester United",
+  "location": {
+    "city_id": 504
+  },
+  "finance": {
+    "balance": 177800000
+  },
+  "teams": [
+    {
+      "id": 680,
+      "name": "Manchester United",
+      "slug": "manchester-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 9200,
+        "national": 9200,
+        "world": 9200
+      }
+    },
+    {
+      "id": 99500009,
+      "name": "Manchester United",
+      "slug": "manchester-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2760,
+        "national": 2760,
+        "world": 2760
+      }
+    },
+    {
+      "id": 99500010,
+      "name": "Manchester United",
+      "slug": "manchester-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1840,
+        "national": 1840,
+        "world": 1840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#da291c",
+    "foreground": "#ffffff"
+  }
+}

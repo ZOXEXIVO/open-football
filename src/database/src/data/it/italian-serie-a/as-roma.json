@@ -1,0 +1,49 @@
+{
+  "id": 1100,
+  "name": "AS Roma",
+  "location": {
+    "city_id": 553
+  },
+  "finance": {
+    "balance": 44450000
+  },
+  "teams": [
+    {
+      "id": 1100,
+      "name": "AS Roma",
+      "slug": "as-roma",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8100,
+        "national": 8100,
+        "world": 8100
+      }
+    },
+    {
+      "id": 98036569,
+      "name": "AS Roma",
+      "slug": "as-roma-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 4800,
+        "national": 4500,
+        "world": 4200
+      }
+    },
+    {
+      "id": 98036570,
+      "name": "AS Roma",
+      "slug": "as-roma-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 2800,
+        "national": 2600,
+        "world": 2500
+      }
+    }
+  ],
+  "colors": {
+    "background": "#4d1f1f",
+    "foreground": "#ffffff"
+  }
+}

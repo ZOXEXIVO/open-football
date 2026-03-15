@@ -1,0 +1,49 @@
+{
+  "id": 423,
+  "name": "Santa Fe",
+  "location": {
+    "city_id": 1504
+  },
+  "finance": {
+    "balance": 8890000
+  },
+  "teams": [
+    {
+      "id": 423,
+      "name": "Santa Fe",
+      "slug": "santa-fe",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 88500009,
+      "name": "Santa Fe",
+      "slug": "santa-fe-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 88500010,
+      "name": "Santa Fe",
+      "slug": "santa-fe-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 2194,
+  "name": "Palermo",
+  "location": {
+    "city_id": 489
+  },
+  "finance": {
+    "balance": 8890000
+  },
+  "teams": [
+    {
+      "id": 2194,
+      "name": "Palermo",
+      "slug": "palermo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6350,
+        "national": 6350,
+        "world": 6350
+      }
+    },
+    {
+      "id": 98037788,
+      "name": "Palermo",
+      "slug": "palermo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1905,
+        "national": 1905,
+        "world": 1905
+      }
+    },
+    {
+      "id": 98037789,
+      "name": "Palermo",
+      "slug": "palermo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1270,
+        "national": 1270,
+        "world": 1270
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e8afe7",
+    "foreground": "#000000"
+  }
+}

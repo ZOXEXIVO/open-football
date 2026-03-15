@@ -1,0 +1,49 @@
+{
+  "id": 338,
+  "name": "São Paulo",
+  "location": {
+    "city_id": 708
+  },
+  "finance": {
+    "balance": 27940000
+  },
+  "teams": [
+    {
+      "id": 338,
+      "name": "São Paulo",
+      "slug": "sao-paulo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7600,
+        "national": 7600,
+        "world": 7600
+      }
+    },
+    {
+      "id": 99800017,
+      "name": "São Paulo",
+      "slug": "sao-paulo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2280,
+        "national": 2280,
+        "world": 2280
+      }
+    },
+    {
+      "id": 99800018,
+      "name": "São Paulo",
+      "slug": "sao-paulo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1520,
+        "national": 1520,
+        "world": 1520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

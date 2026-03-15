@@ -1,0 +1,37 @@
+{
+  "id": 140,
+  "slug": "uruguayan-first-division",
+  "name": "Primera Division",
+  "reputation": 6000,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 10,
+      "from_month": 2,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 7,
+      "to_day": 10,
+      "to_month": 12
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1649,
+      "weight": 5
+    },
+    {
+      "country_id": 1651,
+      "weight": 3
+    },
+    {
+      "country_id": 776,
+      "weight": 1
+    }
+  ]
+}

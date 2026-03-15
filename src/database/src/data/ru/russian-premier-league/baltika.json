@@ -1,0 +1,49 @@
+{
+  "id": 1301106,
+  "name": "Baltika",
+  "location": {
+    "city_id": 111
+  },
+  "finance": {
+    "balance": 27940000
+  },
+  "teams": [
+    {
+      "id": 1301106,
+      "name": "Baltika",
+      "slug": "baltika",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 99100023,
+      "name": "Baltika",
+      "slug": "baltika-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 99100024,
+      "name": "Baltika",
+      "slug": "baltika-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#00529c",
+    "foreground": "#ffffff"
+  }
+}

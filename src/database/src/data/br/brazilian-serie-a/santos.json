@@ -1,0 +1,49 @@
+{
+  "id": 335,
+  "name": "Santos",
+  "location": {
+    "city_id": 707
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 335,
+      "name": "Santos",
+      "slug": "santos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 99800015,
+      "name": "Santos",
+      "slug": "santos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 99800016,
+      "name": "Santos",
+      "slug": "santos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  }
+}

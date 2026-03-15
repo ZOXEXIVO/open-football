@@ -1,0 +1,49 @@
+{
+  "id": 2005,
+  "name": "FC Lorient",
+  "location": {
+    "city_id": 416
+  },
+  "finance": {
+    "balance": 13970000
+  },
+  "teams": [
+    {
+      "id": 2005,
+      "name": "FC Lorient",
+      "slug": "lorient",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 99400033,
+      "name": "FC Lorient",
+      "slug": "lorient-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 99400034,
+      "name": "FC Lorient",
+      "slug": "lorient-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

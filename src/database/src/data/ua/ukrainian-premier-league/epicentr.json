@@ -1,0 +1,49 @@
+{
+  "id": 71017165,
+  "name": "Epicentr",
+  "location": {
+    "city_id": 1714
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 71017165,
+      "name": "Epicentr",
+      "slug": "epicentr",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 88700029,
+      "name": "Epicentr",
+      "slug": "epicentr-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 88700030,
+      "name": "Epicentr",
+      "slug": "epicentr-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

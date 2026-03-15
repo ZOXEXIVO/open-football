@@ -2,9 +2,9 @@ mod generators;
 mod loaders;
 
 pub use loaders::{
-    ClubEntity, ClubLoader, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
-    ForeignPlayerEntry, LeagueEntity, LeagueLoader, NamesByCountryEntity, NamesByCountryLoader,
-    NationalCompetitionEntity, NationalCompetitionLoader,
+    ClubEntity, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
+    ForeignPlayerEntry, LeagueEntity, NamesByCountryEntity,
+    NationalCompetitionEntity, NationalCompetitionLoader, DataTreeLoader,
 };
 
 pub use generators::DatabaseGenerator;
@@ -23,13 +23,17 @@ pub struct DatabaseLoader;
 
 impl DatabaseLoader {
     pub fn load() -> DatabaseEntity {
+        let continents = ContinentLoader::load();
+        let countries = CountryLoader::load();
+        let tree = DataTreeLoader::load(&countries);
+
         DatabaseEntity {
-            continents: ContinentLoader::load(),
-            countries: CountryLoader::load(),
-            leagues: LeagueLoader::load(),
-            clubs: ClubLoader::load(),
+            continents,
+            countries,
+            leagues: tree.leagues,
+            clubs: tree.clubs,
             national_competitions: NationalCompetitionLoader::load(),
-            names_by_country: NamesByCountryLoader::load(),
+            names_by_country: tree.names_by_country,
         }
     }
 }

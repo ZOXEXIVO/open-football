@@ -1,0 +1,17 @@
+{
+  "first_names": [
+    "Alexandros", "Anastasios", "Andreas", "Angelos", "Apostolos", "Christos", "Dimitrios",
+    "Efthymios", "Eleftherios", "Emmanouil", "Evangelos", "Fotios", "Georgios", "Grigorios",
+    "Ioannis", "Konstantinos", "Kostas", "Lazaros", "Leonidas", "Manolis", "Michalis",
+    "Nikos", "Nikolaos", "Panagiotis", "Pavlos", "Petros", "Sotirios", "Spyridon",
+    "Stavros", "Stylianos", "Thanasis", "Theodoros", "Vasileios", "Xenofon"
+  ],
+  "last_names": [
+    "Alexiou", "Androutsos", "Bakasetas", "Diamantakos", "Donis", "Fortounis", "Galanopoulos",
+    "Georgiadis", "Giakoumakis", "Ioannidis", "Karelis", "Kourbelis", "Lampropoulos",
+    "Limnios", "Mandalos", "Manolas", "Mavropanos", "Mitroglou", "Nikolaou", "Papadopoulos",
+    "Papagiannopoulos", "Papanikolaou", "Papastathopulos", "Pelkas", "Retsos", "Samaris",
+    "Siopis", "Siovas", "Stafylidis", "Tachtsidis", "Torosidis", "Tsadjaris", "Tsimikas",
+    "Tzavellas", "Tzolis", "Vlachodimos", "Vrousai", "Xenopoulos"
+  ]
+}

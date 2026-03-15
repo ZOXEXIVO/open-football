@@ -1,0 +1,49 @@
+{
+  "id": 1487,
+  "name": "Benfica",
+  "location": {
+    "city_id": 1400
+  },
+  "finance": {
+    "balance": 101600000
+  },
+  "teams": [
+    {
+      "id": 1487,
+      "name": "Benfica",
+      "slug": "benfica",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8400,
+        "national": 8400,
+        "world": 8400
+      }
+    },
+    {
+      "id": 88400001,
+      "name": "Benfica",
+      "slug": "benfica-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2520,
+        "national": 2520,
+        "world": 2520
+      }
+    },
+    {
+      "id": 88400002,
+      "name": "Benfica",
+      "slug": "benfica-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1680,
+        "national": 1680,
+        "world": 1680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

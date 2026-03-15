@@ -1,0 +1,49 @@
+{
+  "id": 1678,
+  "name": "Leganés",
+  "location": {
+    "city_id": 625
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1678,
+      "name": "Leganés",
+      "slug": "leganes",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 99700011,
+      "name": "Leganés",
+      "slug": "leganes-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 99700012,
+      "name": "Leganés",
+      "slug": "leganes-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

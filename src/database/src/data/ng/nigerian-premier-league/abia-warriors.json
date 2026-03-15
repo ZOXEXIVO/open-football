@@ -1,0 +1,38 @@
+{
+  "id": 13145304,
+  "name": "Abia Warriors",
+  "location": {
+    "city_id": 1812
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 13145304,
+      "name": "Abia Warriors",
+      "slug": "abia-warriors",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 88800026,
+      "name": "Abia Warriors",
+      "slug": "abia-warriors-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

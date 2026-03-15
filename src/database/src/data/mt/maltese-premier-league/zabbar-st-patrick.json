@@ -1,0 +1,38 @@
+{
+  "id": 1300787,
+  "name": "Zabbar St. Patrick",
+  "location": {
+    "city_id": 911
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 1300787,
+      "name": "Zabbar St. Patrick",
+      "slug": "zabbar-st-patrick",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 99010023,
+      "name": "Zabbar St. Patrick",
+      "slug": "zabbar-st-patrick-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 540,
+        "national": 540,
+        "world": 540
+      }
+    }
+  ],
+  "colors": {
+    "background": "#008000",
+    "foreground": "#ffffff"
+  }
+}

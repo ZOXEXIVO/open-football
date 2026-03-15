@@ -1,0 +1,49 @@
+{
+  "id": 427,
+  "name": "Atletico Nacional",
+  "location": {
+    "city_id": 1500
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 427,
+      "name": "Atletico Nacional",
+      "slug": "atletico-nacional",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 88500001,
+      "name": "Atletico Nacional",
+      "slug": "atletico-nacional-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 88500002,
+      "name": "Atletico Nacional",
+      "slug": "atletico-nacional-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

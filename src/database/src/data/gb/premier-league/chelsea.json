@@ -1,0 +1,49 @@
+{
+  "id": 630,
+  "name": "Chelsea",
+  "location": {
+    "city_id": 503
+  },
+  "finance": {
+    "balance": 203200000
+  },
+  "teams": [
+    {
+      "id": 630,
+      "name": "Chelsea",
+      "slug": "chelsea",
+      "team_type": "Main",
+      "reputation": {
+        "home": 9000,
+        "national": 9000,
+        "world": 9000
+      }
+    },
+    {
+      "id": 99500007,
+      "name": "Chelsea",
+      "slug": "chelsea-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2700,
+        "national": 2700,
+        "world": 2700
+      }
+    },
+    {
+      "id": 99500008,
+      "name": "Chelsea",
+      "slug": "chelsea-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#034694",
+    "foreground": "#ffffff"
+  }
+}

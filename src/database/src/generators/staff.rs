@@ -128,6 +128,7 @@ impl StaffGenerator {
                 judging_player_ability: IntegerUtils::random(attr_min, attr_max) as u8,
                 judging_player_potential: IntegerUtils::random(attr_min, attr_max) as u8,
                 tactical_knowledge: IntegerUtils::random(attr_min, attr_max) as u8,
+                known_regions: Vec::new(), // populated after creation based on scout nationality/assignment
             },
             data_analysis: StaffDataAnalysis {
                 judging_player_data: IntegerUtils::random(attr_min, attr_max) as u8,

@@ -40,6 +40,11 @@ pub struct StaffKnowledge {
     pub judging_player_ability: u8,
     pub judging_player_potential: u8,
     pub tactical_knowledge: u8,
+    /// Country IDs this scout knows well (can scout effectively there).
+    /// Like FM: scouts have knowledge of specific nations/regions.
+    /// Scouting in known regions has normal accuracy; unknown regions have
+    /// increased error and fewer observations per day.
+    pub known_regions: Vec<u32>,
 }
 
 #[derive(Debug, Clone)]

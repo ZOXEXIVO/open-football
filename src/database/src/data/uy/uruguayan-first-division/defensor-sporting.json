@@ -1,0 +1,49 @@
+{
+  "id": 1919,
+  "name": "Defensor Sporting",
+  "location": {
+    "city_id": 1102
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1919,
+      "name": "Defensor Sporting",
+      "slug": "defensor-sporting",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 88100005,
+      "name": "Defensor Sporting",
+      "slug": "defensor-sporting-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 88100006,
+      "name": "Defensor Sporting",
+      "slug": "defensor-sporting-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

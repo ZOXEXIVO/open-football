@@ -1,0 +1,49 @@
+{
+  "id": 130342,
+  "name": "Hatayspor",
+  "location": {
+    "city_id": 1614
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 130342,
+      "name": "Hatayspor",
+      "slug": "hatayspor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 88600029,
+      "name": "Hatayspor",
+      "slug": "hatayspor-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 88600030,
+      "name": "Hatayspor",
+      "slug": "hatayspor-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

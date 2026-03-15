@@ -514,6 +514,13 @@ fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGroup) -
 
 // ========== AVAILABILITY CHECK ==========
 
+/// Minimum condition to be physically able to play (15%).
+/// The scoring engine's `condition_floor_penalty()` already heavily penalizes
+/// low-condition players, so this hard gate only blocks truly exhausted players.
+/// Using 40% here previously caused teams to field fewer than 11 players
+/// because post-match condition floors at 30% and recovery is ~2-5%/day.
+const HARD_CONDITION_FLOOR: u32 = 15;
+
 fn is_available(player: &Player, is_friendly: bool) -> bool {
     if player.player_attributes.is_injured {
         return false;
@@ -522,8 +529,8 @@ fn is_available(player: &Player, is_friendly: bool) -> bool {
         return false;
     }
 
-    // Hard condition floor — a player below 10% condition physically cannot play
-    if player.player_attributes.condition_percentage() < 40 {
+    // Hard condition floor — only block players who are physically unable to play
+    if player.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR {
         return false;
     }
 
@@ -531,12 +538,10 @@ fn is_available(player: &Player, is_friendly: bool) -> bool {
         if player.player_attributes.is_banned {
             return false;
         }
-        let s = player.statuses.get();
-        if s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa) {
-            return false;
-        }
+        // Lst (transfer listed) and Loa (loan available) do NOT prevent playing.
+        // Players remain available for selection until they actually leave the club.
     }
-    
+
     true
 }
 
@@ -587,17 +592,31 @@ impl SquadSelector {
         let gk_count = available.len() - outfield_count;
 
         if available.len() < DEFAULT_SQUAD_SIZE {
-            debug!(
-                "Squad selection for team {}: only {} available ({} outfield, {} GK, {} reserves offered)",
-                team.name, available.len(), outfield_count, gk_count, reserve_players.len()
+            // Diagnose why players are unavailable
+            let all_players = team.players.players();
+            let injured_count = all_players.iter().filter(|p| p.player_attributes.is_injured).count();
+            let int_count = all_players.iter().filter(|p| p.statuses.get().contains(&PlayerStatusType::Int)).count();
+            let low_condition = all_players.iter().filter(|p| !p.player_attributes.is_injured && p.player_attributes.condition_percentage() < HARD_CONDITION_FLOOR).count();
+            let banned_count = if !ctx.is_friendly { all_players.iter().filter(|p| p.player_attributes.is_banned).count() } else { 0 };
+            let lst_loa_count = if !ctx.is_friendly {
+                all_players.iter().filter(|p| {
+                    let s = p.statuses.get();
+                    s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa)
+                }).count()
+            } else { 0 };
+
+            log::warn!(
+                "Squad selection for team {}: only {} available out of {} registered \
+                (injured={}, international={}, low_condition={}, banned={}, lst_loa={}, \
+                {} outfield, {} GK, {} reserves offered)",
+                team.name, available.len(), all_players.len(),
+                injured_count, int_count, low_condition, banned_count, lst_loa_count,
+                outfield_count, gk_count, reserve_players.len()
             );
-        } else {
+        } else if available.len() < DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE {
             debug!(
-                "Squad selection: {} available ({} outfield, {} GK, {} reserves)",
-                available.len(),
-                outfield_count,
-                gk_count,
-                reserve_players.len()
+                "Squad selection for team {}: only {} available (need {} for full squad+bench)",
+                team.name, available.len(), DEFAULT_SQUAD_SIZE + DEFAULT_BENCH_SIZE
             );
         }
 

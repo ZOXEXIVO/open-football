@@ -1,0 +1,49 @@
+{
+  "id": 477455,
+  "name": "Spartak Kostroma",
+  "location": {
+    "city_id": 213
+  },
+  "finance": {
+    "balance": 12700000
+  },
+  "teams": [
+    {
+      "id": 477455,
+      "name": "Spartak Kostroma",
+      "slug": "spartak-kostroma",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 99200027,
+      "name": "Spartak Kostroma",
+      "slug": "spartak-kostroma-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    },
+    {
+      "id": 99200028,
+      "name": "Spartak Kostroma",
+      "slug": "spartak-kostroma-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  }
+}

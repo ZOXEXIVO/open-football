@@ -1,0 +1,49 @@
+{
+  "id": 1895,
+  "name": "Shakhtar",
+  "location": {
+    "city_id": 1700
+  },
+  "finance": {
+    "balance": 57150000
+  },
+  "teams": [
+    {
+      "id": 1895,
+      "name": "Shakhtar",
+      "slug": "shakhtar-donetsk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7800,
+        "national": 7800,
+        "world": 7800
+      }
+    },
+    {
+      "id": 88700001,
+      "name": "Shakhtar",
+      "slug": "shakhtar-donetsk-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 2340,
+        "national": 2340,
+        "world": 2340
+      }
+    },
+    {
+      "id": 88700002,
+      "name": "Shakhtar",
+      "slug": "shakhtar-donetsk-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

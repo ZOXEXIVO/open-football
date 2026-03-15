@@ -1,0 +1,49 @@
+{
+  "id": 1921,
+  "name": "Nacional",
+  "location": {
+    "city_id": 1101
+  },
+  "finance": {
+    "balance": 13970000
+  },
+  "teams": [
+    {
+      "id": 1921,
+      "name": "Nacional",
+      "slug": "nacional",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 88100003,
+      "name": "Nacional",
+      "slug": "nacional-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 88100004,
+      "name": "Nacional",
+      "slug": "nacional-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

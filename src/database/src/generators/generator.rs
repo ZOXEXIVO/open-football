@@ -82,6 +82,12 @@ impl DatabaseGenerator {
     }
 
     fn generate_countries(continent: &ContinentEntity, data: &DatabaseEntity) -> Vec<Country> {
+        // Collect all country IDs that have clubs — scouts can know these regions
+        let all_country_ids: Vec<u32> = data.countries.iter()
+            .filter(|c| data.clubs.iter().any(|cl| cl.country_id == c.id))
+            .map(|c| c.id)
+            .collect();
+
         data
             .countries
             .iter()
@@ -108,6 +114,7 @@ impl DatabaseGenerator {
 
                 let mut clubs = DatabaseGenerator::generate_clubs(
                     country.id,
+                    &all_country_ids,
                     data,
                     &mut player_generator,
                     &mut staff_generator,
@@ -309,6 +316,7 @@ impl DatabaseGenerator {
 
     fn generate_clubs(
         country_id: u32,
+        all_country_ids: &[u32],
         data: &DatabaseEntity,
         player_generator: &mut PlayerGenerator,
         staff_generator: &mut StaffGenerator,
@@ -368,7 +376,7 @@ impl DatabaseGenerator {
                             ));
 
                             let staffs = StaffCollection::new(
-                                Self::generate_staffs(staff_generator, country_id, team_rep, &team_type)
+                                Self::generate_staffs(staff_generator, country_id, all_country_ids, team_rep, &team_type)
                             );
 
                             Team::builder()
@@ -470,32 +478,58 @@ impl DatabaseGenerator {
             player_generator.generate(country_id, pos, effective_rep, min_age, max_age, is_youth)
         };
 
-        for _ in 0..IntegerUtils::random(3, 5) {
+        // Main teams need larger squads to avoid fielding fewer than 11 after
+        // injuries, bans, international duty, and condition drops.
+        let (gk_range, def_range, mid_range, st_range) = match team_type {
+            TeamType::Main => ((3, 4), (6, 8), (9, 11), (4, 5)),
+            _ => ((3, 5), (4, 8), (7, 11), (2, 5)),
+        };
+
+        for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {
             players.push(generate_one(PositionType::Goalkeeper));
         }
-        for _ in 0..IntegerUtils::random(4, 8) {
+        for _ in 0..IntegerUtils::random(def_range.0, def_range.1) {
             players.push(generate_one(PositionType::Defender));
         }
-        for _ in 0..IntegerUtils::random(7, 11) {
+        for _ in 0..IntegerUtils::random(mid_range.0, mid_range.1) {
             players.push(generate_one(PositionType::Midfielder));
         }
-        for _ in 0..IntegerUtils::random(2, 5) {
+        for _ in 0..IntegerUtils::random(st_range.0, st_range.1) {
             players.push(generate_one(PositionType::Striker));
+        }
+
+        // Ensure main teams always have at least 25 players
+        if *team_type == TeamType::Main {
+            let positions = [PositionType::Defender, PositionType::Midfielder, PositionType::Striker];
+            let mut pos_idx = 0;
+            while players.len() < 25 {
+                players.push(generate_one(positions[pos_idx % positions.len()]));
+                pos_idx += 1;
+            }
         }
 
         players
     }
 
-    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
+    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, all_country_ids: &[u32], team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {
             // Only main team gets directors and scouts
             staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
             staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
-            staffs.push(staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation));
-            staffs.push(staff_generator.generate(country_id, StaffPosition::Scout, team_reputation));
-            staffs.push(staff_generator.generate(country_id, StaffPosition::Scout, team_reputation));
+
+            // Scouts get known_regions: home country + 1-3 random foreign countries
+            // Better clubs have scouts with wider knowledge networks
+            let mut chief_scout = staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation);
+            Self::assign_scout_regions(&mut chief_scout, country_id, all_country_ids, team_reputation);
+            staffs.push(chief_scout);
+
+            for _ in 0..2 {
+                let mut scout = staff_generator.generate(country_id, StaffPosition::Scout, team_reputation);
+                Self::assign_scout_regions(&mut scout, country_id, all_country_ids, team_reputation);
+                staffs.push(scout);
+            }
         }
 
         staffs.push(staff_generator.generate(country_id, StaffPosition::AssistantManager, team_reputation));
@@ -508,5 +542,36 @@ impl DatabaseGenerator {
         staffs.push(staff_generator.generate(country_id, StaffPosition::Physio, team_reputation));
 
         staffs
+    }
+
+    /// Give a scout knowledge of their home country + 1-3 random foreign countries.
+    /// Chief scouts and scouts at bigger clubs know more regions.
+    fn assign_scout_regions(staff: &mut Staff, home_country_id: u32, all_country_ids: &[u32], team_reputation: u16) {
+        let mut regions = vec![home_country_id];
+
+        // Foreign countries the scout knows (like FM's scout knowledge)
+        // Higher rep clubs = scouts with wider networks
+        let foreign_count = if team_reputation >= 7000 {
+            IntegerUtils::random(2, 4) as usize // Elite: 2-4 foreign regions
+        } else if team_reputation >= 5000 {
+            IntegerUtils::random(1, 3) as usize // Good: 1-3
+        } else {
+            IntegerUtils::random(0, 2) as usize // Small: 0-2
+        };
+
+        let foreign: Vec<u32> = all_country_ids.iter()
+            .filter(|&&id| id != home_country_id)
+            .copied()
+            .collect();
+
+        for _ in 0..foreign_count.min(foreign.len()) {
+            let idx = IntegerUtils::random(0, foreign.len() as i32) as usize;
+            let cid = foreign[idx % foreign.len()];
+            if !regions.contains(&cid) {
+                regions.push(cid);
+            }
+        }
+
+        staff.staff_attributes.knowledge.known_regions = regions;
     }
 }

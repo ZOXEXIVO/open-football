@@ -1,0 +1,49 @@
+{
+  "id": 4212197,
+  "name": "Mirandés",
+  "location": {
+    "city_id": 637
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 4212197,
+      "name": "Mirandés",
+      "slug": "mirandes",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 99700035,
+      "name": "Mirandés",
+      "slug": "mirandes-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 99700036,
+      "name": "Mirandés",
+      "slug": "mirandes-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

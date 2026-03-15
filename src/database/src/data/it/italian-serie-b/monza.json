@@ -1,0 +1,49 @@
+{
+  "id": 1149,
+  "name": "Monza",
+  "location": {
+    "city_id": 531
+  },
+  "finance": {
+    "balance": 11430000
+  },
+  "teams": [
+    {
+      "id": 1149,
+      "name": "Monza",
+      "slug": "monza",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3450,
+        "national": 3450,
+        "world": 3450
+      }
+    },
+    {
+      "id": 98036647,
+      "name": "Monza",
+      "slug": "monza-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1035,
+        "national": 1035,
+        "world": 1035
+      }
+    },
+    {
+      "id": 98036648,
+      "name": "Monza",
+      "slug": "monza-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 690,
+        "national": 690,
+        "world": 690
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff5151",
+    "foreground": "#111111"
+  }
+}

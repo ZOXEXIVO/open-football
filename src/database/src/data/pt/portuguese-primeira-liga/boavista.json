@@ -1,0 +1,49 @@
+{
+  "id": 1471,
+  "name": "Boavista",
+  "location": {
+    "city_id": 1406
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1471,
+      "name": "Boavista",
+      "slug": "boavista",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 88400013,
+      "name": "Boavista",
+      "slug": "boavista-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 88400014,
+      "name": "Boavista",
+      "slug": "boavista-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

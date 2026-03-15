@@ -1,0 +1,49 @@
+{
+  "id": 130341,
+  "name": "Gaziantep FK",
+  "location": {
+    "city_id": 1613
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 130341,
+      "name": "Gaziantep FK",
+      "slug": "gaziantep",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 88600027,
+      "name": "Gaziantep FK",
+      "slug": "gaziantep-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 88600028,
+      "name": "Gaziantep FK",
+      "slug": "gaziantep-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

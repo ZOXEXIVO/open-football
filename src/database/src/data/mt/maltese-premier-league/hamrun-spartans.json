@@ -1,0 +1,38 @@
+{
+  "id": 1242,
+  "name": "Hamrun Spartans",
+  "location": {
+    "city_id": 903
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 1242,
+      "name": "Hamrun Spartans",
+      "slug": "hamrun-spartans",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2500,
+        "national": 2500,
+        "world": 2500
+      }
+    },
+    {
+      "id": 99010007,
+      "name": "Hamrun Spartans",
+      "slug": "hamrun-spartans-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 750,
+        "national": 750,
+        "world": 750
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": 15051934,
+  "name": "Melbourne City",
+  "location": {
+    "city_id": 1001
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 15051934,
+      "name": "Melbourne City",
+      "slug": "melbourne-city",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 99020004,
+      "name": "Melbourne City",
+      "slug": "melbourne-city-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#6caddf",
+    "foreground": "#132257"
+  }
+}

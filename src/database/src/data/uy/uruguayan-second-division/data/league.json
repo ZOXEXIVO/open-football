@@ -1,0 +1,33 @@
+{
+  "id": 141,
+  "slug": "uruguayan-second-division",
+  "name": "Segunda Division",
+  "reputation": 3800,
+  "tier": 2,
+  "promotion_spots": 2,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 10,
+      "from_month": 2,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 7,
+      "to_day": 10,
+      "to_month": 12
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1649,
+      "weight": 4
+    },
+    {
+      "country_id": 1651,
+      "weight": 2
+    }
+  ]
+}

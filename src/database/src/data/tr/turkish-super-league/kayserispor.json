@@ -1,0 +1,49 @@
+{
+  "id": 1875,
+  "name": "Kayserispor",
+  "location": {
+    "city_id": 1612
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1875,
+      "name": "Kayserispor",
+      "slug": "kayserispor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 88600025,
+      "name": "Kayserispor",
+      "slug": "kayserispor-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 88600026,
+      "name": "Kayserispor",
+      "slug": "kayserispor-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#e2001a"
+  }
+}

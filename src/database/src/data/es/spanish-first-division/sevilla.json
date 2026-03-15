@@ -1,0 +1,49 @@
+{
+  "id": 1759,
+  "name": "Sevilla",
+  "location": {
+    "city_id": 603
+  },
+  "finance": {
+    "balance": 63500000
+  },
+  "teams": [
+    {
+      "id": 1759,
+      "name": "Sevilla",
+      "slug": "sevilla",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8000,
+        "national": 8000,
+        "world": 8000
+      }
+    },
+    {
+      "id": 99600007,
+      "name": "Sevilla",
+      "slug": "sevilla-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 99600008,
+      "name": "Sevilla",
+      "slug": "sevilla-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1600,
+        "national": 1600,
+        "world": 1600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

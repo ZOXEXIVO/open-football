@@ -1,0 +1,38 @@
+{
+  "id": 5410008,
+  "name": "Kwara United",
+  "location": {
+    "city_id": 1807
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 5410008,
+      "name": "Kwara United",
+      "slug": "kwara-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 88800016,
+      "name": "Kwara United",
+      "slug": "kwara-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

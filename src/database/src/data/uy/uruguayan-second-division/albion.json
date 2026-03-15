@@ -1,0 +1,49 @@
+{
+  "id": 78014931,
+  "name": "Albion",
+  "location": {
+    "city_id": 1132
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 78014931,
+      "name": "Albion",
+      "slug": "albion",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 88150025,
+      "name": "Albion",
+      "slug": "albion-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 88150026,
+      "name": "Albion",
+      "slug": "albion-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

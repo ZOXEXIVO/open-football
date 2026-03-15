@@ -1,0 +1,49 @@
+{
+  "id": 2000032127,
+  "name": "Poltava",
+  "location": {
+    "city_id": 1713
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 2000032127,
+      "name": "Poltava",
+      "slug": "poltava",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 88700027,
+      "name": "Poltava",
+      "slug": "poltava-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 88700028,
+      "name": "Poltava",
+      "slug": "poltava-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

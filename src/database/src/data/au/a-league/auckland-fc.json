@@ -1,0 +1,38 @@
+{
+  "id": 2000317186,
+  "name": "Auckland FC",
+  "location": {
+    "city_id": 1011
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 2000317186,
+      "name": "Auckland FC",
+      "slug": "auckland-fc",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 99020024,
+      "name": "Auckland FC",
+      "slug": "auckland-fc-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0a1e3f",
+    "foreground": "#c8a44e"
+  }
+}

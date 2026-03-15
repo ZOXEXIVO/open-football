@@ -1,0 +1,49 @@
+{
+  "id": 1733,
+  "name": "Real Betis",
+  "location": {
+    "city_id": 607
+  },
+  "finance": {
+    "balance": 50800000
+  },
+  "teams": [
+    {
+      "id": 1733,
+      "name": "Real Betis",
+      "slug": "real-betis",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 99600015,
+      "name": "Real Betis",
+      "slug": "real-betis-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 99600016,
+      "name": "Real Betis",
+      "slug": "real-betis-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

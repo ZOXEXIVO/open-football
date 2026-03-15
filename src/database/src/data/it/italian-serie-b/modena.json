@@ -1,0 +1,49 @@
+{
+  "id": 1147,
+  "name": "Modena",
+  "location": {
+    "city_id": 529
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1147,
+      "name": "Modena",
+      "slug": "modena",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5650,
+        "national": 5650,
+        "world": 5650
+      }
+    },
+    {
+      "id": 98036645,
+      "name": "Modena",
+      "slug": "modena-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1695,
+        "national": 1695,
+        "world": 1695
+      }
+    },
+    {
+      "id": 98036646,
+      "name": "Modena",
+      "slug": "modena-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1130,
+        "national": 1130,
+        "world": 1130
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ddc512",
+    "foreground": "#023386"
+  }
+}

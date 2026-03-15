@@ -1,0 +1,49 @@
+{
+  "id": 1108,
+  "name": "Avellino",
+  "location": {
+    "city_id": 467
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1108,
+      "name": "Avellino",
+      "slug": "avellino",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5650,
+        "national": 5650,
+        "world": 5650
+      }
+    },
+    {
+      "id": 98036581,
+      "name": "Avellino",
+      "slug": "avellino-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1695,
+        "national": 1695,
+        "world": 1695
+      }
+    },
+    {
+      "id": 98036582,
+      "name": "Avellino",
+      "slug": "avellino-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1130,
+        "national": 1130,
+        "world": 1130
+      }
+    }
+  ],
+  "colors": {
+    "background": "#089667",
+    "foreground": "#111111"
+  }
+}

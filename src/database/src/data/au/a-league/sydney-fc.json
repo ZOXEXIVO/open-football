@@ -1,0 +1,38 @@
+{
+  "id": 1300490,
+  "name": "Sydney FC",
+  "location": {
+    "city_id": 1000
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1300490,
+      "name": "Sydney FC",
+      "slug": "sydney-fc",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 99020002,
+      "name": "Sydney FC",
+      "slug": "sydney-fc-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

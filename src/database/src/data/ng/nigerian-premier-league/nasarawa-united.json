@@ -1,0 +1,38 @@
+{
+  "id": 8632213,
+  "name": "Nasarawa United",
+  "location": {
+    "city_id": 1810
+  },
+  "finance": {
+    "balance": 889000
+  },
+  "teams": [
+    {
+      "id": 8632213,
+      "name": "Nasarawa United",
+      "slug": "nasarawa-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 88800022,
+      "name": "Nasarawa United",
+      "slug": "nasarawa-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

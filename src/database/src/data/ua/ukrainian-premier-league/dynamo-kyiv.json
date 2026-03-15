@@ -1,0 +1,49 @@
+{
+  "id": 1885,
+  "name": "Dynamo Kyiv",
+  "location": {
+    "city_id": 1701
+  },
+  "finance": {
+    "balance": 38100000
+  },
+  "teams": [
+    {
+      "id": 1885,
+      "name": "Dynamo Kyiv",
+      "slug": "dynamo-kyiv",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 88700003,
+      "name": "Dynamo Kyiv",
+      "slug": "dynamo-kyiv-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 88700004,
+      "name": "Dynamo Kyiv",
+      "slug": "dynamo-kyiv-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

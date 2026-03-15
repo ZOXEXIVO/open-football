@@ -1,0 +1,38 @@
+{
+  "id": 13188906,
+  "name": "Katsina United",
+  "location": {
+    "city_id": 1813
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 13188906,
+      "name": "Katsina United",
+      "slug": "katsina-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 88800028,
+      "name": "Katsina United",
+      "slug": "katsina-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

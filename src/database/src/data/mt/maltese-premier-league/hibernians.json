@@ -1,0 +1,38 @@
+{
+  "id": 1243,
+  "name": "Hibernians",
+  "location": {
+    "city_id": 901
+  },
+  "finance": {
+    "balance": 2286000
+  },
+  "teams": [
+    {
+      "id": 1243,
+      "name": "Hibernians",
+      "slug": "hibernians",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2700,
+        "national": 2700,
+        "world": 2700
+      }
+    },
+    {
+      "id": 99010003,
+      "name": "Hibernians",
+      "slug": "hibernians-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 810,
+        "national": 810,
+        "world": 810
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

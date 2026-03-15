@@ -1,0 +1,49 @@
+{
+  "id": 865,
+  "name": "Olympique Lyonnais",
+  "location": {
+    "city_id": 402
+  },
+  "finance": {
+    "balance": 57150000
+  },
+  "teams": [
+    {
+      "id": 865,
+      "name": "Olympique Lyonnais",
+      "slug": "olympique-lyonnais",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7800,
+        "national": 7800,
+        "world": 7800
+      }
+    },
+    {
+      "id": 99400005,
+      "name": "Olympique Lyonnais",
+      "slug": "olympique-lyonnais-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2340,
+        "national": 2340,
+        "world": 2340
+      }
+    },
+    {
+      "id": 99400006,
+      "name": "Olympique Lyonnais",
+      "slug": "olympique-lyonnais-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

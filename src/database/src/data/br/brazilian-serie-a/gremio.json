@@ -1,0 +1,49 @@
+{
+  "id": 324,
+  "name": "Grêmio",
+  "location": {
+    "city_id": 706
+  },
+  "finance": {
+    "balance": 25400000
+  },
+  "teams": [
+    {
+      "id": 324,
+      "name": "Grêmio",
+      "slug": "gremio",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7600,
+        "national": 7600,
+        "world": 7600
+      }
+    },
+    {
+      "id": 99800013,
+      "name": "Grêmio",
+      "slug": "gremio-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2280,
+        "national": 2280,
+        "world": 2280
+      }
+    },
+    {
+      "id": 99800014,
+      "name": "Grêmio",
+      "slug": "gremio-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1520,
+        "national": 1520,
+        "world": 1520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0098d9",
+    "foreground": "#ffffff"
+  }
+}

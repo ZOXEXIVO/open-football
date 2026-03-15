@@ -1,0 +1,38 @@
+{
+  "id": 131252,
+  "name": "Bendel Insurance",
+  "location": {
+    "city_id": 1809
+  },
+  "finance": {
+    "balance": 889000
+  },
+  "teams": [
+    {
+      "id": 131252,
+      "name": "Bendel Insurance",
+      "slug": "bendel-insurance",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 88800020,
+      "name": "Bendel Insurance",
+      "slug": "bendel-insurance-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

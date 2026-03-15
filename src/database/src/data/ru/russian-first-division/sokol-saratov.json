@@ -1,0 +1,49 @@
+{
+  "id": 130511,
+  "name": "Sokol Saratov",
+  "location": {
+    "city_id": 212
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 130511,
+      "name": "Sokol Saratov",
+      "slug": "sokol-saratov",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 99200025,
+      "name": "Sokol Saratov",
+      "slug": "sokol-saratov-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 99200026,
+      "name": "Sokol Saratov",
+      "slug": "sokol-saratov-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0066cc",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1478,
+  "name": "FC Porto",
+  "location": {
+    "city_id": 1401
+  },
+  "finance": {
+    "balance": 82550000
+  },
+  "teams": [
+    {
+      "id": 1478,
+      "name": "FC Porto",
+      "slug": "porto",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8200,
+        "national": 8200,
+        "world": 8200
+      }
+    },
+    {
+      "id": 88400003,
+      "name": "FC Porto",
+      "slug": "porto-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2460,
+        "national": 2460,
+        "world": 2460
+      }
+    },
+    {
+      "id": 88400004,
+      "name": "FC Porto",
+      "slug": "porto-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1640,
+        "national": 1640,
+        "world": 1640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

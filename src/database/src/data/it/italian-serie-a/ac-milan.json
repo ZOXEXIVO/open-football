@@ -1,0 +1,49 @@
+{
+  "id": 1099,
+  "name": "AC Milan",
+  "location": {
+    "city_id": 2
+  },
+  "finance": {
+    "balance": 60960000
+  },
+  "teams": [
+    {
+      "id": 1099,
+      "name": "AC Milan",
+      "slug": "ac-milan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8450,
+        "national": 8450,
+        "world": 8450
+      }
+    },
+    {
+      "id": 98036567,
+      "name": "AC Milan",
+      "slug": "ac-milan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2535,
+        "national": 2535,
+        "world": 2535
+      }
+    },
+    {
+      "id": 98036568,
+      "name": "AC Milan",
+      "slug": "ac-milan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1690,
+        "national": 1690,
+        "world": 1690
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0c0b0b",
+    "foreground": "#a00404"
+  }
+}

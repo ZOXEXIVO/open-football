@@ -1,0 +1,49 @@
+{
+  "id": 106749,
+  "name": "Slaven Belupo",
+  "location": {
+    "city_id": 1205
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 106749,
+      "name": "Slaven Belupo",
+      "slug": "slaven-belupo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 88200011,
+      "name": "Slaven Belupo",
+      "slug": "slaven-belupo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 88200012,
+      "name": "Slaven Belupo",
+      "slug": "slaven-belupo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#006400"
+  }
+}

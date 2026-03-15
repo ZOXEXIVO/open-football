@@ -1,0 +1,38 @@
+{
+  "id": 1300489,
+  "name": "Melbourne Victory",
+  "location": {
+    "city_id": 1002
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1300489,
+      "name": "Melbourne Victory",
+      "slug": "melbourne-victory",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 99020006,
+      "name": "Melbourne Victory",
+      "slug": "melbourne-victory-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#132257",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 329,
+  "name": "Palmeiras",
+  "location": {
+    "city_id": 701
+  },
+  "finance": {
+    "balance": 50800000
+  },
+  "teams": [
+    {
+      "id": 329,
+      "name": "Palmeiras",
+      "slug": "palmeiras",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8200,
+        "national": 8200,
+        "world": 8200
+      }
+    },
+    {
+      "id": 99800003,
+      "name": "Palmeiras",
+      "slug": "palmeiras-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2460,
+        "national": 2460,
+        "world": 2460
+      }
+    },
+    {
+      "id": 99800004,
+      "name": "Palmeiras",
+      "slug": "palmeiras-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1640,
+        "national": 1640,
+        "world": 1640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -59,20 +59,13 @@
 
     window.playerClearInjury = function(pid) {
         dd.classList.remove('fm-dd-open');
-        FmDialog.confirm({
-            title: 'Clear Injury',
-            message: 'Remove injury from this player?',
-            confirmText: 'Clear',
-            onConfirm: function() {
-                fetch('/api/players/' + pid + '/clear-injury', { method: 'POST' })
-                    .then(function() { refreshContent(); });
-            }
-        });
+        fetch('/api/players/' + pid + '/clear-injury', { method: 'POST' })
+            .then(function() { refreshContent(); });
     };
 
     window.playerCancelLoan = function(pid) {
         dd.classList.remove('fm-dd-open');
-        FmDialog.confirm({
+        OpenFootballDialog.confirm({
             title: 'Cancel Loan',
             message: 'Cancel this player\'s loan and return to parent club?',
             confirmText: 'Cancel Loan',
@@ -85,7 +78,7 @@
 
     window.playerTransfer = function(pid) {
         dd.classList.remove('fm-dd-open');
-        FmDialog.open({
+        OpenFootballDialog.open({
             title: 'Transfer Player',
             fields: [
                 {
@@ -108,7 +101,7 @@
 
     window.playerLoan = function(pid) {
         dd.classList.remove('fm-dd-open');
-        FmDialog.open({
+        OpenFootballDialog.open({
             title: 'Loan Player',
             fields: [
                 {

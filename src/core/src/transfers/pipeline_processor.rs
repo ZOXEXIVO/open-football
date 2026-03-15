@@ -94,30 +94,31 @@ struct MatchScoutingObservationResult {
 // ============================================================
 
 #[allow(dead_code)]
-struct PlayerSummary {
-    player_id: u32,
-    club_id: u32,
-    position: PlayerPositionType,
-    position_group: PlayerFieldPositionGroup,
-    age: u8,
-    estimated_value: f64,
-    is_listed: bool,
-    is_loan_listed: bool,
+pub struct PlayerSummary {
+    pub player_id: u32,
+    pub club_id: u32,
+    pub country_id: u32,
+    pub position: PlayerPositionType,
+    pub position_group: PlayerFieldPositionGroup,
+    pub age: u8,
+    pub estimated_value: f64,
+    pub is_listed: bool,
+    pub is_loan_listed: bool,
     // Observable data — what scouts can see from watching
-    skill_ability: u8,         // position-weighted skill average (visible from watching)
-    average_rating: f32,       // match performance
-    goals: u16,
-    assists: u16,
-    appearances: u16,
+    pub skill_ability: u8,         // position-weighted skill average (visible from watching)
+    pub average_rating: f32,       // match performance
+    pub goals: u16,
+    pub assists: u16,
+    pub appearances: u16,
     // Mental character traits (observable through behaviour)
-    determination: f32,
-    work_rate: f32,
-    composure: f32,
-    anticipation: f32,
+    pub determination: f32,
+    pub work_rate: f32,
+    pub composure: f32,
+    pub anticipation: f32,
     // Skill group averages (visible from watching)
-    technical_avg: f32,
-    mental_avg: f32,
-    physical_avg: f32,
+    pub technical_avg: f32,
+    pub mental_avg: f32,
+    pub physical_avg: f32,
 }
 
 /// Info about a player in the squad for formation-based analysis.
@@ -1748,15 +1749,62 @@ impl PipelineProcessor {
     // Step 4: Scouting Observations
     // ============================================================
 
-    pub fn process_scouting(country: &mut Country, date: NaiveDate) {
+    /// Collect player summaries from a country for cross-country scouting.
+    pub fn collect_player_pool(country: &Country, date: NaiveDate) -> Vec<PlayerSummary> {
         let price_level = country.settings.pricing.price_level;
+        let country_id = country.id;
+        let mut players = Vec::new();
 
+        for club in &country.clubs {
+            for team in &club.teams.teams {
+                for player in &team.players.players {
+                    if player.is_on_loan() {
+                        continue;
+                    }
+                    let value = PlayerValuationCalculator::calculate_value_with_price_level(
+                        player, date, price_level,
+                    );
+                    let statuses = player.statuses.get();
+                    players.push(PlayerSummary {
+                        player_id: player.id,
+                        club_id: club.id,
+                        country_id,
+                        position: player.position(),
+                        position_group: player.position().position_group(),
+                        age: player.age(date),
+                        estimated_value: value.amount,
+                        is_listed: statuses.contains(&PlayerStatusType::Lst),
+                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
+                        skill_ability: player.skills.calculate_ability_for_position(player.position()),
+                        average_rating: player.statistics.average_rating,
+                        goals: player.statistics.goals,
+                        assists: player.statistics.assists,
+                        appearances: player.statistics.total_games(),
+                        determination: player.skills.mental.determination,
+                        work_rate: player.skills.mental.work_rate,
+                        composure: player.skills.mental.composure,
+                        anticipation: player.skills.mental.anticipation,
+                        technical_avg: player.skills.technical.average(),
+                        mental_avg: player.skills.mental.average(),
+                        physical_avg: player.skills.physical.average(),
+                    });
+                }
+            }
+        }
+
+        players
+    }
+
+    pub fn process_scouting(country: &mut Country, foreign_players: &[PlayerSummary], date: NaiveDate) {
+        let price_level = country.settings.pricing.price_level;
+        let country_id = country.id;
+
+        // Domestic players
         let mut all_players: Vec<PlayerSummary> = Vec::new();
 
         for club in &country.clubs {
             for team in &club.teams.teams {
                 for player in &team.players.players {
-                    // Skip loan players — they belong to another club and can't be bought
                     if player.is_on_loan() {
                         continue;
                     }
@@ -1770,13 +1818,13 @@ impl PipelineProcessor {
                     all_players.push(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
+                        country_id,
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),
                         estimated_value: value.amount,
                         is_listed: statuses.contains(&PlayerStatusType::Lst),
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
-                        // Observable skills and performance
                         skill_ability: player.skills.calculate_ability_for_position(player.position()),
                         average_rating: player.statistics.average_rating,
                         goals: player.statistics.goals,
@@ -1813,6 +1861,16 @@ impl PipelineProcessor {
                     (8, 8)
                 };
 
+                // Get this scout's known regions for cross-country scouting
+                let scout_known_regions: Vec<u32> = assignment.scout_staff_id
+                    .and_then(|sid| {
+                        club.teams.teams.iter()
+                            .flat_map(|t| &t.staffs.staffs)
+                            .find(|s| s.id == sid)
+                    })
+                    .map(|s| s.staff_attributes.knowledge.known_regions.clone())
+                    .unwrap_or_default();
+
                 let observe_chance = 60 + (judging_ability as i32 / 2);
                 if IntegerUtils::random(0, 100) > observe_chance {
                     continue;
@@ -1822,21 +1880,17 @@ impl PipelineProcessor {
                     staff_events.push((club.id, scout_id, StaffEventType::PlayerScouted));
                 }
 
-                // Find matching players from OTHER clubs
-                // Scouts look at position GROUP match, not just exact position
-                // Scouts evaluate visible skills and performance, not hidden CA/PA
+                // Find matching players from OTHER clubs (domestic + foreign known regions)
                 let target_group = assignment.target_position.position_group();
                 let philosophy = &club.philosophy;
 
                 // DevelopAndSell clubs widen the net for young promising players
                 let (age_min, age_max, ability_floor) = match philosophy {
                     ClubPhilosophy::DevelopAndSell => {
-                        // Also consider very young players below the threshold
                         let youth_floor = assignment.min_ability.saturating_sub(20);
                         (assignment.preferred_age_min.min(16), assignment.preferred_age_max, youth_floor)
                     }
                     ClubPhilosophy::SignToCompete => {
-                        // Focus on proven performers — keep strict thresholds
                         (assignment.preferred_age_min, assignment.preferred_age_max, assignment.min_ability)
                     }
                     _ => {
@@ -1844,23 +1898,35 @@ impl PipelineProcessor {
                     }
                 };
 
-                let matching: Vec<&PlayerSummary> = all_players
+                let player_filter = |p: &&PlayerSummary| -> bool {
+                    if p.club_id == club.id || p.position_group != target_group {
+                        return false;
+                    }
+                    let effective_min = if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
+                        ability_floor
+                    } else {
+                        assignment.min_ability
+                    };
+                    p.age >= age_min
+                        && p.age <= age_max
+                        && p.skill_ability >= effective_min
+                };
+
+                // Domestic players (always visible)
+                let mut matching: Vec<&PlayerSummary> = all_players
                     .iter()
-                    .filter(|p| {
-                        if p.club_id == club.id || p.position_group != target_group {
-                            return false;
-                        }
-                        // Young players (<=21) get a relaxed ability floor for development clubs
-                        let effective_min = if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
-                            ability_floor
-                        } else {
-                            assignment.min_ability
-                        };
-                        p.age >= age_min
-                            && p.age <= age_max
-                            && p.skill_ability >= effective_min
-                    })
+                    .filter(player_filter)
                     .collect();
+
+                // Foreign players from scout's known regions
+                if !scout_known_regions.is_empty() {
+                    let foreign_matching: Vec<&PlayerSummary> = foreign_players
+                        .iter()
+                        .filter(|p| scout_known_regions.contains(&p.country_id))
+                        .filter(player_filter)
+                        .collect();
+                    matching.extend(foreign_matching);
+                }
 
                 if matching.is_empty() {
                     continue;
@@ -1911,8 +1977,16 @@ impl PipelineProcessor {
                     let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
                     let sqrt_count = ((obs_count + 1) as f32).sqrt();
 
-                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32;
-                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32;
+                    // Foreign players in unknown regions have +50% assessment error
+                    let region_penalty = if target.country_id != country_id
+                        && !scout_known_regions.contains(&target.country_id) {
+                        1.5
+                    } else {
+                        1.0
+                    };
+
+                    let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32 * region_penalty;
+                    let base_potential_error = (20i16 - judging_potential as i16).max(1) as f32 * region_penalty;
                     let ability_error = (base_ability_error / sqrt_count) as i32;
                     let potential_error = (base_potential_error / sqrt_count) as i32;
 
@@ -3978,6 +4052,7 @@ impl PipelineProcessor {
                     return Some(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
+                        country_id: country.id,
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),

@@ -1,0 +1,18 @@
+{
+  "first_names": [
+    "Agustin", "Alejandro", "Alvaro", "Andres", "Brian", "Bruno", "Camilo", "Carlos",
+    "Cristian", "Daniel", "Diego", "Eduardo", "Emiliano", "Facundo", "Federico", "Felipe",
+    "Fernando", "Franco", "Gabriel", "Gaston", "Gonzalo", "Ignacio", "Ivan", "Joaquin",
+    "Jonathan", "Jorge", "Jose", "Juan", "Kevin", "Leonardo", "Lucas", "Luis", "Manuel",
+    "Marcelo", "Martin", "Mathias", "Matias", "Maximiliano", "Miguel", "Nahuel", "Nicolas",
+    "Pablo", "Rafael", "Ramon", "Rodrigo", "Santiago", "Sebastian", "Sergio", "Thiago", "Victor"
+  ],
+  "last_names": [
+    "Acosta", "Aguirre", "Alvarez", "Araujo", "Barrios", "Bentancur", "Cabrera", "Caceres",
+    "Cardozo", "Castro", "Coates", "Da Silva", "De Arrascaeta", "Diaz", "Fernandez", "Ferreira",
+    "Garcia", "Gimenez", "Godoy", "Gomez", "Gonzalez", "Hernandez", "Jimenez", "Lopez",
+    "Martinez", "Mendez", "Morales", "Nunez", "Olivera", "Pellistri", "Pereira", "Perez",
+    "Ramirez", "Rios", "Rivera", "Rodriguez", "Rossi", "Sanchez", "Santos", "Silva",
+    "Suarez", "Torres", "Ugarte", "Valverde", "Varela", "Viera", "Vieira"
+  ]
+}

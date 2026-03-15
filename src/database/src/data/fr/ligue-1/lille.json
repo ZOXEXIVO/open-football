@@ -1,0 +1,49 @@
+{
+  "id": 858,
+  "name": "LOSC Lille",
+  "location": {
+    "city_id": 404
+  },
+  "finance": {
+    "balance": 44450000
+  },
+  "teams": [
+    {
+      "id": 858,
+      "name": "LOSC Lille",
+      "slug": "lille",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7600,
+        "national": 7600,
+        "world": 7600
+      }
+    },
+    {
+      "id": 99400009,
+      "name": "LOSC Lille",
+      "slug": "lille-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2280,
+        "national": 2280,
+        "world": 2280
+      }
+    },
+    {
+      "id": 99400010,
+      "name": "LOSC Lille",
+      "slug": "lille-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1520,
+        "national": 1520,
+        "world": 1520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

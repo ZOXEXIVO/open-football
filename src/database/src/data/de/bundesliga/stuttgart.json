@@ -1,0 +1,49 @@
+{
+  "id": 960,
+  "name": "VfB Stuttgart",
+  "location": {
+    "city_id": 805
+  },
+  "finance": {
+    "balance": 57150000
+  },
+  "teams": [
+    {
+      "id": 960,
+      "name": "VfB Stuttgart",
+      "slug": "stuttgart",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7600,
+        "national": 7600,
+        "world": 7600
+      }
+    },
+    {
+      "id": 99900011,
+      "name": "VfB Stuttgart",
+      "slug": "stuttgart-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2280,
+        "national": 2280,
+        "world": 2280
+      }
+    },
+    {
+      "id": 99900012,
+      "name": "VfB Stuttgart",
+      "slug": "stuttgart-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1520,
+        "national": 1520,
+        "world": 1520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e32219"
+  }
+}

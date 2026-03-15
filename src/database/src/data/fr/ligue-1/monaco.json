@@ -1,0 +1,49 @@
+{
+  "id": 826,
+  "name": "Monaco",
+  "location": {
+    "city_id": 401
+  },
+  "finance": {
+    "balance": 69850000
+  },
+  "teams": [
+    {
+      "id": 826,
+      "name": "Monaco",
+      "slug": "monaco",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8000,
+        "national": 8000,
+        "world": 8000
+      }
+    },
+    {
+      "id": 99400003,
+      "name": "Monaco",
+      "slug": "monaco-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 99400004,
+      "name": "Monaco",
+      "slug": "monaco-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1600,
+        "national": 1600,
+        "world": 1600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

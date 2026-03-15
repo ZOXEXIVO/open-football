@@ -1,0 +1,49 @@
+{
+  "id": 1518,
+  "name": "CSKA Moscow",
+  "location": {
+    "city_id": 103
+  },
+  "finance": {
+    "balance": 87630000
+  },
+  "teams": [
+    {
+      "id": 1518,
+      "name": "CSKA Moscow",
+      "slug": "cska-moscow",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 99100007,
+      "name": "CSKA Moscow",
+      "slug": "cska-moscow-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 99100008,
+      "name": "CSKA Moscow",
+      "slug": "cska-moscow-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ed1b24",
+    "foreground": "#003da5"
+  }
+}

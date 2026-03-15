@@ -1,0 +1,49 @@
+{
+  "id": 948,
+  "name": "Werder Bremen",
+  "location": {
+    "city_id": 809
+  },
+  "finance": {
+    "balance": 38100000
+  },
+  "teams": [
+    {
+      "id": 948,
+      "name": "Werder Bremen",
+      "slug": "werder-bremen",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99900019,
+      "name": "Werder Bremen",
+      "slug": "werder-bremen-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99900020,
+      "name": "Werder Bremen",
+      "slug": "werder-bremen-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#1d9053",
+    "foreground": "#ffffff"
+  }
+}

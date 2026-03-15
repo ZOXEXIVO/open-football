@@ -1,0 +1,38 @@
+{
+  "id": 2000199402,
+  "name": "Kun Khalifat",
+  "location": {
+    "city_id": 1818
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 2000199402,
+      "name": "Kun Khalifat",
+      "slug": "kun-khalifat",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 88800038,
+      "name": "Kun Khalifat",
+      "slug": "kun-khalifat-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

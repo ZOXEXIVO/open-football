@@ -1,0 +1,49 @@
+{
+  "id": 1120,
+  "name": "Cesena",
+  "location": {
+    "city_id": 486
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 1120,
+      "name": "Cesena",
+      "slug": "cesena",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5900,
+        "national": 5900,
+        "world": 5900
+      }
+    },
+    {
+      "id": 98036601,
+      "name": "Cesena",
+      "slug": "cesena-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1770,
+        "national": 1770,
+        "world": 1770
+      }
+    },
+    {
+      "id": 98036602,
+      "name": "Cesena",
+      "slug": "cesena-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1180,
+        "national": 1180,
+        "world": 1180
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  }
+}

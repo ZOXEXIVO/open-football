@@ -1,0 +1,49 @@
+{
+  "id": 5512787,
+  "name": "Uruguay Montevideo",
+  "location": {
+    "city_id": 1129
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 5512787,
+      "name": "Uruguay Montevideo",
+      "slug": "uruguay-montevideo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 88150019,
+      "name": "Uruguay Montevideo",
+      "slug": "uruguay-montevideo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 88150020,
+      "name": "Uruguay Montevideo",
+      "slug": "uruguay-montevideo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#6caddf",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "id": 138206,
+  "name": "Tarxien Rainbows",
+  "location": {
+    "city_id": 909
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 138206,
+      "name": "Tarxien Rainbows",
+      "slug": "tarxien-rainbows",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    },
+    {
+      "id": 99010019,
+      "name": "Tarxien Rainbows",
+      "slug": "tarxien-rainbows-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

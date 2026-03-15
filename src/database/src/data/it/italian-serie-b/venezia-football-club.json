@@ -1,0 +1,49 @@
+{
+  "id": 1179,
+  "name": "Venezia",
+  "location": {
+    "city_id": 577
+  },
+  "finance": {
+    "balance": 8890000
+  },
+  "teams": [
+    {
+      "id": 1179,
+      "name": "Venezia",
+      "slug": "venezia-football-club",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3750,
+        "national": 3750,
+        "world": 3750
+      }
+    },
+    {
+      "id": 98036695,
+      "name": "Venezia",
+      "slug": "venezia-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1125,
+        "national": 1125,
+        "world": 1125
+      }
+    },
+    {
+      "id": 98036696,
+      "name": "Venezia",
+      "slug": "venezia-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 750,
+        "national": 750,
+        "world": 750
+      }
+    }
+  ],
+  "colors": {
+    "background": "#256503",
+    "foreground": "#000000"
+  }
+}

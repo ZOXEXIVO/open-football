@@ -1,0 +1,49 @@
+{
+  "id": 886,
+  "name": "Toulouse FC",
+  "location": {
+    "city_id": 410
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 886,
+      "name": "Toulouse FC",
+      "slug": "toulouse",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6600,
+        "national": 6600,
+        "world": 6600
+      }
+    },
+    {
+      "id": 99400021,
+      "name": "Toulouse FC",
+      "slug": "toulouse-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1980,
+        "national": 1980,
+        "world": 1980
+      }
+    },
+    {
+      "id": 99400022,
+      "name": "Toulouse FC",
+      "slug": "toulouse-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#5b2d8e",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 3101453,
+  "name": "Independiente Rivadavia",
+  "location": {
+    "city_id": 325
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 3101453,
+      "name": "Independiente Rivadavia",
+      "slug": "independiente-rivadavia",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 99300051,
+      "name": "Independiente Rivadavia",
+      "slug": "independiente-rivadavia-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 99300052,
+      "name": "Independiente Rivadavia",
+      "slug": "independiente-rivadavia-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

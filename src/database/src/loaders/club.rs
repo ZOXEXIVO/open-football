@@ -1,11 +1,11 @@
 use serde::Deserialize;
 
-const STATIC_CLUB_JSON: &'static str = include_str!("../data/clubs.json");
-
 #[derive(Deserialize)]
 pub struct ClubEntity {
     pub id: u32,
     pub name: String,
+    /// Populated by the loader from the directory path, not present in JSON.
+    #[serde(default)]
     pub country_id: u32,
     pub location: ClubLocationEntity,
     pub finance: ClubFinanceEntity,
@@ -42,15 +42,9 @@ pub struct ClubTeamEntity {
     pub name: String,
     pub slug: String,
     pub team_type: String,
+    /// Populated by the loader from the directory context, not present in JSON.
+    #[serde(default)]
     pub league_id: Option<u32>,
     pub finance: Option<ClubFinanceEntity>,
     pub reputation: ClubReputationEntity,
-}
-
-pub struct ClubLoader;
-
-impl ClubLoader {
-    pub fn load() -> Vec<ClubEntity> {
-        serde_json::from_str(STATIC_CLUB_JSON).unwrap()
-    }
 }

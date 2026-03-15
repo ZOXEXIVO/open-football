@@ -1,0 +1,49 @@
+{
+  "id": 91013388,
+  "name": "RB Leipzig",
+  "location": {
+    "city_id": 802
+  },
+  "finance": {
+    "balance": 101600000
+  },
+  "teams": [
+    {
+      "id": 91013388,
+      "name": "RB Leipzig",
+      "slug": "rb-leipzig",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8200,
+        "national": 8200,
+        "world": 8200
+      }
+    },
+    {
+      "id": 99900005,
+      "name": "RB Leipzig",
+      "slug": "rb-leipzig-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2460,
+        "national": 2460,
+        "world": 2460
+      }
+    },
+    {
+      "id": 99900006,
+      "name": "RB Leipzig",
+      "slug": "rb-leipzig-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1640,
+        "national": 1640,
+        "world": 1640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#dd0741",
+    "foreground": "#ffffff"
+  }
+}

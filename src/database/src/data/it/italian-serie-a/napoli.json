@@ -1,0 +1,49 @@
+{
+  "id": 1150,
+  "name": "Napoli",
+  "location": {
+    "city_id": 3
+  },
+  "finance": {
+    "balance": 54610000
+  },
+  "teams": [
+    {
+      "id": 1150,
+      "name": "Napoli",
+      "slug": "napoli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8050,
+        "national": 8050,
+        "world": 8050
+      }
+    },
+    {
+      "id": 98036649,
+      "name": "Napoli",
+      "slug": "napoli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2415,
+        "national": 2415,
+        "world": 2415
+      }
+    },
+    {
+      "id": 98036650,
+      "name": "Napoli",
+      "slug": "napoli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1610,
+        "national": 1610,
+        "world": 1610
+      }
+    }
+  ],
+  "colors": {
+    "background": "#05619e",
+    "foreground": "#ffffff"
+  }
+}

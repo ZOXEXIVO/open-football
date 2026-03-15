@@ -1,0 +1,49 @@
+{
+  "id": 969,
+  "name": "Aris Thessaloniki",
+  "location": {
+    "city_id": 1304
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 969,
+      "name": "Aris Thessaloniki",
+      "slug": "aris",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 88300009,
+      "name": "Aris Thessaloniki",
+      "slug": "aris-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 88300010,
+      "name": "Aris Thessaloniki",
+      "slug": "aris-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

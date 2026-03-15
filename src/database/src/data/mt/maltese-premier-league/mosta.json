@@ -1,0 +1,38 @@
+{
+  "id": 133179,
+  "name": "Mosta",
+  "location": {
+    "city_id": 907
+  },
+  "finance": {
+    "balance": 1143000
+  },
+  "teams": [
+    {
+      "id": 133179,
+      "name": "Mosta",
+      "slug": "mosta",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2200,
+        "national": 2200,
+        "world": 2200
+      }
+    },
+    {
+      "id": 99010015,
+      "name": "Mosta",
+      "slug": "mosta-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 660,
+        "national": 660,
+        "world": 660
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

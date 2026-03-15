@@ -1,0 +1,49 @@
+{
+  "id": 907,
+  "name": "Borussia Dortmund",
+  "location": {
+    "city_id": 801
+  },
+  "finance": {
+    "balance": 127000000
+  },
+  "teams": [
+    {
+      "id": 907,
+      "name": "Borussia Dortmund",
+      "slug": "borussia-dortmund",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8800,
+        "national": 8800,
+        "world": 8800
+      }
+    },
+    {
+      "id": 99900003,
+      "name": "Borussia Dortmund",
+      "slug": "borussia-dortmund-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2640,
+        "national": 2640,
+        "world": 2640
+      }
+    },
+    {
+      "id": 99900004,
+      "name": "Borussia Dortmund",
+      "slug": "borussia-dortmund-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1760,
+        "national": 1760,
+        "world": 1760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#fde100",
+    "foreground": "#000000"
+  }
+}

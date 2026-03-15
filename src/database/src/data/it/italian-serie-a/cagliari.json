@@ -1,0 +1,49 @@
+{
+  "id": 1114,
+  "name": "Cagliari",
+  "location": {
+    "city_id": 477
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 1114,
+      "name": "Cagliari",
+      "slug": "cagliari",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6050,
+        "national": 6050,
+        "world": 6050
+      }
+    },
+    {
+      "id": 98036591,
+      "name": "Cagliari",
+      "slug": "cagliari-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1815,
+        "national": 1815,
+        "world": 1815
+      }
+    },
+    {
+      "id": 98036592,
+      "name": "Cagliari",
+      "slug": "cagliari-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1210,
+        "national": 1210,
+        "world": 1210
+      }
+    }
+  ],
+  "colors": {
+    "background": "#022e4c",
+    "foreground": "#ffffff"
+  }
+}

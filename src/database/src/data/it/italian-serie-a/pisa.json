@@ -1,0 +1,49 @@
+{
+  "id": 2215,
+  "name": "Pisa",
+  "location": {
+    "city_id": 542
+  },
+  "finance": {
+    "balance": 11430000
+  },
+  "teams": [
+    {
+      "id": 2215,
+      "name": "Pisa",
+      "slug": "pisa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4950,
+        "national": 4950,
+        "world": 4950
+      }
+    },
+    {
+      "id": 98037820,
+      "name": "Pisa",
+      "slug": "pisa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1485,
+        "national": 1485,
+        "world": 1485
+      }
+    },
+    {
+      "id": 98037821,
+      "name": "Pisa",
+      "slug": "pisa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 990,
+        "national": 990,
+        "world": 990
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003580",
+    "foreground": "#000000"
+  }
+}

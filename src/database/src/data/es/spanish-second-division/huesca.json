@@ -1,0 +1,49 @@
+{
+  "id": 4212294,
+  "name": "Huesca",
+  "location": {
+    "city_id": 632
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 4212294,
+      "name": "Huesca",
+      "slug": "huesca",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 99700025,
+      "name": "Huesca",
+      "slug": "huesca-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 99700026,
+      "name": "Huesca",
+      "slug": "huesca-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 130344,
+  "name": "Konyaspor",
+  "location": {
+    "city_id": 1608
+  },
+  "finance": {
+    "balance": 8890000
+  },
+  "teams": [
+    {
+      "id": 130344,
+      "name": "Konyaspor",
+      "slug": "konyaspor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 88600017,
+      "name": "Konyaspor",
+      "slug": "konyaspor-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 88600018,
+      "name": "Konyaspor",
+      "slug": "konyaspor-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

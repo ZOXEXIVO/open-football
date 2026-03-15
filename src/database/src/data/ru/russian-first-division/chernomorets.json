@@ -1,0 +1,49 @@
+{
+  "id": 1301102,
+  "name": "Chernomorets",
+  "location": {
+    "city_id": 202
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1301102,
+      "name": "Chernomorets",
+      "slug": "chernomorets",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 99200005,
+      "name": "Chernomorets",
+      "slug": "chernomorets-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 99200006,
+      "name": "Chernomorets",
+      "slug": "chernomorets-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003366",
+    "foreground": "#ffffff"
+  }
+}

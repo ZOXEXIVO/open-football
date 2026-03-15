@@ -1,0 +1,38 @@
+{
+  "id": 15086550,
+  "name": "Macarthur FC",
+  "location": {
+    "city_id": 1009
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 15086550,
+      "name": "Macarthur FC",
+      "slug": "macarthur",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 99020020,
+      "name": "Macarthur FC",
+      "slug": "macarthur-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#2d2926",
+    "foreground": "#c19a58"
+  }
+}

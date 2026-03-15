@@ -1,0 +1,38 @@
+{
+  "id": 15004168,
+  "name": "Wellington Phoenix",
+  "location": {
+    "city_id": 1010
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 15004168,
+      "name": "Wellington Phoenix",
+      "slug": "wellington-phoenix",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 99020022,
+      "name": "Wellington Phoenix",
+      "slug": "wellington-phoenix-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#f2a900",
+    "foreground": "#000000"
+  }
+}

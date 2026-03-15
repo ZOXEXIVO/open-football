@@ -1,0 +1,49 @@
+{
+  "id": 1926,
+  "name": "Wanderers",
+  "location": {
+    "city_id": 1105
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1926,
+      "name": "Wanderers",
+      "slug": "wanderers",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 88100011,
+      "name": "Wanderers",
+      "slug": "wanderers-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 88100012,
+      "name": "Wanderers",
+      "slug": "wanderers-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

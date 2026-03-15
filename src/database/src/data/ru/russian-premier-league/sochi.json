@@ -1,0 +1,49 @@
+{
+  "id": 58145347,
+  "name": "Sochi",
+  "location": {
+    "city_id": 109
+  },
+  "finance": {
+    "balance": 21590000
+  },
+  "teams": [
+    {
+      "id": 58145347,
+      "name": "Sochi",
+      "slug": "sochi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 99100019,
+      "name": "Sochi",
+      "slug": "sochi-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 99100020,
+      "name": "Sochi",
+      "slug": "sochi-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006847",
+    "foreground": "#ffffff"
+  }
+}

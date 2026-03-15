@@ -1,0 +1,49 @@
+{
+  "id": 617,
+  "name": "Brentford",
+  "location": {
+    "city_id": 511
+  },
+  "finance": {
+    "balance": 50800000
+  },
+  "teams": [
+    {
+      "id": 617,
+      "name": "Brentford",
+      "slug": "brentford",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 99500023,
+      "name": "Brentford",
+      "slug": "brentford-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 99500024,
+      "name": "Brentford",
+      "slug": "brentford-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e30613",
+    "foreground": "#ffffff"
+  }
+}

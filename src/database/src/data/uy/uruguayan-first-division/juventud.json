@@ -1,0 +1,49 @@
+{
+  "id": 130848,
+  "name": "Juventud",
+  "location": {
+    "city_id": 1112
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 130848,
+      "name": "Juventud",
+      "slug": "juventud",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 88100025,
+      "name": "Juventud",
+      "slug": "juventud-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 88100026,
+      "name": "Juventud",
+      "slug": "juventud-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

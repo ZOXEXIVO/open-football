@@ -1,0 +1,49 @@
+{
+  "id": 2443,
+  "name": "Casa Pia",
+  "location": {
+    "city_id": 1409
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 2443,
+      "name": "Casa Pia",
+      "slug": "casa-pia",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 88400019,
+      "name": "Casa Pia",
+      "slug": "casa-pia-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 88400020,
+      "name": "Casa Pia",
+      "slug": "casa-pia-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -308,7 +308,6 @@ impl League {
     }
 
     /// Check if a player is available for selection.
-    /// In friendly matches: injured and Int still block, but Lst/Loa/banned can play.
     fn is_player_available(player: &Player, is_friendly: bool) -> bool {
         if player.player_attributes.is_injured {
             return false;
@@ -316,14 +315,8 @@ impl League {
         if player.statuses.get().contains(&PlayerStatusType::Int) {
             return false;
         }
-        if !is_friendly {
-            if player.player_attributes.is_banned {
-                return false;
-            }
-            let s = player.statuses.get();
-            if s.contains(&PlayerStatusType::Lst) || s.contains(&PlayerStatusType::Loa) {
-                return false;
-            }
+        if !is_friendly && player.player_attributes.is_banned {
+            return false;
         }
         true
     }

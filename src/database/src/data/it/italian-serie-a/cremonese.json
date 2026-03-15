@@ -1,0 +1,49 @@
+{
+  "id": 1125,
+  "name": "Cremonese",
+  "location": {
+    "city_id": 494
+  },
+  "finance": {
+    "balance": 21590000
+  },
+  "teams": [
+    {
+      "id": 1125,
+      "name": "Cremonese",
+      "slug": "cremonese",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4900,
+        "national": 4900,
+        "world": 4900
+      }
+    },
+    {
+      "id": 98036611,
+      "name": "Cremonese",
+      "slug": "cremonese-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1470,
+        "national": 1470,
+        "world": 1470
+      }
+    },
+    {
+      "id": 98036612,
+      "name": "Cremonese",
+      "slug": "cremonese-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 980,
+        "national": 980,
+        "world": 980
+      }
+    }
+  ],
+  "colors": {
+    "background": "#63000b",
+    "foreground": "#746767"
+  }
+}

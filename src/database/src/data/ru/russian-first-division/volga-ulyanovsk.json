@@ -1,0 +1,49 @@
+{
+  "id": 130548,
+  "name": "Volga Ulyanovsk",
+  "location": {
+    "city_id": 216
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 130548,
+      "name": "Volga Ulyanovsk",
+      "slug": "volga-ulyanovsk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 99200033,
+      "name": "Volga Ulyanovsk",
+      "slug": "volga-ulyanovsk-u21",
+      "team_type": "U21",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    },
+    {
+      "id": 99200034,
+      "name": "Volga Ulyanovsk",
+      "slug": "volga-ulyanovsk-u19",
+      "team_type": "U19",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

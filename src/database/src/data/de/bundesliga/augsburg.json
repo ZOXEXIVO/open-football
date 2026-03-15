@@ -1,0 +1,49 @@
+{
+  "id": 2238,
+  "name": "FC Augsburg",
+  "location": {
+    "city_id": 813
+  },
+  "finance": {
+    "balance": 25400000
+  },
+  "teams": [
+    {
+      "id": 2238,
+      "name": "FC Augsburg",
+      "slug": "augsburg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6600,
+        "national": 6600,
+        "world": 6600
+      }
+    },
+    {
+      "id": 99900027,
+      "name": "FC Augsburg",
+      "slug": "augsburg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1980,
+        "national": 1980,
+        "world": 1980
+      }
+    },
+    {
+      "id": 99900028,
+      "name": "FC Augsburg",
+      "slug": "augsburg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#006400"
+  }
+}

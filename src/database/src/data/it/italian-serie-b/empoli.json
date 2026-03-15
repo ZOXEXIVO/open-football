@@ -1,0 +1,49 @@
+{
+  "id": 1126,
+  "name": "Empoli",
+  "location": {
+    "city_id": 495
+  },
+  "finance": {
+    "balance": 11430000
+  },
+  "teams": [
+    {
+      "id": 1126,
+      "name": "Empoli",
+      "slug": "empoli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6100,
+        "national": 6100,
+        "world": 6100
+      }
+    },
+    {
+      "id": 98036613,
+      "name": "Empoli",
+      "slug": "empoli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1830,
+        "national": 1830,
+        "world": 1830
+      }
+    },
+    {
+      "id": 98036614,
+      "name": "Empoli",
+      "slug": "empoli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1220,
+        "national": 1220,
+        "world": 1220
+      }
+    }
+  ],
+  "colors": {
+    "background": "#2460ee",
+    "foreground": "#111111"
+  }
+}

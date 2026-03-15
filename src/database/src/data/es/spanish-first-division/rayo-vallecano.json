@@ -1,0 +1,49 @@
+{
+  "id": 1729,
+  "name": "Rayo Vallecano",
+  "location": {
+    "city_id": 614
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 1729,
+      "name": "Rayo Vallecano",
+      "slug": "rayo-vallecano",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 99600029,
+      "name": "Rayo Vallecano",
+      "slug": "rayo-vallecano-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 99600030,
+      "name": "Rayo Vallecano",
+      "slug": "rayo-vallecano-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

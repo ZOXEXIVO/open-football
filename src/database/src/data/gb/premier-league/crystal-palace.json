@@ -1,0 +1,49 @@
+{
+  "id": 642,
+  "name": "Crystal Palace",
+  "location": {
+    "city_id": 510
+  },
+  "finance": {
+    "balance": 50800000
+  },
+  "teams": [
+    {
+      "id": 642,
+      "name": "Crystal Palace",
+      "slug": "crystal-palace",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7200,
+        "national": 7200,
+        "world": 7200
+      }
+    },
+    {
+      "id": 99500021,
+      "name": "Crystal Palace",
+      "slug": "crystal-palace-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2160,
+        "national": 2160,
+        "world": 2160
+      }
+    },
+    {
+      "id": 99500022,
+      "name": "Crystal Palace",
+      "slug": "crystal-palace-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    }
+  ],
+  "colors": {
+    "background": "#1b458f",
+    "foreground": "#c4122e"
+  }
+}
