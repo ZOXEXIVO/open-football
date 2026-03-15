@@ -2474,7 +2474,7 @@ impl PipelineProcessor {
 
                 let selling_club_id = match selling_club_id {
                     Some(id) if id != club.id => id,
-                    _ => continue,
+                    _ => continue, // Foreign players handled by initiate_foreign_negotiations
                 };
 
                 // ──────────────────────────────────────────────────
@@ -4191,6 +4191,222 @@ impl PipelineProcessor {
             ReputationLevel::Regional => 2,
             ReputationLevel::Local => 1,
             ReputationLevel::Amateur => 0,
+        }
+    }
+
+    // ============================================================
+    // Foreign negotiation initiation
+    // ============================================================
+
+    /// Initiate negotiations for foreign players on clubs' shortlists.
+    /// Called after domestic initiate_negotiations — local players have priority.
+    pub fn initiate_foreign_negotiations(
+        data: &mut crate::simulator::SimulatorData,
+        country_id: u32,
+        date: NaiveDate,
+    ) {
+        use crate::transfers::market::{TransferListing, TransferListingType};
+        use crate::Person;
+
+        // Pass 1: Read — collect foreign candidates from shortlists
+        struct ForeignCandidate {
+            buying_club_id: u32,
+            player_id: u32,
+            shortlist_request_id: u32,
+        }
+
+        let mut candidates: Vec<ForeignCandidate> = Vec::new();
+
+        if let Some(country) = data.country(country_id) {
+            for club in &country.clubs {
+                let plan = &club.transfer_plan;
+                if !plan.initialized || !plan.can_start_negotiation() { continue; }
+
+                let actual_active = country.transfer_market.active_negotiation_count_for_club(club.id);
+                if actual_active >= plan.max_concurrent_negotiations { continue; }
+
+                for shortlist in &plan.shortlists {
+                    if shortlist.has_pursuing_candidate() || shortlist.all_exhausted() { continue; }
+
+                    let candidate = match shortlist.current_candidate() {
+                        Some(c) if c.status == ShortlistCandidateStatus::Available => c,
+                        _ => continue,
+                    };
+
+                    // Only process if player is NOT in the local country
+                    let is_local = Self::find_player_in_country(country, candidate.player_id).is_some();
+                    if is_local { continue; }
+
+                    if country.transfer_market.has_active_negotiation_for(candidate.player_id, club.id) {
+                        continue;
+                    }
+
+                    candidates.push(ForeignCandidate {
+                        buying_club_id: club.id,
+                        player_id: candidate.player_id,
+                        shortlist_request_id: shortlist.transfer_request_id,
+                    });
+                }
+            }
+        }
+
+        if candidates.is_empty() { return; }
+
+        // Pass 2: Resolve — find each player globally, compute offers
+        struct ResolvedNeg {
+            buying_club_id: u32,
+            selling_country_id: u32,
+            selling_club_id: u32,
+            player_id: u32,
+            is_loan: bool,
+            offer: crate::transfers::offer::TransferOffer,
+            reason: String,
+            shortlist_request_id: u32,
+            selling_rep: f32,
+            buying_rep: f32,
+            player_age: u8,
+            player_ambition: f32,
+            asking_price: CurrencyValue,
+            player_name: String,
+            selling_club_name: String,
+        }
+
+        let mut resolved: Vec<ResolvedNeg> = Vec::new();
+
+        for cand in candidates {
+            // Find player globally
+            let mut found = None;
+            for continent in &data.continents {
+                for country in &continent.countries {
+                    if country.id == country_id { continue; }
+                    for club in &country.clubs {
+                        if club.teams.teams.iter().any(|t| t.players.players.iter().any(|p| p.id == cand.player_id)) {
+                            found = Some((country.id, club.id, country.settings.pricing.price_level));
+                            break;
+                        }
+                    }
+                    if found.is_some() { break; }
+                }
+                if found.is_some() { break; }
+            }
+
+            let (sell_country_id, sell_club_id, sell_price_level) = match found {
+                Some(v) => v,
+                None => continue,
+            };
+
+            let sell_country = match data.country(sell_country_id) { Some(c) => c, None => continue };
+            let player = match Self::find_player_in_country(sell_country, cand.player_id) { Some(p) => p, None => continue };
+            if player.is_on_loan() { continue; }
+
+            let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) { Some(c) => c, None => continue };
+            let asking_price = Self::calculate_asking_price(player, sell_club, date, sell_price_level);
+            let player_age = player.age(date);
+            let player_ambition = player.skills.mental.determination;
+            let player_name = player.full_name.to_string();
+            let selling_club_name = sell_club.name.clone();
+
+            let selling_rep = sell_club.teams.teams.first()
+                .map(|t| t.reputation.world as f32 / 10000.0).unwrap_or(0.3);
+
+            let buy_country = match data.country(country_id) { Some(c) => c, None => continue };
+            let buy_club = match buy_country.clubs.iter().find(|c| c.id == cand.buying_club_id) { Some(c) => c, None => continue };
+
+            let buying_rep = buy_club.teams.teams.first()
+                .map(|t| t.reputation.world as f32 / 10000.0).unwrap_or(0.3);
+            let rep_level = buy_club.teams.teams.first()
+                .map(|t| t.reputation.level()).unwrap_or(ReputationLevel::Amateur);
+            let budget = buy_club.finance.transfer_budget.as_ref()
+                .map(|b| b.amount)
+                .unwrap_or_else(|| (buy_club.finance.balance.balance.max(0) as f64) * 0.3);
+
+            let request = buy_club.transfer_plan.transfer_requests.iter()
+                .find(|r| r.id == cand.shortlist_request_id);
+
+            let approach = Self::determine_transfer_approach(
+                &rep_level, budget, asking_price.amount, request,
+                sell_country, cand.player_id, date,
+                buy_club.finance.balance.balance, &buy_club.philosophy,
+            );
+
+            let is_loan = matches!(approach, TransferApproach::Loan | TransferApproach::LoanWithOption);
+
+            let actual_asking = if is_loan {
+                CurrencyValue { amount: crate::utils::FormattingUtils::round_fee(asking_price.amount * 0.1), currency: asking_price.currency.clone() }
+            } else {
+                asking_price.clone()
+            };
+
+            let avg_ability: u8 = buy_club.teams.teams.first()
+                .map(|t| {
+                    if t.players.players.is_empty() { return 50; }
+                    let total: u32 = t.players.players.iter().map(|p| p.player_attributes.current_ability as u32).sum();
+                    (total / t.players.players.len() as u32) as u8
+                }).unwrap_or(50);
+
+            let strategy = ClubTransferStrategy {
+                club_id: cand.buying_club_id,
+                budget: Some(CurrencyValue { amount: budget, currency: Currency::Usd }),
+                selling_willingness: 0.5,
+                buying_aggressiveness: match rep_level {
+                    ReputationLevel::Elite => 0.85, ReputationLevel::Continental => 0.75,
+                    ReputationLevel::National => 0.60, ReputationLevel::Regional => 0.45, _ => 0.30,
+                },
+                target_positions: vec![player.position()],
+                reputation_level: avg_ability as u16,
+            };
+
+            let offer = strategy.calculate_initial_offer(player, &actual_asking, date);
+            let reason = format!("Foreign {} — scouted from {}", if is_loan { "loan" } else { "signing" }, sell_country.name);
+
+            resolved.push(ResolvedNeg {
+                buying_club_id: cand.buying_club_id, selling_country_id: sell_country_id, selling_club_id: sell_club_id,
+                player_id: cand.player_id, is_loan, offer, reason, shortlist_request_id: cand.shortlist_request_id,
+                selling_rep, buying_rep, player_age, player_ambition, asking_price, player_name, selling_club_name,
+            });
+        }
+
+        // Pass 3: Write — create listings and negotiations
+        for action in resolved {
+            let country = match data.country_mut(country_id) { Some(c) => c, None => continue };
+
+            let listing = TransferListing::new(
+                action.player_id, action.selling_club_id, 0, action.asking_price, date,
+                if action.is_loan { TransferListingType::Loan } else { TransferListingType::Transfer },
+            );
+            country.transfer_market.add_listing(listing);
+
+            if let Some(neg_id) = country.transfer_market.start_negotiation(
+                action.player_id, action.buying_club_id, action.offer, date,
+                action.selling_rep, action.buying_rep, action.player_age, action.player_ambition,
+            ) {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.is_loan = action.is_loan;
+                    negotiation.reason = action.reason;
+                    negotiation.selling_country_id = Some(action.selling_country_id);
+                    negotiation.cross_country_player_name = action.player_name;
+                    negotiation.cross_country_selling_club_name = action.selling_club_name;
+                }
+
+                if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.buying_club_id) {
+                    let plan = &mut club.transfer_plan;
+                    if let Some(shortlist) = plan.shortlists.iter_mut()
+                        .find(|s| s.transfer_request_id == action.shortlist_request_id) {
+                        if let Some(candidate) = shortlist.current_candidate_mut() {
+                            if candidate.player_id == action.player_id {
+                                candidate.status = ShortlistCandidateStatus::CurrentlyPursuing;
+                            }
+                        }
+                    }
+                    if let Some(req) = plan.transfer_requests.iter_mut().find(|r| r.id == action.shortlist_request_id) {
+                        req.status = TransferRequestStatus::Negotiating;
+                    }
+                    plan.active_negotiation_count += 1;
+                }
+
+                debug!("Foreign negotiation: Club {} started negotiation for player {} from country {}",
+                    action.buying_club_id, action.player_id, action.selling_country_id);
+            }
         }
     }
 }

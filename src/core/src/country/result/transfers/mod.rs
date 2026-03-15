@@ -34,63 +34,36 @@ impl CountryResult {
             Vec::new()
         };
 
-        if let Some(country) = data.country_mut(country_id) {
-            // Always resolve pending negotiations and expire stale ones,
-            // even outside the window — negotiations started during the window
-            // must be able to complete or be properly cleaned up.
-            Self::resolve_pending_negotiations(country, current_date, &mut summary);
+        // Phase 1: Negotiations & pipeline (per-country)
+        let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
+            // Resolve pending negotiations — returns all completed transfers for deferred execution
+            let deferred = Self::resolve_pending_negotiations(country, current_date, &mut summary);
 
-            // Expire stale negotiations and notify the pipeline so
-            // active_negotiation_count stays accurate and shortlists advance.
+            // Expire stale negotiations
             let expired = country.transfer_market.update(current_date);
             for (buying_club_id, player_id) in expired {
-                PipelineProcessor::on_negotiation_resolved(
-                    country,
-                    buying_club_id,
-                    player_id,
-                    false,
-                );
+                PipelineProcessor::on_negotiation_resolved(country, buying_club_id, player_id, false);
             }
 
-            // Free agents and contract expirations run regardless of window
+            // Free agents and contract expirations
             Self::handle_free_agents(country, current_date, &mut summary);
 
-            // The rest of the pipeline (listings, scouting, negotiations) only
-            // runs when the transfer window is open.
             if window_open {
                 debug!("Transfer window is OPEN - simulating pipeline-driven market activity");
 
-                // List players for transfer (must run before shortlists so market has candidates)
                 Self::list_players_from_pipeline(country, current_date, &mut summary);
-
-                // Evaluate squads (periodic - not daily)
                 PipelineProcessor::evaluate_squads(country, current_date);
-
-                // Staff proactively recommend players (weekly)
                 PipelineProcessor::generate_staff_recommendations(country, current_date);
-
-                // Process staff recommendations into pipeline actions (weekly)
                 PipelineProcessor::process_staff_recommendations(country, current_date);
-
-                // Assign scouts to pending requests
                 PipelineProcessor::assign_scouts(country, current_date);
-
-                // Assign scouts to youth/reserve team matches
                 PipelineProcessor::assign_scouts_to_matches(country, current_date);
-
-                // Process match-day scouting observations
                 PipelineProcessor::process_match_scouting(country, current_date);
-
-                // Process scouting observations (domestic + foreign from scout known regions)
                 PipelineProcessor::process_scouting(country, &foreign_players, current_date);
-
-                // Build shortlists from scouting + market listings
                 PipelineProcessor::build_shortlists(country, current_date);
 
-                // Initiate negotiations from shortlists
+                // Domestic negotiations (local players have priority)
                 PipelineProcessor::initiate_negotiations(country, current_date);
 
-                // Small clubs proactively scan the loan market
                 PipelineProcessor::scan_loan_market(country, current_date);
             }
 
@@ -98,6 +71,30 @@ impl CountryResult {
                 "Transfer Activity - Listings: {}, Negotiations: {}, Completed: {}",
                 summary.total_listings, summary.active_negotiations, summary.completed_transfers
             );
+
+            deferred
+        } else {
+            Vec::new()
+        };
+
+        // Phase 2: Execute all completed transfers (domestic + foreign) via unified path
+        for transfer in deferred_transfers {
+            execution::execute_transfer(
+                data,
+                transfer.player_id,
+                transfer.selling_country_id,
+                transfer.selling_club_id,
+                transfer.buying_country_id,
+                transfer.buying_club_id,
+                transfer.fee,
+                transfer.is_loan,
+                current_date,
+            );
+        }
+
+        // Phase 3: Foreign negotiation initiation (after domestic, so local has priority)
+        if window_open {
+            PipelineProcessor::initiate_foreign_negotiations(data, country_id, current_date);
         }
 
         summary

@@ -138,7 +138,7 @@ pub async fn team_get_action(
                 unhappy: !p.happiness.is_happy(),
                 transfer_listed: p.statuses.get().contains(&PlayerStatusType::Lst),
                 loan_listed: p.statuses.get().contains(&PlayerStatusType::Loa),
-                is_wanted: p.statuses.get().contains(&PlayerStatusType::Wnt),
+                is_wanted: !simulator_data.clubs_interested_in_player(p.id).is_empty(),
                 is_loan,
                 is_loaned_out: false,
                 is_youth,

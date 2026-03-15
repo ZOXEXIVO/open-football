@@ -229,7 +229,7 @@ impl CountryResult {
                 ).with_reason(signing.reason),
             );
 
-            super::execution::execute_player_transfer(
+            super::execution::execute_transfer_within_country(
                 country,
                 signing.player_id,
                 signing.from_club_id,

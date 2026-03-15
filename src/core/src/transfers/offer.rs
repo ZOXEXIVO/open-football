@@ -19,6 +19,19 @@ pub enum TransferClause {
     PromotionBonus(CurrencyValue),     // Money if buying club gets promoted
 }
 
+impl Default for TransferOffer {
+    fn default() -> Self {
+        TransferOffer {
+            base_fee: CurrencyValue { amount: 0.0, currency: crate::shared::Currency::Usd },
+            clauses: Vec::new(),
+            salary_contribution: None,
+            contract_length: None,
+            offering_club_id: 0,
+            offered_date: NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
+        }
+    }
+}
+
 impl TransferOffer {
     pub fn new(
         base_fee: CurrencyValue,

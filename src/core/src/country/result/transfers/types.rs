@@ -51,6 +51,23 @@ pub(crate) struct NegotiationData {
     pub(crate) player_ambition: f32,
     pub(crate) asking_price: f64,
     pub(crate) is_listed: bool,
+    /// Country the player is sold from (None = same as buying country)
+    pub(crate) selling_country_id: Option<u32>,
+    /// Cached names for cross-country (player not accessible from buying country)
+    pub(crate) player_name: String,
+    pub(crate) selling_club_name: String,
+}
+
+/// A completed negotiation that needs execution at SimulatorData level.
+/// Used for ALL transfers — both domestic and cross-country.
+pub(crate) struct DeferredTransfer {
+    pub(crate) player_id: u32,
+    pub(crate) selling_country_id: u32,
+    pub(crate) selling_club_id: u32,
+    pub(crate) buying_country_id: u32,
+    pub(crate) buying_club_id: u32,
+    pub(crate) fee: f64,
+    pub(crate) is_loan: bool,
 }
 
 pub(crate) fn can_club_accept_player(club: &Club) -> bool {
