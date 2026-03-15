@@ -261,7 +261,7 @@ pub async fn league_get_action(
 
     let competition_reputation: Vec<CompetitionReputationItem> = reputation_data
         .into_iter()
-        .take(20)
+        .take(10)
         .map(|(_, league_name, league_slug, country_name, country_code)| {
             CompetitionReputationItem {
                 league_name,

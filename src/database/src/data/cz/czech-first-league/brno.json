@@ -1,0 +1,49 @@
+{
+  "id": 465,
+  "name": "Zbrojovka Brno",
+  "location": {
+    "city_id": 2613
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 465,
+      "name": "Zbrojovka Brno",
+      "slug": "brno",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 89700027,
+      "name": "Zbrojovka Brno",
+      "slug": "brno-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 89700028,
+      "name": "Zbrojovka Brno",
+      "slug": "brno-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

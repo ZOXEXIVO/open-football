@@ -1,0 +1,33 @@
+{
+  "id": 390,
+  "slug": "new-zealand-premiership",
+  "name": "Premiership",
+  "reputation": 2200,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 15,
+      "from_month": 10,
+      "to_day": 31,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 1,
+      "to_day": 15,
+      "to_month": 4
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1435,
+      "weight": 3
+    },
+    {
+      "country_id": 765,
+      "weight": 1
+    }
+  ]
+}

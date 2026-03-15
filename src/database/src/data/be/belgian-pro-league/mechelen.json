@@ -1,0 +1,49 @@
+{
+  "id": 232,
+  "name": "KV Mechelen",
+  "location": {
+    "city_id": 3406
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 232,
+      "name": "KV Mechelen",
+      "slug": "mechelen",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 90500013,
+      "name": "KV Mechelen",
+      "slug": "mechelen-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 90500014,
+      "name": "KV Mechelen",
+      "slug": "mechelen-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#e2001a"
+  }
+}

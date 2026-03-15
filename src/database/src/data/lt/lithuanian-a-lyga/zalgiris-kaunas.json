@@ -1,0 +1,49 @@
+{
+  "id": 47040647,
+  "name": "Kauno Zalgiris",
+  "location": {
+    "city_id": 4703
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 47040647,
+      "name": "Kauno Zalgiris",
+      "slug": "zalgiris-kaunas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 91800007,
+      "name": "Kauno Zalgiris",
+      "slug": "zalgiris-kaunas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 91800008,
+      "name": "Kauno Zalgiris",
+      "slug": "zalgiris-kaunas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 653229,
+  "name": "Lucko",
+  "location": {
+    "city_id": 5004
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 653229,
+      "name": "Lucko",
+      "slug": "lucko",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 92100009,
+      "name": "Lucko",
+      "slug": "lucko-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 92100010,
+      "name": "Lucko",
+      "slug": "lucko-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

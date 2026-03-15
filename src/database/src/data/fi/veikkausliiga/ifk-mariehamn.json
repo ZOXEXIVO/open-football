@@ -1,0 +1,49 @@
+{
+  "id": 129179,
+  "name": "IFK Mariehamn",
+  "location": {
+    "city_id": 3703
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 129179,
+      "name": "IFK Mariehamn",
+      "slug": "ifk-mariehamn",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 90800007,
+      "name": "IFK Mariehamn",
+      "slug": "ifk-mariehamn-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 90800008,
+      "name": "IFK Mariehamn",
+      "slug": "ifk-mariehamn-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

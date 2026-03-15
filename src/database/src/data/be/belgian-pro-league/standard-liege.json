@@ -1,0 +1,49 @@
+{
+  "id": 250,
+  "name": "Standard Liege",
+  "location": {
+    "city_id": 3404
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 250,
+      "name": "Standard Liege",
+      "slug": "standard-liege",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6800,
+        "national": 6800,
+        "world": 6800
+      }
+    },
+    {
+      "id": 90500009,
+      "name": "Standard Liege",
+      "slug": "standard-liege-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2040,
+        "national": 2040,
+        "world": 2040
+      }
+    },
+    {
+      "id": 90500010,
+      "name": "Standard Liege",
+      "slug": "standard-liege-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1360,
+        "national": 1360,
+        "world": 1360
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 135454,
+  "name": "Al Ahli",
+  "location": {
+    "city_id": 4507
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 135454,
+      "name": "Al Ahli",
+      "slug": "al-ahli-uae",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 91600015,
+      "name": "Al Ahli",
+      "slug": "al-ahli-uae-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 91600016,
+      "name": "Al Ahli",
+      "slug": "al-ahli-uae-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

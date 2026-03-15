@@ -1,0 +1,41 @@
+{
+  "id": 81,
+  "slug": "championship",
+  "name": "Championship",
+  "reputation": 7000,
+  "tier": 2,
+  "promotion_spots": 3,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 9,
+      "from_month": 8,
+      "to_day": 26,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 3,
+      "from_month": 1,
+      "to_day": 3,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 769,
+      "weight": 2
+    },
+    {
+      "country_id": 776,
+      "weight": 2
+    },
+    {
+      "country_id": 1651,
+      "weight": 1
+    },
+    {
+      "country_id": 1649,
+      "weight": 1
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+{
+  "id": 616875,
+  "name": "Haras El Hodoud",
+  "location": {
+    "city_id": 6311
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 616875,
+      "name": "Haras El Hodoud",
+      "slug": "haras-el-hodoud",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 93400023,
+      "name": "Haras El Hodoud",
+      "slug": "haras-el-hodoud-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 93400024,
+      "name": "Haras El Hodoud",
+      "slug": "haras-el-hodoud-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

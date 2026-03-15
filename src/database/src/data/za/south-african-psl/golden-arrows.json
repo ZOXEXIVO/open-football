@@ -1,0 +1,49 @@
+{
+  "id": 131270,
+  "name": "Golden Arrows",
+  "location": {
+    "city_id": 6207
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 131270,
+      "name": "Golden Arrows",
+      "slug": "golden-arrows",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 93300015,
+      "name": "Golden Arrows",
+      "slug": "golden-arrows-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 93300016,
+      "name": "Golden Arrows",
+      "slug": "golden-arrows-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

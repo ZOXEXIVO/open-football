@@ -1,0 +1,49 @@
+{
+  "id": 72000112,
+  "name": "Houston Dynamo",
+  "location": {
+    "city_id": 2912
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 72000112,
+      "name": "Houston Dynamo",
+      "slug": "houston-dynamo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5600,
+        "national": 5600,
+        "world": 5600
+      }
+    },
+    {
+      "id": 89000025,
+      "name": "Houston Dynamo",
+      "slug": "houston-dynamo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1680,
+        "national": 1680,
+        "world": 1680
+      }
+    },
+    {
+      "id": 89000026,
+      "name": "Houston Dynamo",
+      "slug": "houston-dynamo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1120,
+        "national": 1120,
+        "world": 1120
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#ffffff"
+  }
+}

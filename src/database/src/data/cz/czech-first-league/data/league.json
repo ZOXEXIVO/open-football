@@ -1,0 +1,37 @@
+{
+  "id": 280,
+  "slug": "czech-first-league",
+  "name": "First League",
+  "reputation": 5500,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 18,
+      "from_month": 7,
+      "to_day": 15,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 1,
+      "from_month": 2,
+      "to_day": 25,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 791,
+      "weight": 2
+    },
+    {
+      "country_id": 776,
+      "weight": 2
+    },
+    {
+      "country_id": 787,
+      "weight": 1
+    }
+  ]
+}

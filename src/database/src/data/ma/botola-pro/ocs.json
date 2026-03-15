@@ -1,0 +1,49 @@
+{
+  "id": 8630097,
+  "name": "OCS",
+  "location": {
+    "city_id": 6014
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 8630097,
+      "name": "OCS",
+      "slug": "ocs",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 93100029,
+      "name": "OCS",
+      "slug": "ocs-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 93100030,
+      "name": "OCS",
+      "slug": "ocs-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

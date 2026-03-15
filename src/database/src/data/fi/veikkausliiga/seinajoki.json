@@ -1,0 +1,49 @@
+{
+  "id": 33007394,
+  "name": "SJK",
+  "location": {
+    "city_id": 3710
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 33007394,
+      "name": "SJK",
+      "slug": "seinajoki",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 90800021,
+      "name": "SJK",
+      "slug": "seinajoki-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 90800022,
+      "name": "SJK",
+      "slug": "seinajoki-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 88021949,
+  "name": "WaiBOP United",
+  "location": {
+    "city_id": 3906
+  },
+  "finance": {
+    "balance": 317500
+  },
+  "teams": [
+    {
+      "id": 88021949,
+      "name": "WaiBOP United",
+      "slug": "waikato-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    },
+    {
+      "id": 91000013,
+      "name": "WaiBOP United",
+      "slug": "waikato-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 91000014,
+      "name": "WaiBOP United",
+      "slug": "waikato-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

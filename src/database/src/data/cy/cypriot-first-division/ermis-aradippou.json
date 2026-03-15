@@ -1,0 +1,49 @@
+{
+  "id": 138181,
+  "name": "Ermis",
+  "location": {
+    "city_id": 7011
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 138181,
+      "name": "Ermis",
+      "slug": "ermis-aradippou",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 93600023,
+      "name": "Ermis",
+      "slug": "ermis-aradippou-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 93600024,
+      "name": "Ermis",
+      "slug": "ermis-aradippou-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

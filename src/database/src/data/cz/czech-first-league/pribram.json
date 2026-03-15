@@ -1,0 +1,49 @@
+{
+  "id": 116156,
+  "name": "Pribram",
+  "location": {
+    "city_id": 2614
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 116156,
+      "name": "Pribram",
+      "slug": "pribram",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 89700029,
+      "name": "Pribram",
+      "slug": "pribram-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 89700030,
+      "name": "Pribram",
+      "slug": "pribram-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

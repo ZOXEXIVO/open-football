@@ -1,0 +1,49 @@
+{
+  "id": 1073,
+  "name": "Keflavik",
+  "location": {
+    "city_id": 5308
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 1073,
+      "name": "Keflavik",
+      "slug": "keflavik",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 92400017,
+      "name": "Keflavik",
+      "slug": "keflavik-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 92400018,
+      "name": "Keflavik",
+      "slug": "keflavik-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

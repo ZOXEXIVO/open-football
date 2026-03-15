@@ -1,0 +1,49 @@
+{
+  "id": 265,
+  "name": "Lokeren",
+  "location": {
+    "city_id": 3412
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 265,
+      "name": "Lokeren",
+      "slug": "lokeren",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 90500025,
+      "name": "Lokeren",
+      "slug": "lokeren-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 90500026,
+      "name": "Lokeren",
+      "slug": "lokeren-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffd700"
+  }
+}

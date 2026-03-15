@@ -1,0 +1,49 @@
+{
+  "id": 1188,
+  "name": "Jubilo Iwata",
+  "location": {
+    "city_id": 5410
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1188,
+      "name": "Jubilo Iwata",
+      "slug": "jubilo-iwata",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 92500021,
+      "name": "Jubilo Iwata",
+      "slug": "jubilo-iwata-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 92500022,
+      "name": "Jubilo Iwata",
+      "slug": "jubilo-iwata-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

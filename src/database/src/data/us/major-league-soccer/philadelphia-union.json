@@ -1,0 +1,49 @@
+{
+  "id": 72019000,
+  "name": "Philadelphia Union",
+  "location": {
+    "city_id": 2910
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 72019000,
+      "name": "Philadelphia Union",
+      "slug": "philadelphia-union",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 89000021,
+      "name": "Philadelphia Union",
+      "slug": "philadelphia-union-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 89000022,
+      "name": "Philadelphia Union",
+      "slug": "philadelphia-union-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

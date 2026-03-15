@@ -1,0 +1,49 @@
+{
+  "id": 7560016,
+  "name": "Podbrezova",
+  "location": {
+    "city_id": 4209
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 7560016,
+      "name": "Podbrezova",
+      "slug": "podbrezova",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 91300019,
+      "name": "Podbrezova",
+      "slug": "podbrezova-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 91300020,
+      "name": "Podbrezova",
+      "slug": "podbrezova-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 665,
+  "name": "Hull City",
+  "location": {
+    "city_id": 3605
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 665,
+      "name": "Hull City",
+      "slug": "hull-city",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 90700011,
+      "name": "Hull City",
+      "slug": "hull-city-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 90700012,
+      "name": "Hull City",
+      "slug": "hull-city-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

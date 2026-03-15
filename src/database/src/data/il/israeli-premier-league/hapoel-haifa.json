@@ -1,0 +1,49 @@
+{
+  "id": 1087,
+  "name": "Hapoel Haifa",
+  "location": {
+    "city_id": 2206
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 1087,
+      "name": "Hapoel Haifa",
+      "slug": "hapoel-haifa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 89300013,
+      "name": "Hapoel Haifa",
+      "slug": "hapoel-haifa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 89300014,
+      "name": "Hapoel Haifa",
+      "slug": "hapoel-haifa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

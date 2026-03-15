@@ -1,0 +1,49 @@
+{
+  "id": 1191,
+  "name": "Nagoya Grampus",
+  "location": {
+    "city_id": 5407
+  },
+  "finance": {
+    "balance": 12700000
+  },
+  "teams": [
+    {
+      "id": 1191,
+      "name": "Nagoya Grampus",
+      "slug": "nagoya-grampus",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 92500015,
+      "name": "Nagoya Grampus",
+      "slug": "nagoya-grampus-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 92500016,
+      "name": "Nagoya Grampus",
+      "slug": "nagoya-grampus-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ff6600"
+  }
+}

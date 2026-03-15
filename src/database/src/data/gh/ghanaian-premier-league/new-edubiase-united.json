@@ -1,0 +1,49 @@
+{
+  "id": 13107126,
+  "name": "New Edubiase United",
+  "location": {
+    "city_id": 7112
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 13107126,
+      "name": "New Edubiase United",
+      "slug": "new-edubiase-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2600,
+        "national": 2600,
+        "world": 2600
+      }
+    },
+    {
+      "id": 93700025,
+      "name": "New Edubiase United",
+      "slug": "new-edubiase-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 780,
+        "national": 780,
+        "world": 780
+      }
+    },
+    {
+      "id": 93700026,
+      "name": "New Edubiase United",
+      "slug": "new-edubiase-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 520,
+        "national": 520,
+        "world": 520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

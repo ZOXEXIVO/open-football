@@ -1,0 +1,49 @@
+{
+  "id": 1183,
+  "name": "Avispa Fukuoka",
+  "location": {
+    "city_id": 5414
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1183,
+      "name": "Avispa Fukuoka",
+      "slug": "avispa-fukuoka",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 92500029,
+      "name": "Avispa Fukuoka",
+      "slug": "avispa-fukuoka-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 92500030,
+      "name": "Avispa Fukuoka",
+      "slug": "avispa-fukuoka-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

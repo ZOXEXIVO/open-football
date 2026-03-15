@@ -1,0 +1,49 @@
+{
+  "id": 1060,
+  "name": "MTK Budapest",
+  "location": {
+    "city_id": 2707
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 1060,
+      "name": "MTK Budapest",
+      "slug": "mtk-budapest",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 89800015,
+      "name": "MTK Budapest",
+      "slug": "mtk-budapest-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 89800016,
+      "name": "MTK Budapest",
+      "slug": "mtk-budapest-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

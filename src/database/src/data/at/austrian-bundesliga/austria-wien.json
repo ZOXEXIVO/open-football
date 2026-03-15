@@ -1,0 +1,49 @@
+{
+  "id": 152,
+  "name": "Austria Wien",
+  "location": {
+    "city_id": 3002
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 152,
+      "name": "Austria Wien",
+      "slug": "austria-wien",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 90100005,
+      "name": "Austria Wien",
+      "slug": "austria-wien-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 90100006,
+      "name": "Austria Wien",
+      "slug": "austria-wien-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

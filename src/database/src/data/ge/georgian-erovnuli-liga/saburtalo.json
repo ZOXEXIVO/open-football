@@ -1,0 +1,49 @@
+{
+  "id": 59071370,
+  "name": "Saburtalo",
+  "location": {
+    "city_id": 2004
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 59071370,
+      "name": "Saburtalo",
+      "slug": "saburtalo",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 89100009,
+      "name": "Saburtalo",
+      "slug": "saburtalo-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 89100010,
+      "name": "Saburtalo",
+      "slug": "saburtalo-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

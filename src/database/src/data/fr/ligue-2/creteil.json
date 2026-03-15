@@ -1,0 +1,49 @@
+{
+  "id": 2069,
+  "name": "US Creteil",
+  "location": {
+    "city_id": 5216
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 2069,
+      "name": "US Creteil",
+      "slug": "creteil",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 92300033,
+      "name": "US Creteil",
+      "slug": "creteil-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 92300034,
+      "name": "US Creteil",
+      "slug": "creteil-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

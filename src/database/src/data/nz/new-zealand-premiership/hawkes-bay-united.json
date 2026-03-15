@@ -1,0 +1,49 @@
+{
+  "id": 130041,
+  "name": "Hawke's Bay United",
+  "location": {
+    "city_id": 3904
+  },
+  "finance": {
+    "balance": 317500
+  },
+  "teams": [
+    {
+      "id": 130041,
+      "name": "Hawke's Bay United",
+      "slug": "hawkes-bay-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    },
+    {
+      "id": 91000009,
+      "name": "Hawke's Bay United",
+      "slug": "hawkes-bay-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 91000010,
+      "name": "Hawke's Bay United",
+      "slug": "hawkes-bay-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

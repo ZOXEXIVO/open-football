@@ -1,0 +1,49 @@
+{
+  "id": 5380013,
+  "name": "MAS Fes",
+  "location": {
+    "city_id": 6010
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 5380013,
+      "name": "MAS Fes",
+      "slug": "mas-fes",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 93100021,
+      "name": "MAS Fes",
+      "slug": "mas-fes-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 93100022,
+      "name": "MAS Fes",
+      "slug": "mas-fes-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

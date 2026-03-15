@@ -1,0 +1,49 @@
+{
+  "id": 14031210,
+  "name": "Guarani Antonio Franco",
+  "location": {
+    "city_id": 5714
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 14031210,
+      "name": "Guarani Antonio Franco",
+      "slug": "guarani-antonio-franco",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 92800029,
+      "name": "Guarani Antonio Franco",
+      "slug": "guarani-antonio-franco-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 92800030,
+      "name": "Guarani Antonio Franco",
+      "slug": "guarani-antonio-franco-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

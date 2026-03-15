@@ -1,0 +1,49 @@
+{
+  "id": 18021101,
+  "name": "Wadi Degla",
+  "location": {
+    "city_id": 6312
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 18021101,
+      "name": "Wadi Degla",
+      "slug": "wadi-degla",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 93400025,
+      "name": "Wadi Degla",
+      "slug": "wadi-degla-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 93400026,
+      "name": "Wadi Degla",
+      "slug": "wadi-degla-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 890,
+  "name": "Dila",
+  "location": {
+    "city_id": 2002
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 890,
+      "name": "Dila",
+      "slug": "dila-gori",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 89100005,
+      "name": "Dila",
+      "slug": "dila-gori-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 89100006,
+      "name": "Dila",
+      "slug": "dila-gori-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

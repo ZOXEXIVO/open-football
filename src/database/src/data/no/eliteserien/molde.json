@@ -1,0 +1,49 @@
+{
+  "id": 1353,
+  "name": "Molde",
+  "location": {
+    "city_id": 4601
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1353,
+      "name": "Molde",
+      "slug": "molde",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 91700003,
+      "name": "Molde",
+      "slug": "molde-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 91700004,
+      "name": "Molde",
+      "slug": "molde-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

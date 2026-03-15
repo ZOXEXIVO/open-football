@@ -1,0 +1,41 @@
+{
+  "id": 550,
+  "slug": "swiss-super-league",
+  "name": "Super League",
+  "reputation": 6400,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 1,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 18,
+      "from_month": 7,
+      "to_day": 18,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 23,
+      "from_month": 1,
+      "to_day": 25,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 771,
+      "weight": 3
+    },
+    {
+      "country_id": 769,
+      "weight": 2
+    },
+    {
+      "country_id": 776,
+      "weight": 2
+    },
+    {
+      "country_id": 1651,
+      "weight": 1
+    }
+  ]
+}

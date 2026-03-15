@@ -1,0 +1,49 @@
+{
+  "id": 106805,
+  "name": "Jomo Cosmos",
+  "location": {
+    "city_id": 6213
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 106805,
+      "name": "Jomo Cosmos",
+      "slug": "jomo-cosmos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 93300027,
+      "name": "Jomo Cosmos",
+      "slug": "jomo-cosmos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 93300028,
+      "name": "Jomo Cosmos",
+      "slug": "jomo-cosmos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

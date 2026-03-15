@@ -1,0 +1,49 @@
+{
+  "id": 5380023,
+  "name": "MAT",
+  "location": {
+    "city_id": 6009
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 5380023,
+      "name": "MAT",
+      "slug": "mat-tetouan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 93100019,
+      "name": "MAT",
+      "slug": "mat-tetouan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 93100020,
+      "name": "MAT",
+      "slug": "mat-tetouan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#006400"
+  }
+}

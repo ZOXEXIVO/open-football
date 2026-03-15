@@ -1,0 +1,49 @@
+{
+  "id": 12025691,
+  "name": "Berekum Chelsea",
+  "location": {
+    "city_id": 7105
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 12025691,
+      "name": "Berekum Chelsea",
+      "slug": "berekum-chelsea",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 93700011,
+      "name": "Berekum Chelsea",
+      "slug": "berekum-chelsea-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 93700012,
+      "name": "Berekum Chelsea",
+      "slug": "berekum-chelsea-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

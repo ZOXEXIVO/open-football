@@ -1,0 +1,49 @@
+{
+  "id": 475411,
+  "name": "Pakhtakor",
+  "location": {
+    "city_id": 2500
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 475411,
+      "name": "Pakhtakor",
+      "slug": "pakhtakor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 89600001,
+      "name": "Pakhtakor",
+      "slug": "pakhtakor-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 89600002,
+      "name": "Pakhtakor",
+      "slug": "pakhtakor-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

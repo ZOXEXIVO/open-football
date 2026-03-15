@@ -1,0 +1,49 @@
+{
+  "id": 654,
+  "name": "Fulham",
+  "location": {
+    "city_id": 3603
+  },
+  "finance": {
+    "balance": 22860000
+  },
+  "teams": [
+    {
+      "id": 654,
+      "name": "Fulham",
+      "slug": "fulham-ch",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6600,
+        "national": 6600,
+        "world": 6600
+      }
+    },
+    {
+      "id": 90700007,
+      "name": "Fulham",
+      "slug": "fulham-ch-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1980,
+        "national": 1980,
+        "world": 1980
+      }
+    },
+    {
+      "id": 90700008,
+      "name": "Fulham",
+      "slug": "fulham-ch-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  }
+}

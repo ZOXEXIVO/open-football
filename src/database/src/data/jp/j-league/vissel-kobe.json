@@ -1,0 +1,49 @@
+{
+  "id": 106844,
+  "name": "Vissel Kobe",
+  "location": {
+    "city_id": 5405
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 106844,
+      "name": "Vissel Kobe",
+      "slug": "vissel-kobe",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 92500011,
+      "name": "Vissel Kobe",
+      "slug": "vissel-kobe-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 92500012,
+      "name": "Vissel Kobe",
+      "slug": "vissel-kobe-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#8b0000",
+    "foreground": "#ffffff"
+  }
+}

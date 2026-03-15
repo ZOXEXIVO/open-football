@@ -1,0 +1,49 @@
+{
+  "id": 130873,
+  "name": "MFK Ruzomberok",
+  "location": {
+    "city_id": 4205
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 130873,
+      "name": "MFK Ruzomberok",
+      "slug": "ruzomberok",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 91300011,
+      "name": "MFK Ruzomberok",
+      "slug": "ruzomberok-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 91300012,
+      "name": "MFK Ruzomberok",
+      "slug": "ruzomberok-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

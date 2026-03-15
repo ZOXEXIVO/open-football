@@ -1,0 +1,49 @@
+{
+  "id": 844,
+  "name": "FC Metz",
+  "location": {
+    "city_id": 5201
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 844,
+      "name": "FC Metz",
+      "slug": "metz-l2",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 92300003,
+      "name": "FC Metz",
+      "slug": "metz-l2-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 92300004,
+      "name": "FC Metz",
+      "slug": "metz-l2-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c3a",
+    "foreground": "#ffffff"
+  }
+}

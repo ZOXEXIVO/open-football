@@ -1,0 +1,49 @@
+{
+  "id": 256,
+  "name": "Anderlecht",
+  "location": {
+    "city_id": 3401
+  },
+  "finance": {
+    "balance": 44450000
+  },
+  "teams": [
+    {
+      "id": 256,
+      "name": "Anderlecht",
+      "slug": "anderlecht",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 90500003,
+      "name": "Anderlecht",
+      "slug": "anderlecht-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 90500004,
+      "name": "Anderlecht",
+      "slug": "anderlecht-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

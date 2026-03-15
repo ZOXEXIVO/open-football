@@ -1,0 +1,49 @@
+{
+  "id": 5370014,
+  "name": "Aswan",
+  "location": {
+    "city_id": 6313
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 5370014,
+      "name": "Aswan",
+      "slug": "aswan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 93400027,
+      "name": "Aswan",
+      "slug": "aswan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 93400028,
+      "name": "Aswan",
+      "slug": "aswan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

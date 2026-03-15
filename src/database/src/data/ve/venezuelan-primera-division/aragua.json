@@ -1,0 +1,49 @@
+{
+  "id": 23014584,
+  "name": "Aragua",
+  "location": {
+    "city_id": 2813
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 23014584,
+      "name": "Aragua",
+      "slug": "aragua",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 89900027,
+      "name": "Aragua",
+      "slug": "aragua-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 89900028,
+      "name": "Aragua",
+      "slug": "aragua-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#e2001a"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 856,
+  "name": "Le Havre",
+  "location": {
+    "city_id": 5206
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 856,
+      "name": "Le Havre",
+      "slug": "le-havre-l2",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 92300013,
+      "name": "Le Havre",
+      "slug": "le-havre-l2-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 92300014,
+      "name": "Le Havre",
+      "slug": "le-havre-l2-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#6caddf",
+    "foreground": "#003da5"
+  }
+}

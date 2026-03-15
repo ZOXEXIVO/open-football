@@ -1,0 +1,49 @@
+{
+  "id": 2300018,
+  "name": "Siauliai",
+  "location": {
+    "city_id": 4706
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 2300018,
+      "name": "Siauliai",
+      "slug": "siauliai",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2600,
+        "national": 2600,
+        "world": 2600
+      }
+    },
+    {
+      "id": 91800013,
+      "name": "Siauliai",
+      "slug": "siauliai-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 780,
+        "national": 780,
+        "world": 780
+      }
+    },
+    {
+      "id": 91800014,
+      "name": "Siauliai",
+      "slug": "siauliai-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 520,
+        "national": 520,
+        "world": 520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

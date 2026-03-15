@@ -1,0 +1,49 @@
+{
+  "id": 130780,
+  "name": "Palestino",
+  "location": {
+    "city_id": 3207
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 130780,
+      "name": "Palestino",
+      "slug": "palestino",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 90300015,
+      "name": "Palestino",
+      "slug": "palestino-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 90300016,
+      "name": "Palestino",
+      "slug": "palestino-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#006400"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1184,
+  "name": "Shonan Bellmare",
+  "location": {
+    "city_id": 5413
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1184,
+      "name": "Shonan Bellmare",
+      "slug": "shonan-bellmare",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 92500027,
+      "name": "Shonan Bellmare",
+      "slug": "shonan-bellmare-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 92500028,
+      "name": "Shonan Bellmare",
+      "slug": "shonan-bellmare-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

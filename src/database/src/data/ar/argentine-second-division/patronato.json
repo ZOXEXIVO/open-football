@@ -1,0 +1,49 @@
+{
+  "id": 3101457,
+  "name": "Patronato",
+  "location": {
+    "city_id": 5703
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 3101457,
+      "name": "Patronato",
+      "slug": "patronato",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 92800007,
+      "name": "Patronato",
+      "slug": "patronato-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 92800008,
+      "name": "Patronato",
+      "slug": "patronato-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

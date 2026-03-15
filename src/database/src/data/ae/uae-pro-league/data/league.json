@@ -1,0 +1,37 @@
+{
+  "id": 450,
+  "slug": "uae-pro-league",
+  "name": "Pro League",
+  "reputation": 5000,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 9,
+      "to_day": 31,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 5,
+      "from_month": 1,
+      "to_day": 15,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1651,
+      "weight": 3
+    },
+    {
+      "country_id": 1649,
+      "weight": 2
+    },
+    {
+      "country_id": 776,
+      "weight": 1
+    }
+  ]
+}

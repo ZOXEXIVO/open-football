@@ -1,0 +1,49 @@
+{
+  "id": 1300526,
+  "name": "Sioni",
+  "location": {
+    "city_id": 2012
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 1300526,
+      "name": "Sioni",
+      "slug": "sioni",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2600,
+        "national": 2600,
+        "world": 2600
+      }
+    },
+    {
+      "id": 89100025,
+      "name": "Sioni",
+      "slug": "sioni-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 780,
+        "national": 780,
+        "world": 780
+      }
+    },
+    {
+      "id": 89100026,
+      "name": "Sioni",
+      "slug": "sioni-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 520,
+        "national": 520,
+        "world": 520
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

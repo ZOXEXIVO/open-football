@@ -1,0 +1,49 @@
+{
+  "id": 1033,
+  "name": "Roda JC",
+  "location": {
+    "city_id": 3116
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 1033,
+      "name": "Roda JC",
+      "slug": "roda-jc",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 90200033,
+      "name": "Roda JC",
+      "slug": "roda-jc-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 90200034,
+      "name": "Roda JC",
+      "slug": "roda-jc-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

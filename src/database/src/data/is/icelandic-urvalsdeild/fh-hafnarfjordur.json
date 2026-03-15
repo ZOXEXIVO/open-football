@@ -1,0 +1,49 @@
+{
+  "id": 1070,
+  "name": "FH",
+  "location": {
+    "city_id": 5301
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 1070,
+      "name": "FH",
+      "slug": "fh-hafnarfjordur",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 92400003,
+      "name": "FH",
+      "slug": "fh-hafnarfjordur-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 92400004,
+      "name": "FH",
+      "slug": "fh-hafnarfjordur-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

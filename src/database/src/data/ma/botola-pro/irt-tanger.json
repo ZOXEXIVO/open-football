@@ -1,0 +1,49 @@
+{
+  "id": 5380025,
+  "name": "IRT",
+  "location": {
+    "city_id": 6008
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 5380025,
+      "name": "IRT",
+      "slug": "irt-tanger",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 93100017,
+      "name": "IRT",
+      "slug": "irt-tanger-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 93100018,
+      "name": "IRT",
+      "slug": "irt-tanger-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

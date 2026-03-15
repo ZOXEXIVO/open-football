@@ -1,0 +1,49 @@
+{
+  "id": 1293,
+  "name": "Bodo/Glimt",
+  "location": {
+    "city_id": 4602
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1293,
+      "name": "Bodo/Glimt",
+      "slug": "bodo-glimt",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 91700005,
+      "name": "Bodo/Glimt",
+      "slug": "bodo-glimt-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 91700006,
+      "name": "Bodo/Glimt",
+      "slug": "bodo-glimt-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

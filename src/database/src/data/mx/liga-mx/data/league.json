@@ -1,0 +1,37 @@
+{
+  "id": 380,
+  "slug": "liga-mx",
+  "name": "Liga MX",
+  "reputation": 7000,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 20,
+      "from_month": 7,
+      "to_day": 10,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 8,
+      "from_month": 1,
+      "to_day": 28,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1649,
+      "weight": 4
+    },
+    {
+      "country_id": 1651,
+      "weight": 3
+    },
+    {
+      "country_id": 1653,
+      "weight": 2
+    }
+  ]
+}

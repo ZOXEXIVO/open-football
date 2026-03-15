@@ -1,0 +1,49 @@
+{
+  "id": 7900348,
+  "name": "Mashal",
+  "location": {
+    "city_id": 2513
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 7900348,
+      "name": "Mashal",
+      "slug": "mashal",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 89600027,
+      "name": "Mashal",
+      "slug": "mashal-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 89600028,
+      "name": "Mashal",
+      "slug": "mashal-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

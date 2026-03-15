@@ -1,0 +1,49 @@
+{
+  "id": 308107,
+  "name": "Cienciano",
+  "location": {
+    "city_id": 4008
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 308107,
+      "name": "Cienciano",
+      "slug": "cienciano",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 91100017,
+      "name": "Cienciano",
+      "slug": "cienciano-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 91100018,
+      "name": "Cienciano",
+      "slug": "cienciano-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

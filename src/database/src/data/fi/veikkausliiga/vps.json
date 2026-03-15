@@ -1,0 +1,49 @@
+{
+  "id": 1300376,
+  "name": "VPS",
+  "location": {
+    "city_id": 3709
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 1300376,
+      "name": "VPS",
+      "slug": "vps",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 90800019,
+      "name": "VPS",
+      "slug": "vps-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 90800020,
+      "name": "VPS",
+      "slug": "vps-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

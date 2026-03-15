@@ -1,0 +1,49 @@
+{
+  "id": 104395,
+  "name": "Zob Ahan",
+  "location": {
+    "city_id": 5604
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 104395,
+      "name": "Zob Ahan",
+      "slug": "zob-ahan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 92700009,
+      "name": "Zob Ahan",
+      "slug": "zob-ahan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 92700010,
+      "name": "Zob Ahan",
+      "slug": "zob-ahan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

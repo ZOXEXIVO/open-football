@@ -1,0 +1,49 @@
+{
+  "id": 1218,
+  "name": "Zalgiris",
+  "location": {
+    "city_id": 4700
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1218,
+      "name": "Zalgiris",
+      "slug": "zalgiris-vilnius",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 91800001,
+      "name": "Zalgiris",
+      "slug": "zalgiris-vilnius-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 91800002,
+      "name": "Zalgiris",
+      "slug": "zalgiris-vilnius-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

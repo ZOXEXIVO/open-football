@@ -1,0 +1,49 @@
+{
+  "id": 484434,
+  "name": "Sogdiana",
+  "location": {
+    "city_id": 2506
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 484434,
+      "name": "Sogdiana",
+      "slug": "sogdiana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 89600013,
+      "name": "Sogdiana",
+      "slug": "sogdiana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 89600014,
+      "name": "Sogdiana",
+      "slug": "sogdiana-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

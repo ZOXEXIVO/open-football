@@ -1,0 +1,49 @@
+{
+  "id": 158,
+  "name": "Red Bull Salzburg",
+  "location": {
+    "city_id": 3000
+  },
+  "finance": {
+    "balance": 50800000
+  },
+  "teams": [
+    {
+      "id": 158,
+      "name": "Red Bull Salzburg",
+      "slug": "red-bull-salzburg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7400,
+        "national": 7400,
+        "world": 7400
+      }
+    },
+    {
+      "id": 90100001,
+      "name": "Red Bull Salzburg",
+      "slug": "red-bull-salzburg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2220,
+        "national": 2220,
+        "world": 2220
+      }
+    },
+    {
+      "id": 90100002,
+      "name": "Red Bull Salzburg",
+      "slug": "red-bull-salzburg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1480,
+        "national": 1480,
+        "world": 1480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

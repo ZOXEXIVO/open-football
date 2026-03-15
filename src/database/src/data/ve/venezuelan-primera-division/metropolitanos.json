@@ -1,0 +1,49 @@
+{
+  "id": 5300232,
+  "name": "Metropolitanos",
+  "location": {
+    "city_id": 2807
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 5300232,
+      "name": "Metropolitanos",
+      "slug": "metropolitanos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 89900015,
+      "name": "Metropolitanos",
+      "slug": "metropolitanos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 89900016,
+      "name": "Metropolitanos",
+      "slug": "metropolitanos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

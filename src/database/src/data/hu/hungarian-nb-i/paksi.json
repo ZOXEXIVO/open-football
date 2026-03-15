@@ -1,0 +1,49 @@
+{
+  "id": 7521327,
+  "name": "Paksi",
+  "location": {
+    "city_id": 2706
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 7521327,
+      "name": "Paksi",
+      "slug": "paksi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 89800013,
+      "name": "Paksi",
+      "slug": "paksi-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 89800014,
+      "name": "Paksi",
+      "slug": "paksi-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

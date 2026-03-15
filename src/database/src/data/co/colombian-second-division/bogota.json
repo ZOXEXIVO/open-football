@@ -1,0 +1,49 @@
+{
+  "id": 309353,
+  "name": "Bogota",
+  "location": {
+    "city_id": 5106
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 309353,
+      "name": "Bogota",
+      "slug": "bogota",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 92200013,
+      "name": "Bogota",
+      "slug": "bogota-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 92200014,
+      "name": "Bogota",
+      "slug": "bogota-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c3a",
+    "foreground": "#ffd700"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 263,
+  "name": "Charleroi",
+  "location": {
+    "city_id": 3405
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 263,
+      "name": "Charleroi",
+      "slug": "charleroi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 90500011,
+      "name": "Charleroi",
+      "slug": "charleroi-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 90500012,
+      "name": "Charleroi",
+      "slug": "charleroi-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 135430,
+  "name": "Al Wahda",
+  "location": {
+    "city_id": 4503
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 135430,
+      "name": "Al Wahda",
+      "slug": "al-wahda",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 91600007,
+      "name": "Al Wahda",
+      "slug": "al-wahda-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 91600008,
+      "name": "Al Wahda",
+      "slug": "al-wahda-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c3a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 14031194,
+  "name": "Atletico Parana",
+  "location": {
+    "city_id": 5713
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 14031194,
+      "name": "Atletico Parana",
+      "slug": "atletico-parana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 92800027,
+      "name": "Atletico Parana",
+      "slug": "atletico-parana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 92800028,
+      "name": "Atletico Parana",
+      "slug": "atletico-parana-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 106755,
+  "name": "Zamalek",
+  "location": {
+    "city_id": 6301
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 106755,
+      "name": "Zamalek",
+      "slug": "zamalek",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6400,
+        "national": 6400,
+        "world": 6400
+      }
+    },
+    {
+      "id": 93400003,
+      "name": "Zamalek",
+      "slug": "zamalek-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1920,
+        "national": 1920,
+        "world": 1920
+      }
+    },
+    {
+      "id": 93400004,
+      "name": "Zamalek",
+      "slug": "zamalek-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1280,
+        "national": 1280,
+        "world": 1280
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

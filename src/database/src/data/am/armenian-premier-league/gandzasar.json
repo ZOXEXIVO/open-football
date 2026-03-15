@@ -1,0 +1,49 @@
+{
+  "id": 59001468,
+  "name": "Gandzasar",
+  "location": {
+    "city_id": 2108
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 59001468,
+      "name": "Gandzasar",
+      "slug": "gandzasar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 89200017,
+      "name": "Gandzasar",
+      "slug": "gandzasar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 89200018,
+      "name": "Gandzasar",
+      "slug": "gandzasar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ff6600",
+    "foreground": "#000000"
+  }
+}

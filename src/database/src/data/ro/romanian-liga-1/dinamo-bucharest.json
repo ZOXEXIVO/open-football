@@ -1,0 +1,49 @@
+{
+  "id": 1500,
+  "name": "Dinamo Bucharest",
+  "location": {
+    "city_id": 4103
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 1500,
+      "name": "Dinamo Bucharest",
+      "slug": "dinamo-bucharest",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 91200007,
+      "name": "Dinamo Bucharest",
+      "slug": "dinamo-bucharest-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 91200008,
+      "name": "Dinamo Bucharest",
+      "slug": "dinamo-bucharest-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

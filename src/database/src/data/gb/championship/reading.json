@@ -1,0 +1,49 @@
+{
+  "id": 702,
+  "name": "Reading",
+  "location": {
+    "city_id": 3615
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 702,
+      "name": "Reading",
+      "slug": "reading",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 90700031,
+      "name": "Reading",
+      "slug": "reading-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 90700032,
+      "name": "Reading",
+      "slug": "reading-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

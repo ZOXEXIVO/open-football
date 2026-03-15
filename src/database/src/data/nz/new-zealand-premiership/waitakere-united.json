@@ -1,0 +1,49 @@
+{
+  "id": 1301561,
+  "name": "Waitakere United",
+  "location": {
+    "city_id": 3902
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 1301561,
+      "name": "Waitakere United",
+      "slug": "waitakere-united",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 91000005,
+      "name": "Waitakere United",
+      "slug": "waitakere-united-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    },
+    {
+      "id": 91000006,
+      "name": "Waitakere United",
+      "slug": "waitakere-united-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#e2001a"
+  }
+}

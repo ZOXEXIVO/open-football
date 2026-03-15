@@ -1,0 +1,49 @@
+{
+  "id": 1050,
+  "name": "Bekescsaba",
+  "location": {
+    "city_id": 2711
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 1050,
+      "name": "Bekescsaba",
+      "slug": "bekescsaba",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 89800023,
+      "name": "Bekescsaba",
+      "slug": "bekescsaba-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 89800024,
+      "name": "Bekescsaba",
+      "slug": "bekescsaba-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffffff"
+  }
+}

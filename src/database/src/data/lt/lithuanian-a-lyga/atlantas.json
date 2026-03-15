@@ -1,0 +1,49 @@
+{
+  "id": 1300725,
+  "name": "Atlantas",
+  "location": {
+    "city_id": 4704
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 1300725,
+      "name": "Atlantas",
+      "slug": "atlantas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 91800009,
+      "name": "Atlantas",
+      "slug": "atlantas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 91800010,
+      "name": "Atlantas",
+      "slug": "atlantas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ff6600"
+  }
+}

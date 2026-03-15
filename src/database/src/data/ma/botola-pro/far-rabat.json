@@ -1,0 +1,49 @@
+{
+  "id": 106054,
+  "name": "FAR Rabat",
+  "location": {
+    "city_id": 6003
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 106054,
+      "name": "FAR Rabat",
+      "slug": "far-rabat",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 93100007,
+      "name": "FAR Rabat",
+      "slug": "far-rabat-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 93100008,
+      "name": "FAR Rabat",
+      "slug": "far-rabat-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#e2001a"
+  }
+}

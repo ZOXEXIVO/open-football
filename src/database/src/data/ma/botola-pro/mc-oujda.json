@@ -1,0 +1,49 @@
+{
+  "id": 8626287,
+  "name": "MCO",
+  "location": {
+    "city_id": 6013
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 8626287,
+      "name": "MCO",
+      "slug": "mc-oujda",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 93100027,
+      "name": "MCO",
+      "slug": "mc-oujda-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 93100028,
+      "name": "MCO",
+      "slug": "mc-oujda-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

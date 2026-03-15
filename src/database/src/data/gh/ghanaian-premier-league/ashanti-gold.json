@@ -1,0 +1,49 @@
+{
+  "id": 131267,
+  "name": "Ashanti Gold",
+  "location": {
+    "city_id": 7102
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 131267,
+      "name": "Ashanti Gold",
+      "slug": "ashanti-gold",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 93700005,
+      "name": "Ashanti Gold",
+      "slug": "ashanti-gold-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 93700006,
+      "name": "Ashanti Gold",
+      "slug": "ashanti-gold-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

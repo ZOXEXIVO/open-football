@@ -1,0 +1,49 @@
+{
+  "id": 485456,
+  "name": "Nasaf",
+  "location": {
+    "city_id": 2503
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 485456,
+      "name": "Nasaf",
+      "slug": "nasaf",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 89600007,
+      "name": "Nasaf",
+      "slug": "nasaf-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 89600008,
+      "name": "Nasaf",
+      "slug": "nasaf-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

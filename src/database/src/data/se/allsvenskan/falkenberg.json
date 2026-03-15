@@ -1,0 +1,49 @@
+{
+  "id": 1788,
+  "name": "Falkenberg",
+  "location": {
+    "city_id": 4413
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 1788,
+      "name": "Falkenberg",
+      "slug": "falkenberg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 91500027,
+      "name": "Falkenberg",
+      "slug": "falkenberg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 91500028,
+      "name": "Falkenberg",
+      "slug": "falkenberg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

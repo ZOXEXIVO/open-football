@@ -1,0 +1,49 @@
+{
+  "id": 8830832,
+  "name": "Valledupar",
+  "location": {
+    "city_id": 5111
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 8830832,
+      "name": "Valledupar",
+      "slug": "valledupar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 92200023,
+      "name": "Valledupar",
+      "slug": "valledupar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 92200024,
+      "name": "Valledupar",
+      "slug": "valledupar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

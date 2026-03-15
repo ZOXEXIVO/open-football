@@ -1,0 +1,49 @@
+{
+  "id": 106756,
+  "name": "Al Ahly",
+  "location": {
+    "city_id": 6300
+  },
+  "finance": {
+    "balance": 19050000
+  },
+  "teams": [
+    {
+      "id": 106756,
+      "name": "Al Ahly",
+      "slug": "al-ahly",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6600,
+        "national": 6600,
+        "world": 6600
+      }
+    },
+    {
+      "id": 93400001,
+      "name": "Al Ahly",
+      "slug": "al-ahly-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1980,
+        "national": 1980,
+        "world": 1980
+      }
+    },
+    {
+      "id": 93400002,
+      "name": "Al Ahly",
+      "slug": "al-ahly-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

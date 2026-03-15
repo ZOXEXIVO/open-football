@@ -1,0 +1,49 @@
+{
+  "id": 135450,
+  "name": "Al Jazira",
+  "location": {
+    "city_id": 4502
+  },
+  "finance": {
+    "balance": 22860000
+  },
+  "teams": [
+    {
+      "id": 135450,
+      "name": "Al Jazira",
+      "slug": "al-jazira",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6400,
+        "national": 6400,
+        "world": 6400
+      }
+    },
+    {
+      "id": 91600005,
+      "name": "Al Jazira",
+      "slug": "al-jazira-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1920,
+        "national": 1920,
+        "world": 1920
+      }
+    },
+    {
+      "id": 91600006,
+      "name": "Al Jazira",
+      "slug": "al-jazira-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1280,
+        "national": 1280,
+        "world": 1280
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  }
+}

@@ -43,7 +43,7 @@
     }
   ],
   "colors": {
-    "background": "#ffd700",
-    "foreground": "#003da5"
+    "background": "#003da5",
+    "foreground": "#ffd700"
   }
 }

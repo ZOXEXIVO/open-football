@@ -1,0 +1,49 @@
+{
+  "id": 700,
+  "name": "Preston North End",
+  "location": {
+    "city_id": 3610
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 700,
+      "name": "Preston North End",
+      "slug": "preston",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 90700021,
+      "name": "Preston North End",
+      "slug": "preston-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 90700022,
+      "name": "Preston North End",
+      "slug": "preston-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1803,
+  "name": "IFK Goteborg",
+  "location": {
+    "city_id": 4403
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1803,
+      "name": "IFK Goteborg",
+      "slug": "ifk-goteborg",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 91500007,
+      "name": "IFK Goteborg",
+      "slug": "ifk-goteborg-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 91500008,
+      "name": "IFK Goteborg",
+      "slug": "ifk-goteborg-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

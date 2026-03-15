@@ -1,0 +1,49 @@
+{
+  "id": 12037919,
+  "name": "Masr El Makasa",
+  "location": {
+    "city_id": 6314
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 12037919,
+      "name": "Masr El Makasa",
+      "slug": "masr-el-makasa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 93400029,
+      "name": "Masr El Makasa",
+      "slug": "masr-el-makasa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 93400030,
+      "name": "Masr El Makasa",
+      "slug": "masr-el-makasa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

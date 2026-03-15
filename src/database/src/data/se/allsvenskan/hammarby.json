@@ -1,0 +1,49 @@
+{
+  "id": 1797,
+  "name": "Hammarby",
+  "location": {
+    "city_id": 4404
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1797,
+      "name": "Hammarby",
+      "slug": "hammarby",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 91500009,
+      "name": "Hammarby",
+      "slug": "hammarby-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 91500010,
+      "name": "Hammarby",
+      "slug": "hammarby-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 14022195,
+  "name": "Union Mar del Plata",
+  "location": {
+    "city_id": 5718
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 14022195,
+      "name": "Union Mar del Plata",
+      "slug": "union-mar-del-plata",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 92800037,
+      "name": "Union Mar del Plata",
+      "slug": "union-mar-del-plata-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 92800038,
+      "name": "Union Mar del Plata",
+      "slug": "union-mar-del-plata-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

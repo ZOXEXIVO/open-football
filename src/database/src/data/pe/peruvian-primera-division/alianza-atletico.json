@@ -1,0 +1,49 @@
+{
+  "id": 308104,
+  "name": "Alianza Atletico",
+  "location": {
+    "city_id": 4010
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 308104,
+      "name": "Alianza Atletico",
+      "slug": "alianza-atletico",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 91100021,
+      "name": "Alianza Atletico",
+      "slug": "alianza-atletico-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 91100022,
+      "name": "Alianza Atletico",
+      "slug": "alianza-atletico-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

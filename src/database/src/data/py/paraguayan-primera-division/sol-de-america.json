@@ -1,0 +1,49 @@
+{
+  "id": 120939,
+  "name": "Sol de America",
+  "location": {
+    "city_id": 2304
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 120939,
+      "name": "Sol de America",
+      "slug": "sol-de-america",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 89400009,
+      "name": "Sol de America",
+      "slug": "sol-de-america-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 89400010,
+      "name": "Sol de America",
+      "slug": "sol-de-america-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

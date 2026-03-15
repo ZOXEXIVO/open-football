@@ -1,0 +1,49 @@
+{
+  "id": 1046,
+  "name": "Vitesse",
+  "location": {
+    "city_id": 3106
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1046,
+      "name": "Vitesse",
+      "slug": "vitesse",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 90200013,
+      "name": "Vitesse",
+      "slug": "vitesse-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 90200014,
+      "name": "Vitesse",
+      "slug": "vitesse-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 116204,
+  "name": "Pachuca",
+  "location": {
+    "city_id": 3809
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 116204,
+      "name": "Pachuca",
+      "slug": "pachuca",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 90900019,
+      "name": "Pachuca",
+      "slug": "pachuca-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 90900020,
+      "name": "Pachuca",
+      "slug": "pachuca-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

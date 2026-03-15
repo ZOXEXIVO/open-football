@@ -1,0 +1,49 @@
+{
+  "id": 1980,
+  "name": "Bourg-Peronnas",
+  "location": {
+    "city_id": 5217
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 1980,
+      "name": "Bourg-Peronnas",
+      "slug": "bourg-peronnas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 92300035,
+      "name": "Bourg-Peronnas",
+      "slug": "bourg-peronnas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 92300036,
+      "name": "Bourg-Peronnas",
+      "slug": "bourg-peronnas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1905,
+  "name": "FC Dallas",
+  "location": {
+    "city_id": 2911
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1905,
+      "name": "FC Dallas",
+      "slug": "fc-dallas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 89000023,
+      "name": "FC Dallas",
+      "slug": "fc-dallas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 89000024,
+      "name": "FC Dallas",
+      "slug": "fc-dallas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

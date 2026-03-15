@@ -1,0 +1,49 @@
+{
+  "id": 151027,
+  "name": "Milton Keynes Dons",
+  "location": {
+    "city_id": 3618
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 151027,
+      "name": "Milton Keynes Dons",
+      "slug": "mk-dons",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 90700037,
+      "name": "Milton Keynes Dons",
+      "slug": "mk-dons-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 90700038,
+      "name": "Milton Keynes Dons",
+      "slug": "mk-dons-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

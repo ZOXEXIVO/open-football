@@ -1,0 +1,49 @@
+{
+  "id": 135432,
+  "name": "Al Fujairah",
+  "location": {
+    "city_id": 4512
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 135432,
+      "name": "Al Fujairah",
+      "slug": "al-fujairah",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 91600025,
+      "name": "Al Fujairah",
+      "slug": "al-fujairah-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 91600026,
+      "name": "Al Fujairah",
+      "slug": "al-fujairah-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

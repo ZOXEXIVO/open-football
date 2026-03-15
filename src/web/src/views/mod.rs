@@ -41,7 +41,7 @@ impl<'a> MenuParams<'a> {
             MenuSection {
                 items: vec![MenuItem {
                     title: self.country_name.to_string(),
-                    url: format!("/{}/countries/{}", self.lang, self.country_slug),
+                    url: format!("/{}/countries/{}/leagues", self.lang, self.country_slug),
                     icon: "fa-home".to_string(),
                     active: false,
                 }],

@@ -1,0 +1,49 @@
+{
+  "id": 816,
+  "name": "HJK",
+  "location": {
+    "city_id": 3700
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 816,
+      "name": "HJK",
+      "slug": "hjk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 90800001,
+      "name": "HJK",
+      "slug": "hjk-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 90800002,
+      "name": "HJK",
+      "slug": "hjk-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

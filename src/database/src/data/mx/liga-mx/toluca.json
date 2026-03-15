@@ -1,0 +1,49 @@
+{
+  "id": 102355,
+  "name": "Toluca",
+  "location": {
+    "city_id": 3807
+  },
+  "finance": {
+    "balance": 12700000
+  },
+  "teams": [
+    {
+      "id": 102355,
+      "name": "Toluca",
+      "slug": "toluca",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6400,
+        "national": 6400,
+        "world": 6400
+      }
+    },
+    {
+      "id": 90900015,
+      "name": "Toluca",
+      "slug": "toluca-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1920,
+        "national": 1920,
+        "world": 1920
+      }
+    },
+    {
+      "id": 90900016,
+      "name": "Toluca",
+      "slug": "toluca-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1280,
+        "national": 1280,
+        "world": 1280
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 5340898,
+  "name": "Great Olympics",
+  "location": {
+    "city_id": 7108
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 5340898,
+      "name": "Great Olympics",
+      "slug": "great-olympics",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 93700017,
+      "name": "Great Olympics",
+      "slug": "great-olympics-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 93700018,
+      "name": "Great Olympics",
+      "slug": "great-olympics-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

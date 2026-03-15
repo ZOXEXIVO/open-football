@@ -1,0 +1,49 @@
+{
+  "id": 1198,
+  "name": "Yokohama F. Marinos",
+  "location": {
+    "city_id": 5400
+  },
+  "finance": {
+    "balance": 25400000
+  },
+  "teams": [
+    {
+      "id": 1198,
+      "name": "Yokohama F. Marinos",
+      "slug": "yokohama-f-marinos",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6400,
+        "national": 6400,
+        "world": 6400
+      }
+    },
+    {
+      "id": 92500001,
+      "name": "Yokohama F. Marinos",
+      "slug": "yokohama-f-marinos-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1920,
+        "national": 1920,
+        "world": 1920
+      }
+    },
+    {
+      "id": 92500002,
+      "name": "Yokohama F. Marinos",
+      "slug": "yokohama-f-marinos-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1280,
+        "national": 1280,
+        "world": 1280
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

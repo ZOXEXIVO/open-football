@@ -1,0 +1,49 @@
+{
+  "id": 130799,
+  "name": "Veracruz",
+  "location": {
+    "city_id": 3815
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 130799,
+      "name": "Veracruz",
+      "slug": "veracruz",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 90900031,
+      "name": "Veracruz",
+      "slug": "veracruz-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 90900032,
+      "name": "Veracruz",
+      "slug": "veracruz-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

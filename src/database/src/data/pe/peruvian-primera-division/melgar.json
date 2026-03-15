@@ -1,0 +1,49 @@
+{
+  "id": 303815,
+  "name": "Melgar",
+  "location": {
+    "city_id": 4003
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 303815,
+      "name": "Melgar",
+      "slug": "melgar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 91100007,
+      "name": "Melgar",
+      "slug": "melgar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 91100008,
+      "name": "Melgar",
+      "slug": "melgar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

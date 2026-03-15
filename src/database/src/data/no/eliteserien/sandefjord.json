@@ -1,0 +1,49 @@
+{
+  "id": 1380,
+  "name": "Sandefjord",
+  "location": {
+    "city_id": 4613
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 1380,
+      "name": "Sandefjord",
+      "slug": "sandefjord",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 91700027,
+      "name": "Sandefjord",
+      "slug": "sandefjord-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 91700028,
+      "name": "Sandefjord",
+      "slug": "sandefjord-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

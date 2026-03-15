@@ -1,0 +1,24 @@
+{
+  "id": 600,
+  "slug": "ghanaian-premier-league",
+  "name": "Premier League",
+  "reputation": 3400,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 9,
+      "to_day": 31,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 10,
+      "from_month": 1,
+      "to_day": 30,
+      "to_month": 6
+    }
+  },
+  "foreign_players": []
+}

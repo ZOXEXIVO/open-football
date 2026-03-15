@@ -1,0 +1,49 @@
+{
+  "id": 930210,
+  "name": "Hobro",
+  "location": {
+    "city_id": 3511
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 930210,
+      "name": "Hobro",
+      "slug": "hobro",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 90600023,
+      "name": "Hobro",
+      "slug": "hobro-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 90600024,
+      "name": "Hobro",
+      "slug": "hobro-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

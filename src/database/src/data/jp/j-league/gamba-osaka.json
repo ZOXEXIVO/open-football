@@ -1,0 +1,49 @@
+{
+  "id": 1186,
+  "name": "Gamba Osaka",
+  "location": {
+    "city_id": 5404
+  },
+  "finance": {
+    "balance": 15240000
+  },
+  "teams": [
+    {
+      "id": 1186,
+      "name": "Gamba Osaka",
+      "slug": "gamba-osaka",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6000,
+        "national": 6000,
+        "world": 6000
+      }
+    },
+    {
+      "id": 92500009,
+      "name": "Gamba Osaka",
+      "slug": "gamba-osaka-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1800,
+        "national": 1800,
+        "world": 1800
+      }
+    },
+    {
+      "id": 92500010,
+      "name": "Gamba Osaka",
+      "slug": "gamba-osaka-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#000000"
+  }
+}

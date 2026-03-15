@@ -1,0 +1,49 @@
+{
+  "id": 7540205,
+  "name": "CFR Cluj",
+  "location": {
+    "city_id": 4100
+  },
+  "finance": {
+    "balance": 12700000
+  },
+  "teams": [
+    {
+      "id": 7540205,
+      "name": "CFR Cluj",
+      "slug": "cfr-cluj",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6200,
+        "national": 6200,
+        "world": 6200
+      }
+    },
+    {
+      "id": 91200001,
+      "name": "CFR Cluj",
+      "slug": "cfr-cluj-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1860,
+        "national": 1860,
+        "world": 1860
+      }
+    },
+    {
+      "id": 91200002,
+      "name": "CFR Cluj",
+      "slug": "cfr-cluj-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1240,
+        "national": 1240,
+        "world": 1240
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c3a",
+    "foreground": "#ffffff"
+  }
+}

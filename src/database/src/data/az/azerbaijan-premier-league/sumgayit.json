@@ -1,0 +1,49 @@
+{
+  "id": 59008270,
+  "name": "Sumgayit",
+  "location": {
+    "city_id": 6406
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 59008270,
+      "name": "Sumgayit",
+      "slug": "sumgayit",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 93500013,
+      "name": "Sumgayit",
+      "slug": "sumgayit-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 93500014,
+      "name": "Sumgayit",
+      "slug": "sumgayit-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 76019314,
+  "name": "Fortaleza CEIF",
+  "location": {
+    "city_id": 5105
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 76019314,
+      "name": "Fortaleza CEIF",
+      "slug": "fortaleza-ceif",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 92200011,
+      "name": "Fortaleza CEIF",
+      "slug": "fortaleza-ceif-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 92200012,
+      "name": "Fortaleza CEIF",
+      "slug": "fortaleza-ceif-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

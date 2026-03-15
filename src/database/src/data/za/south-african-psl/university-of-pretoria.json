@@ -1,0 +1,49 @@
+{
+  "id": 5688086,
+  "name": "University of Pretoria",
+  "location": {
+    "city_id": 6214
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 5688086,
+      "name": "University of Pretoria",
+      "slug": "university-of-pretoria",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 93300029,
+      "name": "University of Pretoria",
+      "slug": "university-of-pretoria-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 93300030,
+      "name": "University of Pretoria",
+      "slug": "university-of-pretoria-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c3a",
+    "foreground": "#ffffff"
+  }
+}

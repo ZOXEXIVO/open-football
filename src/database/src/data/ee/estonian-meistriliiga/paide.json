@@ -1,0 +1,49 @@
+{
+  "id": 31000336,
+  "name": "Paide",
+  "location": {
+    "city_id": 4905
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 31000336,
+      "name": "Paide",
+      "slug": "paide",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 92000011,
+      "name": "Paide",
+      "slug": "paide-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 92000012,
+      "name": "Paide",
+      "slug": "paide-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 12040882,
+  "name": "El Dakhleya",
+  "location": {
+    "city_id": 6315
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 12040882,
+      "name": "El Dakhleya",
+      "slug": "el-dakhleya",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 93400031,
+      "name": "El Dakhleya",
+      "slug": "el-dakhleya-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 93400032,
+      "name": "El Dakhleya",
+      "slug": "el-dakhleya-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

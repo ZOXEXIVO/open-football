@@ -1,0 +1,49 @@
+{
+  "id": 474,
+  "name": "Slavia Prague",
+  "location": {
+    "city_id": 2601
+  },
+  "finance": {
+    "balance": 22860000
+  },
+  "teams": [
+    {
+      "id": 474,
+      "name": "Slavia Prague",
+      "slug": "slavia-prague",
+      "team_type": "Main",
+      "reputation": {
+        "home": 6800,
+        "national": 6800,
+        "world": 6800
+      }
+    },
+    {
+      "id": 89700003,
+      "name": "Slavia Prague",
+      "slug": "slavia-prague-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2040,
+        "national": 2040,
+        "world": 2040
+      }
+    },
+    {
+      "id": 89700004,
+      "name": "Slavia Prague",
+      "slug": "slavia-prague-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1360,
+        "national": 1360,
+        "world": 1360
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 5410577,
+  "name": "Jelgava",
+  "location": {
+    "city_id": 4804
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 5410577,
+      "name": "Jelgava",
+      "slug": "jelgava",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 91900009,
+      "name": "Jelgava",
+      "slug": "jelgava-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 91900010,
+      "name": "Jelgava",
+      "slug": "jelgava-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

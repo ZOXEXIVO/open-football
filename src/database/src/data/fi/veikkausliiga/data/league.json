@@ -1,0 +1,37 @@
+{
+  "id": 370,
+  "slug": "veikkausliiga",
+  "name": "Veikkausliiga",
+  "reputation": 3600,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 1,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 10,
+      "from_month": 4,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 5,
+      "from_month": 7,
+      "to_day": 25,
+      "to_month": 10
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 797,
+      "weight": 2
+    },
+    {
+      "country_id": 786,
+      "weight": 1
+    },
+    {
+      "country_id": 766,
+      "weight": 1
+    }
+  ]
+}

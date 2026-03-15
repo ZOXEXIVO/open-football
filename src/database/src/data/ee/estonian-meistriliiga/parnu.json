@@ -1,0 +1,49 @@
+{
+  "id": 7681005,
+  "name": "Parnu",
+  "location": {
+    "city_id": 4909
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 7681005,
+      "name": "Parnu",
+      "slug": "parnu",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 92000019,
+      "name": "Parnu",
+      "slug": "parnu-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    },
+    {
+      "id": 92000020,
+      "name": "Parnu",
+      "slug": "parnu-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 130789,
+  "name": "Universidad de Concepcion",
+  "location": {
+    "city_id": 3212
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 130789,
+      "name": "Universidad de Concepcion",
+      "slug": "universidad-de-concepcion",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 90300025,
+      "name": "Universidad de Concepcion",
+      "slug": "universidad-de-concepcion-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 90300026,
+      "name": "Universidad de Concepcion",
+      "slug": "universidad-de-concepcion-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

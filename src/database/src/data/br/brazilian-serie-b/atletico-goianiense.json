@@ -1,0 +1,49 @@
+{
+  "id": 301151,
+  "name": "Atletico Goianiense",
+  "location": {
+    "city_id": 3310
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 301151,
+      "name": "Atletico Goianiense",
+      "slug": "atletico-goianiense",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 90400021,
+      "name": "Atletico Goianiense",
+      "slug": "atletico-goianiense-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 90400022,
+      "name": "Atletico Goianiense",
+      "slug": "atletico-goianiense-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

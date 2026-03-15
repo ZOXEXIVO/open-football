@@ -1,0 +1,49 @@
+{
+  "id": 12033282,
+  "name": "Military Production",
+  "location": {
+    "city_id": 6317
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 12033282,
+      "name": "Military Production",
+      "slug": "military-production",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 93400035,
+      "name": "Military Production",
+      "slug": "military-production-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 93400036,
+      "name": "Military Production",
+      "slug": "military-production-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffd700"
+  }
+}

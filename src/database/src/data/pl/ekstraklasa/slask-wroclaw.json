@@ -1,0 +1,49 @@
+{
+  "id": 1300885,
+  "name": "Slask Wroclaw",
+  "location": {
+    "city_id": 2407
+  },
+  "finance": {
+    "balance": 4445000
+  },
+  "teams": [
+    {
+      "id": 1300885,
+      "name": "Slask Wroclaw",
+      "slug": "slask-wroclaw",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 89500015,
+      "name": "Slask Wroclaw",
+      "slug": "slask-wroclaw-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 89500016,
+      "name": "Slask Wroclaw",
+      "slug": "slask-wroclaw-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

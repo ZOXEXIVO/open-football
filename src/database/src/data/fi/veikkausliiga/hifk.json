@@ -1,0 +1,49 @@
+{
+  "id": 129129,
+  "name": "HIFK",
+  "location": {
+    "city_id": 3702
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 129129,
+      "name": "HIFK",
+      "slug": "hifk",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 90800005,
+      "name": "HIFK",
+      "slug": "hifk-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 90800006,
+      "name": "HIFK",
+      "slug": "hifk-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

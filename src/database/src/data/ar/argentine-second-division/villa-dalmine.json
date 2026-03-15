@@ -1,0 +1,49 @@
+{
+  "id": 952724,
+  "name": "Villa Dalmine",
+  "location": {
+    "city_id": 5707
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 952724,
+      "name": "Villa Dalmine",
+      "slug": "villa-dalmine",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 92800015,
+      "name": "Villa Dalmine",
+      "slug": "villa-dalmine-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 92800016,
+      "name": "Villa Dalmine",
+      "slug": "villa-dalmine-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#7b1c7a",
+    "foreground": "#ffd700"
+  }
+}

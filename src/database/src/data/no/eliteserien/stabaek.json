@@ -1,0 +1,49 @@
+{
+  "id": 1396,
+  "name": "Stabaek",
+  "location": {
+    "city_id": 4607
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 1396,
+      "name": "Stabaek",
+      "slug": "stabaek",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 91700015,
+      "name": "Stabaek",
+      "slug": "stabaek-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 91700016,
+      "name": "Stabaek",
+      "slug": "stabaek-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 514345,
+  "name": "Tulevik",
+  "location": {
+    "city_id": 4907
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 514345,
+      "name": "Tulevik",
+      "slug": "tulevik",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2400,
+        "national": 2400,
+        "world": 2400
+      }
+    },
+    {
+      "id": 92000015,
+      "name": "Tulevik",
+      "slug": "tulevik-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    },
+    {
+      "id": 92000016,
+      "name": "Tulevik",
+      "slug": "tulevik-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

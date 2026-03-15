@@ -1,0 +1,49 @@
+{
+  "id": 430,
+  "name": "Cibalia",
+  "location": {
+    "city_id": 5000
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 430,
+      "name": "Cibalia",
+      "slug": "cibalia",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4000,
+        "national": 4000,
+        "world": 4000
+      }
+    },
+    {
+      "id": 92100001,
+      "name": "Cibalia",
+      "slug": "cibalia-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1200,
+        "national": 1200,
+        "world": 1200
+      }
+    },
+    {
+      "id": 92100002,
+      "name": "Cibalia",
+      "slug": "cibalia-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 800,
+        "national": 800,
+        "world": 800
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

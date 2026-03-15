@@ -1,0 +1,49 @@
+{
+  "id": 7560706,
+  "name": "FK Senica",
+  "location": {
+    "city_id": 4207
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 7560706,
+      "name": "FK Senica",
+      "slug": "senica",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 91300015,
+      "name": "FK Senica",
+      "slug": "senica-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 91300016,
+      "name": "FK Senica",
+      "slug": "senica-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

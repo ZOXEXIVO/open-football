@@ -1,0 +1,29 @@
+{
+  "id": 530,
+  "slug": "persian-gulf-pro-league",
+  "name": "Persian Gulf Pro League",
+  "reputation": 5200,
+  "tier": 1,
+  "promotion_spots": 0,
+  "relegation_spots": 2,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 1,
+      "from_month": 8,
+      "to_day": 30,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 10,
+      "from_month": 1,
+      "to_day": 30,
+      "to_month": 5
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 776,
+      "weight": 1
+    }
+  ]
+}

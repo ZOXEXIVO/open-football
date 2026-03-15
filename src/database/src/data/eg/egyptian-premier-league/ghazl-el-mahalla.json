@@ -1,0 +1,49 @@
+{
+  "id": 5370007,
+  "name": "Ghazl El Mahalla",
+  "location": {
+    "city_id": 6310
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 5370007,
+      "name": "Ghazl El Mahalla",
+      "slug": "ghazl-el-mahalla",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 93400021,
+      "name": "Ghazl El Mahalla",
+      "slug": "ghazl-el-mahalla-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 93400022,
+      "name": "Ghazl El Mahalla",
+      "slug": "ghazl-el-mahalla-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

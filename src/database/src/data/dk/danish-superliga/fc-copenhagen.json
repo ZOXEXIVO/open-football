@@ -1,0 +1,49 @@
+{
+  "id": 505,
+  "name": "FC Copenhagen",
+  "location": {
+    "city_id": 3500
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 505,
+      "name": "FC Copenhagen",
+      "slug": "fc-copenhagen",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 90600001,
+      "name": "FC Copenhagen",
+      "slug": "fc-copenhagen-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 90600002,
+      "name": "FC Copenhagen",
+      "slug": "fc-copenhagen-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

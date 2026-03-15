@@ -1,0 +1,49 @@
+{
+  "id": 1637,
+  "name": "NK Celje",
+  "location": {
+    "city_id": 4302
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1637,
+      "name": "NK Celje",
+      "slug": "nk-celje",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 91400005,
+      "name": "NK Celje",
+      "slug": "nk-celje-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 91400006,
+      "name": "NK Celje",
+      "slug": "nk-celje-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#003da5"
+  }
+}

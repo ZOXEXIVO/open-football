@@ -1,0 +1,49 @@
+{
+  "id": 13111492,
+  "name": "Medeama",
+  "location": {
+    "city_id": 7104
+  },
+  "finance": {
+    "balance": 1016000
+  },
+  "teams": [
+    {
+      "id": 13111492,
+      "name": "Medeama",
+      "slug": "medeama",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 93700009,
+      "name": "Medeama",
+      "slug": "medeama-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 93700010,
+      "name": "Medeama",
+      "slug": "medeama-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#7b1c7a"
+  }
+}

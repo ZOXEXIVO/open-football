@@ -1,0 +1,49 @@
+{
+  "id": 2200063,
+  "name": "Depor",
+  "location": {
+    "city_id": 5107
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 2200063,
+      "name": "Depor",
+      "slug": "depor",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 92200015,
+      "name": "Depor",
+      "slug": "depor-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 92200016,
+      "name": "Depor",
+      "slug": "depor-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

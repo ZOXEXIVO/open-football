@@ -1,0 +1,49 @@
+{
+  "id": 714209,
+  "name": "Piast Gliwice",
+  "location": {
+    "city_id": 2406
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 714209,
+      "name": "Piast Gliwice",
+      "slug": "piast-gliwice",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 89500013,
+      "name": "Piast Gliwice",
+      "slug": "piast-gliwice-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 89500014,
+      "name": "Piast Gliwice",
+      "slug": "piast-gliwice-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#e2001a"
+  }
+}

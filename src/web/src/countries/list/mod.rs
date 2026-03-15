@@ -55,9 +55,8 @@ pub async fn country_list_action(
     let continents: Vec<ContinentDto> = simulator_data
         .continents
         .iter()
-        .map(|continent| ContinentDto {
-            name: continent.name.clone(),
-            countries: continent
+        .map(|continent| {
+            let mut countries: Vec<CountryDto> = continent
                 .countries
                 .iter()
                 .filter(|c| !c.leagues.leagues.is_empty())
@@ -66,7 +65,12 @@ pub async fn country_list_action(
                     code: country.code.clone(),
                     name: country.name.clone(),
                 })
-                .collect(),
+                .collect();
+            countries.sort_by(|a, b| a.slug.cmp(&b.slug));
+            ContinentDto {
+                name: continent.name.clone(),
+                countries,
+            }
         })
         .collect();
 

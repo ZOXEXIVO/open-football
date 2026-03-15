@@ -1,0 +1,49 @@
+{
+  "id": 450,
+  "name": "Anorthosis",
+  "location": {
+    "city_id": 7002
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 450,
+      "name": "Anorthosis",
+      "slug": "anorthosis",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 93600005,
+      "name": "Anorthosis",
+      "slug": "anorthosis-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 93600006,
+      "name": "Anorthosis",
+      "slug": "anorthosis-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

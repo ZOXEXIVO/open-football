@@ -1,0 +1,49 @@
+{
+  "id": 1028,
+  "name": "PSV",
+  "location": {
+    "city_id": 3101
+  },
+  "finance": {
+    "balance": 76200000
+  },
+  "teams": [
+    {
+      "id": 1028,
+      "name": "PSV",
+      "slug": "psv",
+      "team_type": "Main",
+      "reputation": {
+        "home": 8200,
+        "national": 8200,
+        "world": 8200
+      }
+    },
+    {
+      "id": 90200003,
+      "name": "PSV",
+      "slug": "psv-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2460,
+        "national": 2460,
+        "world": 2460
+      }
+    },
+    {
+      "id": 90200004,
+      "name": "PSV",
+      "slug": "psv-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1640,
+        "national": 1640,
+        "world": 1640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

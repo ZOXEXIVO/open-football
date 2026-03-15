@@ -1,0 +1,49 @@
+{
+  "id": 1462,
+  "name": "Ruch Chorzow",
+  "location": {
+    "city_id": 2412
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1462,
+      "name": "Ruch Chorzow",
+      "slug": "ruch-chorzow",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4800,
+        "national": 4800,
+        "world": 4800
+      }
+    },
+    {
+      "id": 89500025,
+      "name": "Ruch Chorzow",
+      "slug": "ruch-chorzow-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1440,
+        "national": 1440,
+        "world": 1440
+      }
+    },
+    {
+      "id": 89500026,
+      "name": "Ruch Chorzow",
+      "slug": "ruch-chorzow-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

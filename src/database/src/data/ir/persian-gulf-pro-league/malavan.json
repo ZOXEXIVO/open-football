@@ -1,0 +1,49 @@
+{
+  "id": 5410231,
+  "name": "Malavan",
+  "location": {
+    "city_id": 5609
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 5410231,
+      "name": "Malavan",
+      "slug": "malavan",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 92700019,
+      "name": "Malavan",
+      "slug": "malavan-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 92700020,
+      "name": "Malavan",
+      "slug": "malavan-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

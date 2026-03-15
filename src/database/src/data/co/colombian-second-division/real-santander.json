@@ -1,0 +1,49 @@
+{
+  "id": 76003535,
+  "name": "Real Santander",
+  "location": {
+    "city_id": 5104
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 76003535,
+      "name": "Real Santander",
+      "slug": "real-santander",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 92200009,
+      "name": "Real Santander",
+      "slug": "real-santander-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 92200010,
+      "name": "Real Santander",
+      "slug": "real-santander-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffd700"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 7880107,
+  "name": "Al Dhafra",
+  "location": {
+    "city_id": 4513
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 7880107,
+      "name": "Al Dhafra",
+      "slug": "al-dhafra",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 91600027,
+      "name": "Al Dhafra",
+      "slug": "al-dhafra-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 91600028,
+      "name": "Al Dhafra",
+      "slug": "al-dhafra-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

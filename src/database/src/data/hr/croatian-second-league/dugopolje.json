@@ -1,0 +1,49 @@
+{
+  "id": 661027,
+  "name": "Dugopolje",
+  "location": {
+    "city_id": 5006
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 661027,
+      "name": "Dugopolje",
+      "slug": "dugopolje",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 92100013,
+      "name": "Dugopolje",
+      "slug": "dugopolje-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 92100014,
+      "name": "Dugopolje",
+      "slug": "dugopolje-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

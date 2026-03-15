@@ -1,0 +1,49 @@
+{
+  "id": 1096,
+  "name": "Maccabi Petach Tikva",
+  "location": {
+    "city_id": 2209
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1096,
+      "name": "Maccabi Petach Tikva",
+      "slug": "maccabi-petach-tikva",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 89300019,
+      "name": "Maccabi Petach Tikva",
+      "slug": "maccabi-petach-tikva-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 89300020,
+      "name": "Maccabi Petach Tikva",
+      "slug": "maccabi-petach-tikva-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ff6600"
+  }
+}

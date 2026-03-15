@@ -1,0 +1,49 @@
+{
+  "id": 63010727,
+  "name": "Spartak Myjava",
+  "location": {
+    "city_id": 4210
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 63010727,
+      "name": "Spartak Myjava",
+      "slug": "spartak-myjava",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 91300021,
+      "name": "Spartak Myjava",
+      "slug": "spartak-myjava-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 91300022,
+      "name": "Spartak Myjava",
+      "slug": "spartak-myjava-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 485305,
+  "name": "Suduva",
+  "location": {
+    "city_id": 4701
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 485305,
+      "name": "Suduva",
+      "slug": "suduva",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3400,
+        "national": 3400,
+        "world": 3400
+      }
+    },
+    {
+      "id": 91800003,
+      "name": "Suduva",
+      "slug": "suduva-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1020,
+        "national": 1020,
+        "world": 1020
+      }
+    },
+    {
+      "id": 91800004,
+      "name": "Suduva",
+      "slug": "suduva-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 680,
+        "national": 680,
+        "world": 680
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

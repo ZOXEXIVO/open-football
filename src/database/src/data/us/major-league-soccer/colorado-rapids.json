@@ -1,0 +1,49 @@
+{
+  "id": 1903,
+  "name": "Colorado Rapids",
+  "location": {
+    "city_id": 2916
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1903,
+      "name": "Colorado Rapids",
+      "slug": "colorado-rapids",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 89000033,
+      "name": "Colorado Rapids",
+      "slug": "colorado-rapids-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 89000034,
+      "name": "Colorado Rapids",
+      "slug": "colorado-rapids-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#6b0010",
+    "foreground": "#6caddf"
+  }
+}

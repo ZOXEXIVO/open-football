@@ -1,0 +1,49 @@
+{
+  "id": 109189,
+  "name": "Estudiantes de Merida",
+  "location": {
+    "city_id": 2805
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 109189,
+      "name": "Estudiantes de Merida",
+      "slug": "estudiantes-merida",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 89900011,
+      "name": "Estudiantes de Merida",
+      "slug": "estudiantes-merida-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 89900012,
+      "name": "Estudiantes de Merida",
+      "slug": "estudiantes-merida-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

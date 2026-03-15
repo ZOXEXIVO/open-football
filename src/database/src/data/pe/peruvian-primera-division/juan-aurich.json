@@ -1,0 +1,49 @@
+{
+  "id": 308111,
+  "name": "Juan Aurich",
+  "location": {
+    "city_id": 4007
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 308111,
+      "name": "Juan Aurich",
+      "slug": "juan-aurich",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 91100015,
+      "name": "Juan Aurich",
+      "slug": "juan-aurich-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 91100016,
+      "name": "Juan Aurich",
+      "slug": "juan-aurich-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#e2001a"
+  }
+}

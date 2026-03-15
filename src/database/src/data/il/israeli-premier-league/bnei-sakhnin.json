@@ -1,0 +1,49 @@
+{
+  "id": 7860421,
+  "name": "Bnei Sakhnin",
+  "location": {
+    "city_id": 2210
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 7860421,
+      "name": "Bnei Sakhnin",
+      "slug": "bnei-sakhnin",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 89300021,
+      "name": "Bnei Sakhnin",
+      "slug": "bnei-sakhnin-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 89300022,
+      "name": "Bnei Sakhnin",
+      "slug": "bnei-sakhnin-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

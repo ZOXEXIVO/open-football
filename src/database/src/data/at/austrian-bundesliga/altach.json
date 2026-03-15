@@ -1,0 +1,49 @@
+{
+  "id": 137973,
+  "name": "Altach",
+  "location": {
+    "city_id": 3005
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 137973,
+      "name": "Altach",
+      "slug": "altach",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 90100011,
+      "name": "Altach",
+      "slug": "altach-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 90100012,
+      "name": "Altach",
+      "slug": "altach-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffd700"
+  }
+}

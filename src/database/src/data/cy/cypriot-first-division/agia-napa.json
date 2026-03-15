@@ -1,0 +1,49 @@
+{
+  "id": 149278,
+  "name": "Agia Napa",
+  "location": {
+    "city_id": 7013
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 149278,
+      "name": "Agia Napa",
+      "slug": "agia-napa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 93600027,
+      "name": "Agia Napa",
+      "slug": "agia-napa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 93600028,
+      "name": "Agia Napa",
+      "slug": "agia-napa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

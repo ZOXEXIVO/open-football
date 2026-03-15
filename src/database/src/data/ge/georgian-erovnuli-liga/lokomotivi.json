@@ -1,0 +1,49 @@
+{
+  "id": 483911,
+  "name": "Lokomotivi",
+  "location": {
+    "city_id": 2005
+  },
+  "finance": {
+    "balance": 1270000
+  },
+  "teams": [
+    {
+      "id": 483911,
+      "name": "Lokomotivi",
+      "slug": "lokomotivi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 89100011,
+      "name": "Lokomotivi",
+      "slug": "lokomotivi-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 89100012,
+      "name": "Lokomotivi",
+      "slug": "lokomotivi-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

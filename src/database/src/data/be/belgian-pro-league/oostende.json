@@ -1,0 +1,49 @@
+{
+  "id": 233,
+  "name": "KV Oostende",
+  "location": {
+    "city_id": 3407
+  },
+  "finance": {
+    "balance": 5080000
+  },
+  "teams": [
+    {
+      "id": 233,
+      "name": "KV Oostende",
+      "slug": "oostende",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5600,
+        "national": 5600,
+        "world": 5600
+      }
+    },
+    {
+      "id": 90500015,
+      "name": "KV Oostende",
+      "slug": "oostende-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1680,
+        "national": 1680,
+        "world": 1680
+      }
+    },
+    {
+      "id": 90500016,
+      "name": "KV Oostende",
+      "slug": "oostende-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1120,
+        "national": 1120,
+        "world": 1120
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#006400"
+  }
+}

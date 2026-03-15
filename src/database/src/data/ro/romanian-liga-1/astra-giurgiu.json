@@ -1,0 +1,49 @@
+{
+  "id": 57110823,
+  "name": "Astra",
+  "location": {
+    "city_id": 4104
+  },
+  "finance": {
+    "balance": 3810000
+  },
+  "teams": [
+    {
+      "id": 57110823,
+      "name": "Astra",
+      "slug": "astra-giurgiu",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 91200009,
+      "name": "Astra",
+      "slug": "astra-giurgiu-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 91200010,
+      "name": "Astra",
+      "slug": "astra-giurgiu-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

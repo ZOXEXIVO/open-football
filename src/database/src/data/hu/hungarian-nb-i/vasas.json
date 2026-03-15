@@ -1,0 +1,49 @@
+{
+  "id": 1066,
+  "name": "Vasas",
+  "location": {
+    "city_id": 2708
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 1066,
+      "name": "Vasas",
+      "slug": "vasas",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4600,
+        "national": 4600,
+        "world": 4600
+      }
+    },
+    {
+      "id": 89800017,
+      "name": "Vasas",
+      "slug": "vasas-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1380,
+        "national": 1380,
+        "world": 1380
+      }
+    },
+    {
+      "id": 89800018,
+      "name": "Vasas",
+      "slug": "vasas-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 920,
+        "national": 920,
+        "world": 920
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

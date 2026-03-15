@@ -1,0 +1,49 @@
+{
+  "id": 311028,
+  "name": "Oeste",
+  "location": {
+    "city_id": 3314
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 311028,
+      "name": "Oeste",
+      "slug": "oeste",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3800,
+        "national": 3800,
+        "world": 3800
+      }
+    },
+    {
+      "id": 90400029,
+      "name": "Oeste",
+      "slug": "oeste-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1140,
+        "national": 1140,
+        "world": 1140
+      }
+    },
+    {
+      "id": 90400030,
+      "name": "Oeste",
+      "slug": "oeste-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 760,
+        "national": 760,
+        "world": 760
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#000000"
+  }
+}

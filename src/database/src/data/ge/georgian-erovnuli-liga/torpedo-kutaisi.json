@@ -1,0 +1,49 @@
+{
+  "id": 59025932,
+  "name": "Torpedo Kutaisi",
+  "location": {
+    "city_id": 2001
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 59025932,
+      "name": "Torpedo Kutaisi",
+      "slug": "torpedo-kutaisi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 89100003,
+      "name": "Torpedo Kutaisi",
+      "slug": "torpedo-kutaisi-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 89100004,
+      "name": "Torpedo Kutaisi",
+      "slug": "torpedo-kutaisi-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 59006806,
+  "name": "Alashkert",
+  "location": {
+    "city_id": 2102
+  },
+  "finance": {
+    "balance": 2540000
+  },
+  "teams": [
+    {
+      "id": 59006806,
+      "name": "Alashkert",
+      "slug": "alashkert",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 89200005,
+      "name": "Alashkert",
+      "slug": "alashkert-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 89200006,
+      "name": "Alashkert",
+      "slug": "alashkert-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1201001,
+  "name": "Wydad",
+  "location": {
+    "city_id": 6001
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 1201001,
+      "name": "Wydad",
+      "slug": "wydad",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 93100003,
+      "name": "Wydad",
+      "slug": "wydad-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 93100004,
+      "name": "Wydad",
+      "slug": "wydad-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

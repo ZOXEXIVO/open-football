@@ -1,0 +1,49 @@
+{
+  "id": 443,
+  "name": "Zadar",
+  "location": {
+    "city_id": 5002
+  },
+  "finance": {
+    "balance": 889000
+  },
+  "teams": [
+    {
+      "id": 443,
+      "name": "Zadar",
+      "slug": "zadar",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3600,
+        "national": 3600,
+        "world": 3600
+      }
+    },
+    {
+      "id": 92100005,
+      "name": "Zadar",
+      "slug": "zadar-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    },
+    {
+      "id": 92100006,
+      "name": "Zadar",
+      "slug": "zadar-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 720,
+        "national": 720,
+        "world": 720
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#003da5"
+  }
+}

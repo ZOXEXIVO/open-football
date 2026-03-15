@@ -1,0 +1,49 @@
+{
+  "id": 5380015,
+  "name": "OCK",
+  "location": {
+    "city_id": 6006
+  },
+  "finance": {
+    "balance": 1524000
+  },
+  "teams": [
+    {
+      "id": 5380015,
+      "name": "OCK",
+      "slug": "ock",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4200,
+        "national": 4200,
+        "world": 4200
+      }
+    },
+    {
+      "id": 93100013,
+      "name": "OCK",
+      "slug": "ock-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1260,
+        "national": 1260,
+        "world": 1260
+      }
+    },
+    {
+      "id": 93100014,
+      "name": "OCK",
+      "slug": "ock-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

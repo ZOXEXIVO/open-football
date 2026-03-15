@@ -1,0 +1,49 @@
+{
+  "id": 120998,
+  "name": "Deportivo Tachira",
+  "location": {
+    "city_id": 2801
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 120998,
+      "name": "Deportivo Tachira",
+      "slug": "deportivo-tachira",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 89900003,
+      "name": "Deportivo Tachira",
+      "slug": "deportivo-tachira-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 89900004,
+      "name": "Deportivo Tachira",
+      "slug": "deportivo-tachira-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

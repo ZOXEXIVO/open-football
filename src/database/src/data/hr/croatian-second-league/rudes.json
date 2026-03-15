@@ -1,0 +1,49 @@
+{
+  "id": 658353,
+  "name": "Rudes",
+  "location": {
+    "city_id": 5005
+  },
+  "finance": {
+    "balance": 635000
+  },
+  "teams": [
+    {
+      "id": 658353,
+      "name": "Rudes",
+      "slug": "rudes",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3200,
+        "national": 3200,
+        "world": 3200
+      }
+    },
+    {
+      "id": 92100011,
+      "name": "Rudes",
+      "slug": "rudes-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 960,
+        "national": 960,
+        "world": 960
+      }
+    },
+    {
+      "id": 92100012,
+      "name": "Rudes",
+      "slug": "rudes-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 640,
+        "national": 640,
+        "world": 640
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

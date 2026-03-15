@@ -1,0 +1,49 @@
+{
+  "id": 477,
+  "name": "Viktoria Plzen",
+  "location": {
+    "city_id": 2413
+  },
+  "finance": {
+    "balance": 3175000
+  },
+  "teams": [
+    {
+      "id": 477,
+      "name": "Viktoria Plzen",
+      "slug": "viktoria-plzen",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5000,
+        "national": 5000,
+        "world": 5000
+      }
+    },
+    {
+      "id": 89500027,
+      "name": "Viktoria Plzen",
+      "slug": "viktoria-plzen-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 89500028,
+      "name": "Viktoria Plzen",
+      "slug": "viktoria-plzen-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1000,
+        "national": 1000,
+        "world": 1000
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}

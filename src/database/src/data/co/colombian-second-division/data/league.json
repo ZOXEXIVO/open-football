@@ -1,0 +1,33 @@
+{
+  "id": 181,
+  "slug": "colombian-second-division",
+  "name": "Liga BetPlay 2",
+  "reputation": 4000,
+  "tier": 2,
+  "promotion_spots": 2,
+  "relegation_spots": 0,
+  "settings": {
+    "season_starting_half": {
+      "from_day": 20,
+      "from_month": 1,
+      "to_day": 30,
+      "to_month": 6
+    },
+    "season_ending_half": {
+      "from_day": 15,
+      "from_month": 7,
+      "to_day": 15,
+      "to_month": 12
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1649,
+      "weight": 3
+    },
+    {
+      "country_id": 1651,
+      "weight": 2
+    }
+  ]
+}

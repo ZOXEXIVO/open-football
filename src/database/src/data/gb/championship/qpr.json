@@ -1,0 +1,49 @@
+{
+  "id": 701,
+  "name": "Queens Park Rangers",
+  "location": {
+    "city_id": 3613
+  },
+  "finance": {
+    "balance": 7620000
+  },
+  "teams": [
+    {
+      "id": 701,
+      "name": "Queens Park Rangers",
+      "slug": "qpr",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5400,
+        "national": 5400,
+        "world": 5400
+      }
+    },
+    {
+      "id": 90700027,
+      "name": "Queens Park Rangers",
+      "slug": "qpr-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1620,
+        "national": 1620,
+        "world": 1620
+      }
+    },
+    {
+      "id": 90700028,
+      "name": "Queens Park Rangers",
+      "slug": "qpr-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1080,
+        "national": 1080,
+        "world": 1080
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffffff"
+  }
+}

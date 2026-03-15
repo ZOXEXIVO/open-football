@@ -1,0 +1,49 @@
+{
+  "id": 7580708,
+  "name": "NK Krsko",
+  "location": {
+    "city_id": 4308
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 7580708,
+      "name": "NK Krsko",
+      "slug": "nk-krsko",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 91400017,
+      "name": "NK Krsko",
+      "slug": "nk-krsko-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 91400018,
+      "name": "NK Krsko",
+      "slug": "nk-krsko-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#003da5",
+    "foreground": "#ffd700"
+  }
+}

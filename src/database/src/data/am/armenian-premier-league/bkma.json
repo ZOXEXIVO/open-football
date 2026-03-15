@@ -1,0 +1,49 @@
+{
+  "id": 59036309,
+  "name": "BKMA",
+  "location": {
+    "city_id": 2107
+  },
+  "finance": {
+    "balance": 762000
+  },
+  "teams": [
+    {
+      "id": 59036309,
+      "name": "BKMA",
+      "slug": "bkma",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3000,
+        "national": 3000,
+        "world": 3000
+      }
+    },
+    {
+      "id": 89200015,
+      "name": "BKMA",
+      "slug": "bkma-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 900,
+        "national": 900,
+        "world": 900
+      }
+    },
+    {
+      "id": 89200016,
+      "name": "BKMA",
+      "slug": "bkma-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006400",
+    "foreground": "#ffffff"
+  }
+}

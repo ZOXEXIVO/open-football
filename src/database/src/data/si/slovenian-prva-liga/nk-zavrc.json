@@ -1,0 +1,49 @@
+{
+  "id": 64000339,
+  "name": "NK Zavrc",
+  "location": {
+    "city_id": 4309
+  },
+  "finance": {
+    "balance": 381000
+  },
+  "teams": [
+    {
+      "id": 64000339,
+      "name": "NK Zavrc",
+      "slug": "nk-zavrc",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 91400019,
+      "name": "NK Zavrc",
+      "slug": "nk-zavrc-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 91400020,
+      "name": "NK Zavrc",
+      "slug": "nk-zavrc-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

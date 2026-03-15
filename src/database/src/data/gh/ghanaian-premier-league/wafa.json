@@ -1,0 +1,49 @@
+{
+  "id": 13147249,
+  "name": "WAFA",
+  "location": {
+    "city_id": 7114
+  },
+  "finance": {
+    "balance": 508000
+  },
+  "teams": [
+    {
+      "id": 13147249,
+      "name": "WAFA",
+      "slug": "wafa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2800,
+        "national": 2800,
+        "world": 2800
+      }
+    },
+    {
+      "id": 93700029,
+      "name": "WAFA",
+      "slug": "wafa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 840,
+        "national": 840,
+        "world": 840
+      }
+    },
+    {
+      "id": 93700030,
+      "name": "WAFA",
+      "slug": "wafa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 560,
+        "national": 560,
+        "world": 560
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#e2001a"
+  }
+}

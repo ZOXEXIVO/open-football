@@ -1,0 +1,49 @@
+{
+  "id": 107283,
+  "name": "Vegalta Sendai",
+  "location": {
+    "city_id": 5412
+  },
+  "finance": {
+    "balance": 6350000
+  },
+  "teams": [
+    {
+      "id": 107283,
+      "name": "Vegalta Sendai",
+      "slug": "vegalta-sendai",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5200,
+        "national": 5200,
+        "world": 5200
+      }
+    },
+    {
+      "id": 92500025,
+      "name": "Vegalta Sendai",
+      "slug": "vegalta-sendai-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 92500026,
+      "name": "Vegalta Sendai",
+      "slug": "vegalta-sendai-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#000000"
+  }
+}

@@ -1,0 +1,49 @@
+{
+  "id": 1085,
+  "name": "Hapoel Beer Sheva",
+  "location": {
+    "city_id": 2202
+  },
+  "finance": {
+    "balance": 10160000
+  },
+  "teams": [
+    {
+      "id": 1085,
+      "name": "Hapoel Beer Sheva",
+      "slug": "hapoel-beer-sheva",
+      "team_type": "Main",
+      "reputation": {
+        "home": 5800,
+        "national": 5800,
+        "world": 5800
+      }
+    },
+    {
+      "id": 89300005,
+      "name": "Hapoel Beer Sheva",
+      "slug": "hapoel-beer-sheva-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1740,
+        "national": 1740,
+        "world": 1740
+      }
+    },
+    {
+      "id": 89300006,
+      "name": "Hapoel Beer Sheva",
+      "slug": "hapoel-beer-sheva-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1160,
+        "national": 1160,
+        "world": 1160
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#ffffff"
+  }
+}

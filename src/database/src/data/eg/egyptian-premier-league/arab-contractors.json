@@ -1,0 +1,49 @@
+{
+  "id": 5370001,
+  "name": "Arab Contractors",
+  "location": {
+    "city_id": 6306
+  },
+  "finance": {
+    "balance": 1905000
+  },
+  "teams": [
+    {
+      "id": 5370001,
+      "name": "Arab Contractors",
+      "slug": "arab-contractors",
+      "team_type": "Main",
+      "reputation": {
+        "home": 4400,
+        "national": 4400,
+        "world": 4400
+      }
+    },
+    {
+      "id": 93400013,
+      "name": "Arab Contractors",
+      "slug": "arab-contractors-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1320,
+        "national": 1320,
+        "world": 1320
+      }
+    },
+    {
+      "id": 93400014,
+      "name": "Arab Contractors",
+      "slug": "arab-contractors-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 880,
+        "national": 880,
+        "world": 880
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffd700",
+    "foreground": "#006400"
+  }
+}

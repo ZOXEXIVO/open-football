@@ -1,0 +1,49 @@
+{
+  "id": 1849,
+  "name": "FC Basel",
+  "location": {
+    "city_id": 6101
+  },
+  "finance": {
+    "balance": 31750000
+  },
+  "teams": [
+    {
+      "id": 1849,
+      "name": "FC Basel",
+      "slug": "fc-basel",
+      "team_type": "Main",
+      "reputation": {
+        "home": 7000,
+        "national": 7000,
+        "world": 7000
+      }
+    },
+    {
+      "id": 93200003,
+      "name": "FC Basel",
+      "slug": "fc-basel-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 93200004,
+      "name": "FC Basel",
+      "slug": "fc-basel-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1400,
+        "national": 1400,
+        "world": 1400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#e2001a",
+    "foreground": "#003da5"
+  }
+}
