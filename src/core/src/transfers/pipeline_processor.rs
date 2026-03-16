@@ -72,6 +72,8 @@ struct NegotiationAction {
     shortlist_request_id: u32,
     negotiator_staff_id: Option<u32>,
     reason: String,
+    player_name: String,
+    selling_club_name: String,
 }
 
 struct MatchScoutAssignmentAction {
@@ -98,6 +100,10 @@ pub struct PlayerSummary {
     pub player_id: u32,
     pub club_id: u32,
     pub country_id: u32,
+    pub continent_id: u32,
+    pub country_code: String,
+    pub player_name: String,
+    pub club_name: String,
     pub position: PlayerPositionType,
     pub position_group: PlayerFieldPositionGroup,
     pub age: u8,
@@ -1769,6 +1775,10 @@ impl PipelineProcessor {
                         player_id: player.id,
                         club_id: club.id,
                         country_id,
+                        continent_id: country.continent_id,
+                        country_code: country.code.clone(),
+                        player_name: player.full_name.to_string(),
+                        club_name: club.name.clone(),
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),
@@ -1819,6 +1829,10 @@ impl PipelineProcessor {
                         player_id: player.id,
                         club_id: club.id,
                         country_id,
+                        continent_id: country.continent_id,
+                        country_code: country.code.clone(),
+                        player_name: player.full_name.to_string(),
+                        club_name: club.name.clone(),
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),
@@ -1862,7 +1876,7 @@ impl PipelineProcessor {
                 };
 
                 // Get this scout's known regions for cross-country scouting
-                let scout_known_regions: Vec<u32> = assignment.scout_staff_id
+                let scout_known_regions: Vec<crate::transfers::ScoutingRegion> = assignment.scout_staff_id
                     .and_then(|sid| {
                         club.teams.teams.iter()
                             .flat_map(|t| &t.staffs.staffs)
@@ -1918,11 +1932,16 @@ impl PipelineProcessor {
                     .filter(player_filter)
                     .collect();
 
-                // Foreign players from scout's known regions
+                // Foreign players from scout's known regions (region-based matching)
                 if !scout_known_regions.is_empty() {
                     let foreign_matching: Vec<&PlayerSummary> = foreign_players
                         .iter()
-                        .filter(|p| scout_known_regions.contains(&p.country_id))
+                        .filter(|p| {
+                            let player_region = crate::transfers::ScoutingRegion::from_country(
+                                p.continent_id, &p.country_code,
+                            );
+                            scout_known_regions.contains(&player_region)
+                        })
                         .filter(player_filter)
                         .collect();
                     matching.extend(foreign_matching);
@@ -1978,11 +1997,17 @@ impl PipelineProcessor {
                     let sqrt_count = ((obs_count + 1) as f32).sqrt();
 
                     // Foreign players in unknown regions have +50% assessment error
-                    let region_penalty = if target.country_id != country_id
-                        && !scout_known_regions.contains(&target.country_id) {
-                        1.5
+                    let region_penalty = if target.country_id != country_id {
+                        let target_region = crate::transfers::ScoutingRegion::from_country(
+                            target.continent_id, &target.country_code,
+                        );
+                        if scout_known_regions.contains(&target_region) {
+                            1.0 // Known region — normal accuracy
+                        } else {
+                            1.5 // Unknown region — 50% more error
+                        }
                     } else {
-                        1.0
+                        1.0 // Domestic — always accurate
                     };
 
                     let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32 * region_penalty;
@@ -2592,6 +2617,8 @@ impl PipelineProcessor {
                         shortlist_request_id: shortlist.transfer_request_id,
                         negotiator_staff_id,
                         reason,
+                        player_name: player.full_name.to_string(),
+                        selling_club_name: selling_club.name.clone(),
                     });
 
                     negotiations_this_club += 1;
@@ -2658,6 +2685,8 @@ impl PipelineProcessor {
                     negotiation.is_unsolicited = !has_listing;
                     negotiation.negotiator_staff_id = action.negotiator_staff_id;
                     negotiation.reason = action.reason.clone();
+                    negotiation.player_name = action.player_name.clone();
+                    negotiation.selling_club_name = action.selling_club_name.clone();
                 }
 
                 if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -3011,6 +3040,7 @@ impl PipelineProcessor {
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
+                            && !actions.iter().any(|a| a.player_id == l.player_id)
                     })
                     .max_by_key(|l| l.ability)
                 {
@@ -3044,9 +3074,7 @@ impl PipelineProcessor {
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
-                            && !actions
-                                .iter()
-                                .any(|a| a.club_id == club.id && a.player_id == l.player_id)
+                            && !actions.iter().any(|a| a.player_id == l.player_id)
                     })
                     .collect();
                 opps.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -3074,9 +3102,7 @@ impl PipelineProcessor {
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
-                            && !actions
-                                .iter()
-                                .any(|a| a.club_id == club.id && a.player_id == l.player_id)
+                            && !actions.iter().any(|a| a.player_id == l.player_id)
                     })
                     .max_by_key(|l| l.ability)
                 {
@@ -3146,15 +3172,261 @@ impl PipelineProcessor {
                 p_age,
                 p_ambition,
             ) {
+                // Resolve player and club names
+                let (p_name, sc_name) = Self::resolve_player_and_club_name(country, action.player_id, action.selling_club_id);
+
                 if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                     negotiation.is_loan = true;
                     negotiation.is_unsolicited = false;
                     negotiation.reason = action.reason.clone();
+                    negotiation.player_name = p_name;
+                    negotiation.selling_club_name = sc_name;
                 }
 
                 debug!(
                     "Loan scan: Club {} started loan negotiation for player {}",
                     action.club_id, action.player_id
+                );
+            }
+        }
+    }
+
+    // ============================================================
+    // Step 7b: Loan Market Scanning (other countries)
+    // ============================================================
+
+    pub fn scan_foreign_loan_market(
+        country: &mut Country,
+        foreign_players: &[PlayerSummary],
+        date: NaiveDate,
+    ) {
+        if foreign_players.is_empty() {
+            return;
+        }
+
+        // Collect loan-listed foreign players
+        let foreign_loans: Vec<&PlayerSummary> = foreign_players
+            .iter()
+            .filter(|p| p.is_loan_listed)
+            .collect();
+
+        if foreign_loans.is_empty() {
+            return;
+        }
+
+        struct ForeignLoanAction {
+            club_id: u32,
+            player: PlayerSummary,
+            offer_amount: f64,
+            reason: String,
+        }
+
+        let mut actions: Vec<ForeignLoanAction> = Vec::new();
+
+        for club in &country.clubs {
+            if club.teams.teams.is_empty() {
+                continue;
+            }
+
+            let plan = &club.transfer_plan;
+            if !plan.initialized {
+                continue;
+            }
+
+            let team = &club.teams.teams[0];
+            let rep_level = team.reputation.level();
+
+            // Only National+ clubs scan foreign loan markets
+            if matches!(
+                rep_level,
+                ReputationLevel::Local | ReputationLevel::Amateur
+            ) {
+                continue;
+            }
+
+            // Check concurrent negotiation limits
+            let actual_active = country
+                .transfer_market
+                .active_negotiation_count_for_club(club.id);
+            if actual_active >= plan.max_concurrent_negotiations {
+                continue;
+            }
+
+            let balance = club.finance.balance.balance;
+            let max_loan_fee = if balance < 0 {
+                30_000.0
+            } else {
+                (balance as f64 * 0.15).min(500_000.0)
+            };
+
+            let avg_ability: u8 = if !team.players.players.is_empty() {
+                let total: u32 = team
+                    .players
+                    .players
+                    .iter()
+                    .map(|p| p.player_attributes.current_ability as u32)
+                    .sum();
+                (total / team.players.players.len() as u32) as u8
+            } else {
+                50
+            };
+
+            // Get scout known regions for this club
+            let scout_regions: Vec<crate::transfers::ScoutingRegion> = club
+                .teams
+                .teams
+                .iter()
+                .flat_map(|t| &t.staffs.staffs)
+                .flat_map(|s| s.staff_attributes.knowledge.known_regions.iter().copied())
+                .collect();
+
+            // Check unfulfilled transfer requests
+            let unfulfilled: Vec<&TransferRequest> = plan
+                .transfer_requests
+                .iter()
+                .filter(|r| {
+                    r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
+                })
+                .collect();
+
+            let mut scans = 0usize;
+            let max_scans: usize = match rep_level {
+                ReputationLevel::Elite => 3,
+                ReputationLevel::Continental => 2,
+                _ => 1,
+            };
+
+            for request in &unfulfilled {
+                if scans >= max_scans {
+                    break;
+                }
+
+                let relaxed_min = request.min_ability.saturating_sub(5);
+
+                // Filter foreign loan players: must match position, ability, and be in a scout's known region
+                if let Some(best) = foreign_loans
+                    .iter()
+                    .filter(|p| {
+                        p.position_group == request.position.position_group()
+                            && p.skill_ability >= relaxed_min
+                            && p.age <= request.preferred_age_max.saturating_add(3)
+                            && p.age >= request.preferred_age_min
+                            && p.estimated_value * 0.1 <= max_loan_fee
+                            && p.skill_ability >= avg_ability.saturating_sub(10)
+                            && !country
+                                .transfer_market
+                                .has_active_negotiation_for(p.player_id, club.id)
+                            // Skip players already targeted in this batch
+                            && !actions.iter().any(|a| a.player.player_id == p.player_id)
+                            && {
+                                let player_region = crate::transfers::ScoutingRegion::from_country(
+                                    p.continent_id, &p.country_code,
+                                );
+                                scout_regions.contains(&player_region)
+                            }
+                    })
+                    .max_by_key(|p| p.skill_ability)
+                {
+                    let loan_fee = crate::utils::FormattingUtils::round_fee(
+                        best.estimated_value * 0.1 * 0.8,
+                    );
+                    let reason = format!(
+                        "Loan signing",
+                    );
+                    actions.push(ForeignLoanAction {
+                        club_id: club.id,
+                        player: PlayerSummary {
+                            player_id: best.player_id,
+                            club_id: best.club_id,
+                            country_id: best.country_id,
+                            continent_id: best.continent_id,
+                            country_code: best.country_code.clone(),
+                            player_name: best.player_name.clone(),
+                            club_name: best.club_name.clone(),
+                            position: best.position,
+                            position_group: best.position_group,
+                            age: best.age,
+                            estimated_value: best.estimated_value,
+                            is_listed: best.is_listed,
+                            is_loan_listed: best.is_loan_listed,
+                            skill_ability: best.skill_ability,
+                            average_rating: best.average_rating,
+                            goals: best.goals,
+                            assists: best.assists,
+                            appearances: best.appearances,
+                            determination: best.determination,
+                            work_rate: best.work_rate,
+                            composure: best.composure,
+                            anticipation: best.anticipation,
+                            technical_avg: best.technical_avg,
+                            mental_avg: best.mental_avg,
+                            physical_avg: best.physical_avg,
+                        },
+                        offer_amount: loan_fee,
+                        reason,
+                    });
+                    scans += 1;
+                }
+            }
+        }
+
+        if actions.is_empty() {
+            return;
+        }
+
+        // Create listings and negotiations for foreign loan targets
+        for action in actions {
+            let asking_price = CurrencyValue {
+                amount: action.offer_amount,
+                currency: Currency::Usd,
+            };
+
+            let listing = TransferListing::new(
+                action.player.player_id,
+                action.player.club_id,
+                0, // Foreign team — no local team_id
+                asking_price.clone(),
+                date,
+                TransferListingType::Loan,
+            );
+            country.transfer_market.add_listing(listing);
+
+            let buying_rep = Self::get_club_reputation(country, action.club_id);
+            // Use a reasonable estimate for selling club rep
+            let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
+
+            let offer = crate::transfers::offer::TransferOffer {
+                base_fee: asking_price,
+                clauses: Vec::new(),
+                salary_contribution: None,
+                contract_length: Some(1),
+                offering_club_id: action.club_id,
+                offered_date: date,
+            };
+
+            if let Some(neg_id) = country.transfer_market.start_negotiation(
+                action.player.player_id,
+                action.club_id,
+                offer,
+                date,
+                selling_rep,
+                buying_rep,
+                action.player.age,
+                action.player.determination,
+            ) {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.is_loan = true;
+                    negotiation.is_unsolicited = false;
+                    negotiation.reason = action.reason;
+                    negotiation.selling_country_id = Some(action.player.country_id);
+                    negotiation.player_name = action.player.player_name.clone();
+                    negotiation.selling_club_name = action.player.club_name.clone();
+                }
+
+                debug!(
+                    "Foreign loan scan: Club {} started foreign loan negotiation for player {} from country {}",
+                    action.club_id, action.player.player_id, action.player.country_id
                 );
             }
         }
@@ -4016,6 +4288,31 @@ impl PipelineProcessor {
         }
     }
 
+    /// After a player moves club (transfer, loan, or free agent), remove all
+    /// interest data for that player from every club in the country so that
+    /// stale scouting/shortlist entries don't linger.
+    pub fn clear_player_interest(country: &mut Country, player_id: u32) {
+        for club in &mut country.clubs {
+            let plan = &mut club.transfer_plan;
+
+            // Scouting assignments: drop observations for this player
+            for assignment in &mut plan.scouting_assignments {
+                assignment.observations.retain(|o| o.player_id != player_id);
+            }
+
+            // Scouting reports
+            plan.scouting_reports.retain(|r| r.player_id != player_id);
+
+            // Shortlists: remove the candidate entry
+            for shortlist in &mut plan.shortlists {
+                shortlist.candidates.retain(|c| c.player_id != player_id);
+            }
+
+            // Staff recommendations
+            plan.staff_recommendations.retain(|r| r.player_id != player_id);
+        }
+    }
+
     // ============================================================
     // Helper methods
     // ============================================================
@@ -4029,6 +4326,23 @@ impl PipelineProcessor {
             }
         }
         None
+    }
+
+    /// Resolve player full name and selling club name from the country data.
+    fn resolve_player_and_club_name(country: &Country, player_id: u32, club_id: u32) -> (String, String) {
+        let player_name = country.clubs.iter()
+            .flat_map(|c| c.teams.teams.iter())
+            .flat_map(|t| t.players.players.iter())
+            .find(|p| p.id == player_id)
+            .map(|p| p.full_name.to_string())
+            .unwrap_or_default();
+
+        let club_name = country.clubs.iter()
+            .find(|c| c.id == club_id)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+
+        (player_name, club_name)
     }
 
     fn find_player_in_club<'a>(club: &'a Club, player_id: u32) -> Option<&'a Player> {
@@ -4053,6 +4367,10 @@ impl PipelineProcessor {
                         player_id: player.id,
                         club_id: club.id,
                         country_id: country.id,
+                        continent_id: country.continent_id,
+                        country_code: country.code.clone(),
+                        player_name: player.full_name.to_string(),
+                        club_name: club.name.clone(),
                         position: player.position(),
                         position_group: player.position().position_group(),
                         age: player.age(date),
@@ -4195,7 +4513,7 @@ impl PipelineProcessor {
     }
 
     // ============================================================
-    // Foreign negotiation initiation
+    // Negotiation initiation for players in other countries
     // ============================================================
 
     /// Initiate negotiations for foreign players on clubs' shortlists.
@@ -4357,7 +4675,7 @@ impl PipelineProcessor {
             };
 
             let offer = strategy.calculate_initial_offer(player, &actual_asking, date);
-            let reason = format!("Foreign {} — scouted from {}", if is_loan { "loan" } else { "signing" }, sell_country.name);
+            let reason = if is_loan { "Loan signing".to_string() } else { "Transfer signing".to_string() };
 
             resolved.push(ResolvedNeg {
                 buying_club_id: cand.buying_club_id, selling_country_id: sell_country_id, selling_club_id: sell_club_id,
@@ -4384,8 +4702,8 @@ impl PipelineProcessor {
                     negotiation.is_loan = action.is_loan;
                     negotiation.reason = action.reason;
                     negotiation.selling_country_id = Some(action.selling_country_id);
-                    negotiation.cross_country_player_name = action.player_name;
-                    negotiation.cross_country_selling_club_name = action.selling_club_name;
+                    negotiation.player_name = action.player_name;
+                    negotiation.selling_club_name = action.selling_club_name;
                 }
 
                 if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.buying_club_id) {

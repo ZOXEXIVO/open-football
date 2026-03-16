@@ -1,5 +1,6 @@
 {
   "id": 360,
+  "enabled": false,
   "slug": "danish-superliga",
   "name": "Superliga",
   "reputation": 5600,

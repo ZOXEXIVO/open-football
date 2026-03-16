@@ -486,9 +486,6 @@ fn get_statistics(player: &Player) -> PlayerStatistics {
 
 fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
     let fs = &player.friendly_statistics;
-    if fs.played == 0 && fs.played_subs == 0 {
-        return None;
-    }
     Some(PlayerStatistics {
         played: fs.played,
         played_subs: fs.played_subs,

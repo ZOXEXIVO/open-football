@@ -1064,32 +1064,17 @@ impl TeamBehaviour {
 
         let current_date = ctx.simulation.date.date();
 
-        // Collect complaint candidates
-        let mut candidates: Vec<(u32, ManagerTalkType, u16)> = Vec::new();
+        // Collect complaint candidates with priority score for sorting
+        let mut candidates: Vec<(u32, ManagerTalkType, u32)> = Vec::new();
 
         for player in &players.players {
             if player.player_attributes.is_injured {
                 continue;
             }
 
-            // Under-16 players don't generate playing time complaints
             let age = DateUtils::age(player.birth_date, current_date);
             if age < 16 {
                 continue;
-            }
-
-            // Only skilled players complain about lack of playing time.
-            // Low-ability squad fillers accept their role.
-            let ability = player.player_attributes.current_ability;
-            if ability < 60 {
-                continue;
-            }
-
-            // Skip players marked as NotNeeded
-            if let Some(ref contract) = player.contract {
-                if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
-                    continue;
-                }
             }
 
             // Already has a transfer request or loan status
@@ -1100,12 +1085,63 @@ impl TeamBehaviour {
                 continue;
             }
 
+            // Skip players already on loan from another club
+            if player.is_on_loan() {
+                continue;
+            }
+
+            let ability = player.player_attributes.current_ability;
+            let ambition = player.attributes.ambition;
+            let determination = player.skills.mental.determination;
             let days = player.player_attributes.days_since_last_match;
 
-            // Higher ability players complain sooner — they expect to play
-            let ability_modifier = (ability as f32 - 60.0) / 140.0; // 0.0 at 60, 1.0 at 200
-            // Ambition modifies threshold: ambitious players complain sooner
-            let ambition_modifier = 1.0 - player.attributes.ambition / 30.0;
+            // Skip players marked as NotNeeded (they accept their fate)
+            let squad_status = player.contract.as_ref().map(|c| &c.squad_status);
+            if matches!(squad_status, Some(PlayerSquadStatus::NotNeeded)) {
+                continue;
+            }
+
+            // ── Check 1: Youth prospect wants real football (loan request) ──
+            // Young players with prospect status who aren't getting meaningful
+            // first-team football should request loans for development.
+            let is_prospect = matches!(
+                squad_status,
+                Some(PlayerSquadStatus::HotProspectForTheFuture)
+                    | Some(PlayerSquadStatus::DecentYoungster)
+            );
+
+            if is_prospect && age >= 19 && age <= 23 {
+                // Priority increases with age — a 22yo prospect is more urgent than a 19yo
+                let age_urgency = (age as f32 - 18.0) / 5.0; // 0.2 at 19, 0.8 at 22
+                let ambition_factor = ambition / 20.0; // 0-1
+                let determination_factor = determination / 20.0;
+
+                // Ambitious, determined prospects request loans sooner
+                let desire = age_urgency * 0.4 + ambition_factor * 0.35 + determination_factor * 0.25;
+
+                // At age 21+ with decent ambition (>10), almost always request
+                // At age 19-20, need high ambition (>14) or long wait
+                let threshold = if age >= 21 {
+                    0.35 // Lower bar — most 21+ prospects want real football
+                } else {
+                    0.55 // Higher bar — 19-20 year olds need more drive
+                };
+
+                if desire > threshold || (age >= 21 && days > 14) {
+                    let priority = (desire * 100.0) as u32 + age as u32 * 10;
+                    candidates.push((player.id, ManagerTalkType::LoanRequest, priority));
+                    continue;
+                }
+            }
+
+            // ── Check 2: Playing time complaints (existing logic, enhanced) ──
+            // Only skilled players complain
+            if ability < 60 {
+                continue;
+            }
+
+            let ability_modifier = (ability as f32 - 60.0) / 140.0;
+            let ambition_modifier = 1.0 - ambition / 30.0;
             let combined_modifier = (ambition_modifier * 0.5 + (1.0 - ability_modifier) * 0.5).max(0.4);
             let threshold = (21.0 * combined_modifier) as u16;
 
@@ -1114,16 +1150,18 @@ impl TeamBehaviour {
 
             if days > threshold || playing_time_factor < -10.0 {
                 let talk_type = if age < 23 {
+                    // Young players request loans, not just playing time
                     ManagerTalkType::LoanRequest
                 } else {
                     ManagerTalkType::PlayingTimeRequest
                 };
 
-                candidates.push((player.id, talk_type, days));
+                let priority = days as u32 + if playing_time_factor < -10.0 { 50 } else { 0 };
+                candidates.push((player.id, talk_type, priority));
             }
         }
 
-        // Sort by days since last match descending (most urgent first)
+        // Sort by priority descending (most urgent first)
         candidates.sort_by(|a, b| b.2.cmp(&a.2));
 
         // Max 2 complaints per week
@@ -1134,9 +1172,68 @@ impl TeamBehaviour {
 
             if let Some(player) = players.players.iter().find(|p| p.id == *player_id) {
                 let talk_result =
-                    Self::conduct_manager_talk(manager, player, talk_type.clone());
+                    Self::conduct_loan_or_playing_time_talk(manager, player, talk_type.clone());
                 result.manager_talks.push(talk_result);
             }
+        }
+    }
+
+    /// Loan/playing-time talk with enhanced success logic.
+    /// For LoanRequest: success depends heavily on player ambition, determination,
+    /// and manager's man_management. Ambitious players are harder to convince to stay.
+    fn conduct_loan_or_playing_time_talk(
+        manager: &Staff,
+        player: &Player,
+        talk_type: ManagerTalkType,
+    ) -> ManagerTalkResult {
+        let man_management = manager.staff_attributes.mental.man_management as f32;
+        let motivating = manager.staff_attributes.mental.motivating as f32;
+        let professionalism = player.attributes.professionalism;
+        let loyalty = player.attributes.loyalty;
+        let ambition = player.attributes.ambition;
+        let determination = player.skills.mental.determination;
+
+        let relationship_bonus = player.relations.get_staff(manager.id)
+            .map(|r| (r.level / 100.0) * 0.2)
+            .unwrap_or(0.0);
+
+        if talk_type == ManagerTalkType::LoanRequest {
+            // For loan requests, "success" means the manager AGREES to loan the player.
+            // High ambition/determination players are MORE convincing (harder to deny).
+            // Good man_management coaches are more likely to agree to a sensible loan.
+            let player_conviction = ambition / 20.0 * 0.4 + determination / 20.0 * 0.3
+                + professionalism / 20.0 * 0.2 + 0.1;
+            let coach_willingness = man_management / 20.0 * 0.5 + motivating / 20.0 * 0.3;
+
+            // Base: 50% chance. Player conviction pushes it up, loyalty pulls it down.
+            let success_chance = (0.50
+                + player_conviction * 0.25
+                + coach_willingness * 0.15
+                - loyalty / 40.0  // loyal players are less insistent
+                + relationship_bonus)
+                .clamp(0.20, 0.90);
+
+            let success = rand::random::<f32>() < success_chance;
+
+            let (morale_change, rel_change) = if success {
+                (5.0, 0.2)   // Player happy — loan agreed
+            } else {
+                // Denied loan — ambitious players take it harder
+                let morale_hit = -3.0 - (ambition / 20.0) * 4.0; // -3 to -7
+                (morale_hit, -0.15)
+            };
+
+            ManagerTalkResult {
+                player_id: player.id,
+                staff_id: manager.id,
+                talk_type,
+                success,
+                morale_change,
+                relationship_change: rel_change,
+            }
+        } else {
+            // Standard playing time talk — use existing logic
+            Self::conduct_manager_talk(manager, player, talk_type)
         }
     }
 

@@ -31,6 +31,7 @@ pub struct PlayerBuilder {
     friendly_statistics: Option<PlayerStatistics>,
     statistics_history: Option<PlayerStatisticsHistory>,
     decision_history: Option<PlayerDecisionHistory>,
+    languages: Option<Vec<crate::club::player::language::PlayerLanguage>>,
 }
 
 impl PlayerBuilder {
@@ -143,6 +144,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn languages(mut self, languages: Vec<crate::club::player::language::PlayerLanguage>) -> Self {
+        self.languages = Some(languages);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
         Ok(Player {
             id: self.id.ok_or("id is required")?,
@@ -167,6 +173,7 @@ impl PlayerBuilder {
             friendly_statistics: self.friendly_statistics.unwrap_or_default(),
             statistics_history: self.statistics_history.unwrap_or_else(PlayerStatisticsHistory::new),
             decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
+            languages: self.languages.unwrap_or_default(),
             last_transfer_date: None,
         })
     }

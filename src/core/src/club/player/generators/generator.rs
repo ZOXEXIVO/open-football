@@ -282,7 +282,7 @@ impl PlayerGenerator {
         now: NaiveDate,
         position: PlayerPositionType,
         level: u8,
-        people_names: Option<&PeopleNameGeneratorData>,
+        people_names: &PeopleNameGeneratorData,
     ) -> Player {
         let year = IntegerUtils::random(now.year() - 14, now.year() - 12) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
@@ -319,25 +319,19 @@ impl PlayerGenerator {
         };
 
         // Generate name from country data
-        let full_name = match people_names {
-            Some(names) if !names.first_names.is_empty() && !names.last_names.is_empty() => {
-                let first = &names.first_names
-                    [IntegerUtils::random(0, names.first_names.len() as i32 - 1) as usize];
-                let last = &names.last_names
-                    [IntegerUtils::random(0, names.last_names.len() as i32 - 1) as usize];
+        let full_name = {
+            let first = &people_names.first_names
+                [IntegerUtils::random(0, people_names.first_names.len() as i32 - 1) as usize];
+            let last = &people_names.last_names
+                [IntegerUtils::random(0, people_names.last_names.len() as i32 - 1) as usize];
 
-                if !names.nicknames.is_empty() && IntegerUtils::random(0, 9) == 0 {
-                    let nick = &names.nicknames
-                        [IntegerUtils::random(0, names.nicknames.len() as i32 - 1) as usize];
-                    FullName::with_nickname(first.clone(), last.clone(), nick.clone())
-                } else {
-                    FullName::new(first.clone(), last.clone())
-                }
+            if !people_names.nicknames.is_empty() && IntegerUtils::random(0, 9) == 0 {
+                let nick = &people_names.nicknames
+                    [IntegerUtils::random(0, people_names.nicknames.len() as i32 - 1) as usize];
+                FullName::with_nickname(first.clone(), last.clone(), nick.clone())
+            } else {
+                FullName::new(first.clone(), last.clone())
             }
-            _ => FullName::new(
-                format!("Youth{}", IntegerUtils::random(1, 999)),
-                format!("Player{}", IntegerUtils::random(1, 999)),
-            ),
         };
 
         let preferred_foot = match IntegerUtils::random(0, 10) {
@@ -413,6 +407,7 @@ impl PlayerGenerator {
             friendly_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
+            languages: Vec::new(), // Academy youth — languages set at graduation
             last_transfer_date: None,
         }
     }

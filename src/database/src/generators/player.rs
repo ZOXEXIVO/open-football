@@ -1,6 +1,6 @@
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
-use core::utils::{FloatUtils, IntegerUtils, StringUtils};
+use core::utils::{FloatUtils, IntegerUtils};
 use core::{
     Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
@@ -366,13 +366,17 @@ impl PlayerGenerator {
         country_id: u32,
         position: PositionType,
         team_reputation: u16,
+        country_reputation: u16,
         min_age: i32,
         max_age: i32,
         is_youth: bool,
     ) -> Player {
         let now = Utc::now();
 
-        let rep_factor = (team_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+        // Blend team rep (70%) with country rep (30%) so players from stronger
+        // football nations are naturally better, even at weaker clubs.
+        let blended_rep = team_reputation as f32 * 0.7 + country_reputation as f32 * 0.3;
+        let rep_factor = (blended_rep / 10000.0).clamp(0.0, 1.0);
 
         let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
@@ -413,6 +417,14 @@ impl PlayerGenerator {
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
+        // Native languages based on player's nationality
+        let native_languages: Vec<core::PlayerLanguage> = core::Language::from_country_code(
+            &crate::loaders::CountryLoader::code_for_id(country_id)
+        )
+            .into_iter()
+            .map(|lang| core::PlayerLanguage::native(lang))
+            .collect();
+
         Player::builder()
             .id(PLAYER_ID_SEQUENCE.fetch_add(1, Ordering::SeqCst))
             .full_name(full_name)
@@ -423,6 +435,7 @@ impl PlayerGenerator {
             .player_attributes(player_attributes)
             .contract(Some(contract))
             .positions(positions)
+            .languages(native_languages)
             .build()
             .expect("Failed to build Player")
     }
@@ -801,22 +814,16 @@ impl PlayerGenerator {
     }
 
     fn generate_first_name(&self) -> String {
-        if !self.people_names_data.first_names.is_empty() {
-            let idx =
-                IntegerUtils::random(0, self.people_names_data.first_names.len() as i32) as usize;
-            self.people_names_data.first_names[idx].to_owned()
-        } else {
-            StringUtils::random_string(5)
-        }
+        let names = &self.people_names_data.first_names;
+        if names.is_empty() { return String::new(); }
+        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        names[idx].to_owned()
     }
 
     fn generate_last_name(&self) -> String {
-        if !self.people_names_data.first_names.is_empty() {
-            let idx =
-                IntegerUtils::random(0, self.people_names_data.last_names.len() as i32) as usize;
-            self.people_names_data.last_names[idx].to_owned()
-        } else {
-            StringUtils::random_string(12)
-        }
+        let names = &self.people_names_data.last_names;
+        if names.is_empty() { return String::new(); }
+        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        names[idx].to_owned()
     }
 }

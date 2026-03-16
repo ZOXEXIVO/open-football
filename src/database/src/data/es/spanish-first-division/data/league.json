@@ -1,5 +1,6 @@
 {
   "id": 90,
+  "enabled": true,
   "slug": "spanish-first-division",
   "name": "La Liga",
   "reputation": 9200,

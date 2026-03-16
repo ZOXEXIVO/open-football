@@ -1,5 +1,6 @@
 {
   "id": 290,
+  "enabled": false,
   "slug": "hungarian-nb-i",
   "name": "NB I",
   "reputation": 4800,

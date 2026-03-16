@@ -148,6 +148,11 @@ impl Player {
             return -5.0;
         };
 
+        // Players on loan accept their temporary salary — no frustration
+        if self.contract_loan.is_some() {
+            return 0.0;
+        }
+
         // Youth/amateur players don't evaluate salary competitively
         match contract.contract_type {
             ContractType::Youth | ContractType::Amateur | ContractType::NonContract => return 0.0,

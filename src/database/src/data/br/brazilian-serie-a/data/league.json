@@ -1,5 +1,6 @@
 {
   "id": 100,
+  "enabled": true,
   "slug": "brazilian-serie-a",
   "name": "Série A",
   "reputation": 7800,

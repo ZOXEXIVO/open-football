@@ -31,4 +31,16 @@ impl CountryLoader {
     pub fn load() -> Vec<CountryEntity> {
         serde_json::from_str(STATIC_COUNTRIES_JSON).unwrap()
     }
+
+    /// Look up a country code by its ID. Used during player generation
+    /// to assign native languages.
+    pub fn code_for_id(country_id: u32) -> String {
+        // Parse once per call — acceptable at generation time (not per-tick)
+        let countries: Vec<CountryEntity> = serde_json::from_str(STATIC_COUNTRIES_JSON).unwrap();
+        countries
+            .iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.code.clone())
+            .unwrap_or_default()
+    }
 }

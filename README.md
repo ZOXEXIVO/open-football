@@ -29,6 +29,11 @@ Currently available nation for simulation - **Italy**
 
 ![alt text](.docs/images/player_personal.jpg "Player Personal page")
 
+[Mobile view example](https://open-football.org/en/leagues/italian-serie-a)
+
+
+<img src=".docs/images/mobile.jpg" alt="Mobile team page" width="300">
+
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
 ![alt text](.docs/images/league.jpg "League page")

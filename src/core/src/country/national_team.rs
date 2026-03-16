@@ -944,6 +944,7 @@ impl NationalTeam {
             friendly_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
+            languages: Vec::new(),
             last_transfer_date: None,
         }
     }

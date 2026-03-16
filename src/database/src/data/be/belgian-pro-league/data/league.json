@@ -1,5 +1,6 @@
 {
   "id": 350,
+  "enabled": false,
   "slug": "belgian-pro-league",
   "name": "Pro League",
   "reputation": 6800,

@@ -65,6 +65,9 @@ impl CountryResult {
                 PipelineProcessor::initiate_negotiations(country, current_date);
 
                 PipelineProcessor::scan_loan_market(country, current_date);
+
+                // Cross-country loan scanning: clubs can find loan targets abroad
+                PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
             }
 
             debug!(

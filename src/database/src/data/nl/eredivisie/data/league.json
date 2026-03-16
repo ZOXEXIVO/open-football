@@ -1,5 +1,6 @@
 {
   "id": 330,
+  "enabled": false,
   "slug": "eredivisie",
   "name": "Eredivisie",
   "reputation": 7600,

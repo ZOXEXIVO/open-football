@@ -1,5 +1,6 @@
 {
   "id": 300,
+  "enabled": false,
   "slug": "venezuelan-primera-division",
   "name": "Primera Division",
   "reputation": 4000,

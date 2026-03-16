@@ -1,5 +1,6 @@
 {
   "id": 240,
+  "enabled": false,
   "slug": "israeli-premier-league",
   "name": "Premier League",
   "reputation": 5000,

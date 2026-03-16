@@ -51,8 +51,8 @@ impl CountryResult {
                         asking_price,
                         is_listed,
                         selling_country_id: n.selling_country_id,
-                        player_name: n.cross_country_player_name.clone(),
-                        selling_club_name: n.cross_country_selling_club_name.clone(),
+                        player_name: n.player_name.clone(),
+                        selling_club_name: n.selling_club_name.clone(),
                     }
                 }
                 None => continue,
@@ -382,6 +382,7 @@ impl CountryResult {
                 });
 
                 PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, true);
+                PipelineProcessor::clear_player_interest(country, neg_data.player_id);
             }
         } else {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {

@@ -45,6 +45,9 @@ pub struct Player {
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
 
+    /// Languages the player speaks, with proficiency levels.
+    pub languages: Vec<crate::club::player::language::PlayerLanguage>,
+
     /// Set when a player transfers/loans to a new club. Used by season snapshot
     /// to detect recently transferred players and avoid phantom history entries.
     pub last_transfer_date: Option<NaiveDate>,
@@ -80,6 +83,9 @@ impl Player {
             self.process_happiness(&mut result, now.date(), team_reputation);
             // Natural skill development (weekly)
             self.process_development(now.date());
+            // Language learning when playing abroad
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            self.process_language_learning(now.date(), country_code);
         }
 
         // Contract processing
@@ -143,6 +149,60 @@ impl Player {
 
     pub fn growth_potential(&self, now: NaiveDate) -> u8 {
         PlayerUtils::growth_potential(self, now)
+    }
+
+    /// Weekly language learning: if the player is in a country whose language
+    /// they don't speak natively, they gradually learn it.
+    fn process_language_learning(&mut self, now: NaiveDate, country_code: &str) {
+        use crate::club::player::language::{Language, PlayerLanguage, weekly_language_progress};
+
+        if country_code.is_empty() {
+            return;
+        }
+
+        let country_languages = Language::from_country_code(country_code);
+        if country_languages.is_empty() {
+            return;
+        }
+
+        let age = crate::utils::DateUtils::age(self.birth_date, now);
+
+        for target_lang in &country_languages {
+            // Check if player already speaks this language natively
+            let already_native = self.languages.iter().any(|l| l.language == *target_lang && l.is_native);
+            if already_native {
+                continue;
+            }
+
+            // Check if already fully fluent (proficiency >= 100)
+            let already_fluent = self.languages.iter().any(|l| l.language == *target_lang && l.proficiency >= 100);
+            if already_fluent {
+                continue;
+            }
+
+            let current_prof = self.languages.iter()
+                .find(|l| l.language == *target_lang)
+                .map(|l| l.proficiency)
+                .unwrap_or(0);
+
+            let gain = weekly_language_progress(
+                self.attributes.adaptability,
+                self.attributes.professionalism,
+                age,
+                self.player_attributes.current_ability,
+                current_prof,
+            );
+
+            if gain == 0 {
+                continue;
+            }
+
+            if let Some(lang_entry) = self.languages.iter_mut().find(|l| l.language == *target_lang) {
+                lang_entry.proficiency = (lang_entry.proficiency + gain).min(100);
+            } else {
+                self.languages.push(PlayerLanguage::learning(*target_lang, gain));
+            }
+        }
     }
 }
 

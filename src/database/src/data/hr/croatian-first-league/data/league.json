@@ -1,5 +1,6 @@
 {
   "id": 150,
+  "enabled": false,
   "slug": "croatian-first-league",
   "name": "Prva HNL",
   "reputation": 5500,

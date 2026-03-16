@@ -4,17 +4,23 @@ use crate::country::SeasonDates;
 #[derive(Clone)]
 pub struct CountryContext {
     pub id: u32,
+    pub code: String,
     pub people_names: Option<PeopleNameGeneratorData>,
     pub season_dates: SeasonDates,
 }
 
 impl CountryContext {
     pub fn new(id: u32) -> Self {
-        CountryContext { id, people_names: None, season_dates: SeasonDates::default() }
+        CountryContext { id, code: String::new(), people_names: None, season_dates: SeasonDates::default() }
     }
 
     pub fn with_people_names(id: u32, people_names: PeopleNameGeneratorData) -> Self {
-        CountryContext { id, people_names: Some(people_names), season_dates: SeasonDates::default() }
+        CountryContext { id, code: String::new(), people_names: Some(people_names), season_dates: SeasonDates::default() }
+    }
+
+    pub fn with_code(mut self, code: String) -> Self {
+        self.code = code;
+        self
     }
 
     pub fn with_season_dates(mut self, season_dates: SeasonDates) -> Self {

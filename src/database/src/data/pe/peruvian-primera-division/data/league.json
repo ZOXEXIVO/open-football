@@ -1,5 +1,6 @@
 {
   "id": 400,
+  "enabled": false,
   "slug": "peruvian-primera-division",
   "name": "Primera Division",
   "reputation": 4800,

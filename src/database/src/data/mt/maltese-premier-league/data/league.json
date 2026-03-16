@@ -1,5 +1,6 @@
 {
   "id": 120,
+  "enabled": true,
   "slug": "maltese-premier-league",
   "name": "Premier League",
   "reputation": 2800,

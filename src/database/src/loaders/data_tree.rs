@@ -74,6 +74,10 @@ impl DataTreeLoader {
                 };
                 league.country_id = country_id;
 
+                if !league.enabled {
+                    continue; // Skip disabled leagues and their clubs
+                }
+
                 let league_id = league.id;
                 leagues.push(league);
 

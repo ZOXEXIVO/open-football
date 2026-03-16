@@ -1,5 +1,6 @@
 {
   "id": 130,
+  "enabled": true,
   "slug": "a-league",
   "name": "A-League",
   "reputation": 4500,

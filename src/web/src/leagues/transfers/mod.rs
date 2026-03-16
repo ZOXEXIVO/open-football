@@ -109,7 +109,10 @@ pub async fn league_transfers_action(
             ApiError::NotFound(format!("Country with ID {} not found", league.country_id))
         })?;
 
-    // Get club IDs that belong to this league's teams
+    // Get team IDs directly from the league table (precise per-league filter)
+    let league_team_ids: Vec<u32> = league.table.get().iter().map(|row| row.team_id).collect();
+
+    // Get club IDs for fallback (when from_team_id is 0, e.g. foreign transfers)
     let league_club_ids: Vec<u32> = league
         .table
         .get()
@@ -144,7 +147,9 @@ pub async fn league_transfers_action(
         })
         .collect();
 
-    // Completed transfers involving league clubs, filtered by season
+    // Completed transfers involving league teams, filtered by season.
+    // Use from_team_id (specific team) when available; fall back to club_id for
+    // foreign transfers (where from_team_id is 0) and for the buying side.
     let completed_transfers: Vec<CompletedTransferItem> = country
         .transfer_market
         .transfer_history
@@ -152,7 +157,8 @@ pub async fn league_transfers_action(
         .filter(|t| {
             t.season_year == selected_season
                 && t.from_club_id != 0
-                && (league_club_ids.contains(&t.from_club_id) || league_club_ids.contains(&t.to_club_id))
+                && (league_team_ids.contains(&t.from_team_id)
+                    || league_club_ids.contains(&t.to_club_id))
         })
         .map(|t| {
             let from_team_slug = get_first_team_slug(country, t.from_club_id);

@@ -40,11 +40,12 @@ pub struct StaffKnowledge {
     pub judging_player_ability: u8,
     pub judging_player_potential: u8,
     pub tactical_knowledge: u8,
-    /// Country IDs this scout knows well (can scout effectively there).
-    /// Like FM: scouts have knowledge of specific nations/regions.
+    /// Geographic regions this scout knows well (can scout effectively there).
+    /// A scout knowing WestAfrica can evaluate players from Nigeria, Ghana,
+    /// Ivory Coast, Cameroon, Senegal, etc. — the entire region.
     /// Scouting in known regions has normal accuracy; unknown regions have
     /// increased error and fewer observations per day.
-    pub known_regions: Vec<u32>,
+    pub known_regions: Vec<crate::transfers::ScoutingRegion>,
 }
 
 #[derive(Debug, Clone)]

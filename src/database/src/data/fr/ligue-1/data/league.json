@@ -1,5 +1,6 @@
 {
   "id": 70,
+  "enabled": true,
   "slug": "ligue-1",
   "name": "Ligue 1",
   "reputation": 8200,

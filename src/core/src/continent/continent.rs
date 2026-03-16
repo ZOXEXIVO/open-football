@@ -88,7 +88,7 @@ impl Continent {
             .map(|(country, candidates)| {
                 let message = &format!("simulate country: {} (Continental)", &country.name);
                 Logging::estimate_result(
-                    || country.simulate(ctx.with_country_and_names(country.id, country.generator_data.people_names.clone(), country.season_dates()), &country_ids, candidates),
+                    || country.simulate(ctx.with_country_and_names(country.id, country.code.clone(), country.generator_data.people_names.clone(), country.season_dates()), &country_ids, candidates),
                     message,
                 )
             })

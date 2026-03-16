@@ -52,7 +52,10 @@ impl ClubAcademy {
         let needed = min_players - current_count;
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
-        let people_names = country_ctx.and_then(|c| c.people_names.as_ref());
+        let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
+            Some(names) => names,
+            None => return,
+        };
         let date = ctx.simulation.date.date();
 
         for i in 0..needed {
@@ -141,7 +144,10 @@ impl ClubAcademy {
 
         let country_ctx = ctx.country.as_ref();
         let country_id = country_ctx.map(|c| c.id).unwrap_or(1);
-        let people_names = country_ctx.and_then(|c| c.people_names.as_ref());
+        let people_names = match country_ctx.and_then(|c| c.people_names.as_ref()) {
+            Some(names) => names,
+            None => return ProduceYouthPlayersResult::new(Vec::new()),
+        };
 
         for i in 0..players_to_produce {
             let position = self.select_position_for_youth_player(i, players_to_produce);

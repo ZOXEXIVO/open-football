@@ -7,6 +7,7 @@ pub mod window;
 pub mod pipeline;
 pub mod pipeline_processor;
 pub mod staff_resolver;
+pub mod scouting_region;
 
 pub use market::*;
 pub use negotiation::*;
@@ -17,3 +18,4 @@ pub use window::*;
 pub use pipeline::*;
 pub use pipeline_processor::*;
 pub use staff_resolver::*;
+pub use scouting_region::*;

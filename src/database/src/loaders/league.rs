@@ -9,6 +9,9 @@ pub struct ForeignPlayerEntry {
 #[derive(Deserialize)]
 pub struct LeagueEntity {
     pub id: u32,
+    /// Whether this league is active in the simulation. Set to false to skip.
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
     pub slug: String,
     pub name: String,
     /// Populated by the loader from the directory path, not present in JSON.
@@ -24,6 +27,10 @@ pub struct LeagueEntity {
     pub relegation_spots: u8,
     #[serde(default)]
     pub foreign_players: Vec<ForeignPlayerEntry>,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Deserialize)]

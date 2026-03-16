@@ -1458,10 +1458,18 @@ impl SquadSelector {
 mod tests {
     use super::*;
     use crate::{
-        IntegerUtils, MatchTacticType, PlayerCollection, PlayerGenerator, StaffCollection,
-        TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
+        IntegerUtils, MatchTacticType, PeopleNameGeneratorData, PlayerCollection, PlayerGenerator,
+        StaffCollection, TeamBuilder, TeamReputation, TeamType, TrainingSchedule,
     };
     use chrono::{NaiveTime, Utc};
+
+    fn test_names() -> PeopleNameGeneratorData {
+        PeopleNameGeneratorData {
+            first_names: vec!["Test".to_string()],
+            last_names: vec!["Player".to_string()],
+            nicknames: Vec::new(),
+        }
+    }
 
     #[test]
     fn test_squad_selection_always_produces_11() {
@@ -1548,6 +1556,7 @@ mod tests {
 
     fn generate_test_players() -> Vec<Player> {
         let mut players = Vec::new();
+        let names = test_names();
 
         for &position in &[
             PlayerPositionType::Goalkeeper,
@@ -1562,7 +1571,7 @@ mod tests {
             for _ in 0..3 {
                 let level = IntegerUtils::random(15, 20) as u8;
                 let player =
-                    PlayerGenerator::generate(1, Utc::now().date_naive(), position, level, None);
+                    PlayerGenerator::generate(1, Utc::now().date_naive(), position, level, &names);
                 players.push(player);
             }
         }
@@ -1571,12 +1580,13 @@ mod tests {
     }
 
     fn generate_defender_center() -> Player {
+        let names = test_names();
         PlayerGenerator::generate(
             1,
             Utc::now().date_naive(),
             PlayerPositionType::DefenderCenter,
             18,
-            None,
+            &names,
         )
     }
 }

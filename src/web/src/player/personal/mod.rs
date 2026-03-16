@@ -103,6 +103,14 @@ pub struct PlayerInfoDto {
     pub contract_expiry: String,
     pub international_apps: u16,
     pub international_goals: u16,
+    pub languages: Vec<PlayerLanguageDto>,
+}
+
+pub struct PlayerLanguageDto {
+    pub name: String,
+    pub proficiency: u8,
+    pub level: String,
+    pub is_native: bool,
 }
 
 pub async fn player_personal_action(
@@ -300,6 +308,16 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
         (String::new(), String::new(), String::new())
     };
 
+    let languages: Vec<PlayerLanguageDto> = player.languages.iter()
+        .filter(|l| l.proficiency >= 5 || l.is_native)
+        .map(|l| PlayerLanguageDto {
+            name: i18n.t(l.language.i18n_key()).to_string(),
+            proficiency: l.proficiency,
+            level: i18n.t(l.level_key()).to_string(),
+            is_native: l.is_native,
+        })
+        .collect();
+
     PlayerInfoDto {
         preferred_foot: preferred_foot.to_string(),
         leadership,
@@ -312,6 +330,7 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
         contract_expiry,
         international_apps: pa.international_apps,
         international_goals: pa.international_goals,
+        languages,
     }
 }
 

@@ -64,12 +64,12 @@ pub struct TransferNegotiation {
     pub negotiator_staff_id: Option<u32>,
     /// Reason for signing (from scout report / transfer request)
     pub reason: String,
-    /// Source country ID for cross-country transfers (None = domestic)
+    /// Source country ID (None = same country as buying club)
     pub selling_country_id: Option<u32>,
-    /// For cross-country: cached player name (not accessible from buying country)
-    pub cross_country_player_name: String,
-    /// For cross-country: cached selling club name
-    pub cross_country_selling_club_name: String,
+    /// Cached player name (resolved at negotiation start)
+    pub player_name: String,
+    /// Cached selling club name (resolved at negotiation start)
+    pub selling_club_name: String,
 }
 
 impl TransferNegotiation {
@@ -123,8 +123,8 @@ impl TransferNegotiation {
             negotiator_staff_id: None,
             reason: String::new(),
             selling_country_id: None,
-            cross_country_player_name: String::new(),
-            cross_country_selling_club_name: String::new(),
+            player_name: String::new(),
+            selling_club_name: String::new(),
         }
     }
 

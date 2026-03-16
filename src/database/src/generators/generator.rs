@@ -114,6 +114,9 @@ impl DatabaseGenerator {
 
                 let mut clubs = DatabaseGenerator::generate_clubs(
                     country.id,
+                    continent.id,
+                    &country.code,
+                    country.reputation,
                     &all_country_ids,
                     data,
                     &mut player_generator,
@@ -316,6 +319,9 @@ impl DatabaseGenerator {
 
     fn generate_clubs(
         country_id: u32,
+        continent_id: u32,
+        country_code: &str,
+        country_reputation: u16,
         all_country_ids: &[u32],
         data: &DatabaseEntity,
         player_generator: &mut PlayerGenerator,
@@ -370,13 +376,14 @@ impl DatabaseGenerator {
                                 player_generator,
                                 country_id,
                                 team_rep,
+                                country_reputation,
                                 &team_type,
                                 t.league_id,
                                 data,
                             ));
 
                             let staffs = StaffCollection::new(
-                                Self::generate_staffs(staff_generator, country_id, all_country_ids, team_rep, &team_type)
+                                Self::generate_staffs(staff_generator, country_id, continent_id, country_code, team_rep, &team_type)
                             );
 
                             Team::builder()
@@ -410,6 +417,7 @@ impl DatabaseGenerator {
         player_generator: &mut PlayerGenerator,
         country_id: u32,
         team_reputation: u16,
+        country_reputation: u16,
         team_type: &TeamType,
         league_id: Option<u32>,
         data: &DatabaseEntity,
@@ -470,12 +478,16 @@ impl DatabaseGenerator {
                                 },
                             };
                             let mut foreign_gen = PlayerGenerator::with_people_names(&people_names);
-                            return foreign_gen.generate(fp.country_id, pos, effective_rep, min_age, max_age, is_youth);
+                            let foreign_country_rep = data.countries.iter()
+                                .find(|c| c.id == fp.country_id)
+                                .map(|c| c.reputation)
+                                .unwrap_or(3000);
+                            return foreign_gen.generate(fp.country_id, pos, effective_rep, foreign_country_rep, min_age, max_age, is_youth);
                         }
                     }
                 }
             }
-            player_generator.generate(country_id, pos, effective_rep, min_age, max_age, is_youth)
+            player_generator.generate(country_id, pos, effective_rep, country_reputation, min_age, max_age, is_youth)
         };
 
         // Main teams need larger squads to avoid fielding fewer than 11 after
@@ -511,7 +523,7 @@ impl DatabaseGenerator {
         players
     }
 
-    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, all_country_ids: &[u32], team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
+    fn generate_staffs(staff_generator: &mut StaffGenerator, country_id: u32, continent_id: u32, country_code: &str, team_reputation: u16, team_type: &TeamType) -> Vec<Staff> {
         let mut staffs = Vec::with_capacity(30);
 
         if *team_type == TeamType::Main {
@@ -519,15 +531,15 @@ impl DatabaseGenerator {
             staffs.push(staff_generator.generate(country_id, StaffPosition::DirectorOfFootball, team_reputation));
             staffs.push(staff_generator.generate(country_id, StaffPosition::Director, team_reputation));
 
-            // Scouts get known_regions: home country + 1-3 random foreign countries
+            // Scouts get known_regions: home region + foreign regions weighted by transfer corridors
             // Better clubs have scouts with wider knowledge networks
             let mut chief_scout = staff_generator.generate(country_id, StaffPosition::ChiefScout, team_reputation);
-            Self::assign_scout_regions(&mut chief_scout, country_id, all_country_ids, team_reputation);
+            Self::assign_scout_regions(&mut chief_scout, continent_id, country_code, team_reputation);
             staffs.push(chief_scout);
 
             for _ in 0..2 {
                 let mut scout = staff_generator.generate(country_id, StaffPosition::Scout, team_reputation);
-                Self::assign_scout_regions(&mut scout, country_id, all_country_ids, team_reputation);
+                Self::assign_scout_regions(&mut scout, continent_id, country_code, team_reputation);
                 staffs.push(scout);
             }
         }
@@ -544,31 +556,52 @@ impl DatabaseGenerator {
         staffs
     }
 
-    /// Give a scout knowledge of their home country + 1-3 random foreign countries.
-    /// Chief scouts and scouts at bigger clubs know more regions.
-    fn assign_scout_regions(staff: &mut Staff, home_country_id: u32, all_country_ids: &[u32], team_reputation: u16) {
-        let mut regions = vec![home_country_id];
+    /// Give a scout knowledge of their home region + foreign regions weighted
+    /// by real-world transfer corridors (Africa→Europe, SouthAmerica→Europe, etc.).
+    /// A single scout covering "WestAfrica" can find players from Nigeria, Ghana,
+    /// Ivory Coast, Cameroon, Senegal — the entire region.
+    fn assign_scout_regions(staff: &mut Staff, continent_id: u32, country_code: &str, team_reputation: u16) {
+        use core::transfers::ScoutingRegion;
 
-        // Foreign countries the scout knows (like FM's scout knowledge)
-        // Higher rep clubs = scouts with wider networks
+        let home_region = ScoutingRegion::from_country(continent_id, country_code);
+        let mut regions = vec![home_region];
+
+        // Number of foreign regions based on club reputation
         let foreign_count = if team_reputation >= 7000 {
             IntegerUtils::random(2, 4) as usize // Elite: 2-4 foreign regions
         } else if team_reputation >= 5000 {
             IntegerUtils::random(1, 3) as usize // Good: 1-3
+        } else if team_reputation >= 3000 {
+            IntegerUtils::random(0, 2) as usize // Mid: 0-2
         } else {
-            IntegerUtils::random(0, 2) as usize // Small: 0-2
+            IntegerUtils::random(0, 1) as usize // Small: 0-1
         };
 
-        let foreign: Vec<u32> = all_country_ids.iter()
-            .filter(|&&id| id != home_country_id)
-            .copied()
-            .collect();
+        if foreign_count == 0 {
+            staff.staff_attributes.knowledge.known_regions = regions;
+            return;
+        }
 
-        for _ in 0..foreign_count.min(foreign.len()) {
-            let idx = IntegerUtils::random(0, foreign.len() as i32) as usize;
-            let cid = foreign[idx % foreign.len()];
-            if !regions.contains(&cid) {
-                regions.push(cid);
+        // Pick foreign regions weighted by transfer corridors
+        let corridors = home_region.transfer_corridors();
+        let total_weight: u32 = corridors.iter().map(|(_, w)| *w as u32).sum();
+
+        if total_weight == 0 || corridors.is_empty() {
+            staff.staff_attributes.knowledge.known_regions = regions;
+            return;
+        }
+
+        for _ in 0..foreign_count {
+            let roll = IntegerUtils::random(0, total_weight as i32) as u32;
+            let mut acc = 0u32;
+            for (region, weight) in corridors {
+                acc += *weight as u32;
+                if roll < acc {
+                    if !regions.contains(region) {
+                        regions.push(*region);
+                    }
+                    break;
+                }
             }
         }
 

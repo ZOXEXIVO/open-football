@@ -1,5 +1,6 @@
 {
   "id": 440,
+  "enabled": false,
   "slug": "allsvenskan",
   "name": "Allsvenskan",
   "reputation": 5400,

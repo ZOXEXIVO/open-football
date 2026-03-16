@@ -1,5 +1,6 @@
 {
   "id": 490,
+  "enabled": false,
   "slug": "estonian-meistriliiga",
   "name": "Meistriliiga",
   "reputation": 2400,

@@ -18,7 +18,7 @@
                             <a href="/{{ lang }}/countries/{{ player.country_slug }}" class="fm-ph-flag">
                                 <span class="flag flag-{{ player.country_code }}" title="{{ player.country_name }}"></span>
                             </a>
-                            <span class="fm-ph-age">{{ i18n.t("age") }}: {{ player.age }}</span>
+                            <span class="fm-ph-age">{{ player.age }} {{ i18n.t("years_old") }}</span>
                             <span class="fm-ph-sep"></span>
                             <span class="fm-ph-born">{{ player.birth_date }}</span>
                         </div>
@@ -42,9 +42,12 @@
                         </div>
                         {% else %}
                         <div class="fm-ph-meta">
-                            <span class="fm-detail-value">{{ i18n.t("contracted_to") }} <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
+                            <span class="fm-detail-value fm-ph-contracted">{{ i18n.t("contracted_to") }} <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
                         </div>
                         {% endif %}
+                        <div class="fm-ph-meta">
+                            <span class="fm-detail-value fm-ph-value">{{ i18n.t("valued_at") }} {{ player.value }}</span>
+                        </div>
                         {% if let Some(contract) = player.contract %}
                         <div class="fm-ph-meta">
                             <span class="fm-detail-value">${{ contract.salary }} {{ i18n.t("per_week") }}</span>

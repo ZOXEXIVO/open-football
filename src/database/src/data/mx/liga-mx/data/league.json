@@ -1,5 +1,6 @@
 {
   "id": 380,
+  "enabled": true,
   "slug": "liga-mx",
   "name": "Liga MX",
   "reputation": 7000,

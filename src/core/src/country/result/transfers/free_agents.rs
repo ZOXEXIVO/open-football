@@ -237,6 +237,7 @@ impl CountryResult {
                 0.0, // Free transfer
                 date,
             );
+            crate::transfers::pipeline_processor::PipelineProcessor::clear_player_interest(country, signing.player_id);
             summary.completed_transfers += 1;
 
             debug!(

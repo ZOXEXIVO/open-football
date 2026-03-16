@@ -1,7 +1,7 @@
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::FloatUtils;
-use core::utils::{IntegerUtils, StringUtils};
+use core::utils::IntegerUtils;
 use core::{
     CoachFocus, MentalFocusType, PeopleNameGeneratorData, PersonAttributes,
     PhysicalFocusType, Staff, StaffAttributes, StaffClubContract, StaffCoaching, StaffDataAnalysis,
@@ -144,24 +144,17 @@ impl StaffGenerator {
     }
 
     fn generate_first_name(&self) -> String {
-        if !self.people_names_data.first_names.is_empty() {
-            let idx =
-                IntegerUtils::random(0, self.people_names_data.first_names.len() as i32) as usize;
-
-            self.people_names_data.first_names[idx].to_owned()
-        } else {
-            StringUtils::random_string(5)
-        }
+        let names = &self.people_names_data.first_names;
+        if names.is_empty() { return String::new(); }
+        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        names[idx].to_owned()
     }
 
     fn generate_last_name(&self) -> String {
-        if !self.people_names_data.first_names.is_empty() {
-            let idx =
-                IntegerUtils::random(0, self.people_names_data.last_names.len() as i32) as usize;
-            self.people_names_data.last_names[idx].to_owned()
-        } else {
-            StringUtils::random_string(12)
-        }
+        let names = &self.people_names_data.last_names;
+        if names.is_empty() { return String::new(); }
+        let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
+        names[idx].to_owned()
     }
 }
 

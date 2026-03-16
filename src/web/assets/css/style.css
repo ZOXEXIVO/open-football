@@ -1862,6 +1862,28 @@ a:link, a:visited, a:hover, a:active {
     min-width: 280px;
 }
 
+.fm-ph-id-col:first-child .fm-ph-meta .fm-detail-value {
+    font-size: 13px;
+    color: #686b6e;
+}
+
+.fm-ph-id-col .fm-detail-value {
+    color: #fff;
+}
+
+.fm-ph-value {
+    font-size: 1.1em !important;
+}
+
+.fm-ph-contracted {
+    color: #686b6e !important;
+}
+
+.fm-ph-contracted a {
+    color: #686b6e !important;
+    text-decoration: none !important;
+}
+
 .fm-ph-id-col:nth-child(2) .fm-ph-meta {
     white-space: nowrap;
 }
@@ -1922,8 +1944,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-age {
-    font-size: 13px;
-    color: #7a8a96;
+    font-size: 1.1em;
+    color: #ffffff;
     font-weight: 500;
 }
 
@@ -2015,7 +2037,7 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-detail-value {
     font-size: 0.9em;
-    color: #c8d4de;
+    color: #686b6e;
     font-weight: 500;
     text-align: right;
     min-width: 0;
@@ -2023,7 +2045,6 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-detail-value a {
     color: #c8d4de;
-    text-decoration: underline !important;
     transition: color 0.12s;
 }
 
@@ -2048,6 +2069,7 @@ a:link, a:visited, a:hover, a:active {
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 20px;
+    margin-bottom: 20px;
 }
 
 .fm-personal-fullrow {
@@ -2066,6 +2088,12 @@ a:link, a:visited, a:hover, a:active {
 
 .fm-personal-col {
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+.fm-personal-col > .fm-panel {
+    flex: 1;
 }
 
 .fm-personal-section {

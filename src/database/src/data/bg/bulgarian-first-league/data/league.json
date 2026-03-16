@@ -1,5 +1,6 @@
 {
   "id": 7500000,
+  "enabled": false,
   "slug": "bulgarian-first-league",
   "name": "First League",
   "reputation": 4000,

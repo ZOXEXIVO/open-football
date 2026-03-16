@@ -4,33 +4,8 @@
 
 {% block content %}
 <div class="fm-page">
-    <!-- Row 1: Personality + Player Profile -->
+    <!-- Row 1: Player Profile + Personality -->
     <div class="fm-personal-grid">
-        <div class="fm-personal-col">
-            <section class="fm-panel">
-                <div class="fm-panel-head">
-                    <h3>{{ i18n.t("personality") }}</h3>
-                </div>
-                <div class="fm-personal-section">
-                    <div class="fm-radar-wrap">
-                        <svg viewBox="0 0 400 280" class="fm-radar-svg">
-                            <polygon class="fm-radar-grid fm-radar-grid-4" points="{{ personality.radar_grid_4 }}"/>
-                            <polygon class="fm-radar-grid fm-radar-grid-3" points="{{ personality.radar_grid_3 }}"/>
-                            <polygon class="fm-radar-grid fm-radar-grid-2" points="{{ personality.radar_grid_2 }}"/>
-                            <polygon class="fm-radar-grid fm-radar-grid-1" points="{{ personality.radar_grid_1 }}"/>
-                            {% for axis in personality.radar_axes %}
-                            <line class="fm-radar-axis" x1="200" y1="140" x2="{{ axis.x2 }}" y2="{{ axis.y2 }}"/>
-                            {% endfor %}
-                            <polygon class="fm-radar-area" points="{{ personality.radar_points }}"/>
-                            {% for item in personality.radar_items %}
-                            <text class="fm-radar-label" x="{{ item.x }}" y="{{ item.y }}" text-anchor="{{ item.anchor }}">{{ i18n.t(&item.name) }} ({{ item.value }})</text>
-                            {% endfor %}
-                        </svg>
-                    </div>
-                </div>
-            </section>
-        </div>
-
         <div class="fm-personal-col">
             <section class="fm-panel">
                 <div class="fm-panel-head">
@@ -96,90 +71,136 @@
                 {% endif %}
             </section>
         </div>
-    </div>
 
-    <!-- Row 2: Morale & Happiness (full width) -->
-    <div class="fm-personal-fullrow">
-        <section class="fm-panel">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("morale_and_happiness") }}</h3>
-            </div>
-            <div class="fm-personal-section">
-                <div class="fm-happiness-grid">
-                    <div class="fm-happiness-col">
-                        <div class="fm-morale-row">
-                            <span class="fm-morale-label">{{ i18n.t("morale") }}</span>
-                            <div class="fm-morale-bar">
-                                <div class="fm-morale-fill{% if morale.value >= 65 %} fm-morale-good{% elif morale.value >= 45 %} fm-morale-okay{% else %} fm-morale-poor{% endif %}" style="width:{{ morale.value }}%"></div>
-                            </div>
-                            <span class="fm-morale-val">{{ morale.label }}</span>
-                        </div>
-                        <div class="fm-personal-detail">
-                            <span class="fm-detail-label">{{ i18n.t("behaviour") }}</span>
-                            <span class="fm-detail-value">{{ behaviour }}</span>
-                        </div>
-                        {% if !happiness_factors.is_empty() %}
-                        <h4 class="fm-section-subtitle mt-2">{{ i18n.t("happiness_factors") }}</h4>
-                        <table class="fm-personal-table">
-                            {% for factor in happiness_factors %}
-                            <tr>
-                                <td class="fm-factor-name">{{ factor.name }}</td>
-                                <td class="fm-factor-val{% if factor.value > 0 %} fm-factor-pos{% elif factor.value < 0 %} fm-factor-neg{% endif %}">{{ factor.label }}</td>
-                            </tr>
+        <div class="fm-personal-col">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("personality") }}</h3>
+                </div>
+                <div class="fm-personal-section">
+                    <div class="fm-radar-wrap">
+                        <svg viewBox="0 0 400 280" class="fm-radar-svg">
+                            <polygon class="fm-radar-grid fm-radar-grid-4" points="{{ personality.radar_grid_4 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-3" points="{{ personality.radar_grid_3 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-2" points="{{ personality.radar_grid_2 }}"/>
+                            <polygon class="fm-radar-grid fm-radar-grid-1" points="{{ personality.radar_grid_1 }}"/>
+                            {% for axis in personality.radar_axes %}
+                            <line class="fm-radar-axis" x1="200" y1="140" x2="{{ axis.x2 }}" y2="{{ axis.y2 }}"/>
                             {% endfor %}
-                        </table>
-                        {% endif %}
-                    </div>
-                    <div class="fm-happiness-col">
-                        {% if !concerns.is_empty() %}
-                        <h4 class="fm-section-subtitle fm-concerns-title">{{ i18n.t("concerns") }}</h4>
-                        <ul class="fm-concerns-list">
-                            {% for concern in concerns %}
-                            <li>{{ concern }}</li>
+                            <polygon class="fm-radar-area" points="{{ personality.radar_points }}"/>
+                            {% for item in personality.radar_items %}
+                            <text class="fm-radar-label" x="{{ item.x }}" y="{{ item.y }}" text-anchor="{{ item.anchor }}">{{ i18n.t(&item.name) }} ({{ item.value }})</text>
                             {% endfor %}
-                        </ul>
-                        {% endif %}
-                        {% if let Some(rel) = manager_relationship %}
-                        <h4 class="fm-section-subtitle mt-2">{{ i18n.t("manager_relationship") }}</h4>
-                        <div class="fm-personal-detail">
-                            <span class="fm-detail-label">{{ i18n.t("manager") }}</span>
-                            <span class="fm-detail-value">{{ rel.manager_name }}</span>
-                        </div>
-                        <div class="fm-personal-detail">
-                            <span class="fm-detail-label">{{ i18n.t("relationship") }}</span>
-                            <span class="fm-detail-value{% if rel.level > 20 %} fm-rel-good{% elif rel.level < -20 %} fm-rel-poor{% endif %}">{{ rel.label }}</span>
-                        </div>
-                        <div class="fm-personal-detail fm-bar-row">
-                            <span class="fm-detail-label">{{ i18n.t("trust") }}</span>
-                            <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.trust }}%"></div></div>
-                        </div>
-                        <div class="fm-personal-detail fm-bar-row">
-                            <span class="fm-detail-label">{{ i18n.t("respect") }}</span>
-                            <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.respect }}%"></div></div>
-                        </div>
-                        {% endif %}
+                        </svg>
                     </div>
                 </div>
-            </div>
-        </section>
+            </section>
+        </div>
+    </div>
 
-        {% if !recent_events.is_empty() %}
-        <section class="fm-panel mt-3">
-            <div class="fm-panel-head">
-                <h3>{{ i18n.t("recent_events") }}</h3>
-            </div>
-            <div class="fm-personal-section">
-                <table class="fm-personal-table">
-                    {% for event in recent_events %}
-                    <tr>
-                        <td class="fm-event-desc{% if event.is_positive %} fm-event-pos{% else %} fm-event-neg{% endif %}">{{ event.description }}</td>
-                        <td class="fm-event-ago">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</td>
-                    </tr>
+    <!-- Row 2: Morale & Happiness + Languages -->
+    <div class="fm-personal-grid">
+        <div class="fm-personal-col">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("morale_and_happiness") }}</h3>
+                </div>
+                <div class="fm-personal-section">
+                    <div class="fm-morale-row">
+                        <span class="fm-morale-label">{{ i18n.t("morale") }}</span>
+                        <div class="fm-morale-bar">
+                            <div class="fm-morale-fill{% if morale.value >= 65 %} fm-morale-good{% elif morale.value >= 45 %} fm-morale-okay{% else %} fm-morale-poor{% endif %}" style="width:{{ morale.value }}%"></div>
+                        </div>
+                        <span class="fm-morale-val">{{ morale.label }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("behaviour") }}</span>
+                        <span class="fm-detail-value">{{ behaviour }}</span>
+                    </div>
+                </div>
+                {% if !happiness_factors.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("happiness_factors") }}</h4>
+                    <table class="fm-personal-table">
+                        {% for factor in happiness_factors %}
+                        <tr>
+                            <td class="fm-factor-name">{{ factor.name }}</td>
+                            <td class="fm-factor-val{% if factor.value > 0 %} fm-factor-pos{% elif factor.value < 0 %} fm-factor-neg{% endif %}">{{ factor.label }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endif %}
+                {% if !concerns.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("concerns") }}</h4>
+                    <ul class="fm-concerns-list">
+                        {% for concern in concerns %}
+                        <li>{{ concern }}</li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                {% endif %}
+                {% if let Some(rel) = manager_relationship %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("manager_relationship") }}</h4>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("manager") }}</span>
+                        <span class="fm-detail-value">{{ rel.manager_name }}</span>
+                    </div>
+                    <div class="fm-personal-detail">
+                        <span class="fm-detail-label">{{ i18n.t("relationship") }}</span>
+                        <span class="fm-detail-value{% if rel.level > 20 %} fm-rel-good{% elif rel.level < -20 %} fm-rel-poor{% endif %}">{{ rel.label }}</span>
+                    </div>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("trust") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.trust }}%"></div></div>
+                    </div>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("respect") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ rel.respect }}%"></div></div>
+                    </div>
+                </div>
+                {% endif %}
+                {% if !recent_events.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("recent_events") }}</h4>
+                    <table class="fm-personal-table">
+                        {% for event in recent_events %}
+                        <tr>
+                            <td class="fm-event-desc{% if event.is_positive %} fm-event-pos{% else %} fm-event-neg{% endif %}">{{ event.description }}</td>
+                            <td class="fm-event-ago">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</td>
+                        </tr>
+                        {% endfor %}
+                    </table>
+                </div>
+                {% endif %}
+            </section>
+        </div>
+
+        <div class="fm-personal-col">
+            {% if !player_info.languages.is_empty() %}
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ i18n.t("languages") }}</h3>
+                </div>
+                <div class="fm-personal-section">
+                    {% for lang in player_info.languages %}
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ lang.name }}</span>
+                        {% if lang.is_native %}
+                        <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:100%"></div></div>
+                        <span class="fm-detail-value-sm">{{ lang.level }}</span>
+                        {% else %}
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if lang.proficiency >= 70 %} fm-condition-good{% elif lang.proficiency >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ lang.proficiency }}%"></div></div>
+                        <span class="fm-detail-value-sm">{{ lang.level }}</span>
+                        {% endif %}
+                    </div>
                     {% endfor %}
-                </table>
-            </div>
-        </section>
-        {% endif %}
+                </div>
+            </section>
+            {% endif %}
+        </div>
     </div>
 </div>
 {% endblock %}

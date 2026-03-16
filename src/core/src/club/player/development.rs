@@ -304,8 +304,9 @@ fn personality_multiplier(professionalism: f32, ambition: f32, determination: f3
 // ── Match-experience multiplier ─────────────────────────────────────────
 //
 // Counts both official and friendly appearances. Official matches have full
-// weight; friendly appearances contribute at 30% because the competitive
-// intensity and development stimulus is lower.
+// weight; friendly appearances contribute at only 20% because the competitive
+// intensity and development stimulus is much lower. This makes loaning a
+// young player for 30 league games far more impactful than 30 U20 games.
 
 fn match_experience_multiplier(
     started: u16,
@@ -314,18 +315,20 @@ fn match_experience_multiplier(
     friendly_subs: u16,
 ) -> f32 {
     let official = started as f32 + sub_apps as f32 * 0.4;
-    let friendly = (friendly_started as f32 + friendly_subs as f32 * 0.4) * 0.3;
+    let friendly = (friendly_started as f32 + friendly_subs as f32 * 0.4) * 0.2;
     let effective = official + friendly;
     (0.70 + effective * 0.020).min(1.40)
 }
 
 // ── Official match bonus ────────────────────────────────────────────────
 //
-// Competitive (official) matches develop players faster than friendlies due
-// to higher pressure, intensity, and stakes. This multiplier rewards players
-// who get regular official match time.
+// Competitive (official league/cup) matches develop players significantly
+// faster than friendlies or youth-team games due to higher pressure,
+// intensity, and stakes. This multiplier creates a strong incentive to
+// loan young players out for real first-team football rather than letting
+// them stagnate in U18/U20 leagues.
 //
-// Range: 0.90 (only friendlies) → 1.0 (no games) → 1.15 (only official)
+// Range: 0.75 (only friendlies) → 1.0 (no games) → 1.30 (only official)
 
 fn official_match_bonus(official_games: u16, friendly_games: u16) -> f32 {
     let total = official_games + friendly_games;
@@ -333,7 +336,7 @@ fn official_match_bonus(official_games: u16, friendly_games: u16) -> f32 {
         return 1.0;
     }
     let official_ratio = official_games as f32 / total as f32;
-    0.90 + official_ratio * 0.25
+    0.75 + official_ratio * 0.55
 }
 
 // ── Average match rating bonus ──────────────────────────────────────────

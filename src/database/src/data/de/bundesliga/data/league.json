@@ -1,5 +1,6 @@
 {
   "id": 110,
+  "enabled": true,
   "slug": "bundesliga",
   "name": "Bundesliga",
   "reputation": 8800,

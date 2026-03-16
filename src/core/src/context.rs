@@ -52,9 +52,9 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_country_and_names(&self, country_id: u32, people_names: crate::PeopleNameGeneratorData, season_dates: crate::country::SeasonDates) -> Self {
+    pub fn with_country_and_names(&self, country_id: u32, country_code: String, people_names: crate::PeopleNameGeneratorData, season_dates: crate::country::SeasonDates) -> Self {
         let mut ctx = GlobalContext::clone(self);
-        ctx.country = Some(CountryContext::with_people_names(country_id, people_names).with_season_dates(season_dates));
+        ctx.country = Some(CountryContext::with_people_names(country_id, people_names).with_code(country_code).with_season_dates(season_dates));
         ctx
     }
 

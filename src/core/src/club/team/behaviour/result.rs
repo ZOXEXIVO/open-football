@@ -99,6 +99,14 @@ impl TeamBehaviourResult {
                         ManagerTalkType::PlayingTimeRequest => {
                             player.statuses.add(sim_date, PlayerStatusType::Req);
                         }
+                        ManagerTalkType::LoanRequest => {
+                            // Denied loan — player becomes unsettled about their future
+                            player.statuses.add(sim_date, PlayerStatusType::Fut);
+                            player.happiness.add_event(
+                                HappinessEventType::LackOfPlayingTime,
+                                -5.0,
+                            );
+                        }
                         _ => {}
                     }
                 }
