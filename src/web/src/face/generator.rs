@@ -479,9 +479,48 @@ pub fn generate_face_svg(player_id: u32, age: u8) -> String {
             ));
         }
         5 => {
-            // Afro
+            // Afro — voluminous curly shape with texture
+            let hd = dk(hair, 0.82);
+            let hl = dk(hair, 1.18);
+            // Main afro silhouette with irregular bumpy edge
             s.push_str(&format!(
-                r#"<ellipse cx="40" cy="22" rx="30" ry="20" fill="{}"/>"#, hair
+                r#"<path d="
+                    M12 48
+                    C8 40 6 30 10 20
+                    C12 14 16 8 22 5
+                    C26 2 32 0 40 0
+                    C48 0 54 2 58 5
+                    C64 8 68 14 70 20
+                    C74 30 72 40 68 48
+                    C66 42 64 36 64 30
+                    C64 22 54 14 40 14
+                    C26 14 16 22 16 30
+                    C16 36 14 42 12 48Z
+                " fill="{}"/>"#, hair
+            ));
+            // Texture bumps along the top edge
+            s.push_str(&format!(r#"<circle cx="22" cy="6" r="4.5" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="32" cy="2" r="4" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="40" cy="1" r="4.5" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="48" cy="2" r="4" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="58" cy="6" r="4.5" fill="{}"/>"#, hair));
+            // Side volume bumps
+            s.push_str(&format!(r#"<circle cx="10" cy="30" r="4" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="70" cy="30" r="4" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="9" cy="40" r="3.5" fill="{}"/>"#, hair));
+            s.push_str(&format!(r#"<circle cx="71" cy="40" r="3.5" fill="{}"/>"#, hair));
+            // Inner highlight for depth
+            s.push_str(&format!(
+                r#"<path d="
+                    M18 38
+                    C16 28 22 16 34 12
+                    C38 10 42 10 46 12
+                    C50 14 54 18 56 24
+                " stroke="{}" stroke-width="0.8" fill="none" opacity="0.2"/>"#, hl
+            ));
+            // Inner shadow for curl texture
+            s.push_str(&format!(
+                r#"<path d="M14 44 C14 32 22 18 40 14 C58 18 66 32 66 44" stroke="{}" stroke-width="0.6" fill="none" opacity="0.15"/>"#, hd
             ));
         }
         6 => {
