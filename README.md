@@ -13,8 +13,6 @@ The goal is to get as close as possible to a real soccer simulation and based on
 - Predict the success of future player transfers
 - Simulate other football data
 
-Currently available nation for simulation - **Italy**
-
 ---
 **[Live Demo](https://open-football.org)**
 
@@ -56,9 +54,6 @@ Match dev looks like (cross-platform)
 
 ![alt text](.docs/images/match_dev.png "Match dev tools")
 
-/src/dev/neural - Dev utils for training NN for using in match, etc
-
-/src/neural - Core Burn neural network data
 /src/web - HTTP server for running API for Angular UI
 
 /ui - Angular app that you can see in **[Live Demo](https://open-football.org)**
