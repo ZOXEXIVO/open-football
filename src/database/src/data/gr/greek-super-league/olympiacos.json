@@ -45,5 +45,10 @@
   "colors": {
     "background": "#e2001a",
     "foreground": "#ffffff"
-  }
+  },
+  "rivals": [
+    982,
+    983
+  ],
+  "philosophy": "SignToCompete"
 }

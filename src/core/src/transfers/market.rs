@@ -109,6 +109,11 @@ impl TransferMarket {
                 l.status == TransferListingStatus::Available) {
             let listing = &mut self.listings[listing_index];
 
+            // Never negotiate with yourself
+            if listing.club_id == buying_club_id {
+                return None;
+            }
+
             // Create a negotiation
             let negotiation_id = self.next_negotiation_id;
             self.next_negotiation_id += 1;

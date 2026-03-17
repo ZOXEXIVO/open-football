@@ -20,6 +20,12 @@ pub(crate) fn execute_transfer(
     is_loan: bool,
     date: NaiveDate,
 ) {
+    // Safety: never transfer/loan a player to their own club
+    if selling_club_id == buying_club_id {
+        debug!("Blocked self-transfer: club {} tried to {} player {} to itself",
+            selling_club_id, if is_loan { "loan" } else { "transfer" }, player_id);
+        return;
+    }
     if selling_country_id == buying_country_id {
         // Domestic — work within a single country
         if let Some(country) = data.country_mut(selling_country_id) {

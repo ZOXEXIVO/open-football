@@ -45,5 +45,10 @@
   "colors": {
     "background": "#246c57",
     "foreground": "#ffffff"
-  }
+  },
+  "rivals": [
+    1478,
+    1487
+  ],
+  "philosophy": "DevelopAndSell"
 }

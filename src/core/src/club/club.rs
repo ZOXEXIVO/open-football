@@ -59,9 +59,15 @@ pub struct Club {
     pub transfer_plan: ClubTransferPlan,
 
     pub philosophy: ClubPhilosophy,
+
+    pub rivals: Vec<u32>,
 }
 
 impl Club {
+    pub fn is_rival(&self, other_club_id: u32) -> bool {
+        self.rivals.contains(&other_club_id)
+    }
+
     pub fn new(
         id: u32,
         name: String,
@@ -86,6 +92,7 @@ impl Club {
             teams,
             transfer_plan: ClubTransferPlan::new(),
             philosophy,
+            rivals: Vec::new(),
         }
     }
 

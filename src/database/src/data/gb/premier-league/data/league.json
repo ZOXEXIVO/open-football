@@ -1,6 +1,6 @@
 {
   "id": 80,
-  "enabled": true,
+  "enabled": false,
   "slug": "premier-league",
   "name": "Premier League",
   "reputation": 9500,

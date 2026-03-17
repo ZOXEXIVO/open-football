@@ -49,21 +49,19 @@
                             <span class="fm-detail-value fm-ph-value">{{ i18n.t("valued_at") }} {{ player.value }}</span>
                         </div>
                         {% if let Some(contract) = player.contract %}
-                        <div class="fm-ph-meta">
-                            <span class="fm-detail-value">${{ contract.salary }} {{ i18n.t("per_week") }}</span>
-                            <span class="fm-ph-sep"></span>
+                        <div class="fm-ph-meta fm-ph-contract">
+                            <span class="fm-detail-value fm-salary">${{ contract.salary }} {{ i18n.t("per_week") }}</span>
                             <span class="fm-detail-value">{{ i18n.t("salary_until") }} {{ contract.expiration }}</span>
                         </div>
                         {% if !contract.squad_status.is_empty() %}
-                        <div class="fm-ph-meta">
+                        <div class="fm-ph-meta fm-ph-contract">
                             <span class="fm-detail-value">{{ i18n.t(&contract.squad_status) }}</span>
                         </div>
                         {% endif %}
                         {% endif %}
                         {% if let Some(loan_contract) = player.contract_loan %}
-                        <div class="fm-ph-meta">
-                            <span class="fm-detail-value">{{ i18n.t("loan") }}: ${{ loan_contract.salary }} {{ i18n.t("per_week") }}</span>
-                            <span class="fm-ph-sep"></span>
+                        <div class="fm-ph-meta fm-ph-contract">
+                            <span class="fm-detail-value fm-salary">{{ i18n.t("loan") }}: ${{ loan_contract.salary }} {{ i18n.t("per_week") }}</span>
                             <span class="fm-detail-value">{{ i18n.t("salary_until") }} {{ loan_contract.expiration }}</span>
                         </div>
                         {% endif %}

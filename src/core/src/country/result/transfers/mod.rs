@@ -10,7 +10,7 @@ use types::TransferActivitySummary;
 use super::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::transfers::TransferWindowManager;
-use crate::transfers::pipeline_processor::PipelineProcessor;
+use crate::transfers::pipeline::PipelineProcessor;
 
 impl CountryResult {
     pub(super) fn simulate_transfer_market(
@@ -68,6 +68,7 @@ impl CountryResult {
 
                 // Cross-country loan scanning: clubs can find loan targets abroad
                 PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
+
             }
 
             debug!(

@@ -32,7 +32,8 @@
     }
   ],
   "colors": {
-    "background": "#035a4c",
+    "background": "#1d4c44",
     "foreground": "#ffffff"
-  }
+  },
+  "philosophy": "Balanced"
 }

@@ -1,5 +1,70 @@
+mod evaluation;
+mod scouting;
+mod shortlists;
+mod negotiations;
+mod loan_market;
+mod recommendations;
+mod helpers;
+
 use crate::PlayerPositionType;
 use chrono::NaiveDate;
+
+// Re-export PipelineProcessor and PlayerSummary for external use
+pub use self::processor::PipelineProcessor;
+pub use self::processor::PlayerSummary;
+
+mod processor {
+    use std::collections::HashMap;
+    use crate::{PlayerFieldPositionGroup, PlayerPositionType};
+
+    /// PipelineProcessor handles all daily transfer pipeline logic.
+    /// Uses a two-pass borrow pattern: immutable read -> collect mutations -> mutable write.
+    pub struct PipelineProcessor;
+
+    /// Info about a player in the squad for formation-based analysis.
+    pub(in crate::transfers::pipeline) struct SquadPlayerInfo {
+        pub player_id: u32,
+        pub primary_position: PlayerPositionType,
+        pub current_ability: u8,
+        pub potential_ability: u8,
+        pub age: u8,
+        pub position_levels: HashMap<PlayerPositionType, u8>,
+        pub appearances: u16,
+        pub is_injured: bool,
+        pub recovery_days: u16,
+        #[allow(dead_code)]
+        pub injury_days: u16,
+    }
+
+    #[allow(dead_code)]
+    pub struct PlayerSummary {
+        pub player_id: u32,
+        pub club_id: u32,
+        pub country_id: u32,
+        pub continent_id: u32,
+        pub country_code: String,
+        pub player_name: String,
+        pub club_name: String,
+        pub position: PlayerPositionType,
+        pub position_group: PlayerFieldPositionGroup,
+        pub age: u8,
+        pub estimated_value: f64,
+        pub is_listed: bool,
+        pub is_loan_listed: bool,
+        pub skill_ability: u8,
+        pub average_rating: f32,
+        pub goals: u16,
+        pub assists: u16,
+        pub appearances: u16,
+        pub determination: f32,
+        pub work_rate: f32,
+        pub composure: f32,
+        pub anticipation: f32,
+        pub technical_avg: f32,
+        pub mental_avg: f32,
+        pub physical_avg: f32,
+    }
+}
 
 // ============================================================
 // Transfer Need Priority & Reason

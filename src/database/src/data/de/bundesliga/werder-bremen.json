@@ -45,5 +45,9 @@
   "colors": {
     "background": "#1d9053",
     "foreground": "#ffffff"
-  }
+  },
+  "rivals": [
+    947
+  ],
+  "philosophy": "Balanced"
 }

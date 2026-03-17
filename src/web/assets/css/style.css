@@ -1871,6 +1871,16 @@ a:link, a:visited, a:hover, a:active {
     color: #fff;
 }
 
+.fm-ph-contract .fm-detail-value {
+    font-size: 0.8em;
+    color: #686868;
+}
+
+.fm-ph-contract .fm-salary {
+    color: #fff;
+    margin-right: 6px;
+}
+
 .fm-ph-value {
     font-size: 1.0em !important;
 }

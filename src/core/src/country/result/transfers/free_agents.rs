@@ -5,7 +5,7 @@ use crate::country::result::CountryResult;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
 use crate::transfers::pipeline::TransferRequest;
-use crate::transfers::pipeline_processor::PipelineProcessor;
+use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::staff_resolver::StaffResolver;
 
 impl CountryResult {
@@ -237,7 +237,7 @@ impl CountryResult {
                 0.0, // Free transfer
                 date,
             );
-            crate::transfers::pipeline_processor::PipelineProcessor::clear_player_interest(country, signing.player_id);
+            PipelineProcessor::clear_player_interest(country, signing.player_id);
             summary.completed_transfers += 1;
 
             debug!(

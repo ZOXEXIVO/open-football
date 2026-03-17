@@ -333,15 +333,24 @@ impl DatabaseGenerator {
             .filter(|c| c.country_id == country_id)
             .map(|club| {
                 // Determine philosophy from main team reputation
-                let main_rep = club.teams.iter()
-                    .find(|t| t.team_type == "main")
-                    .map(|t| t.reputation.world)
-                    .unwrap_or(0);
-                let philosophy = match TeamReputation::new(0, 0, main_rep).level() {
-                    ReputationLevel::Elite => ClubPhilosophy::SignToCompete,
-                    ReputationLevel::Continental => ClubPhilosophy::Balanced,
-                    ReputationLevel::National => ClubPhilosophy::Balanced,
-                    _ => ClubPhilosophy::LoanFocused,
+                let philosophy = if let Some(ref p) = club.philosophy {
+                    match p.as_str() {
+                        "SignToCompete" => ClubPhilosophy::SignToCompete,
+                        "DevelopAndSell" => ClubPhilosophy::DevelopAndSell,
+                        "LoanFocused" => ClubPhilosophy::LoanFocused,
+                        _ => ClubPhilosophy::Balanced,
+                    }
+                } else {
+                    let main_rep = club.teams.iter()
+                        .find(|t| t.team_type.eq_ignore_ascii_case("main"))
+                        .map(|t| t.reputation.world)
+                        .unwrap_or(0);
+                    match TeamReputation::new(0, 0, main_rep).level() {
+                        ReputationLevel::Elite => ClubPhilosophy::SignToCompete,
+                        ReputationLevel::Continental => ClubPhilosophy::Balanced,
+                        ReputationLevel::National => ClubPhilosophy::Balanced,
+                        _ => ClubPhilosophy::LoanFocused,
+                    }
                 };
 
                 Club {
@@ -360,6 +369,7 @@ impl DatabaseGenerator {
                 },
                 transfer_plan: ClubTransferPlan::new(),
                 philosophy,
+                rivals: club.rivals.clone(),
                 teams: TeamCollection::new(
                     club.teams
                         .iter()

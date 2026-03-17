@@ -5,7 +5,7 @@ use crate::utils::FloatUtils;
 use crate::{Country, PlayerSquadStatus, PlayerStatusType};
 use crate::transfers::TransferListingStatus;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
-use crate::transfers::pipeline_processor::PipelineProcessor;
+use crate::transfers::pipeline::PipelineProcessor;
 
 impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(

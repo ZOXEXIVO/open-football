@@ -11,6 +11,10 @@ pub struct ClubEntity {
     pub finance: ClubFinanceEntity,
     pub colors: ClubColorsEntity,
     pub teams: Vec<ClubTeamEntity>,
+    #[serde(default)]
+    pub rivals: Vec<u32>,
+    #[serde(default)]
+    pub philosophy: Option<String>,
 }
 
 #[derive(Deserialize)]

@@ -45,5 +45,6 @@
   "colors": {
     "background": "#000000",
     "foreground": "#ff6600"
-  }
+  },
+  "philosophy": "Balanced"
 }

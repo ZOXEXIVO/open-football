@@ -158,6 +158,7 @@ pub async fn league_transfers_action(
             t.season_year == selected_season
                 && t.from_club_id != 0
                 && (league_team_ids.contains(&t.from_team_id)
+                    || league_club_ids.contains(&t.from_club_id)
                     || league_club_ids.contains(&t.to_club_id))
         })
         .map(|t| {
