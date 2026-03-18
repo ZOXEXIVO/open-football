@@ -62,6 +62,7 @@ impl PipelineProcessor {
                         player,
                         date,
                         price_level,
+                        0, 0,
                     );
                     let contract_months = player
                         .contract

@@ -53,12 +53,12 @@ impl TransferWindowManager {
 pub struct PlayerValuationCalculator;
 
 impl PlayerValuationCalculator {
-    pub fn calculate_value(player: &Player, date: NaiveDate) -> CurrencyValue {
-        Self::calculate_value_with_price_level(player, date, 1.0)
+    pub fn calculate_value(player: &Player, date: NaiveDate, league_reputation: u16, club_reputation: u16) -> CurrencyValue {
+        Self::calculate_value_with_price_level(player, date, 1.0, league_reputation, club_reputation)
     }
 
-    pub fn calculate_value_with_price_level(player: &Player, date: NaiveDate, price_level: f32) -> CurrencyValue {
-        let base_value = PlayerValueCalculator::calculate(player, date, price_level);
+    pub fn calculate_value_with_price_level(player: &Player, date: NaiveDate, price_level: f32, league_reputation: u16, club_reputation: u16) -> CurrencyValue {
+        let base_value = PlayerValueCalculator::calculate(player, date, price_level, league_reputation, club_reputation);
 
         // Transfer-listed players face market discount (buyer leverage)
         let mut market_value = base_value;

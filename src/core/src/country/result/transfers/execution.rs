@@ -72,7 +72,7 @@ pub(crate) fn execute_transfer_within_country(
                 reputation: main_team.reputation.world,
                 league_name: String::new(),
                 league_slug: String::new(),
-            });
+                            });
         }
 
         for team in &mut selling_club.teams.teams {
@@ -151,7 +151,7 @@ fn execute_loan_within_country(
                 reputation: main_team.reputation.world,
                 league_name: String::new(),
                 league_slug: String::new(),
-            });
+                            });
         }
 
         from_team_id = selling_club.teams.teams.iter()
@@ -256,7 +256,7 @@ fn take_player_from_selling_country(
             reputation: main_team.reputation.world,
             league_name: String::new(),
             league_slug: String::new(),
-        })?;
+                    })?;
 
     // For loans: move to reserve first
     if is_loan {

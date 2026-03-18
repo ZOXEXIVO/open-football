@@ -224,7 +224,7 @@ impl PipelineProcessor {
         price_level: f32,
     ) -> CurrencyValue {
         let base_value =
-            PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level);
+            PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level, 0, 0);
 
         let multiplier = if club.finance.balance.balance < 0 {
             0.9

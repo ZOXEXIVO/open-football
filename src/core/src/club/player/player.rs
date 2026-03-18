@@ -106,12 +106,12 @@ impl Player {
         0
     }
 
-    pub fn value(&self, date: NaiveDate) -> f64 {
-        PlayerValueCalculator::calculate(self, date, 1.0)
+    pub fn value(&self, date: NaiveDate, league_reputation: u16, club_reputation: u16) -> f64 {
+        PlayerValueCalculator::calculate(self, date, 1.0, league_reputation, club_reputation)
     }
 
-    pub fn value_with_price_level(&self, date: NaiveDate, price_level: f32) -> f64 {
-        PlayerValueCalculator::calculate(self, date, price_level)
+    pub fn value_with_price_level(&self, date: NaiveDate, price_level: f32, league_reputation: u16, club_reputation: u16) -> f64 {
+        PlayerValueCalculator::calculate(self, date, price_level, league_reputation, club_reputation)
     }
 
     #[inline]

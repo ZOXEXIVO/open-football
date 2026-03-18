@@ -305,7 +305,7 @@ impl TransferListManager {
             }
 
             let asking_price = find_player_in_teams(teams, team_indices, decision.player_id)
-                .map(|p| p.value(date))
+                .map(|p| p.value(date, 0, 0))
                 .unwrap_or(0.0);
 
             teams[main_idx]

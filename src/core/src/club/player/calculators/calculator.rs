@@ -4,7 +4,13 @@ use chrono::NaiveDate;
 pub struct PlayerValueCalculator;
 
 impl PlayerValueCalculator {
-    pub fn calculate(player: &Player, now: NaiveDate, price_level: f32) -> f64 {
+    pub fn calculate(
+        player: &Player,
+        now: NaiveDate,
+        price_level: f32,
+        league_reputation: u16,
+        club_reputation: u16,
+    ) -> f64 {
         let base_value = determine_base_value(player);
         let age_factor = determine_age_factor(player, now);
         let potential_factor = determine_potential_factor(player, now);
@@ -13,6 +19,7 @@ impl PlayerValueCalculator {
         let performance_factor = determine_performance_factor(player);
         let reputation_factor = determine_reputation_factor(player);
         let position_factor = determine_position_factor(player);
+        let league_club_factor = determine_league_club_factor(league_reputation, club_reputation);
 
         let value = base_value
             * age_factor
@@ -22,6 +29,7 @@ impl PlayerValueCalculator {
             * performance_factor
             * reputation_factor
             * position_factor
+            * league_club_factor
             * price_level as f64;
 
         round_market_value(value.max(5_000.0))
@@ -241,6 +249,52 @@ fn determine_reputation_factor(player: &Player) -> f64 {
     } else {
         1.0
     }
+}
+
+/// FM-style league and club reputation factor.
+///
+/// In Football Manager, a player's market value is heavily influenced by the
+/// league and club they play in. The same player is worth far more at a Serie A
+/// club than at a Maltese Premier League club.
+///
+/// League reputation (0-10000) and club reputation (0-10000) are blended:
+///   - league_reputation contributes 60% (the market/TV money/visibility)
+///   - club_reputation contributes 40% (brand, finances, exposure)
+///
+/// The resulting factor ranges from ~0.15 (weakest leagues) to ~1.30 (elite).
+/// This means a player at a top-5 league club is worth ~8x more than the same
+/// player in a semi-professional league.
+///
+/// Examples (approximate):
+///   Serie A (8750) + Juventus (8500)  → factor ~1.25
+///   Eredivisie (6500) + Ajax (7000)   → factor ~0.85
+///   Maltese PL (2800) + Valletta (3000) → factor ~0.30
+///   Amateur (1000) + local club (1000)  → factor ~0.15
+fn determine_league_club_factor(league_reputation: u16, club_reputation: u16) -> f64 {
+    let league_rep = league_reputation as f64;
+    let club_rep = club_reputation as f64;
+
+    // No context available (academy players, free agents) — neutral factor
+    if league_rep == 0.0 && club_rep == 0.0 {
+        return 1.0;
+    }
+
+    // Blend: 60% league, 40% club (league visibility drives market value more)
+    let blended = league_rep * 0.6 + club_rep * 0.4;
+    let normalized = blended / 10000.0; // 0.0 to 1.0
+
+    // S-curve mapping: stronger separation between tiers
+    // Uses a power curve with offset to create FM-like value tiers:
+    //   normalized 0.10 (rep ~1000) → ~0.15
+    //   normalized 0.25 (rep ~2500) → ~0.28
+    //   normalized 0.40 (rep ~4000) → ~0.45
+    //   normalized 0.55 (rep ~5500) → ~0.65
+    //   normalized 0.70 (rep ~7000) → ~0.88
+    //   normalized 0.85 (rep ~8500) → ~1.15
+    //   normalized 1.00 (rep 10000) → ~1.30
+    let factor = 0.15 + 1.15 * normalized * normalized;
+
+    factor.clamp(0.15, 1.30)
 }
 
 /// Position-based value adjustment

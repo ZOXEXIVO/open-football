@@ -195,13 +195,16 @@ pub async fn player_transfers_action(
         .copied()
         .collect();
 
+    let league_rep = team_opt.and_then(|t| t.league_id).and_then(|lid| simulator_data.league(lid)).map(|l| l.reputation).unwrap_or(0);
+    let club_rep = team_opt.map(|t| t.reputation.world).unwrap_or(0);
+
     let transfer_status = PlayerTransferStatusDto {
-        value: FormattingUtils::format_money(player.value(now)),
+        value: FormattingUtils::format_money(player.value(now, league_rep, club_rep)),
         asking_price: player
             .contract
             .as_ref()
             .filter(|_| transfer_related.iter().any(|s| *s == PlayerStatusType::Lst))
-            .map(|_| FormattingUtils::format_money(player.value(now) * 1.2))
+            .map(|_| FormattingUtils::format_money(player.value(now, league_rep, club_rep) * 1.2))
             .unwrap_or_default(),
         is_transfer_listed: transfer_related.contains(&PlayerStatusType::Lst),
         is_loan_listed: transfer_related.contains(&PlayerStatusType::Loa),

@@ -494,7 +494,7 @@ impl Club {
             let loan_fee = if rep_multiplier > 0.0 {
                 let player_value = self.teams.teams[team_idx].players.players.iter()
                     .find(|p| p.id == player_id)
-                    .map(|p| p.value(date))
+                    .map(|p| p.value(date, 0, 0))
                     .unwrap_or(0.0);
                 crate::utils::FormattingUtils::round_fee(player_value * rep_multiplier)
             } else {
@@ -540,7 +540,7 @@ impl Club {
                     Some(p) => p,
                     None => continue,
                 };
-                player.value(date) * 0.5
+                player.value(date, 0, 0) * 0.5
             };
 
             let player = match self.teams.teams[team_idx].players.players.iter_mut()

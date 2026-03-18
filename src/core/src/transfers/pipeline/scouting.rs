@@ -457,6 +457,7 @@ impl PipelineProcessor {
                                 player,
                                 current_date,
                                 country.settings.pricing.price_level,
+                                0, 0,
                             );
 
                             reports.push(ScoutingReportResult {
@@ -580,7 +581,7 @@ impl PipelineProcessor {
                         continue;
                     }
                     let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player, date, price_level,
+                        player, date, price_level, 0, 0,
                     );
                     let statuses = player.statuses.get();
                     players.push(PlayerSummary {
@@ -635,6 +636,7 @@ impl PipelineProcessor {
                         player,
                         date,
                         price_level,
+                        0, 0,
                     );
                     let statuses = player.statuses.get();
                     all_players.push(PlayerSummary {

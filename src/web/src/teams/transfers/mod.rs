@@ -165,7 +165,11 @@ pub async fn team_transfers_action(
                     player.full_name.display_first_name(), player.full_name.display_last_name()
                 ),
                 position: player.position().get_short_name().to_string(),
-                value: FormattingUtils::format_money(player.value(now)),
+                value: FormattingUtils::format_money(player.value(
+                    now,
+                    league.map(|l| l.reputation).unwrap_or(0),
+                    team.reputation.world,
+                )),
             })
         })
         .collect();

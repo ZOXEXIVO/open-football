@@ -267,7 +267,11 @@ pub async fn player_get_action(
             conditions: get_conditions(player),
             current_ability: get_current_ability_stars(player),
             potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
-            value: FormattingUtils::format_money(player.value(now)),
+            value: FormattingUtils::format_money(player.value(
+                now,
+                team.league_id.and_then(|lid| simulator_data.league(lid)).map(|l| l.reputation).unwrap_or(0),
+                team.reputation.world,
+            )),
             preferred_foot: player.preferred_foot_str().to_string(),
             player_attributes: get_attributes(player),
             statistics: get_statistics(player),

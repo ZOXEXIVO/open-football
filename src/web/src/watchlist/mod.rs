@@ -112,7 +112,11 @@ pub async fn watchlist_page_action(
                     league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
                     played: player.statistics.played,
                     played_subs: player.statistics.played_subs,
-                    value: FormattingUtils::format_money(player.value(now)),
+                    value: FormattingUtils::format_money(player.value(
+                        now,
+                        league.map(|l| l.reputation).unwrap_or(0),
+                        team.reputation.world,
+                    )),
                     injured: player.player_attributes.is_injured,
                     unhappy: !player.happiness.is_happy(),
                     transfer_listed: player.statuses.get().contains(&PlayerStatusType::Lst),

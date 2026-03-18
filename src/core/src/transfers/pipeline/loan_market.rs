@@ -634,6 +634,7 @@ impl PipelineProcessor {
                             player,
                             date,
                             price_level,
+                            0, 0,
                         );
                         CurrencyValue {
                             amount: crate::utils::FormattingUtils::round_fee(full_value.amount * 0.10),

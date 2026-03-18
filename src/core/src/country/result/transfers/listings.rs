@@ -27,7 +27,14 @@ impl CountryResult {
                 continue;
             }
 
-            for player in &club.teams.teams[0].players.players {
+            let main_team = &club.teams.teams[0];
+            let league_reputation = main_team.league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
+            let club_reputation = main_team.reputation.world;
+
+            for player in &main_team.players.players {
                 // Use existing should_list_player logic for non-pipeline listings
                 if Self::should_list_player(player, &squad_analysis, club, date) {
                     let age = player.age(date);
@@ -43,7 +50,7 @@ impl CountryResult {
                             TransferListingType::EndOfContract,
                         ));
                     } else {
-                        let asking_price = Self::calculate_asking_price(player, club, date, price_level);
+                        let asking_price = Self::calculate_asking_price(player, club, date, price_level, league_reputation, club_reputation);
                         listings_to_add.push((
                             player.id,
                             club.id,
@@ -234,10 +241,12 @@ impl CountryResult {
         club: &Club,
         date: NaiveDate,
         price_level: f32,
+        league_reputation: u16,
+        club_reputation: u16,
     ) -> CurrencyValue {
         use crate::transfers::window::PlayerValuationCalculator;
 
-        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level);
+        let base_value = PlayerValuationCalculator::calculate_value_with_price_level(player, date, price_level, league_reputation, club_reputation);
 
         let multiplier = if club.finance.balance.balance < 0 {
             0.9

@@ -72,7 +72,7 @@ impl ClubTransferStrategy {
         };
 
         // Calculate base valuation
-        let player_value = PlayerValuationCalculator::calculate_value(player, current_date);
+        let player_value = PlayerValuationCalculator::calculate_value(player, current_date, 0, 0);
 
         // Adjust based on asking price
         let mut offer_amount = if asking_price.amount > 0.0 {

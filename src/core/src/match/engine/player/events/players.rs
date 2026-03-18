@@ -132,7 +132,7 @@ impl PlayerEventDispatcher {
         if context.logging_enabled {
             match event {
                 PlayerEvent::TakeBall(_) | PlayerEvent::ClaimBall(_) => {},
-                _ => debug!("Player event: {:?}", event)
+                _ => debug!("Player event: {:?}, tick = {}", event, context.time.time)
             }
         }       
 

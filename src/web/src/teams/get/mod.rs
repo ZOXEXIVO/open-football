@@ -103,6 +103,8 @@ pub async fn team_get_action(
         .ok_or_else(|| ApiError::NotFound(format!("Team with ID {} not found", team_id)))?;
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
+    let league_rep = league.map(|l| l.reputation).unwrap_or(0);
+    let club_rep = team.reputation.world;
 
     let now = simulator_data.date.date();
 
@@ -147,7 +149,7 @@ pub async fn team_get_action(
                 country_name: country.name.clone(),
                 last_name: p.full_name.display_last_name().to_string(),
                 conditions: get_conditions(p),
-                value: FormattingUtils::format_money(p.value(now)),
+                value: FormattingUtils::format_money(p.value(now, league_rep, club_rep)),
                 current_ability: get_current_ability_stars(p),
                 potential_ability: get_potential_ability_stars_by_staff(p, staff_judging, staff_id),
                 age: DateUtils::age(p.birth_date, now),
@@ -197,7 +199,7 @@ pub async fn team_get_action(
                             country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),
                             last_name: player.full_name.display_last_name().to_string(),
                             conditions: get_conditions(player),
-                            value: FormattingUtils::format_money(player.value(now)),
+                            value: FormattingUtils::format_money(player.value(now, league_rep, club_rep)),
                             current_ability: get_current_ability_stars(player),
                             potential_ability: get_potential_ability_stars_by_staff(player, staff_judging, staff_id),
                             age: DateUtils::age(player.birth_date, now),
