@@ -489,7 +489,9 @@ fn assign_new_contract(player: &mut Player, fee: f64, date: NaiveDate, _is_loan:
     else { 2 };
     let expiry = date.checked_add_signed(chrono::Duration::days(contract_years * 365))
         .unwrap_or(date);
-    let salary = (fee / 200.0).max(500.0) as u32;
+    // Salary proportional to fee: ~5% of transfer fee as annual wage, min 500
+    // A 10M transfer → 500K/year, a 100K transfer → 5K/year
+    let salary = (fee * 0.05).max(500.0) as u32;
     player.contract = Some(PlayerClubContract::new(salary, expiry));
     player.contract_loan = None;
 }

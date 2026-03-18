@@ -383,14 +383,43 @@ impl PlayerGenerator {
         let day = IntegerUtils::random(1, 29) as u32;
         let age = (now.year() as u32).saturating_sub(year);
 
-        let salary_min = (2000.0 + rep_factor * 30000.0) as i32;
-        let salary_max = (10000.0 + rep_factor * 190000.0) as i32;
+        // FM-style salary: exponential curve based on reputation.
+        // Salaries in USD/year (annual). Massive gaps between tiers:
+        //   rep_factor ~0.05 (amateur)     →    1K -    3K
+        //   rep_factor ~0.15 (Chad/Malta)  →    3K -   12K
+        //   rep_factor ~0.30 (Ghana/Nigeria)→   10K -   50K
+        //   rep_factor ~0.50 (mid European)→   40K -  200K
+        //   rep_factor ~0.65 (Eredivisie)  →  100K -  600K
+        //   rep_factor ~0.80 (Serie A/BuLi)→  300K - 2.5M
+        //   rep_factor ~0.90 (PL/La Liga)  →  600K - 6M
+        //   rep_factor ~1.00 (elite)       →  1.2M - 12M
+        let curve = rep_factor * rep_factor * rep_factor; // cubic — steep growth at top
+        let salary_min = (1_000.0 + curve * 1_200_000.0) as i32;
+        let salary_max = (3_000.0 + curve * 12_000_000.0) as i32;
 
-        let base_salary = IntegerUtils::random(salary_min, salary_max) as u32;
+        // Age factor: peak earners 25-30, young players earn less
+        let age_salary_factor = match age {
+            0..=17 => 0.08,
+            18 => 0.12,
+            19 => 0.18,
+            20 => 0.30,
+            21 => 0.45,
+            22 => 0.60,
+            23 => 0.75,
+            24 => 0.88,
+            25..=30 => 1.0,
+            31 => 0.85,
+            32 => 0.70,
+            33 => 0.55,
+            34 => 0.40,
+            _ => 0.30,
+        };
+
+        let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64 * age_salary_factor) as u32;
         let salary = if is_youth {
-            base_salary / IntegerUtils::random(10, 100) as u32
+            (base_salary / 10).max(200)
         } else {
-            base_salary
+            base_salary.max(500)
         };
         let expiration =
             NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap();
@@ -483,11 +512,10 @@ impl PlayerGenerator {
             _ =>       0.82, // decline after 32
         };
 
-        // Group means: PA-driven (85%) with small team context bonus (15%)
-        let rep_bonus = rep_factor * 1.5; // 0.0 to 1.5 extra skill points
-        let tech_mean   = pa_final * tech_age_ratio + rep_bonus;
-        let mental_mean = pa_final * mental_age_ratio + rep_bonus;
-        let phys_mean   = pa_final * physical_age_ratio + rep_bonus;
+        // Group means: pure PA-driven. PA already encodes reputation.
+        let tech_mean   = pa_final * tech_age_ratio;
+        let mental_mean = pa_final * mental_age_ratio;
+        let phys_mean   = pa_final * physical_age_ratio;
 
         let max_possible = 20.0_f32;
         let pos_w = position_weights(position);
@@ -542,15 +570,15 @@ impl PlayerGenerator {
             skills[i] = skills[i] * 0.65 + p_avg * 0.35;
         }
 
-        // 8. PA-based floor: high-PA players can't have garbage skills
-        //    PA 180 → floor ~8, PA 100 → floor ~4, PA 40 → floor 3
-        let pa_floor = ((pa - 40.0) / 160.0 * 6.0 + 3.0).clamp(3.0, 10.0);
-        let key_floor = (pa_final * 0.55).clamp(pa_floor, 12.0);
+        // 8. PA-based floor: prevents garbage skills on key attributes
+        //    PA 180 → floor ~8, PA 100 → floor ~4, PA 30 → floor 1
+        let pa_floor = ((pa - 10.0) / 190.0 * 8.0 + 1.0).clamp(1.0, 9.0);
+        let key_floor = (pa_final * 0.50).clamp(pa_floor, 11.0);
         for i in 0..SKILL_COUNT {
             if pos_w[i] >= 1.0 {
                 skills[i] = skills[i].max(key_floor);
             }
-            skills[i] = skills[i].max(pa_floor);
+            skills[i] = skills[i].max(1.0); // absolute minimum is 1
         }
 
         // 9. Apply affinities
@@ -702,31 +730,38 @@ impl PlayerGenerator {
     // ── Potential ability (generated before skills) ─────────────────────
 
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
-        // Gem chance scales steeply with reputation:
-        //   rep <3000 (0.3): ~1% — very rare for small clubs
-        //   rep  5000 (0.5): ~3%
-        //   rep  7000 (0.7): ~7%
-        //   rep  9000 (0.9): ~12%
-        //   rep 10000 (1.0): ~15%
-        let gem_chance = if rep_factor < 0.6 {
-            rep_factor * rep_factor * 0.08 // quadratic: low-rep clubs almost never produce stars
-        } else {
-            0.03 + (rep_factor - 0.6) * 0.30 // linear ramp for good+ clubs
-        };
+        // FM-style PA distribution: massive gaps between tiers.
+        //
+        // rep_factor (blended team 70% + country 30% / 10000):
+        //   0.05-0.15 (amateur/Chad)     → PA 15-55, avg ~35
+        //   0.15-0.30 (Malta/small)      → PA 25-75, avg ~50
+        //   0.30-0.50 (Ghana/Nigeria)    → PA 40-100, avg ~70
+        //   0.50-0.65 (mid European)     → PA 60-130, avg ~95
+        //   0.65-0.80 (Eredivisie/Serie A mid) → PA 80-155, avg ~115
+        //   0.80-0.90 (top clubs)        → PA 100-175, avg ~140
+        //   0.90-1.00 (elite)            → PA 120-195, avg ~160
+        //
+        // Gem system: rare chance of exceptional talent even at low rep
+
+        // Gem chance: very steep reputation scaling
+        let gem_chance = (rep_factor * rep_factor * rep_factor * 0.18).min(0.15);
+        // Low rep clubs: tiny gem chance. Elite: ~15%.
         let is_gem = rand::random::<f32>() < gem_chance;
 
         if is_gem {
-            // High-potential player — PA ceiling tied to club reputation
-            // Elite clubs can produce 190+ PA; small clubs cap around 130
-            let gem_min = (70.0 + rep_factor * 50.0) as i32;  // 0.3→85, 0.6→100, 1.0→120
-            let gem_max = (100.0 + rep_factor * 90.0).min(195.0) as i32; // 0.3→127, 0.6→154, 1.0→190
+            // Gem: PA reaches well above the club's normal range
+            // Even a Chad gem maxes at ~120. Elite gem goes to 195.
+            let gem_min = (60.0 + rep_factor * 70.0) as i32;
+            let gem_max = (90.0 + rep_factor * 105.0).min(195.0) as i32;
             IntegerUtils::random(gem_min, gem_max).min(200) as u8
         } else {
-            // Normal player: PA based on rep with age-dependent variance
-            let base = 30.0 + rep_factor * 100.0; // rep 0.0 → 30, rep 0.6 → 90, rep 1.0 → 130
-            let youth_bonus = if age <= 21 { 10.0 } else if age <= 25 { 5.0 } else { 0.0 };
-            let pa = base + youth_bonus + random_normal() * 12.0;
-            pa.clamp(25.0, 190.0) as u8
+            // Normal player: quadratic curve — elite clubs WAY above low-rep
+            // rep² * 160 gives the spread: 0.1²*160=1.6, 0.5²*160=40, 0.9²*160=130
+            let base = 15.0 + rep_factor * rep_factor * 160.0;
+            let youth_bonus = if age <= 21 { 8.0 } else if age <= 25 { 3.0 } else { 0.0 };
+            let noise = random_normal() * (8.0 + rep_factor * 10.0); // wider spread at top
+            let pa = base + youth_bonus + noise;
+            pa.clamp(10.0, 190.0) as u8
         }
     }
 

@@ -278,7 +278,8 @@ impl Club {
                     let expiration = NaiveDate::from_ymd_opt(
                         date.year() + 3, date.month(), date.day().min(28),
                     ).unwrap_or(date);
-                    let salary = graduation_salary(player.player_attributes.current_ability);
+                    let club_rep = self.teams.teams[main_idx].reputation.world;
+                    let salary = graduation_salary(player.player_attributes.current_ability, club_rep);
                     player.contract = Some(PlayerClubContract::new(salary, expiration));
                 }
 
@@ -364,7 +365,8 @@ impl Club {
                     let expiration = NaiveDate::from_ymd_opt(
                         date.year() + 3, date.month(), date.day().min(28),
                     ).unwrap_or(date);
-                    let salary = graduation_salary(player.player_attributes.current_ability);
+                    let club_rep = self.teams.teams[main_idx].reputation.world;
+                    let salary = graduation_salary(player.player_attributes.current_ability, club_rep);
                     player.contract = Some(PlayerClubContract::new(salary, expiration));
                 }
 
@@ -609,13 +611,27 @@ impl Club {
     }
 }
 
-fn graduation_salary(current_ability: u8) -> u32 {
-    match current_ability {
-        0..=60 => 15_000,
-        61..=80 => 30_000,
-        81..=100 => 60_000,
-        101..=120 => 120_000,
-        121..=150 => 250_000,
-        _ => 500_000,
-    }
+/// FM-style graduation salary: ability sets the tier, club reputation scales it.
+/// A youth graduate at Man City earns 50x what the same ability player earns in Chad.
+fn graduation_salary(current_ability: u8, club_reputation: u16) -> u32 {
+    let base = match current_ability {
+        0..=60 => 2_000,
+        61..=80 => 5_000,
+        81..=100 => 12_000,
+        101..=120 => 30_000,
+        121..=150 => 80_000,
+        _ => 200_000,
+    };
+
+    // Club reputation multiplier: cubic curve
+    //   rep 1000 (amateur)    → ~0.01 → base * 0.10 (floor)
+    //   rep 3000 (Malta)      → ~0.03 → base * 0.17
+    //   rep 5000 (mid)        → ~0.13 → base * 0.47
+    //   rep 7000 (good)       → ~0.34 → base * 1.05
+    //   rep 8500 (top)        → ~0.61 → base * 1.73
+    //   rep 10000 (elite)     → ~1.00 → base * 3.00
+    let norm = (club_reputation as f64 / 10000.0).clamp(0.0, 1.0);
+    let multiplier = 0.10 + 2.90 * norm * norm * norm;
+
+    (base as f64 * multiplier).max(500.0) as u32
 }
