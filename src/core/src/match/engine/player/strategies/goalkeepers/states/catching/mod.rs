@@ -66,7 +66,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         let reflexes = ctx.player.skills.mental.concentration / 20.0;
 
         // GK sprints explosively to catch — reflexes + agility drive reaction speed
-        let speed_boost = 1.5 + agility * 0.4 + reflexes * 0.4; // 1.5x - 2.3x
+        let speed_boost = 1.7 + agility * 0.5 + reflexes * 0.5; // 1.7x - 2.7x
 
         if ball_distance > 3.0 {
             // Sprint to ball using Pursuit with speed boost
@@ -114,8 +114,8 @@ impl GoalkeeperCatchingState {
         let scaled_agility = (agility - 1.0) / 19.0;
 
         // Maximum catch distance — skill-dependent reach
-        // Elite GK: 8 + 5 + 3 = 16, mediocre: 8 + 2.3 + 1.4 = 11.7
-        let max_catch_distance = 8.0 + scaled_agility * 5.0 + scaled_handling * 3.0;
+        // Elite GK: 10 + 6 + 4 = 20, mediocre: 10 + 2.8 + 1.9 = 14.7
+        let max_catch_distance = 10.0 + scaled_agility * 6.0 + scaled_handling * 4.0;
 
         if distance_to_ball > max_catch_distance {
             return false; // Ball too far away to physically catch
@@ -134,19 +134,19 @@ impl GoalkeeperCatchingState {
         let ball_height = ctx.tick_context.positions.ball.position.z;
 
         // Base success rate — strong skill differentiation
-        // Elite (~1.0): 0.25 + 0.70 = 0.95, mediocre (~0.47): 0.25 + 0.33 = 0.58
-        let mut catch_probability = 0.25 + (base_skill * 0.70);
+        // Elite (~1.0): 0.30 + 0.68 = 0.98, mediocre (~0.47): 0.30 + 0.32 = 0.62
+        let mut catch_probability = 0.30 + (base_skill * 0.68);
 
         // Ball speed modifier calibrated for actual speeds
         if ball_speed < 0.8 {
-            catch_probability += 0.12; // Very slow - easier catch
+            catch_probability += 0.15; // Very slow - easier catch
         } else if ball_speed < 1.2 {
-            catch_probability += 0.05; // Moderate speed
+            catch_probability += 0.08; // Moderate speed
         } else if ball_speed > 2.0 {
-            // Strong shot - much harder, skilled keepers mitigate significantly
-            catch_probability -= 0.20 * (1.0 - scaled_reflexes * 0.6);
+            // Strong shot - harder, but skilled keepers mitigate significantly
+            catch_probability -= 0.15 * (1.0 - scaled_reflexes * 0.65);
         } else if ball_speed > 1.5 {
-            catch_probability -= 0.12 * (1.0 - scaled_reflexes * 0.5);
+            catch_probability -= 0.08 * (1.0 - scaled_reflexes * 0.55);
         }
 
         // Distance modifier

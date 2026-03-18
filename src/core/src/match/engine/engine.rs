@@ -3,7 +3,6 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
-use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
@@ -104,12 +103,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let home_team_id = score_ref.home_team.team_id;
 
         for player in &field.players {
-            let goals = player.statistics.items.iter()
-                .filter(|i| i.stat_type == MatchStatisticType::Goal && !i.is_auto_goal)
-                .count() as u16;
-            let assists = player.statistics.items.iter()
-                .filter(|i| i.stat_type == MatchStatisticType::Assist)
-                .count() as u16;
+            let goals = player.statistics.goals_count();
+            let assists = player.statistics.assists_count();
 
             let (player_team_goals, opponent_goals) = if player.team_id == home_team_id {
                 (home_goals, away_goals)
@@ -200,7 +195,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Full tick: ball + player AI + events
             // Light tick: ball + player movement only (no AI re-evaluation)
             if tick_parity & 1 == 0 {
-                Self::game_tick_light(field, context, match_data);
+                Self::game_tick_light(field, context, match_data, &mut events);
             } else {
                 Self::game_tick_inner(field, context, match_data, &mut tick_ctx, &mut events);
             }
@@ -242,11 +237,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
+        events: &mut EventCollection,
     ) {
-        let mut events = EventCollection::new();
+        events.clear();
 
         // Full ball update without needing GameTickContext
-        field.ball.update_light(context, &field.players, &mut events);
+        field.ball.update_light(context, &field.players, events);
 
         // Players: just apply existing velocity
         for player in field.players.iter_mut() {
@@ -255,38 +251,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         // Dispatch ball events (goals, claims, etc.)
-        EventDispatcher::dispatch(events.drain().collect(), field, context, match_data, true);
+        EventDispatcher::dispatch(events, field, context, match_data, true);
 
-        // Goal reset
-        if field.ball.goal_scored {
-            let kickoff_side = field.ball.kickoff_team_side;
-            field.reset_players_positions();
-            field.ball.reset();
-
-            if let Some(side) = kickoff_side {
-                let ball_pos = field.ball.position;
-                let kickoff_player_id = field.players.iter()
-                    .filter(|p| p.side == Some(side))
-                    .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-                    .min_by(|a, b| {
-                        let da = (a.position - ball_pos).norm_squared();
-                        let db = (b.position - ball_pos).norm_squared();
-                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|p| p.id);
-
-                if let Some(player_id) = kickoff_player_id {
-                    field.ball.current_owner = Some(player_id);
-                    field.ball.claim_cooldown = 120;
-                    field.ball.flags.in_flight_state = 120;
-                    field.ball.contested_claim_count = 0;
-                }
-            }
-
-            field.ball.goal_scored = false;
-            field.ball.kickoff_team_side = None;
-            context.record_goal_tick();
-        }
+        Self::handle_goal_reset(field, context);
 
         Self::write_match_positions(field, context.total_match_time, match_data);
     }
@@ -308,47 +275,51 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         Self::play_ball(field, context, tick_ctx, events);
         Self::play_players(field, context, tick_ctx, events);
 
-        // dispatch events
-        EventDispatcher::dispatch(events.drain().collect(), field, context, match_data, true);
+        EventDispatcher::dispatch(events, field, context, match_data, true);
 
         // After all events are dispatched, force-reset positions if a goal was scored.
         // This prevents stale events (ClaimBall, PassTo, etc.) from overriding the goal reset.
-        if field.ball.goal_scored {
-            let kickoff_side = field.ball.kickoff_team_side;
-
-            field.reset_players_positions();
-            field.ball.reset();
-
-            // Kickoff: give the conceding team protected possession at center
-            if let Some(side) = kickoff_side {
-                let ball_pos = field.ball.position;
-                // Find the nearest player from the kickoff team to center
-                let kickoff_player_id = field.players.iter()
-                    .filter(|p| p.side == Some(side))
-                    .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-                    .min_by(|a, b| {
-                        let dist_a = (a.position - ball_pos).norm();
-                        let dist_b = (b.position - ball_pos).norm();
-                        dist_a.partial_cmp(&dist_b).unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .map(|p| p.id);
-
-                if let Some(player_id) = kickoff_player_id {
-                    field.ball.current_owner = Some(player_id);
-                    field.ball.claim_cooldown = 120; // ~2 seconds of protected possession
-                    field.ball.flags.in_flight_state = 120;
-                    field.ball.contested_claim_count = 0;
-                }
-            }
-
-            field.ball.goal_scored = false;
-            field.ball.kickoff_team_side = None;
-
-            context.record_goal_tick();
-        }
+        Self::handle_goal_reset(field, context);
 
         // Use total cumulative match time for positions
         Self::write_match_positions(field, context.total_match_time, match_data);
+    }
+
+    /// Reset field after a goal: reposition players, assign kickoff possession.
+    fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
+        if !field.ball.goal_scored {
+            return;
+        }
+
+        let kickoff_side = field.ball.kickoff_team_side;
+
+        field.reset_players_positions();
+        field.ball.reset();
+
+        // Kickoff: give the conceding team protected possession at center
+        if let Some(side) = kickoff_side {
+            let ball_pos = field.ball.position;
+            let kickoff_player_id = field.players.iter()
+                .filter(|p| p.side == Some(side))
+                .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
+                .min_by(|a, b| {
+                    let da = (a.position - ball_pos).norm_squared();
+                    let db = (b.position - ball_pos).norm_squared();
+                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                })
+                .map(|p| p.id);
+
+            if let Some(player_id) = kickoff_player_id {
+                field.ball.current_owner = Some(player_id);
+                field.ball.claim_cooldown = 120;
+                field.ball.flags.in_flight_state = 120;
+                field.ball.contested_claim_count = 0;
+            }
+        }
+
+        field.ball.goal_scored = false;
+        field.ball.kickoff_team_side = None;
+        context.record_goal_tick();
     }
 
     pub fn write_match_positions(
@@ -431,12 +402,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 if let Some(player_in_id) = sub_id {
                     // Save subbed-out player's stats before they're replaced
                     if let Some(player_out) = field.get_player(*player_out_id) {
-                        let goals = player_out.statistics.items.iter()
-                            .filter(|i| i.stat_type == MatchStatisticType::Goal && !i.is_auto_goal)
-                            .count() as u16;
-                        let assists = player_out.statistics.items.iter()
-                            .filter(|i| i.stat_type == MatchStatisticType::Assist)
-                            .count() as u16;
+                        let goals = player_out.statistics.goals_count();
+                        let assists = player_out.statistics.assists_count();
 
                         context.substituted_out_stats.push((*player_out_id, PlayerMatchEndStats {
                             shots_on_target: player_out.memory.shots_on_target as u16,
@@ -660,58 +627,30 @@ pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in me
 
 impl GoalPosition {
     pub fn is_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        // Ball must be below the crossbar to count as a goal
         if ball_position.z > GOAL_HEIGHT {
             return None;
         }
-
-        // Check if ball has crossed or reached the left goal line (x <= 0)
-        if ball_position.x <= self.left.x {
-            let top_goal_bound = self.left.y - GOAL_WIDTH;
-            let bottom_goal_bound = self.left.y + GOAL_WIDTH;
-
-            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
-                return Some(GoalSide::Home);
-            }
-        }
-
-        // Check if ball has crossed or reached the right goal line (x >= field_width)
-        if ball_position.x >= self.right.x {
-            let top_goal_bound = self.right.y - GOAL_WIDTH;
-            let bottom_goal_bound = self.right.y + GOAL_WIDTH;
-
-            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
-                return Some(GoalSide::Away);
-            }
-        }
-
-        None
+        self.check_goal_line(ball_position)
     }
 
     /// Check if ball crossed the goal line within goal width but ABOVE the crossbar.
     /// Returns which side the ball went over (goal kick for the defending team).
     pub fn is_over_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        // Only triggers when ball is above the crossbar
         if ball_position.z <= GOAL_HEIGHT {
             return None;
         }
+        self.check_goal_line(ball_position)
+    }
 
-        // Check left goal line
+    fn check_goal_line(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
         if ball_position.x <= self.left.x {
-            let top_goal_bound = self.left.y - GOAL_WIDTH;
-            let bottom_goal_bound = self.left.y + GOAL_WIDTH;
-
-            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
+            if (self.left.y - GOAL_WIDTH..=self.left.y + GOAL_WIDTH).contains(&ball_position.y) {
                 return Some(GoalSide::Home);
             }
         }
 
-        // Check right goal line
         if ball_position.x >= self.right.x {
-            let top_goal_bound = self.right.y - GOAL_WIDTH;
-            let bottom_goal_bound = self.right.y + GOAL_WIDTH;
-
-            if ball_position.y >= top_goal_bound && ball_position.y <= bottom_goal_bound {
+            if (self.right.y - GOAL_WIDTH..=self.right.y + GOAL_WIDTH).contains(&ball_position.y) {
                 return Some(GoalSide::Away);
             }
         }
@@ -773,8 +712,8 @@ impl MatchPlayerCollection {
         self.players.get(&player_id)
     }
 
-    pub fn raw_players(&self) -> Vec<&MatchPlayer> {
-        self.players.values().collect()
+    pub fn raw_players(&self) -> impl Iterator<Item = &MatchPlayer> {
+        self.players.values()
     }
 
     pub fn remove_player(&mut self, player_id: u32) {

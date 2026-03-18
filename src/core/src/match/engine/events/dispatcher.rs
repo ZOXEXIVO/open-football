@@ -65,7 +65,17 @@ pub struct EventDispatcher;
 
 impl EventDispatcher {
     pub fn dispatch(
-        events: Vec<Event>,
+        events: &mut EventCollection,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+        process_remaining_events: bool,
+    ) {
+        Self::dispatch_iter(events.drain(), field, context, match_data, process_remaining_events);
+    }
+
+    fn dispatch_iter(
+        events: impl Iterator<Item = Event>,
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
@@ -112,8 +122,8 @@ impl EventDispatcher {
             }
         }
 
-        if process_remaining_events {
-            Self::dispatch(remaining_events, field, context, match_data, false)
+        if process_remaining_events && !remaining_events.is_empty() {
+            Self::dispatch_iter(remaining_events.into_iter(), field, context, match_data, false)
         }
     }
 }

@@ -9,7 +9,18 @@ use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::Player;
 use chrono::{Duration, NaiveDateTime};
+use std::collections::HashMap;
 use std::time::Instant;
+
+/// Lightweight country info for nationality lookups.
+/// Covers ALL countries (not just simulation participants).
+#[derive(Clone, Debug)]
+pub struct CountryInfo {
+    pub id: u32,
+    pub code: String,
+    pub slug: String,
+    pub name: String,
+}
 
 pub struct FootballSimulator;
 
@@ -73,11 +84,25 @@ pub struct SimulatorData {
 
     pub watchlist: Vec<u32>,
 
-    pub global_competitions: GlobalCompetitions
+    pub global_competitions: GlobalCompetitions,
+
+    /// All countries by id (for nationality lookups — includes countries without active leagues)
+    pub country_info: HashMap<u32, CountryInfo>,
 }
 
 impl SimulatorData {
     pub fn new(date: NaiveDateTime, continents: Vec<Continent>, global_competitions: GlobalCompetitions) -> Self {
+        // Build country_info from simulation participants
+        let country_info: HashMap<u32, CountryInfo> = continents.iter()
+            .flat_map(|cont| &cont.countries)
+            .map(|c| (c.id, CountryInfo {
+                id: c.id,
+                code: c.code.clone(),
+                slug: c.slug.clone(),
+                name: c.name.clone(),
+            }))
+            .collect();
+
         let mut data = SimulatorData {
             continents,
             date,
@@ -85,7 +110,8 @@ impl SimulatorData {
             indexes: None,
             match_played: false,
             watchlist: Vec::new(),
-            global_competitions
+            global_competitions,
+            country_info,
         };
 
         let mut indexes = SimulatorDataIndexes::new();
@@ -97,6 +123,12 @@ impl SimulatorData {
         data.init_league_tables();
 
         data
+    }
+
+    /// Register country info for countries that may not have active leagues in the simulation.
+    /// Called by the database generator to ensure nationality lookups always succeed.
+    pub fn add_country_info(&mut self, id: u32, code: String, slug: String, name: String) {
+        self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name });
     }
 
     /// Initialize all league tables with their teams so tables are populated from the start.

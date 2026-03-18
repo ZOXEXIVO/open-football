@@ -1,6 +1,6 @@
 {
   "id": 500,
-  "enabled": true,
+  "enabled": false,
   "slug": "icelandic-urvalsdeild",
   "name": "Urvalsdeild",
   "reputation": 3200,

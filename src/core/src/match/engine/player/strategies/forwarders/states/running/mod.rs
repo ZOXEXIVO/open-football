@@ -39,26 +39,32 @@ impl StateProcessingHandler for ForwardRunningState {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-            // Priority 0: Point-blank range — MUST shoot regardless of clear shot
-            // Prevents running into the goalkeeper
+            // Priority 0: Point-blank range — MUST shoot to avoid running into the goalkeeper
             if distance_to_goal <= POINT_BLANK_DISTANCE {
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                // Even at point blank, very poor finishers may try to pass
+                if finishing > 0.3 || !ctx.players().teammates().nearby(50.0).any(|_| true) {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
+            }
+
+            // Priority 0.5: In shooting range with clear shot — SHOOT
+            if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
-            // Priority 0.5: In shooting range — SHOOT
-            if ctx.player().shooting().in_shooting_range() {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
-            }
-
-            // Priority 0.6: Unopposed approach — shoot from reasonable range when no defenders blocking
+            // Priority 0.6: Unopposed approach — shoot from close range with decent finishing
             if distance_to_goal < CLOSE_RANGE_DISTANCE && self.has_open_space_ahead(ctx) {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                if finishing > 0.45 {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Shooting,
+                    ));
+                }
             }
 
             // Priority 0.7: Long-range shooting — skilled players shoot from distance
@@ -204,10 +210,8 @@ impl StateProcessingHandler for ForwardRunningState {
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
             // But allow extended runs when advancing toward goal with open space
             if ctx.in_state_time > 120 {
-                if distance_to_goal < SHOOTING_ZONE_DISTANCE {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-                }
-                if distance_to_goal < MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot() {
+                let finishing = ctx.player.skills.technical.finishing / 20.0;
+                if distance_to_goal < SHOOTING_ZONE_DISTANCE && finishing > 0.4 && ctx.player().has_clear_shot() {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));

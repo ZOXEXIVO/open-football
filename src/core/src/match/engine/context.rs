@@ -87,7 +87,6 @@ impl MatchContext {
         for player in self
             .players
             .raw_players()
-            .iter()
             .filter(|p| !p.statistics.is_empty())
         {
             for stat in &player.statistics.items {

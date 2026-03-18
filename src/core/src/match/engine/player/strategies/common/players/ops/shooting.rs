@@ -33,29 +33,29 @@ impl<'p> ShootingOperationsImpl<'p> {
         let shooting_skill = skills.technical.finishing / 20.0;
         let long_shot_skill = skills.technical.long_shots / 20.0;
 
-        // Very close range - even poor finishers should shoot!
+        // Very close range - most players should shoot
         if distance_to_goal <= VERY_CLOSE_RANGE_DISTANCE {
-            return true;
+            return shooting_skill >= 0.25; // finishing >= 5
         }
 
-        // Close range shots — most players should shoot
+        // Close range shots — need some finishing ability
         if distance_to_goal <= CLOSE_RANGE_DISTANCE {
-            return shooting_skill >= 0.3; // finishing >= 6
+            return shooting_skill >= 0.45; // finishing >= 9
         }
 
-        // Medium range shots - requires decent finishing
+        // Medium range shots - requires good finishing
         if distance_to_goal <= OPTIMAL_SHOOTING_DISTANCE {
-            return shooting_skill >= 0.45; // finishing >= 9
+            return shooting_skill >= 0.55; // finishing >= 11
         }
 
         // Medium-long range shots — need good long shot ability
         if distance_to_goal <= MEDIUM_RANGE_DISTANCE {
-            return long_shot_skill >= 0.5 && shooting_skill >= 0.4;
+            return long_shot_skill >= 0.6 && shooting_skill >= 0.5;
         }
 
-        // Long range shots — skilled players
+        // Long range shots — skilled players only
         if distance_to_goal <= MAX_SHOOTING_DISTANCE {
-            return long_shot_skill >= 0.6 && shooting_skill >= 0.45;
+            return long_shot_skill >= 0.7 && shooting_skill >= 0.55;
         }
 
         false

@@ -933,7 +933,7 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 45.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 8.0; // Maximum realistic shot velocity per tick
+        const MAX_SHOT_VELOCITY: f32 = 5.6; // Maximum realistic shot velocity per tick
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -975,15 +975,16 @@ impl PlayerEventDispatcher {
         }
 
         // Calculate overall shooting accuracy (0.0 to 1.0)
+        // Composure always dampens accuracy — even great finishers miss under pressure
         let base_accuracy = if horizontal_distance > 100.0 {
             // Long shots depend more on long_shot skill and technique
-            (long_shot_skill * 0.5 + technique_skill * 0.3 + finishing_skill * 0.2) * composure_skill
+            (long_shot_skill * 0.5 + technique_skill * 0.3 + finishing_skill * 0.2) * composure_skill * 0.85
         } else if horizontal_distance > 50.0 {
             // Medium range - balanced
-            (finishing_skill * 0.4 + technique_skill * 0.3 + long_shot_skill * 0.3) * composure_skill
+            (finishing_skill * 0.4 + technique_skill * 0.3 + long_shot_skill * 0.3) * composure_skill * 0.90
         } else {
-            // Close range - finishing is key
-            finishing_skill * 0.6 + technique_skill * 0.2 + composure_skill * 0.2
+            // Close range - finishing is key, but still imperfect
+            (finishing_skill * 0.55 + technique_skill * 0.2 + composure_skill * 0.25) * 0.92
         };
 
         // Calculate target point within goal (aim for corners/areas based on skill)
@@ -1007,27 +1008,27 @@ impl PlayerEventDispatcher {
         // Calculate positional error (how far from intended target)
         // Distance penalty multiplier for base_accuracy — close range should be very accurate
         let distance_penalty = if horizontal_distance > 200.0 {
-            0.12
+            0.10
         } else if horizontal_distance > 150.0 {
-            0.20
+            0.16
         } else if horizontal_distance > 100.0 {
-            0.32
+            0.26
         } else if horizontal_distance > 70.0 {
-            0.50
+            0.42
         } else if horizontal_distance > 50.0 {
-            0.68
+            0.58
         } else if horizontal_distance > 30.0 {
-            0.85
+            0.74
         } else if horizontal_distance > 15.0 {
-            0.93
+            0.85
         } else {
-            0.98
+            0.92
         };
         let adjusted_accuracy = base_accuracy * distance_penalty;
 
-        // Base error: elite close-range ±2-5 units, poor long-range ±30-60 units
-        let base_position_error = 45.0 * distance_error_factor * (1.0 - adjusted_accuracy);
-        let min_error = if horizontal_distance < 30.0 { 2.0 } else if horizontal_distance < 60.0 { 4.0 } else { 8.0 };
+        // Base error: elite close-range ±4-8 units, poor long-range ±35-70 units
+        let base_position_error = 50.0 * distance_error_factor * (1.0 - adjusted_accuracy);
+        let min_error = if horizontal_distance < 30.0 { 4.0 } else if horizontal_distance < 60.0 { 7.0 } else { 12.0 };
         let max_y_error = base_position_error.clamp(min_error, 90.0);
 
         // Add random error to y-coordinate
@@ -1035,17 +1036,17 @@ impl PlayerEventDispatcher {
         let mut actual_y_target = ideal_y_target + y_error;
 
         // Wide miss chance: distance-dependent — close range is much more accurate
-        // Real football: ~50% of all shots miss the frame, but close range (<15m) is ~25%
+        // Real football: ~50% of all shots miss the frame, even close range ~30%
         let wide_miss_base = if horizontal_distance < 30.0 {
-            0.04 // Very close — skilled players rarely miss the frame
+            0.10 // Very close — still miss sometimes under pressure
         } else if horizontal_distance < 60.0 {
-            0.10
+            0.18
         } else if horizontal_distance < 100.0 {
-            0.22
+            0.28
         } else {
-            0.35 // Long range — high base miss rate
+            0.40 // Long range — high base miss rate
         };
-        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.4 + wide_miss_base;
+        let wide_miss_chance = (1.0 - adjusted_accuracy) * 0.45 + wide_miss_base;
         if rng.random_range(0.0f32..1.0) < wide_miss_chance {
             // Shot goes wide — force y outside goal posts
             let extra_wide = rng.random_range(GOAL_WIDTH * 0.2..GOAL_WIDTH * 1.5);
@@ -1125,15 +1126,15 @@ impl PlayerEventDispatcher {
         // Over-the-bar miss chance: distance-dependent
         // Close range: players keep shots low. Long range: more ballooning
         let over_bar_base = if horizontal_distance < 30.0 {
-            0.03 // Close range — very rarely sky it
+            0.06 // Close range — still can sky it
         } else if horizontal_distance < 60.0 {
-            0.08
+            0.12
         } else if horizontal_distance < 100.0 {
-            0.14
+            0.20
         } else {
-            0.22 // Long range — more likely to balloon over
+            0.30 // Long range — more likely to balloon over
         };
-        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.35 + over_bar_base;
+        let over_bar_chance = (1.0 - adjusted_accuracy) * 0.40 + over_bar_base;
         let z_velocity = if rng.random_range(0.0f32..1.0) < over_bar_chance {
             // Shot goes over the bar — set z high enough to clear crossbar (GOAL_HEIGHT = 8.0)
             // Ball needs to reach height > 8.0 during flight, so z_velocity must be significant

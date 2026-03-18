@@ -102,8 +102,8 @@ impl StateProcessingHandler for DefenderPassingState {
             ));
         }
 
-        // If viable to dribble out of pressure
-        if self.can_dribble_effectively(ctx) {
+        // If viable to dribble out of pressure (wait before bailing to prevent Running↔Passing oscillation)
+        if ctx.in_state_time > 20 && self.can_dribble_effectively(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Running,
             ));

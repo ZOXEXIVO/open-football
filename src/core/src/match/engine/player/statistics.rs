@@ -22,6 +22,18 @@ impl MatchPlayerStatistics {
         self.items.is_empty()
     }
 
+    pub fn goals_count(&self) -> u16 {
+        self.items.iter()
+            .filter(|i| i.stat_type == MatchStatisticType::Goal && !i.is_auto_goal)
+            .count() as u16
+    }
+
+    pub fn assists_count(&self) -> u16 {
+        self.items.iter()
+            .filter(|i| i.stat_type == MatchStatisticType::Assist)
+            .count() as u16
+    }
+
     pub fn add_goal(&mut self, match_second: u64, is_auto_goal: bool) {
         self.items.push(MatchPlayerStatisticsItem {
             stat_type: MatchStatisticType::Goal,

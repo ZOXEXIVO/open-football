@@ -383,7 +383,23 @@ impl PlayerGenerator {
         let day = IntegerUtils::random(1, 29) as u32;
         let age = (now.year() as u32).saturating_sub(year);
 
-        // FM-style salary: exponential curve based on reputation.
+        let first_name = self.generate_first_name();
+        let last_name = self.generate_last_name();
+        let full_name = match self.generate_nickname() {
+            Some(nickname) => FullName::with_nickname(first_name, last_name, nickname),
+            None => FullName::new(first_name, last_name),
+        };
+
+        // Generate PA first so skills can target the right ability level
+        let positions = Self::generate_positions(position);
+        let potential_ability = Self::generate_potential_ability(rep_factor, age);
+
+        // Skills target a CA appropriate for this PA and age, not just team rep
+        let skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
+        let player_attributes =
+            Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
+
+        // FM-style salary: exponential curve based on reputation and ability.
         // Salaries in USD/year (annual). Massive gaps between tiers:
         //   rep_factor ~0.05 (amateur)     →    1K -    3K
         //   rep_factor ~0.15 (Chad/Malta)  →    3K -   12K
@@ -396,6 +412,12 @@ impl PlayerGenerator {
         let curve = rep_factor * rep_factor * rep_factor; // cubic — steep growth at top
         let salary_min = (1_000.0 + curve * 1_200_000.0) as i32;
         let salary_max = (3_000.0 + curve * 12_000_000.0) as i32;
+
+        // Ability factor: salary scales with current ability (quadratic)
+        // CA 200 → 1.0, CA 100 → 0.25, CA 50 → 0.0625
+        // Keeps low-ability players from earning elite wages at big clubs
+        let ca_normalized = player_attributes.current_ability as f64 / 200.0;
+        let ability_salary_factor = (ca_normalized * ca_normalized).clamp(0.05, 1.0);
 
         // Age factor: peak earners 25-30, young players earn less
         let age_salary_factor = match age {
@@ -415,7 +437,7 @@ impl PlayerGenerator {
             _ => 0.30,
         };
 
-        let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64 * age_salary_factor) as u32;
+        let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64 * age_salary_factor * ability_salary_factor) as u32;
         let salary = if is_youth {
             (base_salary / 10).max(200)
         } else {
@@ -429,22 +451,6 @@ impl PlayerGenerator {
         } else {
             PlayerClubContract::new(salary, expiration)
         };
-
-        let first_name = self.generate_first_name();
-        let last_name = self.generate_last_name();
-        let full_name = match self.generate_nickname() {
-            Some(nickname) => FullName::with_nickname(first_name, last_name, nickname),
-            None => FullName::new(first_name, last_name),
-        };
-
-        // Generate PA first so skills can target the right ability level
-        let positions = Self::generate_positions(position);
-        let potential_ability = Self::generate_potential_ability(rep_factor, age);
-
-        // Skills target a CA appropriate for this PA and age, not just team rep
-        let skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
-        let player_attributes =
-            Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
         // Native languages based on player's nationality
         let native_languages: Vec<core::PlayerLanguage> = core::Language::from_country_code(

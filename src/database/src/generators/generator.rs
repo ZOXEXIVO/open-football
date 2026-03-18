@@ -78,7 +78,20 @@ impl DatabaseGenerator {
                 )
             }).collect();
 
-        SimulatorData::new(current_date, continents, global_competitions)
+        let mut simulator_data = SimulatorData::new(current_date, continents, global_competitions);
+
+        // Register ALL countries so nationality lookups always succeed
+        // (simulation only loads countries with active leagues)
+        for country in &data.countries {
+            simulator_data.add_country_info(
+                country.id,
+                country.code.clone(),
+                country.slug.clone(),
+                country.name.clone(),
+            );
+        }
+
+        simulator_data
     }
 
     fn generate_countries(continent: &ContinentEntity, data: &DatabaseEntity) -> Vec<Country> {

@@ -93,8 +93,8 @@ impl MatchResultRaw {
         home_team_players: &FieldSquad,
         away_team_players: &FieldSquad,
     ) {
-        self.left_team_players = FieldSquad::from(home_team_players);
-        self.right_team_players = FieldSquad::from(away_team_players);
+        self.left_team_players = home_team_players.clone();
+        self.right_team_players = away_team_players.clone();
     }
 }
 
@@ -113,15 +113,6 @@ impl FieldSquad {
             main: Vec::new(),
             substitutes: Vec::new(),
             substitutes_used: Vec::new(),
-        }
-    }
-
-    pub fn from(field_squad: &FieldSquad) -> Self {
-        FieldSquad {
-            team_id: field_squad.team_id,
-            main: field_squad.main.to_vec(),
-            substitutes: field_squad.substitutes.to_vec(),
-            substitutes_used: field_squad.substitutes_used.to_vec(),
         }
     }
 

@@ -60,10 +60,8 @@ impl StateProcessingHandler for DefenderRunningState {
                 return None;
             }
 
-            if self.should_pass(ctx) {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Passing,
-                ));
+            if let Some(result) = self.try_pass(ctx) {
+                return Some(result);
             }
         } else {
             // COUNTER-PRESS: Just lost possession — press immediately to win ball back
@@ -366,20 +364,22 @@ impl DefenderRunningState {
         total_nearby >= 3
     }
 
-    pub fn should_pass(&self, ctx: &StateProcessingContext) -> bool {
+    /// Try to pass the ball. Returns a state change with pass event for direct passes
+    /// (build-up, switch play), or transitions to Passing state for pressure situations.
+    fn try_pass(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Under direct pressure — skip wait timers and pass immediately
         let under_pressure = ctx.players().opponents().exists(15.0);
 
         if !under_pressure {
             // ANTI-LOOP: Don't pass immediately after entering Running state (only when safe).
             if ctx.in_state_time < 10 {
-                return false;
+                return None;
             }
 
             // Hold the ball briefly after reclaiming (only when safe)
             let ownership_duration = ctx.tick_context.ball.ownership_duration;
             if ownership_duration < 5 {
-                return false;
+                return None;
             }
         }
 
@@ -403,7 +403,7 @@ impl DefenderRunningState {
                     opp_near_t < 2 && ctx.player().has_clear_pass(t.id)
                 });
             if !has_open_target {
-                return false; // No open target — carry the ball out
+                return None; // No open target — carry the ball out
             }
         }
 
@@ -417,49 +417,49 @@ impl DefenderRunningState {
             if dist <= 12.0 { opp_within_12 = true; }
         }
 
-        // Only pass under genuine pressure — opponent closing in
+        // Under direct pressure — delegate to Passing state for detailed evaluation
         if opp_within_12 {
-            return true;
+            return Some(StateChangeResult::with_defender_state(DefenderState::Passing));
         }
 
-        // If teammates are tired, carry the ball instead of passing to let them rest
-        // Only pass if under actual pressure
+        // If teammates are tired and under moderate pressure — delegate to Passing
         if opp_within_15 && self.are_teammates_tired(ctx) {
-            return true;
+            return Some(StateChangeResult::with_defender_state(DefenderState::Passing));
         }
 
-        // BUILD FROM BACK: If no opponents within 30 units and team controls ball,
-        // look for progressive pass (advance play toward opponent goal)
+        // BUILD FROM BACK: emit pass directly (we find the specific target here)
         if !opp_within_30 && ctx.team().is_control_ball() {
-            let player_pos = ctx.player.position;
-            let goal_pos = ctx.player().opponent_goal_position();
-            let to_goal = (goal_pos - player_pos).normalize();
-
-            // Find a teammate ahead who is in space
-            let has_progressive_target = ctx.players().teammates().nearby(200.0)
-                .any(|t| {
-                    let to_t = (t.position - player_pos).normalize();
-                    let is_ahead = to_t.dot(&to_goal) > 0.2;
-                    if !is_ahead { return false; }
-                    let in_space = ctx.tick_context.distances
-                        .opponents(t.id, 15.0).count() < 2;
-                    in_space && ctx.player().has_clear_pass(t.id)
-                });
-            if has_progressive_target {
-                return true;
+            if let Some(target) = self.find_progressive_pass_target(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_BUILD_FROM_BACK")
+                            .build(ctx),
+                    )),
+                ));
             }
         }
 
-        let game_vision_skill = ctx.player.skills.mental.vision;
-        let game_vision_threshold = 14.0;
-
-        if game_vision_skill >= game_vision_threshold {
-            if let Some(_) = self.find_open_teammate_on_opposite_side(ctx) {
-                return true;
+        // High vision: switch play to opposite flank
+        if ctx.player.skills.mental.vision >= 14.0 {
+            if let Some(target) = self.find_open_teammate_on_opposite_side(ctx) {
+                return Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(target.id)
+                            .with_reason("DEF_SWITCH_PLAY")
+                            .build(ctx),
+                    )),
+                ));
             }
         }
 
-        false
+        None
     }
 
     /// Check if nearby teammates are tired (average condition below threshold)
@@ -480,6 +480,54 @@ impl DefenderRunningState {
 
         let avg_condition = total_condition / count;
         avg_condition < 40
+    }
+
+    /// Find the best progressive pass target: teammate ahead in space with clear pass lane.
+    /// Returns the highest-scored option factoring direction, position group, and space.
+    fn find_progressive_pass_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+
+        for t in ctx.players().teammates().nearby(200.0) {
+            if t.tactical_positions.is_goalkeeper() {
+                continue;
+            }
+
+            let to_t = (t.position - player_pos).normalize();
+            let forward = to_t.dot(&to_goal);
+            if forward <= 0.2 {
+                continue; // Not ahead enough
+            }
+
+            let dist = (t.position - player_pos).magnitude();
+            if dist < 30.0 {
+                continue; // Too close — weak passes create claim loops
+            }
+
+            let opponents_near = ctx.tick_context.distances
+                .opponents(t.id, 15.0).count();
+            if opponents_near >= 2 {
+                continue; // Not in space
+            }
+
+            if !ctx.player().has_clear_pass(t.id) {
+                continue;
+            }
+
+            let mut score = forward * 40.0;
+            if t.tactical_positions.is_midfielder() { score += 20.0; }
+            if t.tactical_positions.is_forward() { score += 30.0; }
+            if opponents_near == 0 { score += 15.0; }
+
+            if best.as_ref().is_none_or(|(_, s)| score > *s) {
+                best = Some((t, score));
+            }
+        }
+
+        best.map(|(t, _)| t)
     }
 
     fn find_open_teammate_on_opposite_side(

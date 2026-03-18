@@ -6,9 +6,9 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const DIVE_DISTANCE: f32 = 30.0; // Distance to attempt diving save
-const CATCH_DISTANCE: f32 = 30.0; // Distance to attempt catching
-const PUNCH_DISTANCE: f32 = 15.0; // Distance to attempt punching
+const DIVE_DISTANCE: f32 = 40.0; // Distance to attempt diving save
+const CATCH_DISTANCE: f32 = 35.0; // Distance to attempt catching
+const PUNCH_DISTANCE: f32 = 18.0; // Distance to attempt punching
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPreparingForSaveState {}
@@ -116,7 +116,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
 
         // Sprint speed boost — GK must react explosively to shots
         // Reflexes + agility determine reaction speed
-        let speed_boost = 1.6 + agility * 0.5 + reflexes * 0.4; // 1.6x - 2.5x
+        let speed_boost = 1.8 + agility * 0.6 + reflexes * 0.5; // 1.8x - 2.9x
 
         Some(
             SteeringBehavior::Pursuit {
@@ -165,17 +165,16 @@ impl GoalkeeperPreparingForSaveState {
         // Calculate time to reach
         let time_to_ball = ball_distance / ball_speed.max(0.5);
 
-        // Dive decisions calibrated for actual shot speeds (max ~2.0/tick)
-        // Elite GKs react from much further out and faster
+        // Dive decisions — elite GKs react from much further out and faster
         if ball_speed > 1.5 {
             // Strong shot — dive immediately (skilled keepers react further out)
-            ball_distance < (25.0 + reflexes * 20.0 + agility * 8.0) && time_to_ball < (15.0 + reflexes * 18.0)
+            ball_distance < (30.0 + reflexes * 25.0 + agility * 10.0) && time_to_ball < (18.0 + reflexes * 22.0)
         } else if ball_speed > 0.8 {
             // Medium speed — dive if in range
-            ball_distance < (20.0 + agility * 15.0 + reflexes * 8.0) && bravery > 0.15
+            ball_distance < (25.0 + agility * 18.0 + reflexes * 10.0) && bravery > 0.10
         } else {
             // Slow rolling ball — dive if close
-            ball_distance < (18.0 + agility * 8.0) && (reflexes + agility) > 0.3
+            ball_distance < (20.0 + agility * 10.0) && (reflexes + agility) > 0.2
         }
     }
 

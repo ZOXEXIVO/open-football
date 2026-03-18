@@ -6,8 +6,8 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const CLAIM_BALL_DISTANCE: f32 = 15.0;
-const MAX_COMING_OUT_DISTANCE: f32 = 50.0; // Maximum distance to pursue ball (was 120 — caused GK to chase to midfield)
+const CLAIM_BALL_DISTANCE: f32 = 20.0;
+const MAX_COMING_OUT_DISTANCE: f32 = 60.0; // Maximum distance to pursue ball
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperComingOutState {}

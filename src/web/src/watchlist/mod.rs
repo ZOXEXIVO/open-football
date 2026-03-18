@@ -85,7 +85,11 @@ pub async fn watchlist_page_action(
         .filter_map(|&player_id| {
             // Try active player first, then retired
             if let Some((player, team)) = simulator_data.player_with_team(player_id) {
-                let country = simulator_data.country(player.country_id)?;
+                let (country_code, country_name, country_slug) = simulator_data.country(player.country_id)
+                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+                    .or_else(|| simulator_data.country_info.get(&player.country_id)
+                        .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
+                    .unwrap_or_default();
                 let position = player.positions.display_positions().join(", ");
                 let league = team.league_id.and_then(|id| simulator_data.league(id));
                 let head_coach = team.staffs.head_coach();
@@ -95,9 +99,9 @@ pub async fn watchlist_page_action(
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,
-                    country_code: country.code.clone(),
-                    country_name: country.name.clone(),
-                    country_slug: country.slug.clone(),
+                    country_code,
+                    country_name,
+                    country_slug,
                     age: DateUtils::age(player.birth_date, now),
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars_by_staff(
@@ -123,7 +127,11 @@ pub async fn watchlist_page_action(
                     retired: false,
                 })
             } else if let Some(player) = simulator_data.retired_player(player_id) {
-                let country = simulator_data.country(player.country_id)?;
+                let (country_code, country_name, country_slug) = simulator_data.country(player.country_id)
+                    .map(|c| (c.code.clone(), c.name.clone(), c.slug.clone()))
+                    .or_else(|| simulator_data.country_info.get(&player.country_id)
+                        .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
+                    .unwrap_or_default();
                 let position = player.positions.display_positions().join(", ");
 
                 Some(WatchlistPlayerDto {
@@ -131,9 +139,9 @@ pub async fn watchlist_page_action(
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,
-                    country_code: country.code.clone(),
-                    country_name: country.name.clone(),
-                    country_slug: country.slug.clone(),
+                    country_code,
+                    country_name,
+                    country_slug,
                     age: DateUtils::age(player.birth_date, now),
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars(player),

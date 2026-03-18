@@ -865,11 +865,11 @@ impl Ball {
         let mental_skills = &player.skills.mental;
         let physical_skills = &player.skills.physical;
 
-        let tackling_weight = 0.4;
-        let aggression_weight = 0.2;
-        let bravery_weight = 0.1;
-        let strength_weight = 0.2;
-        let agility_weight = 0.1;
+        let tackling_weight = 0.45;
+        let aggression_weight = 0.15;
+        let bravery_weight = 0.10;
+        let strength_weight = 0.20;
+        let agility_weight = 0.10;
 
         technical_skills.tackling * tackling_weight
             + mental_skills.aggression * aggression_weight

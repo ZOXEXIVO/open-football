@@ -9,7 +9,7 @@ use crate::r#match::{
 use nalgebra::Vector3;
 use rand::RngExt;
 
-const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Close down earlier — aggressive defending
+const TACKLE_DISTANCE_THRESHOLD: f32 = 25.0; // Close down earlier — aggressive defending
 const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained defenders foul less
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
@@ -184,8 +184,10 @@ impl DefenderTacklingState {
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
         let aggression = ctx.player.skills.mental.aggression / 20.0;
         let composure = ctx.player.skills.mental.composure / 20.0;
+        let strength = ctx.player.skills.physical.strength / 20.0;
 
-        let overall_skill = (tackling_skill + composure) / 2.0;
+        // Defender composite: tackling is dominant, strength and composure support
+        let overall_skill = tackling_skill * 0.50 + strength * 0.25 + composure * 0.25;
 
         let opponent_dribbling = ctx.player().skills(opponent.id).technical.dribbling / 20.0;
         let opponent_agility = ctx.player().skills(opponent.id).physical.agility / 20.0;
@@ -193,8 +195,8 @@ impl DefenderTacklingState {
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
         // Defenders have home advantage in tackles — they pick the moment
-        let success_chance = 0.55 + skill_difference * 0.35;
-        let clamped_success_chance = success_chance.clamp(0.15, 0.92);
+        let success_chance = 0.62 + skill_difference * 0.40;
+        let clamped_success_chance = success_chance.clamp(0.18, 0.95);
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 

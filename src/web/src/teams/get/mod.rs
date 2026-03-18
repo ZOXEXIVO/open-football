@@ -118,8 +118,12 @@ pub async fn team_get_action(
         .players()
         .iter()
         .filter(|p| !p.statuses.get().contains(&PlayerStatusType::Ret))
-        .filter_map(|p| {
-            let country = simulator_data.country(p.country_id)?;
+        .map(|p| {
+            let (country_slug, country_code, country_name) = simulator_data.country(p.country_id)
+                .map(|c| (c.slug.clone(), c.code.clone(), c.name.clone()))
+                .or_else(|| simulator_data.country_info.get(&p.country_id)
+                    .map(|i| (i.slug.clone(), i.code.clone(), i.name.clone())))
+                .unwrap_or_default();
             let position = p.positions.display_positions().join(", ");
 
             let is_loan = p.is_on_loan();
@@ -130,7 +134,7 @@ pub async fn team_get_action(
 
             let has_recent_decision = has_decision_within_days(p, now, 30);
 
-            Some(TeamPlayer {
+            TeamPlayer {
                 id: p.id,
                 first_name: p.full_name.display_first_name().to_string(),
                 position_sort: p.position(),
@@ -144,9 +148,9 @@ pub async fn team_get_action(
                 is_loan,
                 is_loaned_out: false,
                 is_youth,
-                country_slug: country.slug.clone(),
-                country_code: country.code.clone(),
-                country_name: country.name.clone(),
+                country_slug,
+                country_code,
+                country_name,
                 last_name: p.full_name.display_last_name().to_string(),
                 conditions: get_conditions(p),
                 value: FormattingUtils::format_money(p.value(now, league_rep, club_rep)),
@@ -159,7 +163,7 @@ pub async fn team_get_action(
                 average_rating: p.statistics.combined_rating_str(&p.friendly_statistics),
                 has_recent_decision,
                 status: PlayerStatusDto::new(p.statuses.get()),
-            })
+            }
         })
         .collect();
 
@@ -177,7 +181,11 @@ pub async fn team_get_action(
 
                         if !is_loaned_from_this_team { continue; }
 
-                        let player_country = simulator_data.country(player.country_id);
+                        let (country_slug, country_code, country_name) = simulator_data.country(player.country_id)
+                            .map(|c| (c.slug.clone(), c.code.clone(), c.name.clone()))
+                            .or_else(|| simulator_data.country_info.get(&player.country_id)
+                                .map(|i| (i.slug.clone(), i.code.clone(), i.name.clone())))
+                            .unwrap_or_default();
                         let position = player.positions.display_positions().join(", ");
 
                         players.push(TeamPlayer {
@@ -194,9 +202,9 @@ pub async fn team_get_action(
                             is_loan: false,
                             is_loaned_out: true,
                             is_youth: false,
-                            country_slug: player_country.map(|c| c.slug.clone()).unwrap_or_default(),
-                            country_code: player_country.map(|c| c.code.clone()).unwrap_or_default(),
-                            country_name: player_country.map(|c| c.name.clone()).unwrap_or_default(),
+                            country_slug,
+                            country_code,
+                            country_name,
                             last_name: player.full_name.display_last_name().to_string(),
                             conditions: get_conditions(player),
                             value: FormattingUtils::format_money(player.value(now, league_rep, club_rep)),

@@ -21,9 +21,16 @@ impl StateProcessingHandler for ForwardShootingState {
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
-        // Only abort for very long range with no clear shot
-        // Close and medium range: always take the shot — keeper/save mechanics handle the rest
+        // Abort for very long range with no clear shot
         if distance_to_goal > 150.0 && !ctx.player().has_clear_shot() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Running,
+            ));
+        }
+
+        // Medium-long range: need decent finishing or clear shot to commit
+        let finishing = ctx.player.skills.technical.finishing / 20.0;
+        if distance_to_goal > 80.0 && finishing < 0.5 && !ctx.player().has_clear_shot() {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Running,
             ));

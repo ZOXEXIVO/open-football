@@ -32,7 +32,7 @@ impl PlayerValueCalculator {
             * league_club_factor
             * price_level as f64;
 
-        round_market_value(value.max(5_000.0))
+        round_market_value(value.max(500.0))
     }
 }
 

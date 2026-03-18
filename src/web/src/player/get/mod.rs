@@ -215,11 +215,14 @@ pub async fn player_get_action(
 
     // Try active player first
     if let Some((player, team)) = simulator_data.player_with_team(route_params.player_id) {
-        let country = simulator_data
-            .country(player.country_id)
-            .ok_or_else(|| {
-                ApiError::NotFound(format!("Country with ID {} not found", player.country_id))
-            })?;
+        // Resolve country: try simulation participant first, fall back to country_info map
+        let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
+            (country.slug.clone(), country.code.clone(), country.name.clone())
+        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
+            (info.slug.clone(), info.code.clone(), info.name.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
         let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
         let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
@@ -261,9 +264,9 @@ pub async fn player_get_action(
             age: player.age(now),
             team_slug: main_team_slug,
             team_name: main_team_name,
-            country_slug: country.slug.clone(),
-            country_code: country.code.clone(),
-            country_name: country.name.clone(),
+            country_slug,
+            country_code,
+            country_name,
             skills: get_skills(player),
             conditions: get_conditions(player),
             current_ability: get_current_ability_stars(player),
@@ -320,10 +323,13 @@ pub async fn player_get_action(
 
     // Try retired player
     if let Some(player) = simulator_data.retired_player(route_params.player_id) {
-        let country = simulator_data.country(player.country_id);
-        let country_slug = country.map(|c| c.slug.clone()).unwrap_or_default();
-        let country_code = country.map(|c| c.code.clone()).unwrap_or_default();
-        let country_name = country.map(|c| c.name.clone()).unwrap_or_default();
+        let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
+            (country.slug.clone(), country.code.clone(), country.name.clone())
+        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
+            (info.slug.clone(), info.code.clone(), info.name.clone())
+        } else {
+            (String::new(), String::new(), String::new())
+        };
 
         let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 

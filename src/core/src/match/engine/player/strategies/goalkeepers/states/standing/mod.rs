@@ -6,10 +6,10 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const DANGER_ZONE_RADIUS: f32 = 30.0;
-const CLOSE_DANGER_DISTANCE: f32 = 80.0;
-const MEDIUM_THREAT_DISTANCE: f32 = 150.0;
-const FAR_THREAT_DISTANCE: f32 = 250.0;
+const DANGER_ZONE_RADIUS: f32 = 35.0;
+const CLOSE_DANGER_DISTANCE: f32 = 100.0;
+const MEDIUM_THREAT_DISTANCE: f32 = 180.0;
+const FAR_THREAT_DISTANCE: f32 = 300.0;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperStandingState {}
