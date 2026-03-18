@@ -30,7 +30,7 @@ The goal is to get as close as possible to a real soccer simulation and based on
 [Mobile view example](https://open-football.org/en/leagues/italian-serie-a)
 
 
-<img src=".docs/images/mobile.jpg" alt="Mobile team page" width="300">
+<img src=".docs/images/mobile.jpg?v=1" alt="Mobile team page" width="300">
 
 [League page example](https://open-football.org/en/leagues/italian-serie-a)
 
