@@ -26,6 +26,17 @@ pub(crate) fn execute_transfer(
             selling_club_id, if is_loan { "loan" } else { "transfer" }, player_id);
         return;
     }
+
+    // Safety: can't loan a player who is already on loan
+    if is_loan {
+        let already_on_loan = data.player(player_id)
+            .map(|p| p.is_on_loan())
+            .unwrap_or(false);
+        if already_on_loan {
+            debug!("Blocked re-loan: player {} is already on loan", player_id);
+            return;
+        }
+    }
     if selling_country_id == buying_country_id {
         // Domestic — work within a single country
         if let Some(country) = data.country_mut(selling_country_id) {
@@ -124,6 +135,9 @@ pub(crate) fn execute_transfer_within_country(
         }
 
         country.transfer_market.complete_listings_for_player(player_id);
+        if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+            selling_club.transfer_plan.loan_out_candidates.retain(|c| c.player_id != player_id);
+        }
 
         debug!("Transfer completed: player {} from club {} to club {} for {}", player_id, selling_club_id, buying_club_id, fee);
     }
@@ -206,8 +220,6 @@ fn execute_loan_within_country(
         clear_transfer_statuses(&mut player);
 
         let loan_end = compute_loan_end(selling_league_id, country, date);
-        let salary = (loan_fee / 50.0).max(200.0) as u32;
-        player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id));
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             if !can_club_accept_player(buying_club) {
@@ -219,14 +231,21 @@ fn execute_loan_within_country(
                 }
                 return;
             }
+
+            let salary = (loan_fee / 50.0).max(200.0) as u32;
+            player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id));
+
             buying_club.finance.spend_from_transfer_budget(loan_fee);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
             }
         }
 
-        // Remove listing so the player can't be loaned again
+        // Remove listing and loan-out candidate so the player can't be loaned again
         country.transfer_market.complete_listings_for_player(player_id);
+        if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+            selling_club.transfer_plan.loan_out_candidates.retain(|c| c.player_id != player_id);
+        }
 
         debug!("Loan completed: player {} from club {} to club {} (fee: {})", player_id, selling_club_id, buying_club_id, loan_fee);
     }
@@ -401,9 +420,6 @@ fn execute_loan_across_countries(
 
     clear_transfer_statuses(&mut player);
 
-    let salary = (loan_fee / 50.0).max(200.0) as u32;
-    player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id));
-
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
         if !can_club_accept_player(buying_club) {
             debug!("Loan rejected: club {} squad full", buying_club_id);
@@ -416,6 +432,9 @@ fn execute_loan_across_countries(
             }
             return;
         }
+        let salary = (loan_fee / 50.0).max(200.0) as u32;
+        player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id));
+
         buying_club.finance.spend_from_transfer_budget(loan_fee);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);

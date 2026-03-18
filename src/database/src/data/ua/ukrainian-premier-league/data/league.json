@@ -1,5 +1,6 @@
 {
   "id": 200,
+  "enabled": true,
   "slug": "ukrainian-premier-league",
   "name": "Premier League",
   "reputation": 5500,

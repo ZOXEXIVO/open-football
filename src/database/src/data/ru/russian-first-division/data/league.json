@@ -1,5 +1,6 @@
 {
   "id": 51,
+  "enabled": true,
   "slug": "russian-first-division",
   "name": "First Division",
   "reputation": 4500,

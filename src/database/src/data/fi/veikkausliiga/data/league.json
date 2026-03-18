@@ -1,6 +1,6 @@
 {
   "id": 370,
-  "enabled": false,
+  "enabled": true,
   "slug": "veikkausliiga",
   "name": "Veikkausliiga",
   "reputation": 3600,

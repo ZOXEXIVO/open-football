@@ -1,6 +1,6 @@
 {
   "id": 101,
-  "enabled": false,
+  "enabled": true,
   "slug": "brazilian-serie-b",
   "name": "Serie B",
   "reputation": 5800,

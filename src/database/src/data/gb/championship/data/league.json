@@ -1,6 +1,6 @@
 {
   "id": 81,
-  "enabled": false,
+  "enabled": true,
   "slug": "championship",
   "name": "Championship",
   "reputation": 7000,

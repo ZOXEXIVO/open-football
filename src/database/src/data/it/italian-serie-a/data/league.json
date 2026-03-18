@@ -1,5 +1,6 @@
 {
   "id": 32,
+  "enabled": true,
   "slug": "italian-serie-a",
   "name": "Serie A",
   "reputation": 8750,

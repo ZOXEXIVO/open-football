@@ -1,5 +1,6 @@
 {
   "id": 50,
+  "enabled": true,
   "slug": "russian-premier-league",
   "name": "Premier League",
   "reputation": 6500,

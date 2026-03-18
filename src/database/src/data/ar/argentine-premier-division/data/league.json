@@ -1,5 +1,6 @@
 {
   "id": 60,
+  "enabled": true,
   "slug": "argentine-premier-division",
   "name": "Premier Division",
   "reputation": 7500,
