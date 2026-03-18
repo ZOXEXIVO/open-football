@@ -31,6 +31,8 @@ pub struct PlayerMatchesTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
+    pub is_on_loan: bool,
+    pub is_injured: bool,
     pub league_slug: String,
     pub items: Vec<PlayerMatchItem>,
 }
@@ -159,6 +161,8 @@ pub async fn player_matches_action(
         lang: route_params.lang.clone(),
         active_tab: "matches",
         player_id: route_params.player_id,
+        is_on_loan: player.is_on_loan(),
+        is_injured: player.player_attributes.is_injured,
         league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
     })

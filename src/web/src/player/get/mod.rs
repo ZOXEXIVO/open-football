@@ -12,7 +12,6 @@ use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
-use core::transfers::TransferType;
 use core::utils::FormattingUtils;
 use serde::Deserialize;
 
@@ -41,6 +40,8 @@ pub struct PlayerGetTemplate {
     pub player_id: u32,
     pub player: PlayerViewModel,
     pub is_goalkeeper: bool,
+    pub is_on_loan: bool,
+    pub is_injured: bool,
 }
 
 pub struct PlayerViewModel {
@@ -287,6 +288,8 @@ pub async fn player_get_action(
         };
 
         let is_goalkeeper = player.position().is_goalkeeper();
+        let is_on_loan = player.is_on_loan();
+        let is_injured = player.player_attributes.is_injured;
 
         return Ok(PlayerGetTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
@@ -310,6 +313,8 @@ pub async fn player_get_action(
             player_id: player.id,
             player: player_vm,
             is_goalkeeper,
+            is_on_loan,
+            is_injured,
         });
     }
 
@@ -371,6 +376,8 @@ pub async fn player_get_action(
             player_id: player.id,
             player: player_vm,
             is_goalkeeper,
+            is_on_loan: false,
+            is_injured: false,
         });
     }
 
@@ -560,68 +567,35 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
     .to_string()
 }
 
-fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
-    let is_on_loan = player.is_on_loan();
+fn get_loan_status(player: &Player, _team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
+    let loan = player.contract_loan.as_ref()?;
 
-    let club_id = team.club_id;
-    let now = data.date.date();
+    // Loaned IN: player has loan_from_club_id
+    if let Some(from_club_id) = loan.loan_from_club_id {
+        let (club_name, club_slug) = data.club(from_club_id)
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| (t.name.clone(), t.slug.clone()))
+            .unwrap_or_default();
 
-    if let Some(country) = data.country_by_club(club_id) {
-        // Check if player is loaned IN (has loan contract with active end date)
-        let loan_in_record = country.transfer_market.transfer_history.iter().find(|t| {
-            t.player_id == player.id
-                && t.to_club_id == club_id
-                && matches!(&t.transfer_type, TransferType::Loan(end) if *end >= now)
+        return Some(PlayerLoanDto {
+            is_loan_in: true,
+            club_name,
+            club_slug,
         });
+    }
 
-        if let Some(record) = loan_in_record {
-            let club_slug = data.club(record.from_club_id)
-                .and_then(|c| c.teams.teams.first())
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
+    // Loaned OUT: player has loan_to_club_id
+    if let Some(to_club_id) = loan.loan_to_club_id {
+        let (club_name, club_slug) = data.club(to_club_id)
+            .and_then(|c| c.teams.teams.first())
+            .map(|t| (t.name.clone(), t.slug.clone()))
+            .unwrap_or_default();
 
-            return Some(PlayerLoanDto {
-                is_loan_in: true,
-                club_name: record.from_team_name.clone(),
-                club_slug,
-            });
-        }
-
-        // Fallback: contract_loan exists but no transfer record found
-        if is_on_loan {
-            if let Some(from_club_id) = player.contract_loan.as_ref().and_then(|c| c.loan_from_club_id) {
-                let (club_name, club_slug) = data.club(from_club_id)
-                    .and_then(|c| c.teams.teams.first())
-                    .map(|t| (t.name.clone(), t.slug.clone()))
-                    .unwrap_or_default();
-
-                return Some(PlayerLoanDto {
-                    is_loan_in: true,
-                    club_name,
-                    club_slug,
-                });
-            }
-        }
-
-        // Check if player is loaned OUT from this club (only active loans)
-        let loan_out_record = country.transfer_market.transfer_history.iter().find(|t| {
-            t.player_id == player.id
-                && t.from_club_id == club_id
-                && matches!(&t.transfer_type, TransferType::Loan(end) if *end >= now)
+        return Some(PlayerLoanDto {
+            is_loan_in: false,
+            club_name,
+            club_slug,
         });
-
-        if let Some(record) = loan_out_record {
-            let club_slug = data.club(record.to_club_id)
-                .and_then(|c| c.teams.teams.first())
-                .map(|t| t.slug.clone())
-                .unwrap_or_default();
-
-            return Some(PlayerLoanDto {
-                is_loan_in: false,
-                club_name: record.to_team_name.clone(),
-                club_slug,
-            });
-        }
     }
 
     None

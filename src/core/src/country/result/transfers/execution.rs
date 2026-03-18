@@ -123,6 +123,8 @@ pub(crate) fn execute_transfer_within_country(
             }
         }
 
+        country.transfer_market.complete_listings_for_player(player_id);
+
         debug!("Transfer completed: player {} from club {} to club {} for {}", player_id, selling_club_id, buying_club_id, fee);
     }
 }
@@ -222,6 +224,9 @@ fn execute_loan_within_country(
                 buying_club.teams.teams[0].players.add(player);
             }
         }
+
+        // Remove listing so the player can't be loaned again
+        country.transfer_market.complete_listings_for_player(player_id);
 
         debug!("Loan completed: player {} from club {} to club {} (fee: {})", player_id, selling_club_id, buying_club_id, loan_fee);
     }

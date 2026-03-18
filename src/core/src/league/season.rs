@@ -25,4 +25,14 @@ impl Season {
         };
         Self::new(start_year)
     }
+
+    /// Approximate start date of this season (Aug 1).
+    pub fn start_date(&self) -> NaiveDate {
+        NaiveDate::from_ymd_opt(self.start_year as i32, 8, 1).unwrap()
+    }
+
+    /// Approximate end date of this season (May 31 of next year).
+    pub fn end_date(&self) -> NaiveDate {
+        NaiveDate::from_ymd_opt(self.start_year as i32 + 1, 5, 31).unwrap()
+    }
 }

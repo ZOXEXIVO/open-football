@@ -92,6 +92,15 @@ impl TransferMarket {
             .find(|l| l.player_id == player_id && l.status == TransferListingStatus::Available)
     }
 
+    /// Mark all listings for a player as completed (after transfer/loan executes).
+    pub fn complete_listings_for_player(&mut self, player_id: u32) {
+        for listing in &mut self.listings {
+            if listing.player_id == player_id {
+                listing.status = TransferListingStatus::Completed;
+            }
+        }
+    }
+
     pub fn start_negotiation(
         &mut self,
         player_id: u32,

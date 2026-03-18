@@ -47,6 +47,8 @@ pub struct PlayerHistoryTemplate {
     pub current_league_slug: String,
     pub is_goalkeeper: bool,
     pub is_retired: bool,
+    pub is_on_loan: bool,
+    pub is_injured: bool,
 }
 
 pub struct PlayerHistorySeasonItem {
@@ -277,6 +279,8 @@ pub async fn player_history_action(
             current_league_slug: String::new(),
             is_goalkeeper: player.position().is_goalkeeper(),
             is_retired: true,
+            is_on_loan: false,
+            is_injured: false,
         })
     } else {
         let team = team_opt.unwrap();
@@ -357,6 +361,8 @@ pub async fn player_history_action(
             current_league_slug: current_location.as_ref().map(|l| l.league_slug.clone()).unwrap_or_default(),
             is_goalkeeper: player.position().is_goalkeeper(),
             is_retired: false,
+            is_on_loan: player.is_on_loan(),
+            is_injured: player.player_attributes.is_injured,
         })
     }
 }

@@ -170,11 +170,11 @@ mod tests {
         assert_eq!(player.statistics.goals, 0);
         assert_eq!(player.last_transfer_date, Some(make_date(2032, 1, 15)));
 
-        assert_eq!(player.statistics_history.items.len(), 2);
-        assert_eq!(player.statistics_history.items[0].team_slug, "inter");
-        assert_eq!(player.statistics_history.items[0].statistics.played, 20);
-        assert_eq!(player.statistics_history.items[1].team_slug, "juventus");
-        assert_eq!(player.statistics_history.items[1].transfer_fee, Some(5_000_000.0));
+        assert_eq!(player.statistics_history.current.len(), 2);
+        assert_eq!(player.statistics_history.current[0].team_slug, "inter");
+        assert_eq!(player.statistics_history.current[0].statistics.played, 20);
+        assert_eq!(player.statistics_history.current[1].team_slug, "juventus");
+        assert_eq!(player.statistics_history.current[1].transfer_fee, Some(5_000_000.0));
     }
 
     // ---------------------------------------------------------------
@@ -192,9 +192,9 @@ mod tests {
         player.on_loan(&from, &to, 50_000.0, make_date(2032, 1, 15));
 
         assert_eq!(player.statistics.played, 0);
-        assert_eq!(player.statistics_history.items.len(), 2);
-        assert!(!player.statistics_history.items[0].is_loan);
-        assert!(player.statistics_history.items[1].is_loan);
+        assert_eq!(player.statistics_history.current.len(), 2);
+        assert!(!player.statistics_history.current[0].is_loan);
+        assert!(player.statistics_history.current[1].is_loan);
     }
 
     // ---------------------------------------------------------------
@@ -206,18 +206,29 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(15, 4);
 
-        // Existing loan placeholder
-        let mut placeholder = make_history_item(2031, "torino", true, 0);
-        placeholder.transfer_fee = Some(50_000.0);
-        player.statistics_history.items.push(placeholder);
+        // Existing loan placeholder in current season
+        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Torino".to_string(),
+            team_slug: "torino".to_string(),
+            team_reputation: 100,
+            league_name: "Serie A".to_string(),
+            league_slug: "serie-a".to_string(),
+            is_loan: true,
+            transfer_fee: Some(50_000.0),
+            statistics: PlayerStatistics::default(),
+            joined_date: make_date(2032, 1, 15),
+            seq_id: 0,
+        });
 
         let borrowing = make_team("Torino", "torino");
         player.on_loan_return(&borrowing, make_date(2032, 5, 31));
 
         assert_eq!(player.statistics.played, 0);
-        assert_eq!(player.statistics_history.items.len(), 1);
-        assert_eq!(player.statistics_history.items[0].statistics.played, 15);
-        assert_eq!(player.statistics_history.items[0].transfer_fee, Some(50_000.0));
+        // Loan entry updated + parent placeholder added
+        let torino = player.statistics_history.current.iter().find(|e| e.team_slug == "torino").unwrap();
+        assert_eq!(torino.statistics.played, 15);
+        assert_eq!(torino.transfer_fee, Some(50_000.0));
     }
 
     // ---------------------------------------------------------------
@@ -281,17 +292,27 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(0, 0);
 
-        // Loan entry + pre-loan entry
-        player.statistics_history.items.push(make_history_item(2031, "torino", true, 15));
-        player.statistics_history.items.push(make_history_item(2031, "juventus", false, 10));
-
-        player.last_transfer_date = Some(make_date(2032, 5, 31));
+        // Simulate: loan entry + pre-loan entry already in current
+        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Torino".to_string(), team_slug: "torino".to_string(),
+            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
+            is_loan: true, transfer_fee: None, statistics: make_stats(15, 0),
+            joined_date: make_date(2032, 1, 1), seq_id: 0,
+        });
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Juventus".to_string(), team_slug: "juventus".to_string(),
+            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
+            is_loan: false, transfer_fee: None, statistics: make_stats(10, 0),
+            joined_date: make_date(2031, 8, 1), seq_id: 1,
+        });
 
         let team = make_team("Juventus", "juventus");
         player.on_season_end(Season::new(2031), &team, make_date(2032, 8, 1));
 
-        // Should NOT create a 3rd entry
+        // Both entries had games, both should be finalized
         assert_eq!(player.statistics_history.items.len(), 2);
+        assert_eq!(player.statistics_history.current.len(), 0);
     }
 
     #[test]
@@ -299,12 +320,25 @@ mod tests {
         let mut player = make_player();
         player.statistics = make_stats(5, 2);
 
-        player.statistics_history.items.push(make_history_item(2031, "juventus", false, 10));
-        player.statistics_history.items.push(make_history_item(2031, "torino", true, 15));
+        // Two stints in current season
+        use crate::club::player::statistics::history::CurrentSeasonEntry;
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Juventus".to_string(), team_slug: "juventus".to_string(),
+            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
+            is_loan: false, transfer_fee: None, statistics: make_stats(10, 0),
+            joined_date: make_date(2031, 8, 1), seq_id: 0,
+        });
+        player.statistics_history.current.push(CurrentSeasonEntry {
+            team_name: "Torino".to_string(), team_slug: "torino".to_string(),
+            team_reputation: 100, league_name: "Serie A".to_string(), league_slug: "serie-a".to_string(),
+            is_loan: true, transfer_fee: None, statistics: make_stats(15, 0),
+            joined_date: make_date(2032, 1, 1), seq_id: 1,
+        });
 
         let team = make_team("Juventus", "juventus");
         player.on_season_end(Season::new(2031), &team, make_date(2032, 8, 1));
 
+        // Season end merges current_stats (5 games) into the Juventus current entry
         let juve = player.statistics_history.items.iter()
             .find(|e| e.team_slug == "juventus").unwrap();
         assert_eq!(juve.statistics.played, 15); // 10 + 5

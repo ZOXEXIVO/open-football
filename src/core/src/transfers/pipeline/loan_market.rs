@@ -40,6 +40,10 @@ impl PipelineProcessor {
                 continue;
             }
             if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
+                // Skip players already on loan — can't re-loan
+                if player.is_on_loan() {
+                    continue;
+                }
                 loan_listings.push(LoanListing {
                     player_id: listing.player_id,
                     club_id: listing.club_id,
@@ -616,6 +620,10 @@ impl PipelineProcessor {
                 }
 
                 if let Some(player) = Self::find_player_in_club(club, candidate.player_id) {
+                    if player.is_on_loan() {
+                        continue;
+                    }
+
                     let team_id = club
                         .teams
                         .teams

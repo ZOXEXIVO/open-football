@@ -92,6 +92,7 @@ impl DatabaseGenerator {
             .countries
             .iter()
             .filter(|cn| cn.continent_id == continent.id)
+            .filter(|cn| data.leagues.iter().any(|l| l.country_id == cn.id))
             .map(|country| {
                 let generator_data = match data
                     .names_by_country

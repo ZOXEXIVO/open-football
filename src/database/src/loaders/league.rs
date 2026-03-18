@@ -32,7 +32,7 @@ pub struct LeagueEntity {
 }
 
 fn default_enabled() -> bool {
-    true
+    false
 }
 
 #[derive(Deserialize)]

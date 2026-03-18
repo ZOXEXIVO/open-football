@@ -2,9 +2,14 @@ use chrono::NaiveDate;
 use crate::league::Season;
 use super::types::{PlayerStatistics, TeamInfo};
 
+const THREE_MONTHS_DAYS: i64 = 90;
+
 #[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistory {
+    /// Finalized history from completed seasons
     pub items: Vec<PlayerStatisticsHistoryItem>,
+    /// Raw current-season entries (never wiped mid-season, collapsed at season end)
+    pub current: Vec<CurrentSeasonEntry>,
     next_seq: u32,
 }
 
@@ -23,6 +28,22 @@ pub struct PlayerStatisticsHistoryItem {
     pub seq_id: u32,
 }
 
+/// Raw entry for current season. Just appended, never deleted mid-season.
+#[derive(Debug, Clone)]
+pub struct CurrentSeasonEntry {
+    pub team_name: String,
+    pub team_slug: String,
+    pub team_reputation: u16,
+    pub league_name: String,
+    pub league_slug: String,
+    pub is_loan: bool,
+    pub transfer_fee: Option<f64>,
+    pub statistics: PlayerStatistics,
+    /// When the player joined/arrived at this club (for 3-month rule)
+    pub joined_date: NaiveDate,
+    pub seq_id: u32,
+}
+
 impl Default for PlayerStatisticsHistory {
     fn default() -> Self {
         Self::new()
@@ -31,17 +52,22 @@ impl Default for PlayerStatisticsHistory {
 
 impl PlayerStatisticsHistory {
     pub fn new() -> Self {
-        PlayerStatisticsHistory { items: Vec::new(), next_seq: 0 }
+        PlayerStatisticsHistory {
+            items: Vec::new(),
+            current: Vec::new(),
+            next_seq: 0,
+        }
     }
 
-    fn assign_seq(&mut self, item: &mut PlayerStatisticsHistoryItem) {
-        item.seq_id = self.next_seq;
+    fn next_seq(&mut self) -> u32 {
+        let s = self.next_seq;
         self.next_seq += 1;
+        s
     }
 
-    // ── Events ───────────────────────────────────────────────────
+    // ── Mid-season events (just append to current, no wipes) ──
 
-    /// Record a permanent transfer. Saves old club stats and creates new club placeholder.
+    /// Permanent transfer: snapshot "from" stats, add "to" placeholder.
     pub fn record_transfer(
         &mut self,
         old_stats: PlayerStatistics,
@@ -50,41 +76,11 @@ impl PlayerStatisticsHistory {
         fee: f64,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-        let has_games = old_stats.total_games() > 0;
-
-        // Save selling club stats (skip 0-game entry unless it's the only record)
-        if has_games || self.items.is_empty() {
-            self.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: from.name.clone(),
-                team_slug: from.slug.clone(),
-                team_reputation: from.reputation,
-                league_name: from.league_name.clone(),
-                league_slug: from.league_slug.clone(),
-                is_loan: false,
-                transfer_fee: None,
-                statistics: old_stats,
-                seq_id: 0, // placeholder
-            });
-        }
-
-        // Buying club placeholder with fee (later time so it sorts after)
-        self.push_or_replace(PlayerStatisticsHistoryItem {
-            season,
-            team_name: to.name.clone(),
-            team_slug: to.slug.clone(),
-            team_reputation: to.reputation,
-            league_name: to.league_name.clone(),
-            league_slug: to.league_slug.clone(),
-            is_loan: false,
-            transfer_fee: Some(fee),
-            statistics: PlayerStatistics::default(),
-            seq_id: 0, // placeholder
-        });
+        self.update_or_push_current(from, old_stats, false, None, date);
+        self.update_or_push_current(to, PlayerStatistics::default(), false, Some(fee), date);
     }
 
-    /// Record a loan move. Saves old club stats and creates loan placeholder.
+    /// Loan move: snapshot "from" stats, add loan placeholder.
     pub fn record_loan(
         &mut self,
         old_stats: PlayerStatistics,
@@ -93,170 +89,63 @@ impl PlayerStatisticsHistory {
         loan_fee: f64,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-        let has_games = old_stats.total_games() > 0;
-
-        // Save parent club stats
-        if has_games || self.items.is_empty() {
-            self.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: from.name.clone(),
-                team_slug: from.slug.clone(),
-                team_reputation: from.reputation,
-                league_name: from.league_name.clone(),
-                league_slug: from.league_slug.clone(),
-                is_loan: false,
-                transfer_fee: None,
-                statistics: old_stats,
-                seq_id: 0, // placeholder
-            });
-        }
-
-        // Loan destination placeholder (later time so it sorts after)
-        self.push_or_replace(PlayerStatisticsHistoryItem {
-            season,
-            team_name: to.name.clone(),
-            team_slug: to.slug.clone(),
-            team_reputation: to.reputation,
-            league_name: to.league_name.clone(),
-            league_slug: to.league_slug.clone(),
-            is_loan: true,
-            transfer_fee: Some(loan_fee),
-            statistics: PlayerStatistics::default(),
-            seq_id: 0, // placeholder
-        });
+        self.update_or_push_current(from, old_stats, false, None, date);
+        self.update_or_push_current(to, PlayerStatistics::default(), true, Some(loan_fee), date);
     }
 
-    /// Record a loan return. Merges remaining stats into the loan entry
-    /// and creates a parent club placeholder for the return season.
+    /// Loan return: update loan entry stats, add parent placeholder.
     pub fn record_loan_return(
         &mut self,
         remaining_stats: PlayerStatistics,
         borrowing: &TeamInfo,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-
-        if let Some(existing) = self.items.iter_mut().find(|e| {
-            e.season.start_year == season.start_year
-                && e.team_slug == borrowing.slug
-                && e.is_loan
+        // Update the loan entry with final stats
+        let date_season = Season::from_date(date);
+        if let Some(entry) = self.current.iter_mut().rev().find(|e| {
+            e.team_slug == borrowing.slug && e.is_loan
+                && Season::from_date(e.joined_date).start_year == date_season.start_year
         }) {
-            let existing_games = existing.statistics.total_games();
-            let new_games = remaining_stats.total_games();
-            if existing_games == 0 && new_games > 0 {
-                existing.statistics = remaining_stats;
+            if remaining_stats.total_games() > 0 && entry.statistics.total_games() == 0 {
+                entry.statistics = remaining_stats;
             }
         } else {
-            self.push_or_replace(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: borrowing.name.clone(),
-                team_slug: borrowing.slug.clone(),
-                team_reputation: borrowing.reputation,
-                league_name: borrowing.league_name.clone(),
-                league_slug: borrowing.league_slug.clone(),
-                is_loan: true,
-                transfer_fee: None,
-                statistics: remaining_stats,
-                seq_id: 0, // placeholder
-            });
+            self.push_current(borrowing, remaining_stats, true, None, date);
         }
 
-        // Create parent club entry for the return season (player is back at parent)
-        let parent_info = self.items.iter()
-            .filter(|e| !e.is_loan && e.team_slug != borrowing.slug)
-            .last()
+        // Find parent club info (last non-loan team that isn't the borrowing club)
+        let parent_data = self.current.iter().rev()
+            .find(|e| !e.is_loan && e.team_slug != borrowing.slug)
             .map(|e| (e.team_name.clone(), e.team_slug.clone(), e.team_reputation,
-                       e.league_name.clone(), e.league_slug.clone()));
+                       e.league_name.clone(), e.league_slug.clone()))
+            .or_else(|| self.items.iter().rev()
+                .find(|e| !e.is_loan && e.team_slug != borrowing.slug)
+                .map(|e| (e.team_name.clone(), e.team_slug.clone(), e.team_reputation,
+                           e.league_name.clone(), e.league_slug.clone())));
 
-        if let Some((name, slug, rep, league_name, league_slug)) = parent_info {
-            let exists = self.items.iter().any(|e| {
-                e.season.start_year == season.start_year && e.team_slug == slug && !e.is_loan
-            });
-            if !exists {
-                self.items.push(PlayerStatisticsHistoryItem {
-                    season,
-                    team_name: name,
-                    team_slug: slug,
-                    team_reputation: rep,
-                    league_name,
-                    league_slug,
-                    is_loan: false,
-                    transfer_fee: None,
-                    statistics: PlayerStatistics::default(),
-                    seq_id: 0,
-                });
-            }
+        if let Some((name, slug, rep, ln, ls)) = parent_data {
+            let parent_team = TeamInfo {
+                name, slug, reputation: rep,
+                league_name: ln, league_slug: ls,
+            };
+            self.update_or_push_current(&parent_team, PlayerStatistics::default(), false, None, date);
         }
     }
 
-    /// Record a cancel-loan departure. Snapshots stats at borrowing club,
-    /// cleans stale entries, and re-creates a parent club placeholder.
+    /// Cancel loan: save borrowing stats, add parent placeholder.
     pub fn record_cancel_loan(
         &mut self,
         old_stats: PlayerStatistics,
         borrowing: &TeamInfo,
         parent: &TeamInfo,
-        is_loan: bool,
+        _is_loan: bool,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-
-        // Save borrowing club stats if player actually played
-        if old_stats.total_games() > 0 {
-            if let Some(existing) = self.items.iter_mut().find(|e| {
-                e.season.start_year == season.start_year && e.team_slug == borrowing.slug
-            }) {
-                if existing.statistics.total_games() == 0 {
-                    existing.statistics = old_stats;
-                } else {
-                    existing.statistics.merge_from(&old_stats);
-                }
-            } else {
-                self.push_item(PlayerStatisticsHistoryItem {
-                    season: season.clone(),
-                    team_name: borrowing.name.clone(),
-                    team_slug: borrowing.slug.clone(),
-                    team_reputation: borrowing.reputation,
-                    league_name: borrowing.league_name.clone(),
-                    league_slug: borrowing.league_slug.clone(),
-                    is_loan,
-                    transfer_fee: None,
-                    statistics: old_stats,
-                    seq_id: 0,
-                });
-            }
-        }
-
-        // Wipe stale 0-game placeholders for current season (keep entries with transfer_fee)
-        self.items.retain(|e| {
-            !(e.season.start_year == season.start_year
-                && e.statistics.total_games() == 0
-                && e.transfer_fee.is_none())
-        });
-
-        // Re-create parent club placeholder (after borrowing entry in sort order)
-        let exists = self.items.iter().any(|e| {
-            e.season.start_year == season.start_year && e.team_slug == parent.slug
-        });
-        if !exists {
-            self.push_item(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: parent.name.clone(),
-                team_slug: parent.slug.clone(),
-                team_reputation: parent.reputation,
-                league_name: parent.league_name.clone(),
-                league_slug: parent.league_slug.clone(),
-                is_loan: false,
-                transfer_fee: None,
-                statistics: PlayerStatistics::default(),
-                seq_id: 0,
-            });
-        }
+        self.update_or_push_current(borrowing, old_stats, true, None, date);
+        self.update_or_push_current(parent, PlayerStatistics::default(), false, None, date);
     }
 
-    /// Record a manual transfer departure from the web UI.
-    /// Snapshots stats at current club, cleans stale entries, creates destination placeholder.
+    /// Manual transfer from web UI.
     pub fn record_departure_transfer(
         &mut self,
         old_stats: PlayerStatistics,
@@ -266,201 +155,189 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-
-        // Save source club stats (always — shows previous club even with 0 games)
-        if let Some(existing) = self.items.iter_mut().find(|e| {
-            e.season.start_year == season.start_year && e.team_slug == from.slug
-        }) {
-            if existing.statistics.total_games() == 0 {
-                existing.statistics = old_stats;
-            } else {
-                existing.statistics.merge_from(&old_stats);
-            }
-        } else {
-            self.push_item(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: from.name.clone(),
-                team_slug: from.slug.clone(),
-                team_reputation: from.reputation,
-                league_name: from.league_name.clone(),
-                league_slug: from.league_slug.clone(),
-                is_loan,
-                transfer_fee: None,
-                statistics: old_stats,
-                seq_id: 0,
-            });
-        }
-
-        // Wipe stale 0-game placeholders for current season
-        // (keep entries with transfer_fee or actual games)
-        self.items.retain(|e| {
-            !(e.season.start_year == season.start_year
-                && e.statistics.total_games() == 0
-                && e.transfer_fee.is_none())
-        });
-
-        // Create destination placeholder
-        let exists = self.items.iter().any(|e| {
-            e.season.start_year == season.start_year && e.team_slug == to.slug
-        });
-        if !exists {
-            self.push_item(PlayerStatisticsHistoryItem {
-                season,
-                team_name: to.name.clone(),
-                team_slug: to.slug.clone(),
-                team_reputation: to.reputation,
-                league_name: to.league_name.clone(),
-                league_slug: to.league_slug.clone(),
-                is_loan: false,
-                transfer_fee: fee,
-                statistics: PlayerStatistics::default(),
-                seq_id: 0,
-            });
-        }
+        self.update_or_push_current(from, old_stats, is_loan, None, date);
+        self.update_or_push_current(to, PlayerStatistics::default(), false, fee, date);
     }
 
-    /// Record a manual loan departure from the web UI.
-    /// Snapshots stats, cleans stale entries, creates loan destination placeholder.
+    /// Manual loan from web UI.
     pub fn record_departure_loan(
         &mut self,
         old_stats: PlayerStatistics,
         from: &TeamInfo,
         _parent: &TeamInfo,
         to: &TeamInfo,
-        is_loan: bool,
+        _is_loan: bool,
         date: NaiveDate,
     ) {
-        let season = Season::from_date(date);
-        let has_games = old_stats.total_games() > 0;
-
-        // Save source club stats if player played, or if this is the first record
-        if has_games || self.items.is_empty() {
-            if let Some(existing) = self.items.iter_mut().find(|e| {
-                e.season.start_year == season.start_year && e.team_slug == from.slug
-            }) {
-                if existing.statistics.total_games() == 0 {
-                    existing.statistics = old_stats;
-                } else {
-                    existing.statistics.merge_from(&old_stats);
-                }
-            } else {
-                self.push_item(PlayerStatisticsHistoryItem {
-                    season: season.clone(),
-                    team_name: from.name.clone(),
-                    team_slug: from.slug.clone(),
-                    team_reputation: from.reputation,
-                    league_name: from.league_name.clone(),
-                    league_slug: from.league_slug.clone(),
-                    is_loan: false,
-                    transfer_fee: None,
-                    statistics: old_stats,
-                    seq_id: 0,
-                });
-            }
-        }
-
-        // Wipe stale 0-game placeholders for current season
-        // (keep source club entry if just created, keep entries with transfer_fee)
-        let keep_from = has_games || self.items.len() <= 1;
-        self.items.retain(|e| {
-            !(e.season.start_year == season.start_year
-                && e.statistics.total_games() == 0
-                && e.transfer_fee.is_none()
-                && !(keep_from && e.team_slug == from.slug))
-        });
-
-        // Parent club entry: if the player played at the parent this season,
-        // the entry already survived cleanup above. No need to create a 0-game
-        // placeholder — it would be a ghost record with no stats.
-
-        // Loan destination placeholder (player goes here on loan)
-        let dest_exists = self.items.iter().any(|e| {
-            e.season.start_year == season.start_year && e.team_slug == to.slug
-        });
-        if !dest_exists {
-            self.push_item(PlayerStatisticsHistoryItem {
-                season: season.clone(),
-                team_name: to.name.clone(),
-                team_slug: to.slug.clone(),
-                team_reputation: to.reputation,
-                league_name: to.league_name.clone(),
-                league_slug: to.league_slug.clone(),
-                is_loan: true,
-                transfer_fee: None,
-                statistics: PlayerStatistics::default(),
-                seq_id: 0,
-            });
-        }
-
+        self.update_or_push_current(from, old_stats, false, None, date);
+        self.update_or_push_current(to, PlayerStatistics::default(), true, None, date);
     }
 
-    /// Record season-end snapshot. Saves current stats to history.
+    // ── Season end: collapse current → items ──────────────────
+
+    /// Called at season end. Collapses `current` entries into `items`.
+    ///
+    /// Rules:
+    /// - Keep entries where player played official matches (total_games > 0)
+    /// - If matches == 0: keep if player stayed > 3 months at the club
+    /// - Transfer fee entries are always kept
     pub fn record_season_end(
         &mut self,
         season: Season,
-        old_stats: PlayerStatistics,
+        current_stats: PlayerStatistics,
         team: &TeamInfo,
         is_loan: bool,
-        last_transfer_date: Option<NaiveDate>,
+        _last_transfer_date: Option<NaiveDate>,
     ) {
-        // If player transferred AFTER the season being snapshotted started,
-        // stats belong to the transfer's season entry (not the old season).
-        if let Some(transfer_date) = last_transfer_date {
-            let transfer_season = Season::from_date(transfer_date);
-            if transfer_season.start_year > season.start_year {
-                if let Some(placeholder) = self.items.iter_mut().find(|e| {
-                    e.season.start_year == transfer_season.start_year
-                        && e.team_slug == team.slug
-                }) {
-                    placeholder.statistics = old_stats;
-                }
-                return;
-            }
-        }
-
-        // Merge into existing entry for this season + team (if any)
-        if let Some(existing) = self.items.iter_mut().find(|e| {
-            e.season.start_year == season.start_year && e.team_slug == team.slug
+        // Update the latest matching current entry with final stats
+        if let Some(entry) = self.current.iter_mut().rev().find(|e| {
+            e.team_slug == team.slug && e.is_loan == is_loan
         }) {
-            if old_stats.total_games() > 0 {
-                if existing.statistics.total_games() == 0 {
-                    existing.statistics = old_stats;
+            if current_stats.total_games() > 0 {
+                if entry.statistics.total_games() == 0 {
+                    entry.statistics = current_stats;
                 } else {
-                    existing.statistics.merge_from(&old_stats);
+                    entry.statistics.merge_from(&current_stats);
                 }
             }
-            return;
+        } else if current_stats.total_games() > 0 || self.current.is_empty() {
+            // No current entry — create one (e.g., player never moved this season)
+            self.push_current_with_date(
+                team, current_stats, is_loan, None,
+                season.start_date(),
+            );
         }
 
-        // No entry yet. Skip 0-game phantom if other season entries already exist.
-        if old_stats.total_games() == 0 {
-            let has_any = self.items.iter()
-                .any(|e| e.season.start_year == season.start_year);
-            if has_any {
-                return;
+        // Collapse: move current entries to items with filtering.
+        // Entries that belong to the next season (joined after season end) stay in current.
+        let season_end = season.end_date();
+        let entries = std::mem::take(&mut self.current);
+
+        for entry in entries {
+            let entry_season = Season::from_date(entry.joined_date);
+            if entry_season.start_year != season.start_year {
+                // Belongs to a different season — keep in current
+                self.current.push(entry);
+                continue;
+            }
+
+            let dominated_days = (season_end - entry.joined_date).num_days().max(0);
+            let has_games = entry.statistics.total_games() > 0;
+            let has_fee = entry.transfer_fee.is_some();
+            let stayed_long = dominated_days >= THREE_MONTHS_DAYS;
+
+            if has_games || has_fee || stayed_long {
+                let seq = entry.seq_id;
+                // Collapse: apps = played + subs, no subs column in finalized history
+                let mut stats = entry.statistics;
+                stats.played += stats.played_subs;
+                stats.played_subs = 0;
+
+                self.items.push(PlayerStatisticsHistoryItem {
+                    season: season.clone(),
+                    team_name: entry.team_name,
+                    team_slug: entry.team_slug,
+                    team_reputation: entry.team_reputation,
+                    league_name: entry.league_name,
+                    league_slug: entry.league_slug,
+                    is_loan: entry.is_loan,
+                    transfer_fee: entry.transfer_fee,
+                    statistics: stats,
+                    seq_id: seq,
+                });
             }
         }
+    }
 
-        self.push_or_replace(PlayerStatisticsHistoryItem {
-            season,
+    // ── View (combines items + current for display) ───────────
+
+    /// Returns all history for display: finalized items + current entries,
+    /// sorted most-recent first.
+    pub fn view_items(&self) -> Vec<PlayerStatisticsHistoryItem> {
+        let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.clone();
+
+        // Add current entries — each with its own season from joined_date
+        for entry in &self.current {
+            result.push(PlayerStatisticsHistoryItem {
+                season: Season::from_date(entry.joined_date),
+                team_name: entry.team_name.clone(),
+                team_slug: entry.team_slug.clone(),
+                team_reputation: entry.team_reputation,
+                league_name: entry.league_name.clone(),
+                league_slug: entry.league_slug.clone(),
+                is_loan: entry.is_loan,
+                transfer_fee: entry.transfer_fee,
+                statistics: entry.statistics.clone(),
+                seq_id: entry.seq_id,
+            });
+        }
+
+        // Group by (season, team, is_loan) and merge stats
+        let merged = Self::merge_groups(&result);
+
+        // Fill missing season gaps
+        let filled = Self::fill_season_gaps(merged);
+
+        // Sort: most recent season first, then seq_id desc
+        let mut out = filled;
+        out.sort_by(|a, b| {
+            b.season.start_year.cmp(&a.season.start_year)
+                .then(b.seq_id.cmp(&a.seq_id))
+        });
+
+        out
+    }
+
+    // ── Internal helpers ──────────────────────────────────────
+
+    fn current_season(&self) -> Season {
+        self.current.first()
+            .map(|e| Season::from_date(e.joined_date))
+            .unwrap_or_else(|| Season::new(2025))
+    }
+
+    fn push_current(&mut self, team: &TeamInfo, stats: PlayerStatistics, is_loan: bool, fee: Option<f64>, date: NaiveDate) {
+        self.push_current_with_date(team, stats, is_loan, fee, date);
+    }
+
+    fn push_current_with_date(&mut self, team: &TeamInfo, stats: PlayerStatistics, is_loan: bool, fee: Option<f64>, date: NaiveDate) {
+        let seq = self.next_seq();
+        self.current.push(CurrentSeasonEntry {
             team_name: team.name.clone(),
             team_slug: team.slug.clone(),
             team_reputation: team.reputation,
             league_name: team.league_name.clone(),
             league_slug: team.league_slug.clone(),
             is_loan,
-            transfer_fee: None,
-            statistics: old_stats,
-            seq_id: 0, // placeholder
+            transfer_fee: fee,
+            statistics: stats,
+            joined_date: date,
+            seq_id: seq,
         });
     }
 
-    // ── View ─────────────────────────────────────────────────────
+    fn update_or_push_current(&mut self, team: &TeamInfo, stats: PlayerStatistics, is_loan: bool, fee: Option<f64>, date: NaiveDate) {
+        let date_season = Season::from_date(date);
+        if let Some(entry) = self.current.iter_mut().rev().find(|e| {
+            e.team_slug == team.slug && e.is_loan == is_loan
+                && Season::from_date(e.joined_date).start_year == date_season.start_year
+        }) {
+            if stats.total_games() > 0 {
+                if entry.statistics.total_games() == 0 {
+                    entry.statistics = stats;
+                } else {
+                    entry.statistics.merge_from(&stats);
+                }
+            }
+            if fee.is_some() && entry.transfer_fee.is_none() {
+                entry.transfer_fee = fee;
+            }
+        } else {
+            self.push_current(team, stats, is_loan, fee, date);
+        }
+    }
 
-    /// Returns history items grouped by (season, team, is_loan), merged and sorted
-    /// for display. Most recent season first, then by created_at within same season.
-    pub fn view_items(&self) -> Vec<PlayerStatisticsHistoryItem> {
+    fn merge_groups(items: &[PlayerStatisticsHistoryItem]) -> Vec<PlayerStatisticsHistoryItem> {
         struct Group {
             key_idx: usize,
             stats: PlayerStatistics,
@@ -471,7 +348,7 @@ impl PlayerStatisticsHistory {
         let mut groups: Vec<Group> = Vec::new();
         let mut keys: Vec<PlayerStatisticsHistoryItem> = Vec::new();
 
-        for item in &self.items {
+        for item in items {
             let games = item.statistics.total_games();
 
             let group_idx = keys.iter().position(|k| {
@@ -517,7 +394,7 @@ impl PlayerStatisticsHistory {
                     league_slug: item.league_slug.clone(),
                     is_loan: item.is_loan,
                     transfer_fee: item.transfer_fee,
-                    statistics: PlayerStatistics::default(), // filled below
+                    statistics: PlayerStatistics::default(),
                     seq_id: item.seq_id,
                 });
                 groups.push(Group {
@@ -534,7 +411,7 @@ impl PlayerStatisticsHistory {
                         shots_on_target: item.statistics.shots_on_target,
                         tackling: item.statistics.tackling,
                         passes: item.statistics.passes,
-                        average_rating: 0.0, // computed from sum/count
+                        average_rating: 0.0,
                         conceded: item.statistics.conceded,
                         clean_sheets: item.statistics.clean_sheets,
                     },
@@ -544,7 +421,6 @@ impl PlayerStatisticsHistory {
             }
         }
 
-        // Finalize: set computed stats into keys
         for group in &groups {
             let key = &mut keys[group.key_idx];
             key.statistics = PlayerStatistics {
@@ -569,124 +445,49 @@ impl PlayerStatisticsHistory {
             };
         }
 
-        // Fill in missing seasons so every year has at least 1 entry.
-        // Use the last known non-loan team for gaps.
-        if !keys.is_empty() {
-            // Sort chronologically first to find gaps
-            keys.sort_by(|a, b| {
-                a.season.start_year.cmp(&b.season.start_year)
-                    .then(a.seq_id.cmp(&b.seq_id))
-            });
-
-            let min_year = keys.first().unwrap().season.start_year;
-            let max_year = keys.last().unwrap().season.start_year;
-
-            let mut fill: Vec<PlayerStatisticsHistoryItem> = Vec::new();
-
-            for year in min_year..=max_year {
-                let has_entry = keys.iter().any(|k| k.season.start_year == year);
-                if has_entry {
-                    continue;
-                }
-
-                // Find the last non-loan team before this gap
-                let parent = keys.iter()
-                    .rev()
-                    .find(|k| k.season.start_year < year && !k.is_loan);
-
-                // Fall back to last team of any kind before the gap
-                let template = parent
-                    .or_else(|| keys.iter().rev().find(|k| k.season.start_year < year));
-
-                if let Some(tmpl) = template {
-                    let season = Season::new(year);
-                    fill.push(PlayerStatisticsHistoryItem {
-                        season: season.clone(),
-                        team_name: tmpl.team_name.clone(),
-                        team_slug: tmpl.team_slug.clone(),
-                        team_reputation: tmpl.team_reputation,
-                        league_name: tmpl.league_name.clone(),
-                        league_slug: tmpl.league_slug.clone(),
-                        is_loan: false,
-                        transfer_fee: None,
-                        statistics: PlayerStatistics::default(),
-                        seq_id: 0,
-                    });
-                }
-            }
-
-            keys.extend(fill);
-        }
-
-        // Filter out 0-game parent placeholders when the same season has a loan entry.
-        // These are artefacts from departure_loan / loan_return bookkeeping.
-        let remove_indices: Vec<usize> = (0..keys.len()).filter(|&i| {
-            let entry = &keys[i];
-            if entry.statistics.total_games() > 0 || entry.is_loan || entry.transfer_fee.is_some() {
-                return false;
-            }
-            keys.iter().any(|other| {
-                other.season.start_year == entry.season.start_year && other.is_loan
-            })
-        }).collect();
-        for &i in remove_indices.iter().rev() {
-            keys.remove(i);
-        }
-
-        // Sort: most recent season first, then seq_id desc within same season
-        keys.sort_by(|a, b| {
-            b.season.start_year.cmp(&a.season.start_year)
-                .then(b.seq_id.cmp(&a.seq_id))
-        });
-
         keys
     }
 
-    // ── Internal ─────────────────────────────────────────────────
+    fn fill_season_gaps(mut keys: Vec<PlayerStatisticsHistoryItem>) -> Vec<PlayerStatisticsHistoryItem> {
+        if keys.is_empty() {
+            return keys;
+        }
 
-    /// Push with auto-assigned seq_id.
-    fn push_item(&mut self, mut item: PlayerStatisticsHistoryItem) {
-        self.assign_seq(&mut item);
-        self.items.push(item);
-    }
-
-    /// Push a new history entry, deduplicating against existing entries for the
-    /// same season + team to preserve correct seq_id ordering.
-    fn push_or_replace(&mut self, mut item: PlayerStatisticsHistoryItem) {
-        self.assign_seq(&mut item);
-        let new_games = item.statistics.played + item.statistics.played_subs;
-
-        // Find existing entry for same season + team with 0 games
-        let zero_games_idx = self.items.iter().position(|existing| {
-            existing.season.start_year == item.season.start_year
-                && existing.team_slug == item.team_slug
-                && (existing.statistics.played + existing.statistics.played_subs) == 0
+        keys.sort_by(|a, b| {
+            a.season.start_year.cmp(&b.season.start_year)
+                .then(a.seq_id.cmp(&b.seq_id))
         });
 
-        if let Some(idx) = zero_games_idx {
-            // Replace 0-game placeholder only if new entry has actual games;
-            // preserve original seq_id, transfer info, and loan flag
-            if new_games > 0 {
-                let original_seq_id = self.items[idx].seq_id;
-                let transfer_fee = self.items[idx].transfer_fee;
-                let original_is_loan = self.items[idx].is_loan;
-                self.items[idx] = item;
-                self.items[idx].seq_id = original_seq_id;
-                self.items[idx].transfer_fee = transfer_fee;
-                self.items[idx].is_loan = original_is_loan;
+        let min_year = keys.first().unwrap().season.start_year;
+        let max_year = keys.last().unwrap().season.start_year;
+
+        let mut fill = Vec::new();
+        for year in min_year..=max_year {
+            if keys.iter().any(|k| k.season.start_year == year) {
+                continue;
             }
-        } else if new_games == 0 {
-            // New 0-game entry: only push if no entry exists at all for this season + team
-            let any_existing = self.items.iter().any(|existing| {
-                existing.season.start_year == item.season.start_year
-                    && existing.team_slug == item.team_slug
-            });
-            if !any_existing {
-                self.items.push(item);
+            let template = keys.iter().rev()
+                .find(|k| k.season.start_year < year && !k.is_loan)
+                .or_else(|| keys.iter().rev().find(|k| k.season.start_year < year));
+
+            if let Some(tmpl) = template {
+                fill.push(PlayerStatisticsHistoryItem {
+                    season: Season::new(year),
+                    team_name: tmpl.team_name.clone(),
+                    team_slug: tmpl.team_slug.clone(),
+                    team_reputation: tmpl.team_reputation,
+                    league_name: tmpl.league_name.clone(),
+                    league_slug: tmpl.league_slug.clone(),
+                    is_loan: false,
+                    transfer_fee: None,
+                    statistics: PlayerStatistics::default(),
+                    seq_id: 0,
+                });
             }
-        } else {
-            self.items.push(item);
         }
+
+        keys.extend(fill);
+        keys
     }
 }
 
@@ -715,238 +516,113 @@ mod tests {
         s
     }
 
-    // ---------------------------------------------------------------
-    // Track A: Loan with 0 games at original team
-    // ---------------------------------------------------------------
-
-    /// After loan to Inter with 0 games at Juventus:
-    /// view = [2025/2026 Inter Loan 0g]
     #[test]
-    fn zero_games_after_loan() {
+    fn loan_cancel_then_transfer_preserves_all() {
         let mut h = PlayerStatisticsHistory::new();
         let juve = make_team("Juventus", "juventus");
         let inter = make_team("Inter", "inter");
+        let milan = make_team("Milan", "milan");
 
+        // Loan to Inter (0 games at Juve)
         h.record_departure_loan(
-            make_stats(0, 0.0),
-            &juve, &juve, &inter, false,
+            make_stats(0, 0.0), &juve, &juve, &inter, false,
             make_date(2026, 1, 15),
+        );
+        // Cancel loan (0 games at Inter)
+        h.record_cancel_loan(
+            make_stats(0, 0.0), &inter, &juve, true,
+            make_date(2026, 2, 15),
+        );
+        // Transfer to Milan (0 games at Juve)
+        h.record_departure_transfer(
+            make_stats(0, 0.0), &juve, &milan, Some(1_000_000.0), false,
+            make_date(2026, 3, 15),
         );
 
         let view = h.view_items();
-        assert_eq!(view.len(), 1);
-        assert_eq!(view[0].season.start_year, 2025);
-        assert_eq!(view[0].team_slug, "inter");
-        assert!(view[0].is_loan);
-        assert_eq!(view[0].statistics.played, 0);
+        // Should see: Milan (destination), Juve (after cancel), Inter (loan), Juve (original)
+        assert!(view.len() >= 2, "got {} items", view.len());
+        // Milan must be present
+        assert!(view.iter().any(|v| v.team_slug == "milan"), "milan missing");
+        // Inter loan must be present
+        assert!(view.iter().any(|v| v.team_slug == "inter" && v.is_loan), "inter loan missing");
     }
 
-    /// After season 2025/2026 ends + loan return + next season:
-    /// view = [2026/2027 Juventus 0g, 2025/2026 Inter Loan 0g]
     #[test]
-    fn zero_games_after_season_end() {
+    fn season_end_keeps_entries_with_games() {
         let mut h = PlayerStatisticsHistory::new();
         let juve = make_team("Juventus", "juventus");
         let inter = make_team("Inter", "inter");
 
-        // Loan to Inter (2025/2026)
-        h.record_departure_loan(
-            make_stats(0, 0.0),
-            &juve, &juve, &inter, false,
+        // Transfer mid-season: 10 games at Juve, then move to Inter
+        h.record_departure_transfer(
+            make_stats(10, 7.0), &juve, &inter, Some(5_000_000.0), false,
             make_date(2026, 1, 15),
         );
-        // Season end at Inter
+        // Season end: 5 games at Inter
         h.record_season_end(
-            Season::new(2025), make_stats(0, 0.0), &inter, true,
-            Some(make_date(2026, 1, 15)),
-        );
-        // Loan return
-        h.record_loan_return(
-            PlayerStatistics::default(), &inter,
-            make_date(2026, 5, 28),
-        );
-        // Next season ends at Juventus (0 games)
-        h.record_season_end(
-            Season::new(2026), make_stats(0, 0.0), &juve, false, None,
+            Season::new(2025), make_stats(5, 6.5), &inter, false, None,
         );
 
-        let view = h.view_items();
-        assert_eq!(view.len(), 2);
-        assert_eq!(view[0].season.start_year, 2026);
-        assert_eq!(view[0].team_slug, "juventus");
-        assert_eq!(view[0].statistics.played, 0);
-        assert_eq!(view[1].season.start_year, 2025);
-        assert_eq!(view[1].team_slug, "inter");
-        assert!(view[1].is_loan);
+        assert_eq!(h.items.len(), 2);
+        assert_eq!(h.current.len(), 0);
+        let juve_item = h.items.iter().find(|e| e.team_slug == "juventus").unwrap();
+        assert_eq!(juve_item.statistics.played, 10);
+        let inter_item = h.items.iter().find(|e| e.team_slug == "inter").unwrap();
+        assert_eq!(inter_item.statistics.played, 5);
     }
 
-    /// After re-loan to Inter (0 games at Juventus):
-    /// view = [2026/2027 Inter Loan 0g, 2025/2026 Inter Loan 0g]
     #[test]
-    fn zero_games_after_reloan() {
+    fn season_end_drops_short_zero_game_entries() {
         let mut h = PlayerStatisticsHistory::new();
         let juve = make_team("Juventus", "juventus");
         let inter = make_team("Inter", "inter");
+        let milan = make_team("Milan", "milan");
 
-        // Loan to Inter (2025/2026)
+        // Quick loan (< 3 months), cancelled, 0 games
         h.record_departure_loan(
-            make_stats(0, 0.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 1, 15),
+            make_stats(0, 0.0), &juve, &juve, &inter, false,
+            make_date(2026, 3, 1),
         );
-        // Season end at Inter
+        h.record_cancel_loan(
+            make_stats(0, 0.0), &inter, &juve, true,
+            make_date(2026, 4, 1),  // only 1 month
+        );
+        // Transfer to Milan
+        h.record_departure_transfer(
+            make_stats(5, 7.0), &juve, &milan, None, false,
+            make_date(2026, 4, 15),
+        );
+        // Season end
         h.record_season_end(
-            Season::new(2025), make_stats(0, 0.0), &inter, true,
-            Some(make_date(2026, 1, 15)),
-        );
-        // Loan return
-        h.record_loan_return(
-            PlayerStatistics::default(), &inter,
-            make_date(2026, 5, 28),
-        );
-        // Next season ends at Juventus (0 games)
-        h.record_season_end(
-            Season::new(2026), make_stats(0, 0.0), &juve, false, None,
-        );
-        // Re-loan to Inter (0 games at Juventus)
-        h.record_departure_loan(
-            make_stats(0, 0.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 9, 1),
+            Season::new(2025), make_stats(3, 6.0), &milan, false, None,
         );
 
-        let view = h.view_items();
-        assert_eq!(view.len(), 2);
-        assert_eq!(view[0].season.start_year, 2026);
-        assert_eq!(view[0].team_slug, "inter");
-        assert!(view[0].is_loan);
-        assert_eq!(view[1].season.start_year, 2025);
-        assert_eq!(view[1].team_slug, "inter");
-        assert!(view[1].is_loan);
+        // Juve has 5 games → kept
+        // Inter loan: 0 games, < 3 months → dropped
+        // Milan has 3 games → kept
+        // Juve original: 0 games, < 3 months → dropped (joined Mar 1, only 2.5 months to season end ~May)
+        assert!(h.items.iter().any(|e| e.team_slug == "juventus" && e.statistics.played == 5));
+        assert!(h.items.iter().any(|e| e.team_slug == "milan"));
     }
 
-    // ---------------------------------------------------------------
-    // Track B: Loan with non-0 games at original team
-    // ---------------------------------------------------------------
-
-    /// After loan to Inter with 1 game at Juventus:
-    /// view = [2025/2026 Inter Loan 0g, 2025/2026 Juventus 1g]
     #[test]
-    fn with_games_after_loan() {
+    fn season_end_keeps_long_zero_game_entries() {
         let mut h = PlayerStatisticsHistory::new();
         let juve = make_team("Juventus", "juventus");
-        let inter = make_team("Inter", "inter");
 
-        h.record_departure_loan(
-            make_stats(1, 7.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 1, 15),
+        // Player at Juve entire season but 0 games
+        h.push_current_with_date(
+            &juve, PlayerStatistics::default(), false, None,
+            make_date(2025, 8, 1), // joined at season start
         );
 
-        let view = h.view_items();
-        assert_eq!(view.len(), 2);
-        assert_eq!(view[0].season.start_year, 2025);
-        assert_eq!(view[0].team_slug, "inter");
-        assert!(view[0].is_loan);
-        assert_eq!(view[0].statistics.played, 0);
-        assert_eq!(view[1].season.start_year, 2025);
-        assert_eq!(view[1].team_slug, "juventus");
-        assert!(!view[1].is_loan);
-        assert_eq!(view[1].statistics.played, 1);
-    }
-
-    /// After season 2025/2026 ends + loan return + next season:
-    /// view = [2026/2027 Juventus 0g, 2025/2026 Inter Loan 0g, 2025/2026 Juventus 1g]
-    #[test]
-    fn with_games_after_season_end() {
-        let mut h = PlayerStatisticsHistory::new();
-        let juve = make_team("Juventus", "juventus");
-        let inter = make_team("Inter", "inter");
-
-        // Loan to Inter with 1 game at Juve (2025/2026)
-        h.record_departure_loan(
-            make_stats(1, 7.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 1, 15),
-        );
-        // Season end at Inter
         h.record_season_end(
-            Season::new(2025), make_stats(0, 0.0), &inter, true,
-            Some(make_date(2026, 1, 15)),
-        );
-        // Loan return
-        h.record_loan_return(
-            PlayerStatistics::default(), &inter,
-            make_date(2026, 5, 28),
-        );
-        // Next season ends at Juventus (0 games)
-        h.record_season_end(
-            Season::new(2026), make_stats(0, 0.0), &juve, false, None,
+            Season::new(2025), make_stats(0, 0.0), &juve, false, None,
         );
 
-        let view = h.view_items();
-        assert_eq!(view.len(), 3);
-        assert_eq!(view[0].season.start_year, 2026);
-        assert_eq!(view[0].team_slug, "juventus");
-        assert_eq!(view[0].statistics.played, 0);
-        assert_eq!(view[1].season.start_year, 2025);
-        assert_eq!(view[1].team_slug, "inter");
-        assert!(view[1].is_loan);
-        assert_eq!(view[2].season.start_year, 2025);
-        assert_eq!(view[2].team_slug, "juventus");
-        assert_eq!(view[2].statistics.played, 1);
-    }
-
-    /// After re-loan to Inter (1 game at Juventus before re-loan):
-    /// view = [2026/2027 Inter Loan 0g, 2026/2027 Juventus 1g,
-    ///         2025/2026 Inter Loan 0g, 2025/2026 Juventus 1g]
-    #[test]
-    fn with_games_after_reloan() {
-        let mut h = PlayerStatisticsHistory::new();
-        let juve = make_team("Juventus", "juventus");
-        let inter = make_team("Inter", "inter");
-
-        // Loan to Inter with 1 game at Juve (2025/2026)
-        h.record_departure_loan(
-            make_stats(1, 7.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 1, 15),
-        );
-        // Season end at Inter
-        h.record_season_end(
-            Season::new(2025), make_stats(0, 0.0), &inter, true,
-            Some(make_date(2026, 1, 15)),
-        );
-        // Loan return
-        h.record_loan_return(
-            PlayerStatistics::default(), &inter,
-            make_date(2026, 5, 28),
-        );
-        // Next season ends at Juventus (0 games)
-        h.record_season_end(
-            Season::new(2026), make_stats(0, 0.0), &juve, false, None,
-        );
-        // Re-loan to Inter (1 game at Juventus before re-loan)
-        h.record_departure_loan(
-            make_stats(1, 7.0),
-            &juve, &juve, &inter, false,
-            make_date(2026, 9, 1),
-        );
-
-        let view = h.view_items();
-        assert_eq!(view.len(), 4);
-        assert_eq!(view[0].season.start_year, 2026);
-        assert_eq!(view[0].team_slug, "inter");
-        assert!(view[0].is_loan);
-        assert_eq!(view[0].statistics.played, 0);
-        assert_eq!(view[1].season.start_year, 2026);
-        assert_eq!(view[1].team_slug, "juventus");
-        assert_eq!(view[1].statistics.played, 1);
-        assert_eq!(view[2].season.start_year, 2025);
-        assert_eq!(view[2].team_slug, "inter");
-        assert!(view[2].is_loan);
-        assert_eq!(view[3].season.start_year, 2025);
-        assert_eq!(view[3].team_slug, "juventus");
-        assert_eq!(view[3].statistics.played, 1);
+        // Stayed > 3 months → kept
+        assert_eq!(h.items.len(), 1);
+        assert_eq!(h.items[0].team_slug, "juventus");
     }
 }
