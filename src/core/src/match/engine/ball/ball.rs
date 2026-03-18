@@ -349,13 +349,13 @@ impl Ball {
 
     pub fn is_stands_outside(&self) -> bool {
         self.is_ball_outside()
-            && self.velocity.norm() < 0.5 // Changed from exact 0.0 to allow tiny velocities from physics
+            && self.velocity.norm_squared() < 0.25 // 0.5^2, allow tiny velocities from physics
             && self.current_owner.is_none()
     }
 
     pub fn is_ball_stopped_on_field(&self) -> bool {
         !self.is_ball_outside()
-            && self.velocity.norm() < 2.5 // Increased to catch slow rolling balls that need claiming
+            && self.velocity.norm_squared() < 6.25 // 2.5^2, catch slow rolling balls that need claiming
             && self.current_owner.is_none()
     }
 
@@ -571,16 +571,14 @@ impl Ball {
 
     fn is_players_running_to_ball(&self, players: &[MatchPlayer]) -> bool {
         let ball_position = self.position;
-        let player_positions: Vec<(Vector3<f32>, Vector3<f32>)> = players
-            .iter()
-            .map(|player| (player.position, player.velocity))
-            .collect();
 
-        for (player_position, player_velocity) in player_positions {
-            let direction_to_ball = (ball_position - player_position).normalize();
-            let player_direction = player_velocity.normalize();
-            let dot_product = direction_to_ball.dot(&player_direction);
-
+        for player in players {
+            let vel_sq = player.velocity.norm_squared();
+            if vel_sq < 0.001 {
+                continue; // Standing still
+            }
+            let to_ball = ball_position - player.position;
+            let dot_product = to_ball.dot(&player.velocity);
             if dot_product > 0.0 {
                 return true;
             }
@@ -623,28 +621,18 @@ impl Ball {
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
                 let distance_squared = dx * dx + dy * dy;
-                let ball_speed = self.velocity.norm();
+                let ball_speed_sq = self.velocity.norm_squared();
+                let min_vel_sq = MIN_VELOCITY_FOR_DISTANCE_CHECK * MIN_VELOCITY_FOR_DISTANCE_CHECK;
 
                 // Only clear ownership if ball is moving AND far from owner
                 // This prevents interference with deadlock claiming and boundary situations
-                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED && ball_speed > MIN_VELOCITY_FOR_DISTANCE_CHECK {
-                    // Check if ball is moving AWAY from owner (not towards them)
-                    let ball_dir_x = self.velocity.x / ball_speed;
-                    let ball_dir_y = self.velocity.y / ball_speed;
+                if distance_squared > MAX_OWNERSHIP_DISTANCE_SQUARED && ball_speed_sq > min_vel_sq {
+                    // Use unnormalized dot product — sign is what matters
+                    // dot(velocity, to_owner) < 0 means ball moving away from owner
+                    let dot = self.velocity.x * dx + self.velocity.y * dy;
 
-                    // Vector from ball to owner
-                    let to_owner_x = dx;
-                    let to_owner_y = dy;
-                    let to_owner_dist = (dx * dx + dy * dy).sqrt();
-
-                    if to_owner_dist > 0.1 {
-                        let to_owner_norm_x = to_owner_x / to_owner_dist;
-                        let to_owner_norm_y = to_owner_y / to_owner_dist;
-
-                        // Dot product: negative means ball is moving away from owner
-                        let dot = ball_dir_x * to_owner_norm_x + ball_dir_y * to_owner_norm_y;
-
-                        if dot < -0.3 { // Ball is clearly moving away from owner
+                    if distance_squared > 0.01 {
+                        if dot < 0.0 { // Ball is moving away from owner
                             // Owner is too far and ball is flying away - clear ownership
                             self.previous_owner = self.current_owner;
                             self.current_owner = None;
@@ -1113,7 +1101,7 @@ impl Ball {
         }
     }
 
-    fn update_velocity(&mut self) {
+    pub fn update_velocity(&mut self) {
         const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
@@ -1193,7 +1181,7 @@ impl Ball {
             self.velocity = self.velocity * 0.8; // Smooth final decay
 
             // Only fully stop when truly negligible
-            if self.velocity.norm() < 0.01 {
+            if self.velocity.norm_squared() < 0.0001 { // 0.01^2
                 self.velocity = Vector3::zeros();
                 self.position.z = 0.0;
             }
@@ -1290,6 +1278,76 @@ impl Ball {
             if self.position.z < 0.0 {
                 self.position.z = 0.0;
             }
+        }
+    }
+
+    /// Light update: full ball logic but reads owner position from players slice directly.
+    pub fn update_light(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        if self.claim_cooldown > 0 {
+            self.claim_cooldown -= 1;
+        }
+
+        self.update_velocity();
+        self.try_intercept(players, events);
+        self.process_ownership(context, players, events);
+
+        // Move ball: find owner position from players slice directly
+        self.move_to_with_players(players);
+        self.check_goal(context, events);
+        self.check_over_goal(context, players, events);
+        self.check_wide_of_goal(context, players, events);
+        self.check_boundary_collision(context);
+    }
+
+    fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
+        const MAX_OWNER_TELEPORT_DISTANCE_SQUARED: f32 = 15.0 * 15.0;
+        const BALL_TRACK_SPEED: f32 = 1.5;
+        const SNAP_DISTANCE_SQUARED: f32 = 2.0 * 2.0;
+
+        if let Some(owner_id) = self.current_owner {
+            if let Some(owner) = players.iter().find(|p| p.id == owner_id) {
+                let dx = owner.position.x - self.position.x;
+                let dy = owner.position.y - self.position.y;
+                let dist_sq = dx * dx + dy * dy;
+
+                if dist_sq <= MAX_OWNER_TELEPORT_DISTANCE_SQUARED {
+                    if dist_sq <= SNAP_DISTANCE_SQUARED {
+                        self.position = owner.position;
+                        self.position.z = 0.0;
+                        self.velocity = Vector3::zeros();
+                    } else {
+                        let dist = dist_sq.sqrt();
+                        self.position.x += (dx / dist) * BALL_TRACK_SPEED;
+                        self.position.y += (dy / dist) * BALL_TRACK_SPEED;
+                        self.position.z = 0.0;
+                        self.velocity = Vector3::zeros();
+                    }
+                } else {
+                    self.previous_owner = self.current_owner;
+                    self.current_owner = None;
+                    self.ownership_duration = 0;
+                    self.apply_movement();
+                }
+            } else {
+                self.apply_movement();
+            }
+        } else {
+            self.apply_movement();
+        }
+    }
+
+    /// Lightweight movement: just apply velocity to position (no ownership logic)
+    pub fn apply_movement(&mut self) {
+        self.position.x += self.velocity.x;
+        self.position.y += self.velocity.y;
+        self.position.z += self.velocity.z;
+        if self.position.z < 0.0 {
+            self.position.z = 0.0;
         }
     }
 

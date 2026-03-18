@@ -1,11 +1,23 @@
 use crate::I18n;
 use core::SimulatorData;
+use core::league::League;
 
 pub fn club_country_info(simulator_data: &SimulatorData, club_id: u32) -> (&str, &str) {
     simulator_data
         .country_by_club(club_id)
         .map(|c| (c.name.as_str(), c.slug.as_str()))
         .unwrap_or_default()
+}
+
+pub fn league_display_name(league: &League, i18n: &I18n, simulator_data: &SimulatorData) -> String {
+    let country_adj = simulator_data.country(league.country_id)
+        .map(|c| i18n.country_en(&c.code))
+        .unwrap_or("");
+    if country_adj.is_empty() {
+        league.name.clone()
+    } else {
+        format!("{} {}", country_adj, league.name)
+    }
 }
 
 pub struct MenuSection {

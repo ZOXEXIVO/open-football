@@ -1307,7 +1307,7 @@ impl ForwardRunningState {
     /// ONE-TWO COMBINATION: Check if the player who just passed to us has run
     /// ahead into space — return the ball for a wall-pass / give-and-go
     fn find_one_two_return<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        let recent_passers = &ctx.tick_context.ball.recent_passers;
+        let recent_passers = ctx.tick_context.ball.recent_passers();
         let passer_id = *recent_passers.last()?;
 
         // Passer must be a teammate

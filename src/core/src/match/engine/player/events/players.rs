@@ -933,7 +933,7 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 45.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 10.0; // Maximum realistic shot velocity per tick
+        const MAX_SHOT_VELOCITY: f32 = 8.0; // Maximum realistic shot velocity per tick
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();
@@ -1079,7 +1079,7 @@ impl PlayerEventDispatcher {
 
         // Calculate horizontal velocity with skill-based power
         let horizontal_direction = Vector3::new(shot_vector.x, shot_vector.y, 0.0).normalize();
-        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 2.0;
+        let base_horizontal_velocity = shoot_event_model.force as f32 * power_multiplier * 1.6;
 
         // Add power randomness (better players have more consistent power)
         let power_consistency = 0.96 + (technique_skill * 0.08); // 0.96 to 1.04

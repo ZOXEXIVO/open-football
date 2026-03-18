@@ -200,7 +200,7 @@ impl<'b> BallOperationsImpl<'b> {
     /// Check if current player has been notified to take the ball
     #[inline]
     pub fn is_player_notified(&self) -> bool {
-        self.ctx.tick_context.ball.notified_players.contains(&self.ctx.player.id)
+        self.ctx.tick_context.ball.notified_players().contains(&self.ctx.player.id)
     }
 
     /// Check if ball should be taken immediately (emergency situation)
@@ -247,7 +247,7 @@ impl<'b> BallOperationsImpl<'b> {
     pub fn passer_recency_penalty(&self, player_id: u32) -> f32 {
         const PENALTIES: [f32; 5] = [0.1, 0.3, 0.5, 0.7, 0.85];
 
-        let recent_passers = &self.ctx.tick_context.ball.recent_passers;
+        let recent_passers = self.ctx.tick_context.ball.recent_passers();
 
         // Search from end (most recent) to beginning (oldest)
         for (i, &passer_id) in recent_passers.iter().rev().enumerate() {

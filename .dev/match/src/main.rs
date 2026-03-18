@@ -5,7 +5,7 @@ use core::r#match::player::MatchPlayer;
 use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::staff_contract_mod::NaiveDate;
-use core::PlayerGenerator;
+use core::{PeopleNameGeneratorData, PlayerGenerator};
 use rayon::prelude::*;
 
 const POSITIONS_442: [PlayerPositionType; 11] = [
@@ -35,12 +35,17 @@ struct MatchSetup {
 }
 
 fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
+    let empty_names = PeopleNameGeneratorData {
+        first_names: Vec::new(),
+        last_names: Vec::new(),
+        nicknames: Vec::new(),
+    };
     let mut player = PlayerGenerator::generate(
         1,
         NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
         position,
         level,
-        None,
+        &empty_names,
     );
     player.id = id;
     player

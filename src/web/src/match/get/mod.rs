@@ -1,6 +1,6 @@
 pub mod routes;
 
-use crate::views::MenuSection;
+use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
@@ -286,7 +286,7 @@ pub async fn match_get_action(
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
-        sub_title: league.name.clone(),
+        sub_title: views::league_display_name(&league, &i18n, simulator_data),
         sub_title_link: format!("/{}/leagues/{}", &route_params.lang, &league.slug),
         sub_title_country_code: String::new(),
         header_color: String::new(),

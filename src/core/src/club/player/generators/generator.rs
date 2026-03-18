@@ -320,17 +320,27 @@ impl PlayerGenerator {
 
         // Generate name from country data
         let full_name = {
-            let first = &people_names.first_names
-                [IntegerUtils::random(0, people_names.first_names.len() as i32 - 1) as usize];
-            let last = &people_names.last_names
-                [IntegerUtils::random(0, people_names.last_names.len() as i32 - 1) as usize];
+            let first = if people_names.first_names.is_empty() {
+                String::from("Player")
+            } else {
+                people_names.first_names
+                    [IntegerUtils::random(0, people_names.first_names.len() as i32 - 1) as usize]
+                    .clone()
+            };
+            let last = if people_names.last_names.is_empty() {
+                format!("{}", IntegerUtils::random(1, 99999))
+            } else {
+                people_names.last_names
+                    [IntegerUtils::random(0, people_names.last_names.len() as i32 - 1) as usize]
+                    .clone()
+            };
 
             if !people_names.nicknames.is_empty() && IntegerUtils::random(0, 9) == 0 {
                 let nick = &people_names.nicknames
                     [IntegerUtils::random(0, people_names.nicknames.len() as i32 - 1) as usize];
-                FullName::with_nickname(first.clone(), last.clone(), nick.clone())
+                FullName::with_nickname(first, last, nick.clone())
             } else {
-                FullName::new(first.clone(), last.clone())
+                FullName::new(first, last)
             }
         };
 

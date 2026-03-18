@@ -22,6 +22,7 @@ use core::r#match::PlayerSide;
 use core::r#match::Score;
 use core::r#match::GOAL_WIDTH;
 use core::staff_contract_mod::NaiveDate;
+use core::PeopleNameGeneratorData;
 use core::PlayerGenerator;
 
 /// Tracks pass target for visualization
@@ -139,6 +140,8 @@ async fn main() {
 
     context.enable_logging();
 
+    let mut tick_ctx = core::r#match::engine::player::context::GameTickContext::new(&field);
+
     let mut current_frame = 0u64;
     let mut tick_frame = 0u64;
 
@@ -216,7 +219,7 @@ async fn main() {
                 if should_tick {
                     for _ in 0..ticks_per_frame {
                         context.increment_time();
-                        FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data);
+                        FootballEngine::<840, 545>::game_tick(&mut field, &mut context, &mut match_data, &mut tick_ctx);
                     }
                 }
 
@@ -411,12 +414,17 @@ pub fn get_away_squad() -> MatchSquad {
 }
 
 fn get_player(id: u32, position: PlayerPositionType) -> Player {
+    let empty_names = PeopleNameGeneratorData {
+        first_names: Vec::new(),
+        last_names: Vec::new(),
+        nicknames: Vec::new(),
+    };
     let mut player = PlayerGenerator::generate(
         1,
         NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
         position,
         20,
-        None,
+        &empty_names,
     );
 
     player.id = id;

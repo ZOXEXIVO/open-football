@@ -42,6 +42,9 @@ pub struct MatchPlayer {
 
     /// Accumulates fractional condition changes across ticks
     pub fatigue_accumulator: f32,
+
+    /// Cached waypoint vectors (only changes on substitution/half-time swap)
+    cached_waypoints: Vec<Vector3<f32>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -75,7 +78,18 @@ impl MatchPlayer {
             use_extended_state_logging,
             memory: PlayerMemory::new(),
             fatigue_accumulator: 0.0,
+            cached_waypoints: Vec::new(),
         }
+    }
+
+    pub fn rebuild_waypoint_cache(&mut self) {
+        self.cached_waypoints = self.tactical_position
+            .tactical_positions
+            .iter()
+            .filter(|tp| tp.position == self.tactical_position.current_position)
+            .flat_map(|tp| &tp.waypoints)
+            .map(|(x, y)| Vector3::new(*x, *y, 0.0))
+            .collect();
     }
 
     pub fn update(
@@ -94,7 +108,15 @@ impl MatchPlayer {
         self.move_to();
     }
 
-    fn check_boundary_collision(&mut self, context: &MatchContext) {
+    /// Movement-only update: apply existing velocity without re-evaluating AI state.
+    #[inline]
+    pub fn update_movement_only(&mut self, context: &MatchContext) {
+        self.in_state_time += 1;
+        self.check_boundary_collision(context);
+        self.move_to();
+    }
+
+    pub fn check_boundary_collision(&mut self, context: &MatchContext) {
         let field_width = context.field_size.width as f32 + 1.0;
         let field_height = context.field_size.height as f32 + 1.0;
 
@@ -123,6 +145,7 @@ impl MatchPlayer {
 
     pub fn set_default_state(&mut self) {
         self.state = Self::default_state(self.tactical_position.current_position);
+        self.rebuild_waypoint_cache();
     }
 
     fn default_state(position: PlayerPositionType) -> PlayerState {
@@ -151,7 +174,7 @@ impl MatchPlayer {
         }
     }
 
-    fn move_to(&mut self) {
+    pub fn move_to(&mut self) {
         #[cfg(debug_assertions)]
         let old_position = self.position;
 
@@ -200,20 +223,17 @@ impl MatchPlayer {
     }
 
     pub fn update_waypoint_index(&mut self, tick_context: &GameTickContext) {
+        if self.cached_waypoints.is_empty() {
+            self.rebuild_waypoint_cache();
+        }
         self.waypoint_manager.update(
             &tick_context.positions.players.position(self.id),
-            &self.get_waypoints_as_vectors(),
+            &self.cached_waypoints,
         );
     }
 
-    pub fn get_waypoints_as_vectors(&self) -> Vec<Vector3<f32>> {
-        self.tactical_position
-            .tactical_positions
-            .iter()
-            .filter(|tp| tp.position == self.tactical_position.current_position)
-            .flat_map(|tp| &tp.waypoints)
-            .map(|(x, y)| Vector3::new(*x, *y, 0.0))
-            .collect()
+    pub fn get_waypoints_as_vectors(&self) -> &[Vector3<f32>] {
+        &self.cached_waypoints
     }
 
     pub fn should_follow_waypoints(&self, ctx: &StateProcessingContext) -> bool {

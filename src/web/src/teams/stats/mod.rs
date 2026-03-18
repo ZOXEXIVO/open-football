@@ -120,6 +120,7 @@ pub async fn team_stats_action(
     let menu_params = views::MenuParams { i18n: &i18n, lang: &route_params.lang, current_path: &current_path, country_name: cn, country_slug: cs };
     let menu_sections = views::team_menu(&menu_params, &neighbor_refs, &team.slug, &league_refs, team.team_type == core::TeamType::Main);
     let title = team.name.clone();
+    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
 
     Ok(TeamStatsTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
@@ -128,7 +129,7 @@ pub async fn team_stats_action(
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
-        sub_title: league.map(|l| l.name.clone()).unwrap_or_default(),
+        sub_title: league_title,
         sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),

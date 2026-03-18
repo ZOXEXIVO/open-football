@@ -97,10 +97,12 @@ impl PlayerMatchState {
                 )
             };
 
-            let velocity_magnitude = velocity.norm();
+            let velocity_sq = velocity.norm_squared();
+            let max_speed_sq = max_speed * max_speed;
 
-            if velocity_magnitude > max_speed && velocity_magnitude > 0.0 {
+            if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
                 // Velocity is too high, clamp it to max_speed
+                let velocity_magnitude = velocity_sq.sqrt();
                 player.velocity = velocity * (max_speed / velocity_magnitude);
             } else {
                 player.velocity = velocity;

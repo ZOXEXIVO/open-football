@@ -188,8 +188,22 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
 
+        // Pre-allocate tick context and events, reuse across ticks
+        let mut tick_ctx = GameTickContext::new(field);
+        let mut events = EventCollection::new();
+
+        let mut tick_parity: u32 = 0;
+
         while context.increment_time() {
-            Self::game_tick(field, context, match_data);
+            tick_parity += 1;
+
+            // Full tick: ball + player AI + events
+            // Light tick: ball + player movement only (no AI re-evaluation)
+            if tick_parity & 1 == 0 {
+                Self::game_tick_light(field, context, match_data);
+            } else {
+                Self::game_tick_inner(field, context, match_data, &mut tick_ctx, &mut events);
+            }
 
             // Substitutions only during second half
             if context.state.match_state == MatchState::SecondHalf {
@@ -217,19 +231,85 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field: &mut MatchField,
         context: &mut MatchContext,
         match_data: &mut ResultMatchPositionData,
+        tick_ctx: &mut GameTickContext,
     ) {
-        // Recalculate N² distance matrix every 3 ticks
-        field.update_distances(3);
+        let mut events = EventCollection::new();
+        Self::game_tick_inner(field, context, match_data, tick_ctx, &mut events);
+    }
 
-        let game_tick_context = GameTickContext::new(field);
-
+    /// Light tick: full ball logic (physics, ownership, goals) but players only move.
+    fn game_tick_light(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+    ) {
         let mut events = EventCollection::new();
 
-        Self::play_ball(field, context, &game_tick_context, &mut events);
-        Self::play_players(field, context, &game_tick_context, &mut events);
+        // Full ball update without needing GameTickContext
+        field.ball.update_light(context, &field.players, &mut events);
+
+        // Players: just apply existing velocity
+        for player in field.players.iter_mut() {
+            player.check_boundary_collision(context);
+            player.move_to();
+        }
+
+        // Dispatch ball events (goals, claims, etc.)
+        EventDispatcher::dispatch(events.drain().collect(), field, context, match_data, true);
+
+        // Goal reset
+        if field.ball.goal_scored {
+            let kickoff_side = field.ball.kickoff_team_side;
+            field.reset_players_positions();
+            field.ball.reset();
+
+            if let Some(side) = kickoff_side {
+                let ball_pos = field.ball.position;
+                let kickoff_player_id = field.players.iter()
+                    .filter(|p| p.side == Some(side))
+                    .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
+                    .min_by(|a, b| {
+                        let da = (a.position - ball_pos).norm_squared();
+                        let db = (b.position - ball_pos).norm_squared();
+                        da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+                    })
+                    .map(|p| p.id);
+
+                if let Some(player_id) = kickoff_player_id {
+                    field.ball.current_owner = Some(player_id);
+                    field.ball.claim_cooldown = 120;
+                    field.ball.flags.in_flight_state = 120;
+                    field.ball.contested_claim_count = 0;
+                }
+            }
+
+            field.ball.goal_scored = false;
+            field.ball.kickoff_team_side = None;
+            context.record_goal_tick();
+        }
+
+        Self::write_match_positions(field, context.total_match_time, match_data);
+    }
+
+    fn game_tick_inner(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        match_data: &mut ResultMatchPositionData,
+        tick_ctx: &mut GameTickContext,
+        events: &mut EventCollection,
+    ) {
+        // Recalculate N² distance matrix every 5 ticks
+        field.update_distances(5);
+
+        tick_ctx.update(field);
+
+        events.clear();
+
+        Self::play_ball(field, context, tick_ctx, events);
+        Self::play_players(field, context, tick_ctx, events);
 
         // dispatch events
-        EventDispatcher::dispatch(events.to_vec(), field, context, match_data, true);
+        EventDispatcher::dispatch(events.drain().collect(), field, context, match_data, true);
 
         // After all events are dispatched, force-reset positions if a goal was scored.
         // This prevents stale events (ClaimBall, PassTo, etc.) from overriding the goal reset.
@@ -305,8 +385,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         field
             .players
             .iter_mut()
-            .map(|player| player.update(context, tick_context, events))
-            .collect()
+            .for_each(|player| player.update(context, tick_context, events));
     }
 
     fn process_substitutions(

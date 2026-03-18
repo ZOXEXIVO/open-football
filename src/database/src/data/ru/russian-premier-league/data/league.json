@@ -6,6 +6,9 @@
   "tier": 1,
   "promotion_spots": 0,
   "relegation_spots": 2,
+  "sub_leagues_competitions": [
+    "U19"
+  ],
   "settings": {
     "season_starting_half": {
       "from_day": 15,
@@ -21,9 +24,21 @@
     }
   },
   "foreign_players": [
-    {"country_id": 776, "weight": 3},
-    {"country_id": 1649, "weight": 5},
-    {"country_id": 769, "weight": 2},
-    {"country_id": 1651, "weight": 2}
+    {
+      "country_id": 776,
+      "weight": 3
+    },
+    {
+      "country_id": 1649,
+      "weight": 5
+    },
+    {
+      "country_id": 769,
+      "weight": 2
+    },
+    {
+      "country_id": 1651,
+      "weight": 2
+    }
   ]
 }

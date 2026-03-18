@@ -1,14 +1,26 @@
-use crate::r#match::{MatchField, VectorExtensions};
-use log::debug;
+use crate::r#match::{MatchField, MatchPlayer, VectorExtensions};
 use std::cmp::Ordering;
 
 const MAX_DISTANCE: f32 = 999.0;
+const MAX_PLAYERS: usize = 32;
+const SLOT_TABLE_SIZE: usize = 128;
+const SLOT_EMPTY: u8 = 0xFF;
+// Max entries per player in per_player flat array
+const MAX_NEIGHBORS: usize = MAX_PLAYERS - 1;
 
 #[derive(Debug, Clone)]
 pub struct PlayerDistanceClosure {
-    pub distances: Vec<PlayerDistanceItem>,
+    // Flat matrix: dist_matrix[slot_a * MAX_PLAYERS + slot_b] = distance
+    dist_matrix: [f32; MAX_PLAYERS * MAX_PLAYERS],
+    // Open-addressing hash: id_slots[hash(id)] = (player_id, slot)
+    id_slots: [(u32, u8); SLOT_TABLE_SIZE],
+    // Flat per-player neighbor data: per_player_data[slot * MAX_NEIGHBORS .. (slot+1) * MAX_NEIGHBORS]
+    per_player_data: Vec<(u32, bool, f32)>, // (other_id, same_team, distance)
+    per_player_len: [u8; MAX_PLAYERS],       // count per slot
+    num_players: usize,
 }
 
+// Keep for external use (e.g. debug tools)
 #[derive(Debug, Clone)]
 pub struct PlayerDistanceItem {
     pub player_from_id: u32,
@@ -18,62 +30,114 @@ pub struct PlayerDistanceItem {
     pub distance: f32,
 }
 
-impl From<&MatchField> for PlayerDistanceClosure {
-    fn from(field: &MatchField) -> Self {
-        let n = field.players.len();
-        let capacity = n * (n - 1); // Both (A→B) and (B→A) are stored
+impl PlayerDistanceClosure {
+    pub fn new() -> Self {
+        PlayerDistanceClosure {
+            dist_matrix: [MAX_DISTANCE; MAX_PLAYERS * MAX_PLAYERS],
+            id_slots: [(0, SLOT_EMPTY); SLOT_TABLE_SIZE],
+            per_player_data: vec![(0, false, 0.0); MAX_PLAYERS * MAX_NEIGHBORS],
+            per_player_len: [0; MAX_PLAYERS],
+            num_players: 0,
+        }
+    }
 
-        let mut distances = Vec::with_capacity(capacity);
-
-        for outer_player in &field.players {
-            for inner_player in &field.players {
-                if outer_player.id == inner_player.id {
-                    continue;
-                }
-
-                let distance = outer_player.position.distance_to(&inner_player.position);
-
-                distances.push(PlayerDistanceItem {
-                    player_from_id: outer_player.id,
-                    player_from_team: outer_player.team_id,
-                    player_to_id: inner_player.id,
-                    player_to_team: inner_player.team_id,
-                    distance,
-                });
+    #[inline(always)]
+    fn slot_of(&self, player_id: u32) -> Option<usize> {
+        let mask = (SLOT_TABLE_SIZE - 1) as u32;
+        let mut idx = player_id.wrapping_mul(2654435761) & mask;
+        for _ in 0..8 {
+            let entry = unsafe { self.id_slots.get_unchecked(idx as usize) };
+            if entry.1 == SLOT_EMPTY {
+                return None;
             }
+            if entry.0 == player_id {
+                return Some(entry.1 as usize);
+            }
+            idx = (idx + 1) & mask;
+        }
+        None
+    }
+
+    #[inline]
+    fn insert_slot(&mut self, player_id: u32, slot: u8) {
+        let mask = (SLOT_TABLE_SIZE - 1) as u32;
+        let mut idx = player_id.wrapping_mul(2654435761) & mask;
+        loop {
+            let entry = &mut self.id_slots[idx as usize];
+            if entry.1 == SLOT_EMPTY {
+                *entry = (player_id, slot);
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    pub fn update_from_field(&mut self, field: &MatchField) {
+        self.update_from_players(&field.players);
+    }
+
+    pub fn update_from_players(&mut self, players: &[MatchPlayer]) {
+        let n = players.len();
+        self.num_players = n;
+
+        // Reset hash table
+        self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+        for (slot, p) in players.iter().enumerate() {
+            self.insert_slot(p.id, slot as u8);
         }
 
-        PlayerDistanceClosure { distances }
+        // Reset per-player counts
+        for i in 0..n {
+            self.per_player_len[i] = 0;
+        }
+
+        for i in 0..n {
+            let outer = &players[i];
+            for j in 0..n {
+                if i == j {
+                    continue;
+                }
+                let inner = &players[j];
+                let dx = outer.position.x - inner.position.x;
+                let dy = outer.position.y - inner.position.y;
+                let distance = (dx * dx + dy * dy).sqrt();
+
+                self.dist_matrix[i * MAX_PLAYERS + j] = distance;
+
+                let same_team = outer.team_id == inner.team_id;
+                let count = self.per_player_len[i] as usize;
+                self.per_player_data[i * MAX_NEIGHBORS + count] = (inner.id, same_team, distance);
+                self.per_player_len[i] = (count + 1) as u8;
+            }
+        }
+    }
+}
+
+impl From<&MatchField> for PlayerDistanceClosure {
+    fn from(field: &MatchField) -> Self {
+        let mut closure = PlayerDistanceClosure::new();
+        closure.update_from_field(field);
+        closure
     }
 }
 
 impl PlayerDistanceClosure {
+    #[inline]
     pub fn get(&self, player_from_id: u32, player_to_id: u32) -> f32 {
         if player_from_id == player_to_id {
-            debug!(
-                "player {} and {} are the same",
-                player_from_id, player_to_id
-            );
             return 0.0;
         }
 
-        self.distances
-            .iter()
-            .find(|distance| {
-                (distance.player_from_id == player_from_id && distance.player_to_id == player_to_id)
-                    || (distance.player_from_id == player_to_id && distance.player_to_id == player_from_id)
-            })
-            .map(|dist| dist.distance)
-            .unwrap_or_else(|| {
-                MAX_DISTANCE  // Required for subs
-            })
-    }
+        let slot_a = match self.slot_of(player_from_id) {
+            Some(s) => s,
+            None => return MAX_DISTANCE,
+        };
+        let slot_b = match self.slot_of(player_to_id) {
+            Some(s) => s,
+            None => return MAX_DISTANCE,
+        };
 
-    pub fn get_collisions(&self, max_distance: f32) -> Vec<&PlayerDistanceItem> {
-        self.distances
-            .iter()
-            .filter(|&p| p.distance < max_distance)
-            .collect()
+        unsafe { *self.dist_matrix.get_unchecked(slot_a * MAX_PLAYERS + slot_b) }
     }
 
     pub fn teammates<'t>(
@@ -82,26 +146,17 @@ impl PlayerDistanceClosure {
         min_distance: f32,
         max_distance: f32,
     ) -> impl Iterator<Item = (u32, f32)> + 't {
-        self.distances
-            .iter()
-            .filter(move |p| p.distance >= min_distance && p.distance <= max_distance)
-            .filter_map(move |item| {
-                if item.player_from_id == item.player_to_id
-                {
-                    return None;
-                }
-                
-                if item.player_from_id == player_id && item.player_from_team == item.player_to_team
-                {
-                    return Some((item.player_to_id, item.distance));
-                }
-
-                if item.player_to_id == player_id && item.player_from_team == item.player_to_team {
-                    return Some((item.player_from_id, item.distance));
-                }
-
-                None
+        let slot = self.slot_of(player_id);
+        slot.into_iter()
+            .flat_map(move |s| {
+                let len = self.per_player_len[s] as usize;
+                let base = s * MAX_NEIGHBORS;
+                self.per_player_data[base..base + len].iter()
             })
+            .filter(move |(_, same_team, dist)| {
+                *same_team && *dist >= min_distance && *dist <= max_distance
+            })
+            .map(|(id, _, dist)| (*id, *dist))
     }
 
     pub fn opponents<'t>(
@@ -109,26 +164,17 @@ impl PlayerDistanceClosure {
         player_id: u32,
         distance: f32,
     ) -> impl Iterator<Item = (u32, f32)> + 't {
-        self.distances
-            .iter()
-            .filter(move |p| p.distance <= distance)
-            .filter_map(move |item| {
-                if item.player_from_id == item.player_to_id
-                {
-                    return None;
-                }
-                
-                if item.player_from_id == player_id && item.player_from_team != item.player_to_team
-                {
-                    return Some((item.player_to_id, item.distance));
-                }
-
-                if item.player_to_id == player_id && item.player_from_team != item.player_to_team {
-                    return Some((item.player_from_id, item.distance));
-                }
-
-                None
+        let slot = self.slot_of(player_id);
+        slot.into_iter()
+            .flat_map(move |s| {
+                let len = self.per_player_len[s] as usize;
+                let base = s * MAX_NEIGHBORS;
+                self.per_player_data[base..base + len].iter()
             })
+            .filter(move |(_, same_team, dist)| {
+                !*same_team && *dist <= distance
+            })
+            .map(|(id, _, dist)| (*id, *dist))
     }
 }
 

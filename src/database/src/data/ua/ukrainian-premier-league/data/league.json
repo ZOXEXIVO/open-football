@@ -20,6 +20,9 @@
       "to_month": 5
     }
   },
+  "sub_leagues_competitions": [
+    "U19"
+  ],
   "foreign_players": [
     {
       "country_id": 1651,

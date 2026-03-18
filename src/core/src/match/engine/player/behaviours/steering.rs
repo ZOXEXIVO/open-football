@@ -1,7 +1,7 @@
 ﻿use crate::r#match::MatchPlayer;
 use nalgebra::Vector3;
 
-pub enum SteeringBehavior {
+pub enum SteeringBehavior<'a> {
     Seek {
         target: Vector3<f32>,
     },
@@ -27,13 +27,13 @@ pub enum SteeringBehavior {
         target: Vector3<f32>,
     },
     FollowPath {
-        waypoints: Vec<Vector3<f32>>,
+        waypoints: &'a [Vector3<f32>],
         current_waypoint: usize,
         path_offset: f32,
     },
 }
 
-impl SteeringBehavior {
+impl<'a> SteeringBehavior<'a> {
     pub fn calculate(&self, player: &MatchPlayer) -> SteeringOutput {
         match self {
             SteeringBehavior::Seek { target } => {

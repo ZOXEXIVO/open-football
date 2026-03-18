@@ -811,7 +811,7 @@ impl MidfielderRunningState {
     /// ONE-TWO COMBINATION: Check if the player who just passed to us has run into
     /// a better forward position with space. If so, return the ball for a wall-pass.
     fn find_one_two_return<'a>(&self, ctx: &StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        let recent_passers = &ctx.tick_context.ball.recent_passers;
+        let recent_passers = ctx.tick_context.ball.recent_passers();
         // Get the most recent passer (last element in the ring buffer vec)
         let passer_id = *recent_passers.last()?;
 

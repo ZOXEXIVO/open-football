@@ -6,6 +6,7 @@
   "tier": 2,
   "promotion_spots": 3,
   "relegation_spots": 0,
+  "sub_leagues_competitions": ["U18"],
   "settings": {
     "season_starting_half": {
       "from_day": 26,

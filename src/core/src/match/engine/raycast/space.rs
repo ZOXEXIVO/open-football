@@ -1,5 +1,5 @@
-use crate::r#match::{MatchField, MatchPlayer};
 use nalgebra::Vector3;
+use crate::r#match::MatchField;
 
 pub struct Space {
     colliders: Vec<SphereCollider>,
@@ -10,22 +10,20 @@ impl From<&MatchField> for Space {
         let mut space = Space::new();
 
         // Add ball collider
-        let ball_radius = 0.11; // Assuming the ball radius is 0.11 meters (size 5 football)
         let ball_collider = SphereCollider {
             center: field.ball.position,
-            radius: ball_radius,
-            player: None,
+            radius: 0.11,
+            player_id: None,
         };
 
         space.add_collider(ball_collider);
 
-        // Add player colliders
+        // Add player colliders (no cloning — just store position + id)
         for player in &field.players {
-            let player_radius = 0.5; // Assuming the player radius is 0.5 meters
             let player_collider = SphereCollider {
                 center: player.position,
-                radius: player_radius,
-                player: Some(player.clone()),
+                radius: 0.5,
+                player_id: Some(player.id),
             };
             space.add_collider(player_collider);
         }
@@ -45,6 +43,22 @@ impl Space {
         self.colliders.push(collider);
     }
 
+    pub fn update(&mut self, field: &MatchField) {
+        self.colliders.clear();
+        self.colliders.push(SphereCollider {
+            center: field.ball.position,
+            radius: 0.11,
+            player_id: None,
+        });
+        for player in &field.players {
+            self.colliders.push(SphereCollider {
+                center: player.position,
+                radius: 0.5,
+                player_id: Some(player.id),
+            });
+        }
+    }
+
     pub fn cast_ray(
         &self,
         origin: Vector3<f32>,
@@ -55,14 +69,11 @@ impl Space {
         let mut closest_hit: Option<RaycastHit<SphereCollider>> = None;
         let mut closest_distance = max_distance;
 
-        // Iterate through all colliders in the space
         for collider in &self.colliders {
-            // Check if the collider belongs to a player
-            if collider.match_player().is_some() && !include_players {
+            if collider.is_player() && !include_players {
                 continue;
             }
 
-            // Perform ray intersection test with the collider
             if let Some(intersection) = collider.intersect_ray(origin, direction) {
                 let distance = (intersection - origin).magnitude();
 
@@ -92,16 +103,14 @@ pub struct RaycastHit<T: Collider> {
 pub trait Collider: Clone {
     fn intersect_ray(&self, origin: Vector3<f32>, direction: Vector3<f32>) -> Option<Vector3<f32>>;
     fn normal(&self, point: Vector3<f32>) -> Vector3<f32>;
-    fn match_player(&self) -> Option<&MatchPlayer>;
+    fn is_player(&self) -> bool;
 }
-
-// Example collider implementations
 
 #[derive(Clone)]
 pub struct SphereCollider {
     pub center: Vector3<f32>,
     pub radius: f32,
-    pub player: Option<MatchPlayer>,
+    pub player_id: Option<u32>,
 }
 
 impl Collider for SphereCollider {
@@ -113,24 +122,19 @@ impl Collider for SphereCollider {
         let discriminant = b * b - 4.0 * a * c;
 
         if discriminant < 0.0 {
-            // No intersection
             None
         } else {
             let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
             let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
 
             if t1 >= 0.0 && t2 >= 0.0 {
-                // Two intersections, return the closer one
                 let t = t1.min(t2);
                 Some(origin + t * direction)
             } else if t1 >= 0.0 {
-                // One intersection (t1)
                 Some(origin + t1 * direction)
             } else if t2 >= 0.0 {
-                // One intersection (t2)
                 Some(origin + t2 * direction)
             } else {
-                // No intersection (both t1 and t2 are negative)
                 None
             }
         }
@@ -140,7 +144,7 @@ impl Collider for SphereCollider {
         (point - self.center).normalize()
     }
 
-    fn match_player(&self) -> Option<&MatchPlayer> {
-        self.player.as_ref()
+    fn is_player(&self) -> bool {
+        self.player_id.is_some()
     }
 }

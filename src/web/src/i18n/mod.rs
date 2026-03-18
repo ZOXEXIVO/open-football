@@ -30,12 +30,14 @@ const DAY_KEYS: &[&str] = &[
 
 pub struct I18nManager {
     translations: HashMap<String, Arc<HashMap<String, String>>>,
+    country_names: HashMap<String, Arc<HashMap<String, String>>>,
     date: RwLock<NaiveDateTime>,
 }
 
 impl I18nManager {
     pub fn new() -> Self {
         let mut translations = HashMap::new();
+        let mut country_names = HashMap::new();
 
         for &(lang, _, _) in SUPPORTED_LANGUAGES {
             let path = format!("i18n/{}.json", lang);
@@ -46,10 +48,20 @@ impl I18nManager {
             let map: HashMap<String, String> = serde_json::from_str(json_str)
                 .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", path, e));
             translations.insert(lang.to_string(), Arc::new(map));
+
+            let countries_path = format!("i18n/countries/{}.json", lang);
+            if let Some(data) = Assets::get(&countries_path) {
+                let json_str = std::str::from_utf8(&data.data)
+                    .unwrap_or_else(|_| panic!("Invalid UTF-8 in {}", countries_path));
+                let map: HashMap<String, String> = serde_json::from_str(json_str)
+                    .unwrap_or_else(|e| panic!("Invalid JSON in {}: {}", countries_path, e));
+                country_names.insert(lang.to_string(), Arc::new(map));
+            }
         }
 
         I18nManager {
             translations,
+            country_names,
             date: RwLock::new(NaiveDateTime::default()),
         }
     }
@@ -88,9 +100,20 @@ impl I18nManager {
         let date_main = format!("{} {} {}", date.day(), t(month_key), date.year());
         let date_sub = t(day_key);
 
+        let country_names = self.country_names.get(lang_key).cloned()
+            .unwrap_or_else(|| Arc::new(HashMap::new()));
+        let country_names_fallback = if lang_key != DEFAULT_LANGUAGE {
+            self.country_names.get(DEFAULT_LANGUAGE).cloned()
+                .unwrap_or_else(|| Arc::new(HashMap::new()))
+        } else {
+            country_names.clone()
+        };
+
         I18n {
             translations,
             fallback,
+            country_names,
+            country_names_fallback,
             lang: lang_key.to_string(),
             date_main,
             date_sub,
@@ -105,6 +128,8 @@ impl I18nManager {
 pub struct I18n {
     translations: Arc<HashMap<String, String>>,
     fallback: Arc<HashMap<String, String>>,
+    country_names: Arc<HashMap<String, String>>,
+    country_names_fallback: Arc<HashMap<String, String>>,
     pub lang: String,
     pub date_main: String,
     pub date_sub: String,
@@ -122,6 +147,19 @@ impl I18n {
             .or_else(|| self.fallback.get(key))
             .map(|s| s.as_str())
             .unwrap_or(key)
+    }
+
+    pub fn country<'a>(&'a self, code: &'a str) -> &'a str {
+        self.country_names.get(code)
+            .or_else(|| self.country_names_fallback.get(code))
+            .map(|s| s.as_str())
+            .unwrap_or(code)
+    }
+
+    pub fn country_en<'a>(&'a self, code: &'a str) -> &'a str {
+        self.country_names_fallback.get(code)
+            .map(|s| s.as_str())
+            .unwrap_or(code)
     }
 
     pub fn current_flag(&self) -> &'static str {

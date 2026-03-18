@@ -13,4 +13,9 @@ impl MatchObjectsPositions {
             players: PlayerFieldData::from(field)
         }
     }
+
+    pub fn update(&mut self, field: &MatchField) {
+        self.ball = BallFieldData::from(&field.ball);
+        self.players.update(field);
+    }
 }

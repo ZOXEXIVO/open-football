@@ -5141,7 +5141,7 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-date {
-        padding: 0 6px;
+        padding: 0px 10px 0 0;
     }
 
     .fm-date-main {
@@ -5706,8 +5706,14 @@ a:link, a:visited, a:hover, a:active {
 }
 
 @keyframes fm-dlg-in {
-    from { opacity: 0; transform: translateY(-10px) scale(0.97); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from {
+        opacity: 0;
+        transform: translateY(-10px) scale(0.97);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+    }
 }
 
 .fm-dlg-header {
@@ -5775,11 +5781,16 @@ a:link, a:visited, a:hover, a:active {
     padding-right: 28px;
 }
 
-.fm-ac-wrap { position: relative; }
+.fm-ac-wrap {
+    position: relative;
+}
+
 .fm-ac-list {
     display: none;
     position: absolute;
-    left: 0; right: 0; top: 100%;
+    left: 0;
+    right: 0;
+    top: 100%;
     max-height: 200px;
     overflow-y: auto;
     background: #151c22;
@@ -5788,12 +5799,14 @@ a:link, a:visited, a:hover, a:active {
     border-radius: 0 0 4px 4px;
     z-index: 10;
 }
+
 .fm-ac-item {
     padding: 7px 10px;
     font-size: 13px;
     color: #d0d6dc;
     cursor: pointer;
 }
+
 .fm-ac-item:hover {
     background: #1e2830;
 }

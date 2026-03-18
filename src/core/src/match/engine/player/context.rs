@@ -19,6 +19,13 @@ impl GameTickContext {
             space: Space::from(field),
         }
     }
+
+    pub fn update(&mut self, field: &MatchField) {
+        self.ball.update(field);
+        self.positions.update(field);
+        self.distances = field.cached_distances.clone();
+        self.space.update(field);
+    }
 }
 
 pub struct BallMetadata {
@@ -27,23 +34,60 @@ pub struct BallMetadata {
 
     pub current_owner: Option<u32>,
     pub last_owner: Option<u32>,
-    pub notified_players: Vec<u32>,
+
+    notified_buf: [u32; 4],
+    notified_len: u8,
 
     pub ownership_duration: u32,
-    pub recent_passers: Vec<u32>,
+
+    recent_buf: [u32; 5],
+    recent_len: u8,
 }
 
-impl From<&MatchField> for BallMetadata {
-    fn from(field: &MatchField) -> Self {
-        BallMetadata {
-            is_owned: field.ball.current_owner.is_some(),
-            is_in_flight_state: field.ball.flags.in_flight_state,
-            current_owner: field.ball.current_owner,
-            last_owner: field.ball.previous_owner,
-            notified_players: field.ball.take_ball_notified_players.clone(),
-            ownership_duration: field.ball.ownership_duration,
-            recent_passers: field.ball.recent_passers.iter().copied().collect(),
+impl BallMetadata {
+    #[inline]
+    pub fn notified_players(&self) -> &[u32] {
+        &self.notified_buf[..self.notified_len as usize]
+    }
+
+    #[inline]
+    pub fn recent_passers(&self) -> &[u32] {
+        &self.recent_buf[..self.recent_len as usize]
+    }
+
+    fn update(&mut self, field: &MatchField) {
+        self.is_owned = field.ball.current_owner.is_some();
+        self.is_in_flight_state = field.ball.flags.in_flight_state;
+        self.current_owner = field.ball.current_owner;
+        self.last_owner = field.ball.previous_owner;
+        self.ownership_duration = field.ball.ownership_duration;
+
+        self.notified_len = field.ball.take_ball_notified_players.len().min(4) as u8;
+        for (i, &id) in field.ball.take_ball_notified_players.iter().take(4).enumerate() {
+            self.notified_buf[i] = id;
+        }
+
+        self.recent_len = field.ball.recent_passers.len().min(5) as u8;
+        for (i, &id) in field.ball.recent_passers.iter().take(5).enumerate() {
+            self.recent_buf[i] = id;
         }
     }
 }
 
+impl From<&MatchField> for BallMetadata {
+    fn from(field: &MatchField) -> Self {
+        let mut meta = BallMetadata {
+            is_owned: false,
+            is_in_flight_state: 0,
+            current_owner: None,
+            last_owner: None,
+            notified_buf: [0; 4],
+            notified_len: 0,
+            ownership_duration: 0,
+            recent_buf: [0; 5],
+            recent_len: 0,
+        };
+        meta.update(field);
+        meta
+    }
+}

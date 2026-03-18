@@ -124,8 +124,7 @@ impl DatabaseGenerator {
                 );
 
                 let mut leagues_vec = DatabaseGenerator::generate_leagues(country.id, data);
-                DatabaseGenerator::create_youth_leagues(country.id, &mut clubs, &mut leagues_vec);
-                DatabaseGenerator::create_friendly_leagues(country.id, &mut clubs, &mut leagues_vec);
+                DatabaseGenerator::create_subteams_leagues(country.id, &mut clubs, &mut leagues_vec, data);
                 let leagues = LeagueCollection::new(leagues_vec);
 
                 let settings = CountrySettings {
@@ -181,7 +180,7 @@ impl DatabaseGenerator {
             .collect()
     }
 
-    fn create_youth_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>) {
+    fn create_subteams_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>, data: &DatabaseEntity) {
         // Build a map: club_id → parent league_id (from the club's Main team)
         let club_league_map: Vec<(u32, u32)> = clubs
             .iter()
@@ -194,123 +193,80 @@ impl DatabaseGenerator {
             })
             .collect();
 
-        // Snapshot parent leagues to create one U18 league per parent
+        // Snapshot parent leagues to create subleagues per configured team type
         let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
             .iter()
             .map(|l| (l.id, l.name.clone(), l.slug.clone(), l.reputation, l.settings.clone()))
             .collect();
 
         for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
-            // Check if any club in this parent league has a U18 team
-            let has_u18 = clubs.iter().any(|club| {
-                club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
-                    && club.teams.teams.iter().any(|t| t.team_type == TeamType::U18)
-            });
+            // Find sub_leagues_competitions config from the league entity
+            let team_types: Vec<TeamType> = data.leagues
+                .iter()
+                .find(|l| l.id == *parent_id)
+                .map(|l| {
+                    l.sub_leagues_competitions.iter()
+                        .filter_map(|s| TeamType::from_str(s).ok())
+                        .collect()
+                })
+                .unwrap_or_default();
 
-            if !has_u18 {
-                continue;
-            }
+            for team_type in &team_types {
+                // Check if any club in this parent league has this team type
+                let has_type = clubs.iter().any(|club| {
+                    club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
+                        && club.teams.teams.iter().any(|t| t.team_type == *team_type)
+                });
 
-            let youth_league_id = parent_id + 100000;
-            let youth_reputation = (parent_rep / 10).max(100);
-
-            let youth_settings = LeagueSettings {
-                season_starting_half: parent_settings.season_starting_half,
-                season_ending_half: parent_settings.season_ending_half,
-                tier: 99,
-                promotion_spots: 0,
-                relegation_spots: 0,
-            };
-
-            let youth_league = League::new(
-                youth_league_id,
-                format!("{} U18", parent_name),
-                format!("{}-u18", parent_slug),
-                country_id,
-                youth_reputation,
-                youth_settings,
-                true,
-            );
-
-            leagues.push(youth_league);
-
-            // Assign U18 teams to this youth league based on their club's parent league
-            for club in clubs.iter_mut() {
-                let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
-                if !is_in_parent {
+                if !has_type {
                     continue;
                 }
-                for team in &mut club.teams.teams {
-                    if team.team_type == TeamType::U18 {
-                        team.league_id = Some(youth_league_id);
+
+                // Deterministic league ID offset per team type
+                let type_offset = match team_type {
+                    TeamType::U18 => 100000,
+                    TeamType::U19 => 110000,
+                    TeamType::U20 => 120000,
+                    TeamType::U21 => 130000,
+                    TeamType::U23 => 140000,
+                    _ => continue,
+                };
+
+                let youth_league_id = parent_id + type_offset;
+                let youth_reputation = (parent_rep / 10).max(100);
+                let type_label = format!("{}", team_type);
+                let type_slug = type_label.to_lowercase();
+
+                let youth_settings = LeagueSettings {
+                    season_starting_half: parent_settings.season_starting_half,
+                    season_ending_half: parent_settings.season_ending_half,
+                    tier: 99,
+                    promotion_spots: 0,
+                    relegation_spots: 0,
+                };
+
+                let youth_league = League::new(
+                    youth_league_id,
+                    format!("{} {}", parent_name, type_label),
+                    format!("{}-{}", parent_slug, type_slug),
+                    country_id,
+                    youth_reputation,
+                    youth_settings,
+                    true,
+                );
+
+                leagues.push(youth_league);
+
+                // Assign matching teams to this youth league
+                for club in clubs.iter_mut() {
+                    let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
+                    if !is_in_parent {
+                        continue;
                     }
-                }
-            }
-        }
-    }
-
-    fn create_friendly_leagues(country_id: u32, clubs: &mut [Club], leagues: &mut Vec<League>) {
-        // Build a map: club_id → parent league_id (from the club's Main team)
-        let club_league_map: Vec<(u32, u32)> = clubs
-            .iter()
-            .filter_map(|club| {
-                let main_league_id = club.teams.teams
-                    .iter()
-                    .find(|t| t.team_type == TeamType::Main)
-                    .and_then(|t| t.league_id)?;
-                Some((club.id, main_league_id))
-            })
-            .collect();
-
-        let parent_leagues: Vec<(u32, String, String, u16, LeagueSettings)> = leagues
-            .iter()
-            .filter(|l| !l.friendly)
-            .map(|l| (l.id, l.name.clone(), l.slug.clone(), l.reputation, l.settings.clone()))
-            .collect();
-
-        for (parent_id, parent_name, parent_slug, parent_rep, parent_settings) in &parent_leagues {
-            // Find clubs in this parent league that have teams without a league assignment
-            let has_unassigned = clubs.iter().any(|club| {
-                club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id)
-                    && club.teams.teams.iter().any(|t| t.league_id.is_none())
-            });
-
-            if !has_unassigned {
-                continue;
-            }
-
-            let friendly_league_id = parent_id + 200000;
-            let friendly_reputation = (parent_rep / 10).max(100);
-
-            let friendly_settings = LeagueSettings {
-                season_starting_half: parent_settings.season_starting_half,
-                season_ending_half: parent_settings.season_ending_half,
-                tier: 99,
-                promotion_spots: 0,
-                relegation_spots: 0,
-            };
-
-            let friendly_league = League::new(
-                friendly_league_id,
-                format!("{} Reserves", parent_name),
-                format!("{}-reserves", parent_slug),
-                country_id,
-                friendly_reputation,
-                friendly_settings,
-                true,
-            );
-
-            leagues.push(friendly_league);
-
-            // Assign teams without league_id to this friendly league
-            for club in clubs.iter_mut() {
-                let is_in_parent = club_league_map.iter().any(|(cid, lid)| *cid == club.id && lid == parent_id);
-                if !is_in_parent {
-                    continue;
-                }
-                for team in &mut club.teams.teams {
-                    if team.league_id.is_none() {
-                        team.league_id = Some(friendly_league_id);
+                    for team in &mut club.teams.teams {
+                        if team.team_type == *team_type {
+                            team.league_id = Some(youth_league_id);
+                        }
                     }
                 }
             }

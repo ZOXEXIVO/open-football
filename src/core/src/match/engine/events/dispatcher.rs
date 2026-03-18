@@ -48,6 +48,14 @@ impl EventCollection {
         }
     }
 
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+
+    pub fn drain(&mut self) -> std::vec::Drain<'_, Event> {
+        self.events.drain(..)
+    }
+
     pub fn to_vec(self) -> Vec<Event> {
         self.events
     }

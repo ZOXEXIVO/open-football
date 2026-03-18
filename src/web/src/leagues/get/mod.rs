@@ -360,9 +360,11 @@ pub async fn league_get_action(
         })
         .collect();
 
+    let league_title = views::league_display_name(&league, &i18n, simulator_data);
+
     Ok(LeagueGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        title: league.name.clone(),
+        title: league_title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: country.name.clone(),

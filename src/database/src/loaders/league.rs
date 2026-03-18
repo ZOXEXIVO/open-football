@@ -27,6 +27,8 @@ pub struct LeagueEntity {
     pub relegation_spots: u8,
     #[serde(default)]
     pub foreign_players: Vec<ForeignPlayerEntry>,
+    #[serde(default)]
+    pub sub_leagues_competitions: Vec<String>,
 }
 
 fn default_enabled() -> bool {

@@ -231,6 +231,7 @@ pub async fn team_get_action(
     let title = team.name.clone();
 
     let watchlist_ids = simulator_data.watchlist.clone();
+    let league_title = league.map(|l| views::league_display_name(l, &i18n, simulator_data)).unwrap_or_default();
 
     Ok(TeamGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
@@ -239,7 +240,7 @@ pub async fn team_get_action(
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
-        sub_title: league.map(|l| l.name.clone()).unwrap_or_default(),
+        sub_title: league_title,
         sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
