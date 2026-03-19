@@ -310,12 +310,18 @@ pub async fn player_history_action(
 
         let current_is_loan = player.is_on_loan() || is_loaned_in;
 
-        // Current season transfer info from history entries
+        // Current season transfer info: check live current-season entries first, then frozen history
         let current_season_year = if month >= 7 { year as u16 } else { (year - 1) as u16 };
-        let current_history_entry = player.statistics_history.items.iter()
-            .find(|h| h.season.start_year == current_season_year && h.team_slug == current_display_slug);
+        let current_fee = player.statistics_history.current.iter().rev()
+            .find(|e| e.team_slug == current_display_slug)
+            .and_then(|e| e.transfer_fee)
+            .or_else(|| {
+                player.statistics_history.items.iter()
+                    .find(|h| h.season.start_year == current_season_year && h.team_slug == current_display_slug)
+                    .and_then(|h| h.transfer_fee)
+            });
 
-        let current_transfer_fee = match current_history_entry.and_then(|h| h.transfer_fee) {
+        let current_transfer_fee = match current_fee {
             Some(f) if f > 0.0 => FormattingUtils::format_money(f),
             Some(_) => "Free".to_string(),
             None => String::new(),
