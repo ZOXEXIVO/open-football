@@ -446,7 +446,10 @@ impl PlayerGenerator {
                 _ => phys_gw,
             };
 
-            let raw = base * age_curve(i, age) * pos_w[i] * gw;
+            // Position weight adjusts as bonus/penalty around the base, not as a multiplier.
+            // w=1.0 → no change, w=1.5 → +50% bonus, w=0.3 → base * 0.55 (floor at ~55%)
+            let pos_adjust = 0.55 + 0.45 * pos_w[i];
+            let raw = base * age_curve(i, age) * pos_adjust * gw;
             skills[i] = raw.min(max_possible).clamp(1.0, 20.0);
         }
 
