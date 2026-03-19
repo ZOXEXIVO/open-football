@@ -170,11 +170,10 @@ mod tests {
         assert_eq!(player.statistics.goals, 0);
         assert_eq!(player.last_transfer_date, Some(make_date(2032, 1, 15)));
 
-        assert_eq!(player.statistics_history.current.len(), 2);
-        assert_eq!(player.statistics_history.current[0].team_slug, "inter");
-        assert_eq!(player.statistics_history.current[0].statistics.played, 20);
-        assert_eq!(player.statistics_history.current[1].team_slug, "juventus");
-        assert_eq!(player.statistics_history.current[1].transfer_fee, Some(5_000_000.0));
+        // Only destination added — source stats saved if entry exists (none here for fresh player)
+        let juve = player.statistics_history.current.iter().find(|e| e.team_slug == "juventus");
+        assert!(juve.is_some());
+        assert_eq!(juve.unwrap().transfer_fee, Some(5_000_000.0));
     }
 
     // ---------------------------------------------------------------
@@ -192,9 +191,10 @@ mod tests {
         player.on_loan(&from, &to, 50_000.0, make_date(2032, 1, 15));
 
         assert_eq!(player.statistics.played, 0);
-        assert_eq!(player.statistics_history.current.len(), 2);
-        assert!(!player.statistics_history.current[0].is_loan);
-        assert!(player.statistics_history.current[1].is_loan);
+        // Only loan destination added
+        let torino = player.statistics_history.current.iter().find(|e| e.team_slug == "torino");
+        assert!(torino.is_some());
+        assert!(torino.unwrap().is_loan);
     }
 
     // ---------------------------------------------------------------
@@ -202,7 +202,7 @@ mod tests {
     // ---------------------------------------------------------------
 
     #[test]
-    fn on_loan_return_merges_stats() {
+    fn on_loan_return_updates_stats() {
         let mut player = make_player();
         player.statistics = make_stats(15, 4);
 
@@ -225,8 +225,10 @@ mod tests {
         player.on_loan_return(&borrowing, make_date(2032, 5, 31));
 
         assert_eq!(player.statistics.played, 0);
-        // Loan entry updated + parent placeholder added
-        let torino = player.statistics_history.current.iter().find(|e| e.team_slug == "torino").unwrap();
+        // Upsert updates existing Torino loan entry with 15 games
+        let torino = player.statistics_history.current.iter()
+            .find(|e| e.team_slug == "torino" && e.is_loan)
+            .unwrap();
         assert_eq!(torino.statistics.played, 15);
         assert_eq!(torino.transfer_fee, Some(50_000.0));
     }
@@ -312,11 +314,14 @@ mod tests {
 
         // Both entries had games, both should be finalized
         assert_eq!(player.statistics_history.items.len(), 2);
-        assert_eq!(player.statistics_history.current.len(), 0);
+        // current has 1 entry: seeded empty entry for new season
+        assert_eq!(player.statistics_history.current.len(), 1);
+        assert_eq!(player.statistics_history.current[0].team_slug, "juventus");
+        assert_eq!(player.statistics_history.current[0].statistics.total_games(), 0);
     }
 
     #[test]
-    fn on_season_end_merges_two_stints() {
+    fn on_season_end_merges_live_stats_into_current_team() {
         let mut player = make_player();
         player.statistics = make_stats(5, 2);
 

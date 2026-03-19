@@ -83,7 +83,7 @@ impl CountryResult {
 
         // Phase 2: Execute all completed transfers (domestic + foreign) via unified path
         for transfer in deferred_transfers {
-            execution::execute_transfer(
+            let success = execution::execute_transfer(
                 data,
                 transfer.player_id,
                 transfer.selling_country_id,
@@ -94,6 +94,18 @@ impl CountryResult {
                 transfer.is_loan,
                 current_date,
             );
+
+            // Remove phantom transfer record if execution failed
+            // (e.g. player already moved via another negotiation)
+            if !success {
+                if let Some(country) = data.country_mut(transfer.buying_country_id) {
+                    country.transfer_market.transfer_history.retain(|t| {
+                        !(t.player_id == transfer.player_id
+                            && t.to_club_id == transfer.buying_club_id
+                            && t.transfer_date == current_date)
+                    });
+                }
+            }
         }
 
         // Phase 3: Foreign negotiation initiation (after domestic, so local has priority)

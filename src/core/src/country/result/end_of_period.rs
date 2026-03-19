@@ -6,6 +6,13 @@ use crate::{ClubResult, Country, Person, PlayerStatusType, TeamInfo};
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
 
+struct LoanReturnEvent {
+    player_id: u32,
+    borrowing_club_id: u32,
+    parent_club_id: u32,
+    borrowing_info: TeamInfo,
+}
+
 impl CountryResult {
     pub(super) fn process_end_of_period(
         data: &mut SimulatorData,
@@ -68,30 +75,33 @@ impl CountryResult {
             return;
         }
 
-        if let Some(country) = data.country_mut(country_id) {
-            Self::process_contract_expirations(country, date);
+        // Phase 1: Scan — collect expired loans as lightweight events
+        let events = Self::scan_expired_loans(data, country_id, date);
+
+        // Phase 2: Execute — move players by club ID (country-agnostic)
+        for event in events {
+            Self::execute_loan_return(data, event, date);
         }
     }
 
-    fn process_contract_expirations(country: &mut Country, date: NaiveDate) {
-        debug!("Processing contract expirations");
+    /// Read-only scan: find players with expired loan contracts in this country.
+    fn scan_expired_loans(
+        data: &SimulatorData,
+        country_id: u32,
+        date: NaiveDate,
+    ) -> Vec<LoanReturnEvent> {
+        let country = match data.country(country_id) {
+            Some(c) => c,
+            None => return Vec::new(),
+        };
 
-        // Build league lookup for history entries
         let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
             .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
             .collect();
 
-        // Phase 1: Collect expired loan returns
-        struct LoanReturn {
-            player_id: u32,
-            borrowing_club_idx: usize,
-            parent_club_id: u32,
-            borrowing_info: TeamInfo,
-        }
+        let mut events = Vec::new();
 
-        let mut loan_returns: Vec<LoanReturn> = Vec::new();
-
-        for (club_idx, club) in country.clubs.iter().enumerate() {
+        for club in &country.clubs {
             let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
                 .find(|t| t.team_type == crate::TeamType::Main)
                 .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
@@ -117,9 +127,9 @@ impl CountryResult {
                     if let Some(ref loan_contract) = player.contract_loan {
                         if loan_contract.expiration <= date {
                             if let Some(parent_club_id) = loan_contract.loan_from_club_id {
-                                loan_returns.push(LoanReturn {
+                                events.push(LoanReturnEvent {
                                     player_id: player.id,
-                                    borrowing_club_idx: club_idx,
+                                    borrowing_club_id: club.id,
                                     parent_club_id,
                                     borrowing_info: TeamInfo {
                                         name: team_name.clone(),
@@ -136,39 +146,49 @@ impl CountryResult {
             }
         }
 
-        // Phase 2: Execute loan returns
-        for loan_return in loan_returns {
-            let parent_exists = country.clubs.iter().any(|c| c.id == loan_return.parent_club_id)
-                && country.clubs.iter().any(|c| c.id == loan_return.parent_club_id && !c.teams.teams.is_empty());
+        events
+    }
 
-            if !parent_exists {
-                debug!("Loan return skipped: parent club {} not found in country for player {}", loan_return.parent_club_id, loan_return.player_id);
-                continue;
-            }
-
-            let mut player_opt = None;
-            for team in &mut country.clubs[loan_return.borrowing_club_idx].teams.teams {
-                if let Some(p) = team.players.take_player(&loan_return.player_id) {
-                    player_opt = Some(p);
-                    break;
-                }
-            }
-
-            if let Some(mut player) = player_opt {
-                player.on_loan_return(&loan_return.borrowing_info, date);
-
-                player.contract_loan = None;
-                player.happiness = crate::PlayerHappiness::new();
-                player.statuses.statuses.clear();
-
-                if let Some(parent_club) = country.clubs.iter_mut().find(|c| c.id == loan_return.parent_club_id) {
-                    if !parent_club.teams.teams.is_empty() {
-                        info!("Loan return: player {} returns to club {}", loan_return.player_id, loan_return.parent_club_id);
-                        parent_club.teams.teams[0].players.add(player);
-                    }
-                }
-            }
+    /// Execute a single loan return: take player from borrowing club, place at parent club.
+    /// Both clubs are resolved globally by ID — works for domestic and cross-country.
+    fn execute_loan_return(
+        data: &mut SimulatorData,
+        event: LoanReturnEvent,
+        date: NaiveDate,
+    ) {
+        // Find parent club location first — abort early if missing
+        let parent_pos = data.find_club_main_team(event.parent_club_id);
+        if parent_pos.is_none() {
+            debug!("Loan return skipped: parent club {} not found for player {}",
+                event.parent_club_id, event.player_id);
+            return;
         }
+
+        // Take player from wherever they are
+        let player_pos = data.find_player_position(event.player_id);
+        let mut player = match player_pos {
+            Some((ci, coi, cli, ti)) => {
+                match data.continents[ci].countries[coi].clubs[cli]
+                    .teams.teams[ti].players.take_player(&event.player_id)
+                {
+                    Some(p) => p,
+                    None => return,
+                }
+            }
+            None => return,
+        };
+
+        player.on_loan_return(&event.borrowing_info, date);
+        player.contract_loan = None;
+        player.happiness = crate::PlayerHappiness::new();
+        player.statuses.statuses.clear();
+
+        // Place at parent club
+        let (ci, coi, cli, ti) = parent_pos.unwrap();
+        info!("Loan return: player {} from club {} back to club {}",
+            event.player_id, event.borrowing_club_id, event.parent_club_id);
+        data.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.add(player);
     }
 
     /// Monthly check: retire players who are clearly past max retirement age

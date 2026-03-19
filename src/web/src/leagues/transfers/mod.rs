@@ -162,8 +162,8 @@ pub async fn league_transfers_action(
                     || league_club_ids.contains(&t.to_club_id))
         })
         .map(|t| {
-            let from_team_slug = get_first_team_slug(country, t.from_club_id);
-            let to_team_slug = get_first_team_slug(country, t.to_club_id);
+            let from_team_slug = get_first_team_slug(simulator_data, country, t.from_club_id);
+            let to_team_slug = get_first_team_slug(simulator_data, country, t.to_club_id);
             CompletedTransferItem {
                 player_id: t.player_id,
                 player_name: t.player_name.clone(),
@@ -252,12 +252,19 @@ pub async fn league_transfers_action(
     })
 }
 
-fn get_first_team_slug(country: &core::Country, club_id: u32) -> String {
+fn get_first_team_slug(simulator_data: &core::SimulatorData, country: &core::Country, club_id: u32) -> String {
+    // Try local country first (common case)
     country
         .clubs
         .iter()
         .find(|c| c.id == club_id)
         .and_then(|c| c.teams.teams.first())
         .map(|t| t.slug.clone())
+        .or_else(|| {
+            // Fall back to global lookup for cross-country transfers
+            simulator_data.club(club_id)
+                .and_then(|c| c.teams.teams.first())
+                .map(|t| t.slug.clone())
+        })
         .unwrap_or_default()
 }

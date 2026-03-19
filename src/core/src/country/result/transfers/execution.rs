@@ -9,6 +9,7 @@ use crate::simulator::SimulatorData;
 /// Unified transfer execution — handles both domestic and cross-country.
 /// When selling_country_id == buying_country_id it's domestic (single country).
 /// When different, the player moves between countries.
+/// Returns true if the player was successfully placed at the buying club.
 pub(crate) fn execute_transfer(
     data: &mut SimulatorData,
     player_id: u32,
@@ -19,12 +20,12 @@ pub(crate) fn execute_transfer(
     fee: f64,
     is_loan: bool,
     date: NaiveDate,
-) {
+) -> bool {
     // Safety: never transfer/loan a player to their own club
     if selling_club_id == buying_club_id {
         debug!("Blocked self-transfer: club {} tried to {} player {} to itself",
             selling_club_id, if is_loan { "loan" } else { "transfer" }, player_id);
-        return;
+        return false;
     }
 
     // Safety: can't loan a player who is already on loan
@@ -34,24 +35,26 @@ pub(crate) fn execute_transfer(
             .unwrap_or(false);
         if already_on_loan {
             debug!("Blocked re-loan: player {} is already on loan", player_id);
-            return;
+            return false;
         }
     }
     if selling_country_id == buying_country_id {
         // Domestic — work within a single country
         if let Some(country) = data.country_mut(selling_country_id) {
             if is_loan {
-                execute_loan_within_country(country, player_id, selling_club_id, buying_club_id, fee, date);
+                execute_loan_within_country(country, player_id, selling_club_id, buying_club_id, fee, date)
             } else {
-                execute_transfer_within_country(country, player_id, selling_club_id, buying_club_id, fee, date);
+                execute_transfer_within_country(country, player_id, selling_club_id, buying_club_id, fee, date)
             }
+        } else {
+            false
         }
     } else {
         // Cross-country — take from one country, place in another
         if is_loan {
-            execute_loan_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date);
+            execute_loan_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date)
         } else {
-            execute_transfer_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date);
+            execute_transfer_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date)
         }
     }
 }
@@ -67,7 +70,7 @@ pub(crate) fn execute_transfer_within_country(
     buying_club_id: u32,
     fee: f64,
     date: NaiveDate,
-) {
+) -> bool {
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
@@ -126,7 +129,7 @@ pub(crate) fn execute_transfer_within_country(
                     }
                     selling_club.finance.add_transfer_income(-fee);
                 }
-                return;
+                return false;
             }
             buying_club.finance.spend_from_transfer_budget(fee);
             if !buying_club.teams.teams.is_empty() {
@@ -140,6 +143,10 @@ pub(crate) fn execute_transfer_within_country(
         }
 
         debug!("Transfer completed: player {} from club {} to club {} for {}", player_id, selling_club_id, buying_club_id, fee);
+        true
+    } else {
+        debug!("Transfer failed: player {} not found at club {}", player_id, selling_club_id);
+        false
     }
 }
 
@@ -150,7 +157,7 @@ fn execute_loan_within_country(
     buying_club_id: u32,
     loan_fee: f64,
     date: NaiveDate,
-) {
+) -> bool {
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
@@ -229,7 +236,7 @@ fn execute_loan_within_country(
                         selling_club.teams.teams[0].players.add(player);
                     }
                 }
-                return;
+                return false;
             }
 
             let salary = (loan_fee / 50.0).max(200.0) as u32;
@@ -248,6 +255,10 @@ fn execute_loan_within_country(
         }
 
         debug!("Loan completed: player {} from club {} to club {} (fee: {})", player_id, selling_club_id, buying_club_id, loan_fee);
+        true
+    } else {
+        debug!("Loan failed: player {} not found at club {}", player_id, selling_club_id);
+        false
     }
 }
 
@@ -328,20 +339,20 @@ fn execute_transfer_across_countries(
     buying_club_id: u32,
     fee: f64,
     date: NaiveDate,
-) {
+) -> bool {
     let taken = take_player_from_selling_country(data, player_id, selling_country_id, selling_club_id, fee, false);
 
     let (mut player, from_info, _) = match taken {
         Some(v) => v,
         None => {
             debug!("Transfer failed: player {} not found in country {}", player_id, selling_country_id);
-            return;
+            return false;
         }
     };
 
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
-        None => return,
+        None => return false,
     };
 
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
@@ -363,7 +374,7 @@ fn execute_transfer_across_countries(
                     }
                 }
             }
-            return;
+            return false;
         }
         buying_club.finance.spend_from_transfer_budget(fee);
         if !buying_club.teams.teams.is_empty() {
@@ -372,6 +383,7 @@ fn execute_transfer_across_countries(
     }
 
     debug!("Transfer completed: player {} from country {} to country {} (fee: {})", player_id, selling_country_id, buying_country_id, fee);
+    true
 }
 
 fn execute_loan_across_countries(
@@ -383,7 +395,7 @@ fn execute_loan_across_countries(
     buying_club_id: u32,
     loan_fee: f64,
     date: NaiveDate,
-) {
+) -> bool {
     // Get loan end date from selling country's league before taking the player
     let selling_league_id = data.country(selling_country_id)
         .and_then(|c| c.clubs.iter().find(|cl| cl.id == selling_club_id))
@@ -403,13 +415,13 @@ fn execute_loan_across_countries(
         Some(v) => v,
         None => {
             debug!("Loan failed: player {} not found in country {}", player_id, selling_country_id);
-            return;
+            return false;
         }
     };
 
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
-        None => return,
+        None => return false,
     };
 
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
@@ -430,7 +442,7 @@ fn execute_loan_across_countries(
                     }
                 }
             }
-            return;
+            return false;
         }
         let salary = (loan_fee / 50.0).max(200.0) as u32;
         player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id));
@@ -442,6 +454,7 @@ fn execute_loan_across_countries(
     }
 
     debug!("Loan completed: player {} from country {} to country {} (fee: {})", player_id, selling_country_id, buying_country_id, loan_fee);
+    true
 }
 
 // ============================================================
