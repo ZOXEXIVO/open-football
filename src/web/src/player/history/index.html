@@ -29,25 +29,6 @@
                 </tr>
             </thead>
             <tbody>
-                {% if !is_retired %}
-                <tr class="fm-stats-current">
-                    <td>{{ current_season }}</td>
-                    <td class="sq-club"><a href="/{{ lang }}/teams/{{ team_slug }}">{{ current_club }}</a></td>
-                    <td class="sq-nat">{% if !current_country_code.is_empty() %}<a href="/{{ lang }}/countries/{{ current_country_slug }}"><span class="flag flag-{{ current_country_code }}" title="{{ current_country_name }}"></span> {{ current_country_name }}</a>{% endif %}</td>
-                    <td class="sq-league">{% if !current_league_slug.is_empty() %}<a href="/{{ lang }}/leagues/{{ current_league_slug }}">{{ current_league_name }}</a>{% endif %}</td>
-                    <td class="sq-fee">{% if current_is_loan %}{{ i18n.t("loan") }}{% else if !current_transfer_fee.is_empty() %}{{ current_transfer_fee }}{% endif %}</td>
-                    <td class="sq-stat">{{ current.played + current.played_subs }}</td>
-                    {% if is_goalkeeper %}
-                    <td class="sq-stat">{{ current.conceded }}</td>
-                    <td class="sq-stat">{{ current.clean_sheets }}</td>
-                    {% else %}
-                    <td class="sq-stat">{{ current.goals }}</td>
-                    <td class="sq-stat">{{ current.assists }}</td>
-                    {% endif %}
-                    <td class="sq-stat">{{ current.player_of_the_match }}</td>
-                    <td class="sq-stat">{{ current.average_rating }}</td>
-                </tr>
-                {% endif %}
                 {% for item in items %}
                 <tr>
                     <td>{{ item.season }}</td>

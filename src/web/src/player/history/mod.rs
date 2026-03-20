@@ -6,7 +6,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::utils::FormattingUtils;
-use chrono::{Datelike, NaiveDate};
+use chrono::Datelike;
 use core::SimulatorData;
 use serde::Deserialize;
 
@@ -32,21 +32,9 @@ pub struct PlayerHistoryTemplate {
     pub i18n: crate::I18n,
     pub lang: String,
     pub active_tab: &'static str,
-    pub team_slug: String,
     pub player_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
-    pub current_club: String,
-    pub current_is_loan: bool,
-    pub current_transfer_fee: String,
-    pub current_season: String,
-    pub current: PlayerHistoryStats,
-    pub current_country_code: String,
-    pub current_country_name: String,
-    pub current_country_slug: String,
-    pub current_league_name: String,
-    pub current_league_slug: String,
     pub is_goalkeeper: bool,
-    pub is_retired: bool,
     pub is_on_loan: bool,
     pub is_injured: bool,
 }
@@ -64,7 +52,6 @@ pub struct PlayerHistorySeasonItem {
     pub country_slug: String,
     pub league_name: String,
     pub league_slug: String,
-    pub seq_id: u32,
 }
 
 pub struct PlayerHistoryStats {
@@ -222,7 +209,6 @@ pub async fn player_history_action(
                 country_slug: location.map(|l| l.country_slug.clone()).unwrap_or_default(),
                 league_name,
                 league_slug,
-                seq_id: item.seq_id,
             }
         })
         .collect();
@@ -234,11 +220,50 @@ pub async fn player_history_action(
     let sim_date = simulator_data.date.date();
     let year = sim_date.year();
     let month = sim_date.month();
-    let current_season = if month >= 7 {
-        format!("{}/{}", year, (year + 1) % 100)
-    } else {
-        format!("{}/{}", year - 1, year % 100)
-    };
+
+    // For active players, patch the current-season entry with live stats
+    if let Some(team) = team_opt {
+        let main_team_slug = if team.team_type != core::TeamType::Main {
+            simulator_data.club(team.club_id)
+                .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
+                .map(|t| t.slug.clone())
+        } else {
+            None
+        };
+        let current_display_slug = main_team_slug.as_deref().unwrap_or(&team.slug);
+        let current_season_year = if month >= 7 { year as u16 } else { (year - 1) as u16 };
+        let current_is_loan = player.is_on_loan() || is_loaned_in;
+
+        // Find current-season entry and patch with live stats + mark as current
+        if let Some(current_item) = items.iter_mut().find(|item| {
+            item.start_year == current_season_year && item.team_slug == current_display_slug
+        }) {
+            current_item.is_loan = current_is_loan;
+            current_item.stats = PlayerHistoryStats {
+                played: player.statistics.played,
+                played_subs: player.statistics.played_subs,
+                goals: player.statistics.goals,
+                assists: player.statistics.assists,
+                player_of_the_match: player.statistics.player_of_the_match,
+                average_rating: player.statistics.average_rating_str(),
+                conceded: player.statistics.conceded,
+                clean_sheets: player.statistics.clean_sheets,
+            };
+
+            // Resolve transfer fee from core
+            let fee = player.statistics_history.current_transfer_fee(current_display_slug, current_season_year);
+            current_item.transfer_fee = match fee {
+                Some(f) if f > 0.0 => FormattingUtils::format_money(f),
+                Some(_) => "Free".to_string(),
+                None => String::new(),
+            };
+
+            // Use club name for display
+            if let Some(club) = simulator_data.club(team.club_id) {
+                current_item.team_name = club.name.clone();
+            }
+        }
+    }
 
     if is_retired {
         Ok(PlayerHistoryTemplate {
@@ -255,83 +280,14 @@ pub async fn player_history_action(
             i18n,
             lang: route_params.lang.clone(),
             active_tab: "history",
-            team_slug: String::new(),
             player_id: route_params.player_id,
             items,
-            current_club: String::new(),
-            current_is_loan: false,
-            current_transfer_fee: String::new(),
-            current_season,
-            current: PlayerHistoryStats {
-                played: 0,
-                played_subs: 0,
-                goals: 0,
-                assists: 0,
-                player_of_the_match: 0,
-                average_rating: String::new(),
-                conceded: 0,
-                clean_sheets: 0,
-            },
-            current_country_code: String::new(),
-            current_country_name: String::new(),
-            current_country_slug: String::new(),
-            current_league_name: String::new(),
-            current_league_slug: String::new(),
             is_goalkeeper: player.position().is_goalkeeper(),
-            is_retired: true,
             is_on_loan: false,
             is_injured: false,
         })
     } else {
         let team = team_opt.unwrap();
-
-        let current = PlayerHistoryStats {
-            played: player.statistics.played,
-            played_subs: player.statistics.played_subs,
-            goals: player.statistics.goals,
-            assists: player.statistics.assists,
-            player_of_the_match: player.statistics.player_of_the_match,
-            average_rating: player.statistics.average_rating_str(),
-            conceded: player.statistics.conceded,
-            clean_sheets: player.statistics.clean_sheets,
-        };
-
-        // For non-main teams, resolve main team's slug and league info
-        let main_team_slug = if team.team_type != core::TeamType::Main {
-            simulator_data.club(team.club_id)
-                .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
-                .map(|t| t.slug.clone())
-        } else {
-            None
-        };
-        let current_display_slug = main_team_slug.as_deref().unwrap_or(&team.slug);
-
-        let current_location = find_team_location(simulator_data, current_display_slug);
-
-        let current_is_loan = player.is_on_loan() || is_loaned_in;
-
-        // Current season transfer info: check live current-season entries first, then frozen history
-        let current_season_year = if month >= 7 { year as u16 } else { (year - 1) as u16 };
-        let current_fee = player.statistics_history.current.iter().rev()
-            .find(|e| e.team_slug == current_display_slug)
-            .and_then(|e| e.transfer_fee)
-            .or_else(|| {
-                player.statistics_history.items.iter()
-                    .find(|h| h.season.start_year == current_season_year && h.team_slug == current_display_slug)
-                    .and_then(|h| h.transfer_fee)
-            });
-
-        let current_transfer_fee = match current_fee {
-            Some(f) if f > 0.0 => FormattingUtils::format_money(f),
-            Some(_) => "Free".to_string(),
-            None => String::new(),
-        };
-
-        // Remove the current team's current-season entry from history items —
-        // it is already shown as the hardcoded "current" row at the top.
-        items.retain(|item| {
-            !(item.start_year == current_season_year && item.team_slug == current_display_slug)
-        });
 
         Ok(PlayerHistoryTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
@@ -352,21 +308,9 @@ pub async fn player_history_action(
             i18n,
             lang: route_params.lang.clone(),
             active_tab: "history",
-            team_slug: current_display_slug.to_string(),
             player_id: route_params.player_id,
             items,
-            current_club: simulator_data.club(team.club_id).map(|c| c.name.clone()).unwrap_or_else(|| team.name.clone()),
-            current_is_loan,
-            current_transfer_fee,
-            current_season,
-            current,
-            current_country_code: current_location.as_ref().map(|l| l.country_code.clone()).unwrap_or_default(),
-            current_country_name: current_location.as_ref().map(|l| l.country_name.clone()).unwrap_or_default(),
-            current_country_slug: current_location.as_ref().map(|l| l.country_slug.clone()).unwrap_or_default(),
-            current_league_name: current_location.as_ref().map(|l| l.league_name.clone()).unwrap_or_default(),
-            current_league_slug: current_location.as_ref().map(|l| l.league_slug.clone()).unwrap_or_default(),
             is_goalkeeper: player.position().is_goalkeeper(),
-            is_retired: false,
             is_on_loan: player.is_on_loan(),
             is_injured: player.player_attributes.is_injured,
         })

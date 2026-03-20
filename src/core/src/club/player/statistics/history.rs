@@ -180,6 +180,21 @@ impl PlayerStatisticsHistory {
         self.upsert_current(team, PlayerStatistics::default(), is_loan, None, new_season_start);
     }
 
+    // ── Query: pure read, no mutation ──────────────────────
+
+    /// Get the transfer fee for a team in the current season.
+    /// Checks live current-season entries first, falls back to frozen history.
+    pub fn current_transfer_fee(&self, team_slug: &str, season_year: u16) -> Option<f64> {
+        self.current.iter().rev()
+            .find(|e| e.team_slug == team_slug)
+            .and_then(|e| e.transfer_fee)
+            .or_else(|| {
+                self.items.iter()
+                    .find(|h| h.season.start_year == season_year && h.team_slug == team_slug)
+                    .and_then(|h| h.transfer_fee)
+            })
+    }
+
     // ── View: pure read, no mutation ────────────────────────
 
     /// Returns all history (past seasons) + current season entries,
@@ -212,7 +227,7 @@ impl PlayerStatisticsHistory {
 
         result.sort_by(|a, b| {
             b.season.start_year.cmp(&a.season.start_year)
-                .then(a.seq_id.cmp(&b.seq_id))
+                .then(b.seq_id.cmp(&a.seq_id))
         });
         result
     }
