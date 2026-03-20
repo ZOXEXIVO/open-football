@@ -7,7 +7,7 @@ use crate::league::LeagueTable;
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
-use crate::Player;
+use crate::{Player, TeamInfo};
 use chrono::{Duration, NaiveDateTime};
 use std::collections::HashMap;
 use std::time::Instant;
@@ -121,6 +121,7 @@ impl SimulatorData {
         data.indexes = Some(indexes);
 
         data.init_league_tables();
+        data.seed_player_histories();
 
         data
     }
@@ -149,6 +150,41 @@ impl SimulatorData {
 
                     if !team_ids.is_empty() {
                         league.table = LeagueTable::new(&team_ids);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Seed statistics history for all players that have no history yet.
+    fn seed_player_histories(&mut self) {
+        let date = self.date.date();
+
+        for continent in &mut self.continents {
+            for country in &mut continent.countries {
+                // Build league lookup: league_id -> (name, slug)
+                let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
+                    .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
+                    .collect();
+
+                for club in &mut country.clubs {
+                    for team in &mut club.teams.teams {
+                        let (league_name, league_slug) = team.league_id
+                            .and_then(|lid| league_lookup.get(&lid))
+                            .cloned()
+                            .unwrap_or_default();
+
+                        let team_info = TeamInfo {
+                            name: team.name.clone(),
+                            slug: team.slug.clone(),
+                            reputation: team.reputation.world,
+                            league_name,
+                            league_slug,
+                        };
+
+                        for player in &mut team.players.players {
+                            player.statistics_history.seed_initial_team(&team_info, date);
+                        }
                     }
                 }
             }

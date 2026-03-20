@@ -180,6 +180,16 @@ impl PlayerStatisticsHistory {
         self.upsert_current(team, PlayerStatistics::default(), is_loan, None, new_season_start);
     }
 
+    // ── Initial seeding ───────────────────────────────────
+
+    /// Seed the player's history with their initial team when the game starts.
+    /// Only seeds if history is completely empty (no current entries).
+    pub fn seed_initial_team(&mut self, team: &TeamInfo, date: NaiveDate) {
+        if self.current.is_empty() && self.items.is_empty() {
+            self.upsert_current(team, PlayerStatistics::default(), false, None, date);
+        }
+    }
+
     // ── Query: pure read, no mutation ──────────────────────
 
     /// Get the transfer fee for a team in the current season.
