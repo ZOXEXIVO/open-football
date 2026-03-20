@@ -168,18 +168,34 @@ impl SimulatorData {
                     .collect();
 
                 for club in &mut country.clubs {
+                    // Get main team info — used for all teams in player history
+                    let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
+                        .find(|t| t.team_type == crate::TeamType::Main)
+                        .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
+
+                    let main_team_league = club.teams.teams.iter()
+                        .find(|t| t.team_type == crate::TeamType::Main)
+                        .and_then(|t| t.league_id)
+                        .and_then(|lid| league_lookup.get(&lid))
+                        .cloned()
+                        .unwrap_or_default();
+
                     for team in &mut club.teams.teams {
-                        let (league_name, league_slug) = team.league_id
-                            .and_then(|lid| league_lookup.get(&lid))
-                            .cloned()
-                            .unwrap_or_default();
+                        let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
+                            (crate::TeamType::Main, _) | (_, None) => {
+                                (team.name.clone(), team.slug.clone(), team.reputation.world)
+                            }
+                            (_, Some((name, slug, rep))) => {
+                                (name.clone(), slug.clone(), *rep)
+                            }
+                        };
 
                         let team_info = TeamInfo {
-                            name: team.name.clone(),
-                            slug: team.slug.clone(),
-                            reputation: team.reputation.world,
-                            league_name,
-                            league_slug,
+                            name: team_name,
+                            slug: team_slug,
+                            reputation: team_reputation,
+                            league_name: main_team_league.0.clone(),
+                            league_slug: main_team_league.1.clone(),
                         };
 
                         for player in &mut team.players.players {
