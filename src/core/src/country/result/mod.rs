@@ -40,8 +40,11 @@ impl CountryResult {
             league_result.process(data, result);
         }
 
-        // Snapshot player statistics when new season starts (all match stats are now up-to-date)
+        // Process loan returns BEFORE snapshot so that players are back at their
+        // parent clubs when season history is recorded. Otherwise on_season_end
+        // seeds a stale entry for the borrowing club that becomes a phantom.
         if any_new_season {
+            Self::process_loan_returns(data, country_id, current_date);
             Self::snapshot_player_season_statistics(data, self.country_id);
         }
 
@@ -67,10 +70,10 @@ impl CountryResult {
             }
         }
 
-        // Phase 2.5: Process loan returns — runs AFTER club results so that
-        // ClubResult player references (contract proposals etc.) are fully processed
-        // before players are moved between clubs
-        Self::process_loan_returns(data, country_id, current_date);
+        // Regular loan return check for non-season-end days
+        if !any_new_season {
+            Self::process_loan_returns(data, country_id, current_date);
+        }
 
         // Phase 3: Pre-season activities (if applicable)
         if season_dates.is_off_season(current_date) {

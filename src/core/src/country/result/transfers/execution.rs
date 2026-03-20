@@ -111,7 +111,23 @@ pub(crate) fn execute_transfer_within_country(
             from.league_slug = league_slug;
         }
 
+        // Check squad capacity BEFORE recording history — otherwise a rejected
+        // transfer creates a phantom career entry with no matching transfer record
         let to_info = resolve_buying_club_info(country, buying_club_id);
+        let can_accept = country.clubs.iter().find(|c| c.id == buying_club_id)
+            .map(|c| can_club_accept_player(c))
+            .unwrap_or(false);
+
+        if !can_accept {
+            debug!("Transfer rejected: club {} squad full, returning player {}", buying_club_id, player_id);
+            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                if !selling_club.teams.teams.is_empty() {
+                    selling_club.teams.teams[0].players.add(player);
+                }
+                selling_club.finance.add_transfer_income(-fee);
+            }
+            return false;
+        }
 
         if let (Some(from), Some(to)) = (from_info, to_info) {
             player.on_transfer(&from, &to, fee, date);
@@ -121,16 +137,6 @@ pub(crate) fn execute_transfer_within_country(
         assign_new_contract(&mut player, fee, date, false);
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            if !can_club_accept_player(buying_club) {
-                debug!("Transfer rejected: club {} squad full, returning player {}", buying_club_id, player_id);
-                if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                    if !selling_club.teams.teams.is_empty() {
-                        selling_club.teams.teams[0].players.add(player);
-                    }
-                    selling_club.finance.add_transfer_income(-fee);
-                }
-                return false;
-            }
             buying_club.finance.spend_from_transfer_budget(fee);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
@@ -218,7 +224,24 @@ fn execute_loan_within_country(
             from.league_slug = league_slug;
         }
 
+        let loan_end = compute_loan_end(selling_league_id, country, date);
+
+        // Check squad capacity BEFORE recording history — otherwise a rejected
+        // loan creates a phantom career entry with no matching transfer record
         let to_info = resolve_buying_club_info(country, buying_club_id);
+        let can_accept = country.clubs.iter().find(|c| c.id == buying_club_id)
+            .map(|c| can_club_accept_player(c))
+            .unwrap_or(false);
+
+        if !can_accept {
+            debug!("Loan rejected: club {} squad full, returning player {}", buying_club_id, player_id);
+            if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                if !selling_club.teams.teams.is_empty() {
+                    selling_club.teams.teams[0].players.add(player);
+                }
+            }
+            return false;
+        }
 
         if let (Some(from), Some(to)) = (&from_info, to_info) {
             player.on_loan(from, &to, loan_fee, date);
@@ -226,19 +249,7 @@ fn execute_loan_within_country(
 
         clear_transfer_statuses(&mut player);
 
-        let loan_end = compute_loan_end(selling_league_id, country, date);
-
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            if !can_club_accept_player(buying_club) {
-                debug!("Loan rejected: club {} squad full, returning player {}", buying_club_id, player_id);
-                if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                    if !selling_club.teams.teams.is_empty() {
-                        selling_club.teams.teams[0].players.add(player);
-                    }
-                }
-                return false;
-            }
-
             let salary = (loan_fee / 50.0).max(200.0) as u32;
             player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id));
 
@@ -355,7 +366,23 @@ fn execute_transfer_across_countries(
         None => return false,
     };
 
+    // Check squad capacity BEFORE recording history
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
+    let can_accept = buying_country.clubs.iter().find(|c| c.id == buying_club_id)
+        .map(|c| can_club_accept_player(c))
+        .unwrap_or(false);
+
+    if !can_accept {
+        debug!("Transfer rejected: club {} squad full", buying_club_id);
+        if let Some(selling_country) = data.country_mut(selling_country_id) {
+            if let Some(selling_club) = selling_country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                if !selling_club.teams.teams.is_empty() {
+                    selling_club.teams.teams[0].players.add(player);
+                }
+            }
+        }
+        return false;
+    }
 
     if let Some(to) = to_info {
         player.on_transfer(&from_info, &to, fee, date);
@@ -365,17 +392,6 @@ fn execute_transfer_across_countries(
     assign_new_contract(&mut player, fee, date, false);
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-        if !can_club_accept_player(buying_club) {
-            debug!("Transfer rejected: club {} squad full", buying_club_id);
-            if let Some(selling_country) = data.country_mut(selling_country_id) {
-                if let Some(selling_club) = selling_country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                    if !selling_club.teams.teams.is_empty() {
-                        selling_club.teams.teams[0].players.add(player);
-                    }
-                }
-            }
-            return false;
-        }
         buying_club.finance.spend_from_transfer_budget(fee);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
@@ -424,7 +440,23 @@ fn execute_loan_across_countries(
         None => return false,
     };
 
+    // Check squad capacity BEFORE recording history
     let to_info = resolve_buying_club_info(buying_country, buying_club_id);
+    let can_accept = buying_country.clubs.iter().find(|c| c.id == buying_club_id)
+        .map(|c| can_club_accept_player(c))
+        .unwrap_or(false);
+
+    if !can_accept {
+        debug!("Loan rejected: club {} squad full", buying_club_id);
+        if let Some(selling_country) = data.country_mut(selling_country_id) {
+            if let Some(selling_club) = selling_country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
+                if !selling_club.teams.teams.is_empty() {
+                    selling_club.teams.teams[0].players.add(player);
+                }
+            }
+        }
+        return false;
+    }
 
     if let Some(to) = to_info {
         player.on_loan(&from_info, &to, loan_fee, date);
@@ -433,17 +465,6 @@ fn execute_loan_across_countries(
     clear_transfer_statuses(&mut player);
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-        if !can_club_accept_player(buying_club) {
-            debug!("Loan rejected: club {} squad full", buying_club_id);
-            if let Some(selling_country) = data.country_mut(selling_country_id) {
-                if let Some(selling_club) = selling_country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-                    if !selling_club.teams.teams.is_empty() {
-                        selling_club.teams.teams[0].players.add(player);
-                    }
-                }
-            }
-            return false;
-        }
         let salary = (loan_fee / 50.0).max(200.0) as u32;
         player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id));
 

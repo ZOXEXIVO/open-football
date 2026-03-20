@@ -170,6 +170,15 @@ impl CountryResult {
             return false;
         }
 
+        // Recently transferred players get a settling-in period — prevents
+        // unrealistic chains where a player is bought and immediately re-listed
+        if let Some(transfer_date) = player.last_transfer_date {
+            let days_since = (date - transfer_date).num_days();
+            if days_since < 120 {
+                return false;
+            }
+        }
+
         let statuses = player.statuses.get();
 
         // Already listed

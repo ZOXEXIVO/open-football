@@ -2,8 +2,6 @@ use chrono::NaiveDate;
 use crate::league::Season;
 use super::types::{PlayerStatistics, TeamInfo};
 
-const THREE_MONTHS_DAYS: i64 = 90;
-
 #[derive(Debug, Clone)]
 pub struct PlayerStatisticsHistory {
     /// Frozen history from completed seasons. Never modified after write.
@@ -38,6 +36,10 @@ pub struct CurrentSeasonEntry {
     pub transfer_fee: Option<f64>,
     pub statistics: PlayerStatistics,
     pub joined_date: NaiveDate,
+    /// Set when the player leaves (loan/transfer out). Used to calculate
+    /// actual time at the club — without this, pre-loan stints look like
+    /// full-season stays because joined_date is the season start.
+    pub departed_date: Option<NaiveDate>,
     pub seq_id: u32,
 }
 
@@ -60,6 +62,15 @@ impl PlayerStatisticsHistory {
         let s = self.next_seq;
         self.next_seq += 1;
         s
+    }
+
+    /// Mark the most recent entry for a team as departed on the given date.
+    fn mark_departed(&mut self, team_slug: &str, is_loan: bool, date: NaiveDate) {
+        if let Some(entry) = self.current.iter_mut().rev()
+            .find(|e| e.team_slug == team_slug && e.is_loan == is_loan)
+        {
+            entry.departed_date = Some(date);
+        }
     }
 
     /// Add or update a current-season entry for (team_slug, is_loan).
@@ -92,6 +103,7 @@ impl PlayerStatisticsHistory {
                 transfer_fee: fee,
                 statistics: stats,
                 joined_date: date,
+                departed_date: None,
                 seq_id: seq,
             });
         }
@@ -104,16 +116,36 @@ impl PlayerStatisticsHistory {
 
     pub fn record_transfer(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
         self.upsert_current(from, old_stats, false, None, date);
+        self.mark_departed(&from.slug, false, date);
         self.upsert_current(to, PlayerStatistics::default(), false, Some(fee), date);
     }
 
     pub fn record_loan(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         self.upsert_current(from, old_stats, false, None, date);
+        self.mark_departed(&from.slug, false, date);
         self.upsert_current(to, PlayerStatistics::default(), true, Some(loan_fee), date);
     }
 
-    pub fn record_loan_return(&mut self, remaining_stats: PlayerStatistics, borrowing: &TeamInfo, _date: NaiveDate) {
-        self.upsert_current(borrowing, remaining_stats, true, None, _date);
+    pub fn record_loan_return(&mut self, remaining_stats: PlayerStatistics, borrowing: &TeamInfo, date: NaiveDate) {
+        self.upsert_current(borrowing, remaining_stats, true, None, date);
+
+        // Clean up stale loan entries: after a loan return, any loan entry
+        // with 0 games and no fee is a leftover seed from season-end processing.
+        // Keeping it would create phantom history entries in the next season.
+        self.current.retain(|e| {
+            !(e.is_loan && e.statistics.total_games() == 0 && e.transfer_fee.is_none())
+        });
+
+        // Clear departed_date on parent entry — the player is back
+        if let Some(parent) = self.current.iter_mut().rev()
+            .find(|e| !e.is_loan && e.departed_date.is_some())
+        {
+            parent.departed_date = None;
+            // Reset joined_date to return date for post-loan time calculation
+            if parent.statistics.total_games() == 0 && parent.transfer_fee.is_none() {
+                parent.joined_date = date;
+            }
+        }
     }
 
     pub fn record_cancel_loan(&mut self, old_stats: PlayerStatistics, borrowing: &TeamInfo, _parent: &TeamInfo, _is_loan: bool, _date: NaiveDate) {
@@ -148,12 +180,23 @@ impl PlayerStatisticsHistory {
         let entries = std::mem::take(&mut self.current);
 
         for entry in entries {
-            let days = (season_end - entry.joined_date).num_days().max(0);
-            // Drop only short loan stints with 0 games and no fee
-            let keep = entry.statistics.total_games() > 0
-                || entry.transfer_fee.is_some()
-                || !entry.is_loan
-                || days >= THREE_MONTHS_DAYS;
+            let games = entry.statistics.total_games();
+            let end_date = entry.departed_date.unwrap_or(season_end);
+            let days_at_club = (end_date - entry.joined_date).num_days().max(0);
+            let season_days = (season_end - season.start_date()).num_days().max(1);
+            let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
+
+            // Drop entries where the player barely stayed and never played:
+            // - Loan entries with 0 games and no fee are stale seeds (phantom entries)
+            // - Any entry with 0 games and no fee that covers < 3% of the season is noise
+            //   (e.g. returned from loan 5 days before season end, 0 apps at parent)
+            // Always keep: entries with games, entries with transfer fees, or
+            // entries where the player was at the club for a meaningful portion of the season
+            let has_fee = entry.transfer_fee.is_some();
+            let trivial_stint = games == 0 && !has_fee && time_pct < 3.0;
+            let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
+
+            let keep = !stale_loan_seed && !trivial_stint;
 
             if keep {
                 let mut stats = entry.statistics;

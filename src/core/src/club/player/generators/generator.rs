@@ -181,8 +181,12 @@ fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
 }
 
 fn age_group_weights(age: u32) -> (f32, f32, f32) {
-    if age <= 21 {
-        (0.95, 0.93, 1.1)
+    // (technical, mental, physical)
+    if age <= 18 {
+        // Young academy players: raw athleticism, developing game sense, low technique
+        (0.80, 1.05, 1.30)
+    } else if age <= 21 {
+        (0.88, 1.02, 1.18)
     } else if age <= 29 {
         (1.0, 1.0, 1.0)
     } else {
@@ -223,6 +227,45 @@ fn apply_affinities(skills: &mut [f32; SKILL_COUNT]) {
         let bonus = (skills[SK_LEADERSHIP] - 14.0) * 0.1;
         skills[SK_DETERMINATION] += bonus;
         skills[SK_TEAMWORK] += bonus;
+    }
+}
+
+/// Pick a few random skills per group to spike up and a few to dip down,
+/// so that even flat low-level profiles have visible individual variation.
+fn apply_talent_spikes(skills: &mut [f32; SKILL_COUNT], mean_skill: f32) {
+    // Spike magnitude scales with base level — low-ability players get
+    // proportionally larger spikes so the differences survive integer rounding
+    let spike_up = (1.5 + (10.0 - mean_skill).max(0.0) * 0.2).min(4.0);
+    let spike_down = spike_up * 0.6;
+
+    // (group_start, group_end, spikes_up, spikes_down)
+    let groups: [(usize, usize, usize, usize); 3] = [
+        (0, 14, 2, 2),   // Technical: 14 skills, 2 up / 2 down
+        (14, 28, 3, 2),   // Mental: 14 skills, 3 up / 2 down
+        (28, SKILL_COUNT, 2, 1), // Physical: 9 skills, 2 up / 1 down
+    ];
+
+    for &(start, end, n_up, n_down) in &groups {
+        let len = end - start;
+
+        // Pick random indices within the group
+        let mut indices: Vec<usize> = (start..end).collect();
+
+        // Fisher-Yates shuffle
+        for i in (1..len).rev() {
+            let j = (rand::random::<f32>() * (i + 1) as f32) as usize % (i + 1);
+            indices.swap(i, j);
+        }
+
+        // First n_up get boosted
+        for &idx in indices.iter().take(n_up) {
+            skills[idx] += spike_up * (0.7 + rand::random::<f32>() * 0.6);
+        }
+
+        // Next n_down get reduced
+        for &idx in indices.iter().skip(n_up).take(n_down) {
+            skills[idx] -= spike_down * (0.5 + rand::random::<f32>() * 0.5);
+        }
     }
 }
 
@@ -454,6 +497,27 @@ impl PlayerGenerator {
         }
 
         apply_affinities(&mut skills);
+
+        // Ensure mental and physical don't collapse to same level as technical
+        // Even weak players have basic athleticism and game awareness
+        let tech_avg: f32 = skills[..14].iter().sum::<f32>() / 14.0;
+        let mental_floor = tech_avg + 1.0;
+        let physical_floor = tech_avg + 2.0;
+
+        for skill in &mut skills[14..28] {
+            if *skill < mental_floor {
+                *skill = mental_floor + random_normal().abs() * 0.5;
+            }
+        }
+        for skill in &mut skills[28..SKILL_COUNT] {
+            if *skill < physical_floor {
+                *skill = physical_floor + random_normal().abs() * 0.5;
+            }
+        }
+
+        // Inject intra-group talent spikes so skills within a group don't all
+        // round to the same integer. Every player has natural strengths/weaknesses.
+        apply_talent_spikes(&mut skills, mean_skill);
 
         for v in skills.iter_mut() {
             *v = v.clamp(1.0, 20.0);

@@ -648,6 +648,15 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Recently signed players get a settling-in period — prevents
+            // unrealistic chains where a player is bought and immediately loaned out
+            if let Some(transfer_date) = player.last_transfer_date {
+                let days_since = (date - transfer_date).num_days();
+                if days_since < 120 {
+                    continue;
+                }
+            }
+
             let group = player_info.primary_position.position_group();
 
             // Count players in same position group
