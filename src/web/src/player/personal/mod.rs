@@ -392,30 +392,13 @@ fn get_happiness_factors(player: &Player, i18n: &crate::I18n) -> Vec<HappinessFa
 }
 
 fn get_recent_events(player: &Player, i18n: &crate::I18n) -> Vec<RecentEventDto> {
-    use core::HappinessEventType;
-
     let mut events: Vec<_> = player
         .happiness
         .recent_events
         .iter()
         .take(8)
         .map(|e| {
-            let key = match &e.event_type {
-                HappinessEventType::ManagerPraise => "event_manager_praise",
-                HappinessEventType::ManagerDiscipline => "event_manager_discipline",
-                HappinessEventType::ManagerPlayingTimePromise => "event_playing_time_promise",
-                HappinessEventType::GoodTraining => "event_good_training",
-                HappinessEventType::PoorTraining => "event_poor_training",
-                HappinessEventType::MatchSelection => "event_match_selection",
-                HappinessEventType::MatchDropped => "event_match_dropped",
-                HappinessEventType::ContractOffer => "event_contract_offer",
-                HappinessEventType::WageIncrease => "event_wage_increase",
-                HappinessEventType::InjuryReturn => "event_injury_return",
-                HappinessEventType::SquadStatusChange => "event_squad_status_change",
-                HappinessEventType::LackOfPlayingTime => "event_lack_of_playing_time",
-                HappinessEventType::LoanListingAccepted => "event_loan_listing_accepted",
-                HappinessEventType::PlayerOfTheMatch => "event_player_of_the_match",
-            };
+            let key = super::events::event_type_to_i18n_key(&e.event_type);
             RecentEventDto {
                 description: i18n.t(key).to_string(),
                 is_positive: e.magnitude > 0.0,

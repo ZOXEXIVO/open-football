@@ -143,6 +143,13 @@ impl PlayerBehaviourResult {
                     relationship_result.change_type.clone(),
                     sim_date,
                 );
+
+                // Generate teammate relationship events visible in player history
+                if relationship_result.relationship_change > 0.3 {
+                    player_to_modify.happiness.add_event(HappinessEventType::TeammateBonding, 1.0);
+                } else if relationship_result.relationship_change < -0.3 {
+                    player_to_modify.happiness.add_event(HappinessEventType::ConflictWithTeammate, -1.5);
+                }
             }
         }
     }

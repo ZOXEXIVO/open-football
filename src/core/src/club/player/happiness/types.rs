@@ -28,20 +28,35 @@ pub struct HappinessEvent {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum HappinessEventType {
+    // Manager interactions
     ManagerPraise,
     ManagerDiscipline,
     ManagerPlayingTimePromise,
+    ManagerCriticism,
+    ManagerEncouragement,
+    ManagerTacticalInstruction,
+    // Training
     GoodTraining,
     PoorTraining,
+    // Match selection
     MatchSelection,
     MatchDropped,
+    // Contract & transfers
     ContractOffer,
     WageIncrease,
-    InjuryReturn,
     SquadStatusChange,
     LackOfPlayingTime,
     LoanListingAccepted,
+    // Injury
+    InjuryReturn,
+    // Match performance
     PlayerOfTheMatch,
+    // Team/squad relationship
+    TeammateBonding,
+    ConflictWithTeammate,
+    DressingRoomSpeech,
+    SettledIntoSquad,
+    FeelingIsolated,
 }
 
 impl PlayerHappiness {
@@ -83,12 +98,12 @@ impl PlayerHappiness {
         for event in &mut self.recent_events {
             event.days_ago += 7;
         }
-        self.recent_events.retain(|e| e.days_ago <= 60);
+        // Keep events for up to 365 days (1 season of history)
+        self.recent_events.retain(|e| e.days_ago <= 365);
 
-        // Keep at most 10 recent events
-        if self.recent_events.len() > 10 {
+        if self.recent_events.len() > 100 {
             self.recent_events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
-            self.recent_events.truncate(10);
+            self.recent_events.truncate(100);
         }
     }
 
@@ -99,10 +114,9 @@ impl PlayerHappiness {
             days_ago: 0,
         });
 
-        // Keep at most 10
-        if self.recent_events.len() > 10 {
+        if self.recent_events.len() > 100 {
             self.recent_events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
-            self.recent_events.truncate(10);
+            self.recent_events.truncate(100);
         }
     }
 

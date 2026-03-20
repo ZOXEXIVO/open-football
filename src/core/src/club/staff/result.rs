@@ -95,26 +95,23 @@ impl StaffResult {
         if let Some(ref event) = self.relationship_event {
             match event {
                 RelationshipEvent::PositiveInteraction => {
-                    // Pick a random player and give a small positive relationship update
                     if let Some(player) = Self::random_player(data) {
                         let change = RelationshipChange::positive(
                             ChangeType::CoachingSuccess,
                             0.5,
                         );
                         player.relations.update_staff_relationship(self.staff_id, change, sim_date);
+                        player.happiness.add_event(HappinessEventType::ManagerEncouragement, 1.5);
                     }
                 }
                 RelationshipEvent::Conflict => {
-                    // Small negative relationship with a random player
                     if let Some(player) = Self::random_player(data) {
                         let change = RelationshipChange::negative(
                             ChangeType::TacticalDisagreement,
                             0.3,
                         );
                         player.relations.update_staff_relationship(self.staff_id, change, sim_date);
-
-                        // Also affect player morale slightly
-                        player.happiness.add_event(HappinessEventType::ManagerDiscipline, -1.0);
+                        player.happiness.add_event(HappinessEventType::ManagerCriticism, -2.0);
                     }
                 }
                 RelationshipEvent::MentorshipStarted => {
@@ -124,6 +121,7 @@ impl StaffResult {
                             0.8,
                         );
                         player.relations.update_staff_relationship(self.staff_id, change, sim_date);
+                        player.happiness.add_event(HappinessEventType::ManagerEncouragement, 2.0);
                     }
                 }
                 RelationshipEvent::TrustBuilt => {
@@ -133,6 +131,7 @@ impl StaffResult {
                             0.6,
                         );
                         player.relations.update_staff_relationship(self.staff_id, change, sim_date);
+                        player.happiness.add_event(HappinessEventType::ManagerTacticalInstruction, 1.0);
                     }
                 }
             }

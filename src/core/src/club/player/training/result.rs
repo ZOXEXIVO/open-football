@@ -4,6 +4,8 @@ use crate::{HappinessEventType, MentalGains, PhysicalGains, PlayerStatusType, Si
 pub struct PlayerTrainingResult {
     pub player_id: u32,
     pub effects: TrainingEffects,
+    /// How well the player executed this session (1.0-20.0)
+    pub session_performance: f32,
 }
 
 impl PlayerTrainingResult {
@@ -11,6 +13,7 @@ impl PlayerTrainingResult {
         PlayerTrainingResult {
             player_id,
             effects,
+            session_performance: 10.0,
         }
     }
 
@@ -25,6 +28,7 @@ impl PlayerTrainingResult {
                 injury_risk: 0.0,
                 morale_change: 0.0,
             },
+            session_performance: 10.0,
         }
     }
 
@@ -74,6 +78,13 @@ impl PlayerTrainingResult {
 
             // Recalculate current_ability from actual skill values
             player.player_attributes.current_ability = player.skills.calculate_ability();
+
+            // Update rolling training performance (exponential moving average)
+            // Alpha = 0.3 for first 5 sessions (fast warmup), then 0.15 (slower, more stable)
+            let alpha = if player.training.sessions_completed < 5 { 0.3 } else { 0.15 };
+            player.training.training_performance = player.training.training_performance * (1.0 - alpha)
+                + self.session_performance * alpha;
+            player.training.sessions_completed = player.training.sessions_completed.saturating_add(1);
 
             // Apply fatigue changes
             // Negative fatigue_change = recovery (condition increases)

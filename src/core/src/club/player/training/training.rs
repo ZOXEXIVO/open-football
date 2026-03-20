@@ -3,7 +3,14 @@ use crate::{MentalGains, Person, PhysicalGains, Player, Staff, TechnicalGains, T
 use chrono::NaiveDateTime;
 
 #[derive(Debug, Clone)]
-pub struct PlayerTraining {}
+pub struct PlayerTraining {
+    /// Rolling average of actual training session quality (1.0-20.0).
+    /// Measures execution quality, not just effort/personality.
+    /// Updated each training session via exponential moving average.
+    pub training_performance: f32,
+    /// How many sessions this player has completed (for EMA warmup)
+    pub sessions_completed: u16,
+}
 
 impl Default for PlayerTraining {
     fn default() -> Self {
@@ -13,7 +20,10 @@ impl Default for PlayerTraining {
 
 impl PlayerTraining {
     pub fn new() -> Self {
-        PlayerTraining {}
+        PlayerTraining {
+            training_performance: 10.0, // Neutral starting point
+            sessions_completed: 0,
+        }
     }
 
     pub fn train(
@@ -154,7 +164,33 @@ impl PlayerTraining {
         effects.technical_gains = Self::scale_technical(effects.technical_gains, potential_factor);
         effects.mental_gains = Self::scale_mental(effects.mental_gains, potential_factor);
 
-        PlayerTrainingResult::new(player.id, effects)
+        // Calculate session performance score (1-20):
+        // How well did the player actually execute this session?
+        // Based on: gains achieved + effort + coach synergy + randomness
+        let total_gains = effects.physical_gains.total()
+            + effects.technical_gains.total()
+            + effects.mental_gains.total();
+
+        // Normalize gains to 0-10 scale (typical session total gain is 0.01-0.15)
+        let gain_score = (total_gains * 80.0).clamp(0.0, 10.0);
+
+        // Effort component: professionalism + work_rate + determination
+        let effort_score = (player.attributes.professionalism
+            + player.skills.mental.work_rate
+            + player.skills.mental.determination) / 3.0;
+
+        // Execution randomness: even good players have bad days
+        let execution_roll = rand::random::<f32>() * 4.0 - 2.0; // -2 to +2
+
+        // Coach synergy: good coach-player fit produces better sessions
+        let synergy = coach_quality * player_receptiveness;
+
+        let session_performance = (gain_score + effort_score * 0.5 + synergy * 2.0 + execution_roll)
+            .clamp(1.0, 20.0);
+
+        let mut result = PlayerTrainingResult::new(player.id, effects);
+        result.session_performance = session_performance;
+        result
     }
 
     fn apply_bonus_to_physical(mut gains: PhysicalGains, bonus: f32) -> PhysicalGains {

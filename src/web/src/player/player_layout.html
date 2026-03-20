@@ -7,6 +7,7 @@
     <a class="fm-tab{% if active_tab == "matches" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/matches">{{ i18n.t("matches") }}</a>
     <a class="fm-tab{% if active_tab == "transfers" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/transfers">{{ i18n.t("transfers") }}</a>
     <a class="fm-tab{% if active_tab == "decisions" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/decisions">{{ i18n.t("decisions") }}</a>
+    <a class="fm-tab{% if active_tab == "events" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/events">{{ i18n.t("events") }}</a>
     <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
     <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}">
         <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">

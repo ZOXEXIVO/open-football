@@ -162,19 +162,6 @@
                     </div>
                 </div>
                 {% endif %}
-                {% if !recent_events.is_empty() %}
-                <div class="fm-personal-section">
-                    <h4 class="fm-section-subtitle">{{ i18n.t("recent_events") }}</h4>
-                    <table class="fm-personal-table">
-                        {% for event in recent_events %}
-                        <tr>
-                            <td class="fm-event-desc{% if event.is_positive %} fm-event-pos{% else %} fm-event-neg{% endif %}">{{ event.description }}</td>
-                            <td class="fm-event-ago">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</td>
-                        </tr>
-                        {% endfor %}
-                    </table>
-                </div>
-                {% endif %}
             </section>
         </div>
 

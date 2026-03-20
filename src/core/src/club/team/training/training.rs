@@ -556,6 +556,13 @@ pub struct PhysicalGains {
     pub natural_fitness: f32,
 }
 
+impl PhysicalGains {
+    pub fn total(&self) -> f32 {
+        self.stamina + self.strength + self.pace + self.agility
+            + self.balance + self.jumping + self.natural_fitness
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct TechnicalGains {
     pub first_touch: f32,
@@ -568,6 +575,13 @@ pub struct TechnicalGains {
     pub technique: f32,
 }
 
+impl TechnicalGains {
+    pub fn total(&self) -> f32 {
+        self.first_touch + self.passing + self.crossing + self.dribbling
+            + self.finishing + self.heading + self.tackling + self.technique
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct MentalGains {
     pub concentration: f32,
@@ -577,6 +591,13 @@ pub struct MentalGains {
     pub vision: f32,
     pub work_rate: f32,
     pub leadership: f32,
+}
+
+impl MentalGains {
+    pub fn total(&self) -> f32 {
+        self.concentration + self.decisions + self.positioning
+            + self.teamwork + self.vision + self.work_rate + self.leadership
+    }
 }
 
 // ============== Individual Player Training Plans ==============

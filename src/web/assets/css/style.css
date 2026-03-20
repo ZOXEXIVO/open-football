@@ -336,16 +336,22 @@ a:link, a:visited, a:hover, a:active {
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 130px;
+    min-width: 130px;
+    padding: 0 18px;
     margin-bottom: -1px;
     background: #232e35;
     color: #fff;
     font-weight: 700;
     font-size: 13px;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    white-space: nowrap;
     cursor: pointer;
     transition: background 0.15s;
+}
+
+.fm-process-label {
+    letter-spacing: 1px;
+    margin-right: -1px;
 }
 
 .fm-process-btn:hover {
@@ -2313,6 +2319,104 @@ a:link, a:visited, a:hover, a:active {
     font-size: 12px;
     text-align: right;
     white-space: nowrap;
+}
+
+.fm-empty-state {
+    padding: 32px 16px;
+    text-align: center;
+    color: #546a78;
+    font-size: 13px;
+}
+
+/* --- Events Timeline --- */
+
+.fm-events-timeline {
+    padding: 8px 16px 16px;
+}
+
+.fm-evt-row {
+    display: flex;
+    align-items: flex-start;
+    padding: 7px 0;
+    border-left: 2px solid #2a3840;
+    margin-left: 6px;
+    position: relative;
+}
+
+.fm-evt-row:last-child {
+    border-left-color: transparent;
+}
+
+.fm-evt-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #3d4f5c;
+    flex-shrink: 0;
+    margin-left: -5px;
+    margin-top: 5px;
+    margin-right: 12px;
+}
+
+.fm-evt-body {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    flex: 1;
+    min-width: 0;
+    gap: 12px;
+}
+
+.fm-evt-text {
+    font-size: 13px;
+    color: #d0d6dc;
+    line-height: 1.35;
+}
+
+.fm-evt-time {
+    font-size: 11px;
+    color: #4a5a66;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+/* Big events — bolder text, dot glow */
+.fm-evt-big .fm-evt-dot {
+    width: 10px;
+    height: 10px;
+    margin-left: -6px;
+    margin-top: 4px;
+}
+
+.fm-evt-big .fm-evt-text {
+    font-weight: 600;
+}
+
+/* Neutral dot: white */
+.fm-evt-dot {
+    background: #8899a4;
+}
+.fm-evt-big .fm-evt-dot {
+    background: #b0bec5;
+    box-shadow: 0 0 5px rgba(176, 190, 197, 0.3);
+}
+
+/* Positive dot: green */
+.fm-evt-positive .fm-evt-dot {
+    background: #4caf50;
+}
+.fm-evt-positive.fm-evt-big .fm-evt-dot {
+    background: #66bb6a;
+    box-shadow: 0 0 6px rgba(76, 175, 80, 0.4);
+}
+
+/* Negative dot: red */
+.fm-evt-negative .fm-evt-dot {
+    background: #e53935;
+}
+.fm-evt-negative.fm-evt-big .fm-evt-dot {
+    background: #ef5350;
+    box-shadow: 0 0 6px rgba(229, 57, 53, 0.4);
 }
 
 /* --- Radar chart --- */
@@ -4848,7 +4952,8 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-process-btn {
-        width: 100px;
+        min-width: 100px;
+        padding: 0 14px;
         font-size: 12px;
     }
 
@@ -5151,9 +5256,14 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-process-btn {
-        width: 70px;
+        min-width: 70px;
+        padding: 0 10px;
         font-size: 10px;
+    }
+
+    .fm-process-label {
         letter-spacing: 0.3px;
+        margin-right: -0.3px;
     }
 
     .fm-tabbar {

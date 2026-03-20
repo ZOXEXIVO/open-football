@@ -107,6 +107,9 @@ impl TeamBehaviour {
         Self::process_injury_sympathy(players, &mut result, &ctx);
         Self::process_international_duty_bonds(players, &mut result, &ctx);
 
+        // Squad integration events — settled in or feeling isolated
+        Self::process_squad_integration(players, &ctx);
+
         // Manager-player talks (weekly during full update)
         Self::process_manager_player_talks(players, staffs, &mut result);
 
@@ -225,6 +228,53 @@ impl TeamBehaviour {
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Generate squad integration events: "settled into squad" or "feeling isolated".
+    /// Runs weekly. Also generates "dressing room speech" from team leaders.
+    fn process_squad_integration(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        use crate::HappinessEventType;
+        let sim_date = ctx.simulation.date.date();
+
+        // Collect teammate IDs for relationship lookups
+        let teammate_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
+
+        for player in &mut players.players {
+            // Integration events for recent transfers (first 90 days)
+            let is_recent = player.last_transfer_date
+                .map(|d| (sim_date - d).num_days() < 90)
+                .unwrap_or(false);
+
+            if is_recent {
+                // Count positive relationships with current teammates
+                let positive_count = teammate_ids.iter()
+                    .filter(|&&tid| tid != player.id)
+                    .filter(|&&tid| player.relations.get_player(tid)
+                        .map(|r| r.level > 20.0).unwrap_or(false))
+                    .count();
+
+                let has_any_relation = teammate_ids.iter()
+                    .any(|&tid| tid != player.id && player.relations.get_player(tid).is_some());
+
+                // ~10% weekly chance, biased by relationship count
+                if positive_count >= 3 && rand::random::<f32>() < 0.10 {
+                    player.happiness.add_event(HappinessEventType::SettledIntoSquad, 2.0);
+                } else if !has_any_relation && rand::random::<f32>() < 0.08 {
+                    player.happiness.add_event(HappinessEventType::FeelingIsolated, -1.5);
+                }
+            }
+
+            // Team leaders give dressing room speeches (~5% weekly chance)
+            if player.skills.mental.leadership >= 14.0
+                && player.happiness.morale >= 60.0
+                && rand::random::<f32>() < 0.05
+            {
+                player.happiness.add_event(HappinessEventType::DressingRoomSpeech, 1.5);
             }
         }
     }

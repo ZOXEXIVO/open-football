@@ -40,12 +40,14 @@ impl CountryResult {
             league_result.process(data, result);
         }
 
-        // Process loan returns BEFORE snapshot so that players are back at their
-        // parent clubs when season history is recorded. Otherwise on_season_end
-        // seeds a stale entry for the borrowing club that becomes a phantom.
+        // Snapshot BEFORE loan returns: this ensures cross-country loan players
+        // get their season stats recorded while they're still at the borrowing club.
+        // The snapshot correctly handles is_loan flag from the player's contract.
+        // Loan returns then move the player back — if both clubs are in the same
+        // country, the snapshot already captured the loan entry correctly.
         if any_new_season {
-            Self::process_loan_returns(data, country_id, current_date);
             Self::snapshot_player_season_statistics(data, self.country_id);
+            Self::process_loan_returns(data, country_id, current_date);
         }
 
         // Phase 2: Process club results (morale, training use post-match state)

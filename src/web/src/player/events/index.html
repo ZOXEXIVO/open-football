@@ -1,0 +1,28 @@
+{% extends "player/player_layout.html" %}
+
+{% block html_title %}{{ title }} - {{ i18n.t("events") }} | {{ i18n.t("site_name") }}{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("events") }}</h3>
+        </div>
+        {% if events.is_empty() %}
+        <div class="fm-empty-state">{{ i18n.t("no_events") }}</div>
+        {% else %}
+        <div class="fm-events-timeline">
+            {% for event in events %}
+            <div class="fm-evt-row{% if event.is_big %} fm-evt-big{% endif %}{% if event.is_positive %} fm-evt-positive{% elif event.is_negative %} fm-evt-negative{% endif %}">
+                <div class="fm-evt-dot"></div>
+                <div class="fm-evt-body">
+                    <span class="fm-evt-text">{{ event.description }}</span>
+                    <span class="fm-evt-time">{{ event.days_ago }}{{ i18n.t("days_ago_short") }}</span>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% endif %}
+    </section>
+</div>
+{% endblock %}

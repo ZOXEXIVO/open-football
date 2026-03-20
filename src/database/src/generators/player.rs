@@ -107,131 +107,166 @@ fn age_curve(skill_idx: usize, age: u32) -> f32 {
 
 // ── Position weight tables ──────────────────────────────────────────────
 
+/// Position weights with wide range (0.1-1.8) for clear skill differentiation.
+/// Used additively via spread formula: skill = group_mean + (weight - 1.0) * spread
 fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
-    // Default 0.8: non-key skills are naturally ~20% below mean
-    // Key skills override to 1.0-1.4, irrelevant skills drop to 0.3-0.6
     let mut w = [0.8f32; SKILL_COUNT];
     match position {
         PositionType::Goalkeeper => {
-            // Key GK skills — high weights for clear differentiation
-            w[SK_POSITIONING] = 1.6;
-            w[SK_CONCENTRATION] = 1.5;
-            w[SK_AGILITY] = 1.5;
-            w[SK_ANTICIPATION] = 1.4;
-            w[SK_COMPOSURE] = 1.4;
-            w[SK_JUMPING] = 1.4;
-            w[SK_BRAVERY] = 1.3;
-            w[SK_DECISIONS] = 1.2;
-            // Relevant
-            w[SK_STRENGTH] = 1.1;
-            w[SK_FIRST_TOUCH] = 1.1;
-            w[SK_PASSING] = 1.1;
-            w[SK_TECHNIQUE] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_PACE] = 0.9;
-            w[SK_STAMINA] = 0.9;
-            w[SK_LEADERSHIP] = 1.0;
-            w[SK_BALANCE] = 1.0;
-            w[SK_DETERMINATION] = 1.0;
-            w[SK_TEAMWORK] = 1.0;
-            w[SK_PENALTY_TAKING] = 0.5;
-            // Irrelevant outfield skills — low weights
-            w[SK_FINISHING] = 0.2;
-            w[SK_LONG_SHOTS] = 0.2;
-            w[SK_CROSSING] = 0.2;
-            w[SK_CORNERS] = 0.2;
-            w[SK_FREE_KICKS] = 0.3;
-            w[SK_HEADING] = 0.3;
-            w[SK_OFF_THE_BALL] = 0.3;
-            w[SK_DRIBBLING] = 0.4;
-            w[SK_LONG_THROWS] = 0.5;
-            w[SK_TACKLING] = 0.3;
-            w[SK_MARKING] = 0.3;
-            w[SK_WORK_RATE] = 0.5;
-            w[SK_FLAIR] = 0.4;
-            w[SK_ACCELERATION] = 0.7;
+            // GK-critical
+            w[SK_POSITIONING] = 1.8; w[SK_CONCENTRATION] = 1.6; w[SK_AGILITY] = 1.7;
+            w[SK_ANTICIPATION] = 1.5; w[SK_COMPOSURE] = 1.5; w[SK_JUMPING] = 1.5;
+            w[SK_BRAVERY] = 1.4; w[SK_DECISIONS] = 1.3; w[SK_STRENGTH] = 1.1;
+            // Modern GK
+            w[SK_FIRST_TOUCH] = 1.0; w[SK_PASSING] = 1.0; w[SK_TECHNIQUE] = 0.9;
+            w[SK_NATURAL_FITNESS] = 1.0; w[SK_PACE] = 0.8; w[SK_STAMINA] = 0.8;
+            w[SK_LEADERSHIP] = 1.0; w[SK_BALANCE] = 1.0;
+            w[SK_DETERMINATION] = 1.0; w[SK_TEAMWORK] = 1.0;
+            w[SK_PENALTY_TAKING] = 0.4;
+            // Irrelevant outfield
+            w[SK_FINISHING] = 0.1; w[SK_LONG_SHOTS] = 0.1; w[SK_CROSSING] = 0.1;
+            w[SK_CORNERS] = 0.1; w[SK_FREE_KICKS] = 0.2; w[SK_HEADING] = 0.2;
+            w[SK_OFF_THE_BALL] = 0.2; w[SK_DRIBBLING] = 0.3; w[SK_LONG_THROWS] = 0.4;
+            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_WORK_RATE] = 0.4;
+            w[SK_FLAIR] = 0.3; w[SK_ACCELERATION] = 0.6;
         }
         PositionType::Defender => {
-            // Key
-            w[SK_TACKLING] = 1.3;
-            w[SK_MARKING] = 1.3;
-            w[SK_POSITIONING] = 1.3;
-            w[SK_HEADING] = 1.2;
-            w[SK_STRENGTH] = 1.2;
-            w[SK_CONCENTRATION] = 1.2;
-            w[SK_ANTICIPATION] = 1.2;
-            w[SK_BRAVERY] = 1.2;
-            // Relevant
-            w[SK_PACE] = 1.0;
-            w[SK_JUMPING] = 1.0;
-            w[SK_PASSING] = 1.0;
-            w[SK_TEAMWORK] = 1.0;
-            w[SK_DECISIONS] = 1.0;
-            w[SK_COMPOSURE] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_STAMINA] = 1.0;
-            // Irrelevant
-            w[SK_FINISHING] = 0.5;
-            w[SK_DRIBBLING] = 0.6;
-            w[SK_FLAIR] = 0.5;
-            w[SK_LONG_SHOTS] = 0.5;
-            w[SK_OFF_THE_BALL] = 0.6;
+            w[SK_TACKLING] = 1.6; w[SK_MARKING] = 1.6; w[SK_POSITIONING] = 1.5;
+            w[SK_HEADING] = 1.4; w[SK_STRENGTH] = 1.4; w[SK_CONCENTRATION] = 1.4;
+            w[SK_ANTICIPATION] = 1.3; w[SK_BRAVERY] = 1.3;
+            w[SK_PACE] = 1.1; w[SK_JUMPING] = 1.1; w[SK_PASSING] = 1.0;
+            w[SK_TEAMWORK] = 1.1; w[SK_DECISIONS] = 1.1; w[SK_COMPOSURE] = 1.0;
+            w[SK_NATURAL_FITNESS] = 1.0; w[SK_STAMINA] = 1.0;
+            w[SK_FINISHING] = 0.3; w[SK_DRIBBLING] = 0.4; w[SK_FLAIR] = 0.3;
+            w[SK_LONG_SHOTS] = 0.3; w[SK_OFF_THE_BALL] = 0.4; w[SK_VISION] = 0.5;
+            w[SK_CROSSING] = 0.5; w[SK_CORNERS] = 0.3; w[SK_FREE_KICKS] = 0.4;
         }
         PositionType::Midfielder => {
-            // Key
-            w[SK_PASSING] = 1.3;
-            w[SK_VISION] = 1.3;
-            w[SK_STAMINA] = 1.2;
-            w[SK_TECHNIQUE] = 1.2;
-            w[SK_FIRST_TOUCH] = 1.2;
-            w[SK_DECISIONS] = 1.2;
-            w[SK_TEAMWORK] = 1.2;
-            w[SK_WORK_RATE] = 1.2;
-            // Relevant
-            w[SK_DRIBBLING] = 1.0;
-            w[SK_TACKLING] = 1.0;
-            w[SK_POSITIONING] = 1.0;
-            w[SK_COMPOSURE] = 1.0;
-            w[SK_ANTICIPATION] = 1.0;
-            w[SK_CONCENTRATION] = 1.0;
-            w[SK_PACE] = 1.0;
-            w[SK_ACCELERATION] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
+            w[SK_PASSING] = 1.5; w[SK_VISION] = 1.4; w[SK_STAMINA] = 1.3;
+            w[SK_TECHNIQUE] = 1.3; w[SK_FIRST_TOUCH] = 1.3; w[SK_DECISIONS] = 1.3;
+            w[SK_TEAMWORK] = 1.3; w[SK_WORK_RATE] = 1.2;
+            w[SK_DRIBBLING] = 1.1; w[SK_TACKLING] = 1.0; w[SK_POSITIONING] = 1.0;
+            w[SK_COMPOSURE] = 1.1; w[SK_ANTICIPATION] = 1.1; w[SK_CONCENTRATION] = 1.0;
+            w[SK_PACE] = 1.0; w[SK_ACCELERATION] = 1.0; w[SK_NATURAL_FITNESS] = 1.0;
             w[SK_BALANCE] = 1.0;
-            // Irrelevant
-            w[SK_HEADING] = 0.7;
-            w[SK_LONG_THROWS] = 0.6;
-            w[SK_FINISHING] = 0.7;
+            w[SK_HEADING] = 0.5; w[SK_LONG_THROWS] = 0.4; w[SK_FINISHING] = 0.5;
+            w[SK_MARKING] = 0.6; w[SK_STRENGTH] = 0.7;
         }
         PositionType::Striker => {
-            // Key
-            w[SK_FINISHING] = 1.4;
-            w[SK_OFF_THE_BALL] = 1.3;
-            w[SK_DRIBBLING] = 1.2;
-            w[SK_PACE] = 1.2;
-            w[SK_COMPOSURE] = 1.2;
-            w[SK_FIRST_TOUCH] = 1.2;
-            w[SK_ANTICIPATION] = 1.2;
-            w[SK_ACCELERATION] = 1.2;
-            // Relevant
-            w[SK_HEADING] = 1.0;
-            w[SK_TECHNIQUE] = 1.0;
-            w[SK_STRENGTH] = 1.0;
-            w[SK_AGILITY] = 1.0;
-            w[SK_BALANCE] = 1.0;
-            w[SK_DECISIONS] = 1.0;
-            w[SK_DETERMINATION] = 1.0;
-            w[SK_BRAVERY] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0;
-            // Irrelevant
-            w[SK_TACKLING] = 0.4;
-            w[SK_MARKING] = 0.4;
-            w[SK_POSITIONING] = 0.6;
-            w[SK_CONCENTRATION] = 0.7;
-            w[SK_LONG_THROWS] = 0.5;
+            w[SK_FINISHING] = 1.7; w[SK_OFF_THE_BALL] = 1.5; w[SK_COMPOSURE] = 1.4;
+            w[SK_DRIBBLING] = 1.3; w[SK_PACE] = 1.3; w[SK_FIRST_TOUCH] = 1.3;
+            w[SK_ANTICIPATION] = 1.3; w[SK_ACCELERATION] = 1.3;
+            w[SK_HEADING] = 1.1; w[SK_TECHNIQUE] = 1.1; w[SK_STRENGTH] = 1.0;
+            w[SK_AGILITY] = 1.0; w[SK_BALANCE] = 1.0; w[SK_DECISIONS] = 1.0;
+            w[SK_DETERMINATION] = 1.0; w[SK_BRAVERY] = 1.0; w[SK_NATURAL_FITNESS] = 1.0;
+            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_POSITIONING] = 0.4;
+            w[SK_CONCENTRATION] = 0.6; w[SK_LONG_THROWS] = 0.3;
+            w[SK_CORNERS] = 0.3; w[SK_FREE_KICKS] = 0.4;
         }
     }
     w
+}
+
+/// Apply a random role archetype to create variety within position groups.
+fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
+    let roll = rand::random::<f32>();
+    match position {
+        PositionType::Goalkeeper => {
+            if roll < 0.35 {
+                // Shot Stopper
+                weights[SK_AGILITY] += 0.3; weights[SK_ANTICIPATION] += 0.2;
+                weights[SK_CONCENTRATION] += 0.2;
+            } else if roll < 0.60 {
+                // Sweeper Keeper
+                weights[SK_PACE] += 0.4; weights[SK_PASSING] += 0.4;
+                weights[SK_FIRST_TOUCH] += 0.3; weights[SK_BRAVERY] += 0.2;
+            } else if roll < 0.85 {
+                // Commanding
+                weights[SK_JUMPING] += 0.3; weights[SK_STRENGTH] += 0.3;
+                weights[SK_LEADERSHIP] += 0.3; weights[SK_BRAVERY] += 0.2;
+            } else {
+                weights[SK_POSITIONING] += 0.1; weights[SK_CONCENTRATION] += 0.1;
+            }
+        }
+        PositionType::Defender => {
+            if roll < 0.25 {
+                // Ball-Playing
+                weights[SK_PASSING] += 0.4; weights[SK_FIRST_TOUCH] += 0.3;
+                weights[SK_COMPOSURE] += 0.3; weights[SK_TECHNIQUE] += 0.2;
+                weights[SK_AGGRESSION] -= 0.2; weights[SK_HEADING] -= 0.1;
+            } else if roll < 0.50 {
+                // Stopper
+                weights[SK_AGGRESSION] += 0.3; weights[SK_HEADING] += 0.3;
+                weights[SK_STRENGTH] += 0.3; weights[SK_BRAVERY] += 0.2;
+                weights[SK_PASSING] -= 0.2; weights[SK_TECHNIQUE] -= 0.2;
+            } else if roll < 0.75 {
+                // Athletic
+                weights[SK_PACE] += 0.4; weights[SK_ACCELERATION] += 0.3;
+                weights[SK_AGILITY] += 0.2; weights[SK_STAMINA] += 0.2;
+                weights[SK_STRENGTH] -= 0.2; weights[SK_HEADING] -= 0.1;
+            } else {
+                // No-Nonsense
+                weights[SK_MARKING] += 0.3; weights[SK_TACKLING] += 0.2;
+                weights[SK_POSITIONING] += 0.2;
+                weights[SK_DRIBBLING] -= 0.3; weights[SK_FLAIR] -= 0.3;
+            }
+        }
+        PositionType::Midfielder => {
+            if roll < 0.20 {
+                // Playmaker
+                weights[SK_VISION] += 0.4; weights[SK_PASSING] += 0.3;
+                weights[SK_TECHNIQUE] += 0.3; weights[SK_COMPOSURE] += 0.3;
+                weights[SK_TACKLING] -= 0.3; weights[SK_STRENGTH] -= 0.2;
+            } else if roll < 0.40 {
+                // Box-to-Box
+                weights[SK_STAMINA] += 0.4; weights[SK_WORK_RATE] += 0.3;
+                weights[SK_TACKLING] += 0.3; weights[SK_STRENGTH] += 0.2;
+                weights[SK_FLAIR] -= 0.2;
+            } else if roll < 0.60 {
+                // Ball Winner
+                weights[SK_TACKLING] += 0.5; weights[SK_MARKING] += 0.4;
+                weights[SK_AGGRESSION] += 0.3; weights[SK_STRENGTH] += 0.3;
+                weights[SK_TECHNIQUE] -= 0.3; weights[SK_VISION] -= 0.3;
+            } else if roll < 0.80 {
+                // Winger
+                weights[SK_PACE] += 0.5; weights[SK_CROSSING] += 0.5;
+                weights[SK_DRIBBLING] += 0.4; weights[SK_ACCELERATION] += 0.3;
+                weights[SK_TACKLING] -= 0.3; weights[SK_HEADING] -= 0.3;
+            } else {
+                // Mezzala
+                weights[SK_DRIBBLING] += 0.4; weights[SK_OFF_THE_BALL] += 0.3;
+                weights[SK_TECHNIQUE] += 0.3; weights[SK_ACCELERATION] += 0.2;
+                weights[SK_MARKING] -= 0.2;
+            }
+        }
+        PositionType::Striker => {
+            if roll < 0.25 {
+                // Poacher
+                weights[SK_FINISHING] += 0.4; weights[SK_OFF_THE_BALL] += 0.4;
+                weights[SK_ANTICIPATION] += 0.3; weights[SK_COMPOSURE] += 0.3;
+                weights[SK_DRIBBLING] -= 0.3; weights[SK_PASSING] -= 0.3;
+            } else if roll < 0.45 {
+                // Target Man
+                weights[SK_HEADING] += 0.5; weights[SK_STRENGTH] += 0.5;
+                weights[SK_FIRST_TOUCH] += 0.3; weights[SK_BRAVERY] += 0.3;
+                weights[SK_PACE] -= 0.4; weights[SK_ACCELERATION] -= 0.3;
+            } else if roll < 0.65 {
+                // Speed Merchant
+                weights[SK_PACE] += 0.5; weights[SK_ACCELERATION] += 0.4;
+                weights[SK_DRIBBLING] += 0.3; weights[SK_AGILITY] += 0.2;
+                weights[SK_HEADING] -= 0.3; weights[SK_STRENGTH] -= 0.3;
+            } else if roll < 0.85 {
+                // Complete Forward
+                weights[SK_TECHNIQUE] += 0.2; weights[SK_PASSING] += 0.2;
+                weights[SK_VISION] += 0.2; weights[SK_DECISIONS] += 0.2;
+            } else {
+                // Deep-Lying Forward
+                weights[SK_FIRST_TOUCH] += 0.4; weights[SK_PASSING] += 0.4;
+                weights[SK_VISION] += 0.4; weights[SK_TECHNIQUE] += 0.3;
+                weights[SK_HEADING] -= 0.3; weights[SK_OFF_THE_BALL] -= 0.2;
+            }
+        }
+    }
 }
 
 /// Which broad group a skill index belongs to: 0=technical, 1=mental, 2=physical
@@ -480,60 +515,66 @@ impl PlayerGenerator {
     fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8) -> PlayerSkills {
         // ── PA is the anchor ───────────────────────────────────────────────
         // PA maps to a "fully developed" skill level: what this player's average
-        // skill would be at peak. Each skill group develops differently with age:
-        //   Mental:    barely changes over career → starts near final level
-        //   Physical:  changes ~10-20% over career → starts close to final level
-        //   Technical: grows the most → young players start much lower
+        // skill would be at peak. Position weights create FM-like differentiation
+        // via ADDITIVE spread so even PA 15 players have clear strengths/weaknesses.
 
         let pa = potential_ability as f32;
         // Final skill level this PA implies (PA 1→1, PA 100→10.5, PA 200→20)
         let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
 
-        // Age-dependent development ratio per skill group (how close to final level)
+        // Age-dependent development ratio per skill group
+        // Technical develops early (ball work from childhood), peaks mid-20s
         let tech_age_ratio = match age {
-            0..=17 =>  0.40,
-            18..=19 => 0.50,
-            20..=22 => 0.65,
-            23..=26 => 0.80,
-            27..=29 => 0.92,
-            30..=32 => 0.95,
-            _ =>       0.90,
-        };
-        let mental_age_ratio = match age {
-            0..=17 =>  0.82,
-            18..=19 => 0.85,
+            0..=17 =>  0.75,
+            18..=19 => 0.82,
             20..=22 => 0.90,
             23..=26 => 0.95,
-            27..=29 => 0.98,
-            30..=32 => 1.0,
-            _ =>       1.0, // mental doesn't decline
+            27..=29 => 1.0,
+            30..=32 => 0.97,
+            _ =>       0.93,
         };
+        // Mental develops late (experience, reading the game), peaks early 30s
+        let mental_age_ratio = match age {
+            0..=17 =>  0.55,
+            18..=19 => 0.62,
+            20..=22 => 0.72,
+            23..=26 => 0.85,
+            27..=29 => 0.95,
+            30..=32 => 1.0,
+            _ =>       1.0,
+        };
+        // Physical peaks mid-20s, declines after 30
         let physical_age_ratio = match age {
             0..=17 =>  0.70,
             18..=19 => 0.78,
             20..=22 => 0.88,
             23..=26 => 0.95,
-            27..=29 => 1.0,  // physical peak
+            27..=29 => 1.0,
             30..=32 => 0.93,
-            _ =>       0.82, // decline after 32
+            _ =>       0.82,
         };
 
-        // Group means: pure PA-driven. PA already encodes reputation.
+        // Group means: pure PA-driven
         let tech_mean   = pa_final * tech_age_ratio;
         let mental_mean = pa_final * mental_age_ratio;
         let phys_mean   = pa_final * physical_age_ratio;
 
-        let max_possible = 20.0_f32;
-        let pos_w = position_weights(position);
+        // Position spread: how much key/weak skills deviate from group mean.
+        // Ensures differentiation at ALL ability levels:
+        //   PA 15 (pa_final ~2.3): spread ~2.5 → key ~4, weak ~1
+        //   PA 50 (pa_final ~5.7): spread ~2.8 → key ~8, weak ~3
+        //   PA 100 (pa_final ~10.5): spread ~5.2 → key ~14, weak ~5
+        //   PA 180 (pa_final ~18.1): spread ~9.1 → key ~20, weak ~9
+        let spread = (pa_final * 0.5).max(2.5);
 
-        // Noise per group:
-        //   Technical — widest spread (distinct skill profiles), extra for youth
-        //   Mental — narrow (personality is consistent)
-        //   Physical — moderate (cohesion applied later)
+        let mut pos_w = position_weights(position);
+        apply_role_archetype(&mut pos_w, position);
+
+        // Noise per group
         let base_noise = 1.5 + rep_factor * 1.0;
         let tech_noise = if age <= 18 { base_noise + 2.0 } else { base_noise + 0.5 };
         let mental_noise = base_noise * 0.5;
-        let phys_noise = base_noise * 0.7;
+        let phys_noise = base_noise * 1.5;
 
         let mut skills = [0.0f32; SKILL_COUNT];
 
@@ -545,54 +586,83 @@ impl PlayerGenerator {
                 _ => (phys_mean, phys_noise),
             };
 
-            // 2. base = group_mean + noise
-            let base = group_mean + random_normal() * noise;
+            // 2. Additive position spread: key skills (w>1) get bonus, weak skills (w<1) get penalty
+            //    w=1.7 → group_mean + 0.7 * spread (big boost)
+            //    w=0.2 → group_mean - 0.8 * spread (big penalty)
+            let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;
+            let base = pos_mean + random_normal() * noise;
 
-            // 3. Apply position weight (floored at 0.4 to prevent crushing)
-            let effective_pos_w = pos_w[i].max(0.4);
+            // 3. Apply per-skill age curve for individual peak timing
+            let raw = base * age_curve(i, age);
 
-            // 4. Apply per-skill age curve for individual peak timing
-            let raw = base * age_curve(i, age) * effective_pos_w;
-
-            // 5. Clamp
-            skills[i] = raw.min(max_possible).clamp(1.0, 20.0);
+            // 4. Clamp
+            skills[i] = raw.clamp(1.0, 20.0);
         }
 
-        // 6. Mental cohesion: pull toward group mean (mentality is unified)
-        let m_start = 14; // SK_AGGRESSION
-        let m_end = 28;   // through SK_WORK_RATE
+        // 5. Mental cohesion: pull toward group mean (mentality is unified)
+        let m_start = 14;
+        let m_end = 28;
         let m_count = (m_end - m_start) as f32;
         let m_avg: f32 = skills[m_start..m_end].iter().sum::<f32>() / m_count;
         for i in m_start..m_end {
             skills[i] = skills[i] * 0.70 + m_avg * 0.30;
         }
 
-        // 7. Physical cohesion: pull toward group mean (body is one unit)
-        let p_start = 28; // SK_ACCELERATION
+        // 6. Physical cohesion: light pull toward group mean (keep individuality)
+        let p_start = 28;
         let p_end = SKILL_COUNT;
         let p_count = (p_end - p_start) as f32;
         let p_avg: f32 = skills[p_start..p_end].iter().sum::<f32>() / p_count;
         for i in p_start..p_end {
-            skills[i] = skills[i] * 0.65 + p_avg * 0.35;
+            skills[i] = skills[i] * 0.85 + p_avg * 0.15;
         }
 
-        // 8. PA-based floor: prevents garbage skills on key attributes
-        //    PA 180 → floor ~8, PA 100 → floor ~4, PA 30 → floor 1
-        let pa_floor = ((pa - 10.0) / 190.0 * 8.0 + 1.0).clamp(1.0, 9.0);
-        let key_floor = (pa_final * 0.50).clamp(pa_floor, 11.0);
+        // 7. PA-based floors
+        let key_floor = (pa_final * 0.40).clamp(1.0, 9.0);
+        // Universal minimum: no skill should be 1 for any professional player.
+        // Even a bad GK can pass at 3. Even a striker has basic tackling at 2-3.
+        // PA 20 (pa_final ~2.8) → floor 2, PA 70 (pa_final ~7.6) → floor 3, PA 150 → floor 4
+        let universal_floor = (1.0 + pa_final * 0.3).clamp(2.0, 5.0);
+        // Physical floor: footballers are professional athletes — even low-PA players
+        // should have reasonable physical attributes, not 2-3 like untrained people.
+        // PA 15 → 5, PA 50 → 5, PA 100 → 6.7, PA 150 → 8
+        let physical_floor_base = (3.0 + pa_final * 0.35).clamp(6.0, 9.0);
+        // Technical floor: all professional footballers train technical skills daily.
+        // Position-trained skills (weight >= 0.8) get the full trained floor.
+        // Other technical skills get a lower but still decent "footballer floor".
+        // Mental skills use universal floor only — they develop with age/experience.
+        let trained_floor = (pa_final * 0.35 + 3.0).clamp(6.0, 9.0);
+        let footballer_tech_floor = (pa_final * 0.25 + 2.0).clamp(4.0, 7.0);
         for i in 0..SKILL_COUNT {
-            if pos_w[i] >= 1.0 {
+            if pos_w[i] >= 1.2 {
                 skills[i] = skills[i].max(key_floor);
             }
-            skills[i] = skills[i].max(1.0); // absolute minimum is 1
+            if skill_group(i) == 2 {
+                // Physical: per-skill jitter so not every physical lands at the same value
+                let jitter = (random_normal() * 2.5).clamp(-3.0, 3.0);
+                let floor = (physical_floor_base + jitter).max(4.0);
+                skills[i] = skills[i].max(floor);
+            } else if skill_group(i) == 0 && pos_w[i] >= 0.8 {
+                // Technical skills this position trains regularly
+                let jitter = (random_normal() * 1.5).clamp(-2.0, 2.0);
+                let floor = (trained_floor + jitter).max(4.0);
+                skills[i] = skills[i].max(floor);
+            } else if skill_group(i) == 0 {
+                // All other technical skills — footballers can still pass, shoot, etc.
+                let jitter = (random_normal() * 1.5).clamp(-2.0, 2.0);
+                let floor = (footballer_tech_floor + jitter).max(3.0);
+                skills[i] = skills[i].max(floor);
+            } else {
+                skills[i] = skills[i].max(universal_floor);
+            }
         }
 
-        // 9. Apply affinities
+        // 8. Apply affinities
         apply_affinities(&mut skills);
 
-        // 10. Final clamp
+        // 9. Final clamp
         for v in skills.iter_mut() {
-            *v = v.clamp(3.0, 20.0);
+            *v = v.clamp(1.0, 20.0);
         }
 
         skills_from_array(&skills)
@@ -736,38 +806,41 @@ impl PlayerGenerator {
     // ── Potential ability (generated before skills) ─────────────────────
 
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
-        // FM-style PA distribution: massive gaps between tiers.
+        // Three-tier PA distribution:
+        //   Normal:   majority of squad — ability matches club level
+        //   Standout: ~6-10% — notably better than club level (every club has 1-2)
+        //   Gem:      ~1-3% — exceptional talent well above club level
         //
-        // rep_factor (blended team 70% + country 30% / 10000):
-        //   0.05-0.15 (amateur/Chad)     → PA 15-55, avg ~35
-        //   0.15-0.30 (Malta/small)      → PA 25-75, avg ~50
-        //   0.30-0.50 (Ghana/Nigeria)    → PA 40-100, avg ~70
-        //   0.50-0.65 (mid European)     → PA 60-130, avg ~95
-        //   0.65-0.80 (Eredivisie/Serie A mid) → PA 80-155, avg ~115
-        //   0.80-0.90 (top clubs)        → PA 100-175, avg ~140
-        //   0.90-1.00 (elite)            → PA 120-195, avg ~160
-        //
-        // Gem system: rare chance of exceptional talent even at low rep
+        // Floriana (rep 0.265): normal ~26, standout ~55-85, gem ~80-120
+        // Premier League (rep 0.90): normal ~145, standout ~155-180, gem ~170-195
 
-        // Gem chance: very steep reputation scaling
-        let gem_chance = (rep_factor * rep_factor * rep_factor * 0.18).min(0.15);
-        // Low rep clubs: tiny gem chance. Elite: ~15%.
-        let is_gem = rand::random::<f32>() < gem_chance;
+        let roll = rand::random::<f32>();
 
-        if is_gem {
-            // Gem: PA reaches well above the club's normal range
-            // Even a Chad gem maxes at ~120. Elite gem goes to 195.
-            let gem_min = (60.0 + rep_factor * 70.0) as i32;
-            let gem_max = (90.0 + rep_factor * 105.0).min(195.0) as i32;
+        // Gem: rare exceptional talent
+        let gem_chance = (0.01 + rep_factor * rep_factor * 0.04).min(0.05);
+        // Standout: every club has a few above-average players
+        let standout_chance = gem_chance + 0.06 + rep_factor * 0.04;
+
+        if roll < gem_chance {
+            // Gem: PA well above club range
+            let gem_min = (70.0 + rep_factor * 60.0) as i32;
+            let gem_max = (100.0 + rep_factor * 95.0).min(195.0) as i32;
             IntegerUtils::random(gem_min, gem_max).min(200) as u8
+        } else if roll < standout_chance {
+            // Standout: clearly best player at the club, PA 1.5-2.5x normal range
+            let standout_base = 45.0 + rep_factor * 90.0;
+            let noise = random_normal() * 10.0;
+            let pa = standout_base + noise;
+            pa.clamp(30.0, 185.0) as u8
         } else {
-            // Normal player: quadratic curve — elite clubs WAY above low-rep
-            // rep² * 160 gives the spread: 0.1²*160=1.6, 0.5²*160=40, 0.9²*160=130
-            let base = 15.0 + rep_factor * rep_factor * 160.0;
+            // Normal: bulk of squad
+            // Floor of 25 ensures even the smallest clubs (Floriana, Chad league)
+            // produce players with visible skill differentiation, not all-3 profiles
+            let base = 25.0 + rep_factor * rep_factor * 150.0;
             let youth_bonus = if age <= 21 { 8.0 } else if age <= 25 { 3.0 } else { 0.0 };
-            let noise = random_normal() * (8.0 + rep_factor * 10.0); // wider spread at top
+            let noise = random_normal() * (8.0 + rep_factor * 10.0);
             let pa = base + youth_bonus + noise;
-            pa.clamp(10.0, 190.0) as u8
+            pa.clamp(20.0, 190.0) as u8
         }
     }
 

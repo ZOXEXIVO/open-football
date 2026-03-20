@@ -808,4 +808,296 @@ mod tests {
         assert!(!roma_entries.is_empty(),
             "Roma 0-app entry for 60 days (20%% of season) should be kept.\n{desc}");
     }
+
+    // ---------------------------------------------------------------
+    // Cross-country loan: Floriana (Malta) → Spartak (Russia)
+    // Simulates: loan return in Russia, then snapshot in Malta
+    // The loan entry must survive regardless of processing order.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn lifecycle_cross_country_loan_free_0_games() {
+        let mut player = make_player();
+
+        let floriana = TeamInfo {
+            name: "Floriana".to_string(),
+            slug: "floriana".to_string(),
+            reputation: 100,
+            league_name: "Premier League".to_string(),
+            league_slug: "maltese-premier-league".to_string(),
+        };
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak-moscow".to_string(),
+            reputation: 500,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+
+        // Season start: player at Floriana
+        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1));
+
+        // Immediate loan to Spartak on Aug 1 (free loan)
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&floriana, &spartak, 0.0, make_date(2026, 8, 1));
+
+        // Player sits on bench all season — 0 games at Spartak
+        player.statistics = make_stats(0, 0);
+
+        // Loan return (Russia processes first, moves player back to Floriana)
+        player.on_loan_return(&spartak, make_date(2027, 5, 31));
+        player.contract_loan = None;
+
+        // Malta snapshot runs — player is at Floriana now
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &floriana, make_date(2027, 8, 1));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // Spartak loan entry must exist (even with 0 games)
+        let spartak_entry = history.iter().find(|e| e.team_slug == "spartak-moscow");
+        assert!(spartak_entry.is_some(), "Missing Spartak Moscow loan entry.\n{desc}");
+        assert!(spartak_entry.unwrap().is_loan, "Spartak entry should be a loan.\n{desc}");
+
+        // Floriana entry can exist (0 games, parent club)
+        // The important thing is that BOTH entries are present
+    }
+
+    #[test]
+    fn lifecycle_cross_country_loan_with_games() {
+        let mut player = make_player();
+
+        let floriana = TeamInfo {
+            name: "Floriana".to_string(),
+            slug: "floriana".to_string(),
+            reputation: 100,
+            league_name: "Premier League".to_string(),
+            league_slug: "maltese-premier-league".to_string(),
+        };
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak-moscow".to_string(),
+            reputation: 500,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+
+        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1));
+
+        player.statistics = make_stats(0, 0);
+        player.on_loan(&floriana, &spartak, 0.0, make_date(2026, 8, 1));
+
+        // Player plays 15 games at Spartak
+        player.statistics = make_stats(15, 3);
+
+        // Loan return
+        player.on_loan_return(&spartak, make_date(2027, 5, 31));
+        player.contract_loan = None;
+
+        // Malta snapshot
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &floriana, make_date(2027, 8, 1));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        let spartak_entry = history.iter().find(|e| e.team_slug == "spartak-moscow");
+        assert!(spartak_entry.is_some(), "Missing Spartak Moscow loan entry.\n{desc}");
+        assert_eq!(spartak_entry.unwrap().statistics.played, 15, "Spartak apps wrong.\n{desc}");
+        assert_eq!(spartak_entry.unwrap().statistics.goals, 3, "Spartak goals wrong.\n{desc}");
+        assert!(spartak_entry.unwrap().is_loan, "Should be loan.\n{desc}");
+    }
+
+    // ---------------------------------------------------------------
+    // Manual 2-season loan: both seasons must appear in history
+    // Reproduces: Spartak → Floriana (1 season) then Spartak → Floriana (2 seasons)
+    // User reports missing 2027/28 entry, only 2028/29 shows
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn lifecycle_manual_two_season_loan_both_seasons_visible() {
+        let mut player = make_player();
+
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak-moscow".to_string(),
+            reputation: 500,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        let floriana = TeamInfo {
+            name: "Floriana".to_string(),
+            slug: "floriana".to_string(),
+            reputation: 100,
+            league_name: "Maltese Premier League".to_string(),
+            league_slug: "maltese-premier-league".to_string(),
+        };
+
+        // -- Season 2025/26: player at Spartak, plays 25 games --
+        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1));
+        player.statistics = make_stats(25, 5);
+        player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
+
+        // -- Manual loan 1: Spartak → Floriana, 01.08.2026, 1 season --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2026, 8, 1));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500, make_date(2027, 5, 31), 99, 0, 100,
+        ));
+
+        // Player plays 20 games at Floriana in season 2026/27
+        player.statistics = make_stats(20, 4);
+
+        // Loan return (before season end, like real game flow)
+        player.on_loan_return(&floriana, make_date(2027, 5, 31));
+        player.contract_loan = None;
+
+        // Season end 2026/27 — player is back at Spartak (Russia processes)
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &spartak, make_date(2027, 8, 1));
+
+        // -- Manual loan 2: Spartak → Floriana, 16.08.2027, 2 seasons --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2027, 8, 16));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500, make_date(2029, 5, 31), 99, 0, 100,
+        ));
+
+        // -- Season 2027/28: player at Floriana, 22 games --
+        player.statistics = make_stats(22, 6);
+        // Malta processes season end (player still on loan at Floriana)
+        player.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 1));
+
+        // -- Season 2028/29: player still at Floriana, 18 games --
+        player.statistics = make_stats(18, 3);
+        // Malta processes season end
+        player.on_season_end(Season::new(2028), &floriana, make_date(2029, 8, 1));
+
+        // Loan return after season end
+        player.statistics = make_stats(0, 0);
+        player.on_loan_return(&floriana, make_date(2029, 5, 31));
+        player.contract_loan = None;
+
+        // -- Verify history --
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // 2025/26: Spartak 25 apps
+        let spartak_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
+        assert!(spartak_2025.is_some(), "Missing Spartak 2025/26.\n{desc}");
+        assert_eq!(spartak_2025.unwrap().statistics.played, 25, "Spartak 2025/26 apps wrong.\n{desc}");
+
+        // 2026/27: Floriana 20 apps (loan 1)
+        let floriana_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
+        assert!(floriana_2026.is_some(), "Missing Floriana 2026/27 (loan 1).\n{desc}");
+        assert_eq!(floriana_2026.unwrap().statistics.played, 20, "Floriana 2026/27 apps wrong.\n{desc}");
+        assert!(floriana_2026.unwrap().is_loan, "Floriana 2026/27 should be loan.\n{desc}");
+
+        // 2027/28: Floriana 22 apps (loan 2, season 1) ← THIS IS THE ONE USER SAYS IS MISSING
+        let floriana_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
+        assert!(floriana_2027.is_some(), "Missing Floriana 2027/28 (loan 2, season 1) — THIS IS THE BUG.\n{desc}");
+        assert_eq!(floriana_2027.unwrap().statistics.played, 22, "Floriana 2027/28 apps wrong.\n{desc}");
+        assert!(floriana_2027.unwrap().is_loan, "Floriana 2027/28 should be loan.\n{desc}");
+
+        // 2028/29: Floriana 18 apps (loan 2, season 2)
+        let floriana_2028 = history.iter().find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
+        assert!(floriana_2028.is_some(), "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}");
+        assert_eq!(floriana_2028.unwrap().statistics.played, 18, "Floriana 2028/29 apps wrong.\n{desc}");
+        assert!(floriana_2028.unwrap().is_loan, "Floriana 2028/29 should be loan.\n{desc}");
+    }
+
+    /// Reproduces the exact scenario: when Russia's Season(2026) snapshot hasn't
+    /// drained current before the user does the second manual loan, the old
+    /// Floriana entry from loan 1 may get reused by loan 2.
+    #[test]
+    fn lifecycle_manual_two_season_loan_delayed_snapshot() {
+        let mut player = make_player();
+
+        let spartak = TeamInfo {
+            name: "Spartak Moscow".to_string(),
+            slug: "spartak-moscow".to_string(),
+            reputation: 500,
+            league_name: "Russian Premier League".to_string(),
+            league_slug: "russian-premier-league".to_string(),
+        };
+        let floriana = TeamInfo {
+            name: "Floriana".to_string(),
+            slug: "floriana".to_string(),
+            reputation: 100,
+            league_name: "Maltese Premier League".to_string(),
+            league_slug: "maltese-premier-league".to_string(),
+        };
+
+        // -- Season 2025/26: player at Spartak, plays 25 games --
+        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1));
+        player.statistics = make_stats(25, 5);
+        player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
+
+        // -- Manual loan 1: Spartak → Floriana, 01.08.2026, 1 season --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2026, 8, 1));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500, make_date(2027, 5, 31), 99, 0, 100,
+        ));
+
+        // Player plays 20 games at Floriana in season 2026/27
+        player.statistics = make_stats(20, 4);
+
+        // Loan return (before season end snapshot)
+        player.on_loan_return(&floriana, make_date(2027, 5, 31));
+        player.contract_loan = None;
+
+        // *** KEY DIFFERENCE: Russia's Season(2026) snapshot has NOT run yet ***
+        // The user immediately does manual loan 2 on Aug 16, before Russia processes
+        // its new season. current still has old entries from loan 1.
+
+        // -- Manual loan 2: Spartak → Floriana, 16.08.2027, 2 seasons --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&spartak, &spartak, &floriana, make_date(2027, 8, 16));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500, make_date(2029, 5, 31), 99, 0, 100,
+        ));
+
+        // NOW Russia's snapshot runs (late) for Season(2026)
+        // But the player is at Floriana (Malta), so Russia doesn't process them.
+        // Simulating: no on_season_end call from Russia for this player.
+
+        // -- Season 2027/28: player at Floriana, 22 games --
+        player.statistics = make_stats(22, 6);
+        // Malta processes season end
+        player.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 1));
+
+        // -- Season 2028/29: player still at Floriana, 18 games --
+        player.statistics = make_stats(18, 3);
+        player.on_season_end(Season::new(2028), &floriana, make_date(2029, 8, 1));
+
+        // Loan return
+        player.statistics = make_stats(0, 0);
+        player.on_loan_return(&floriana, make_date(2029, 5, 31));
+        player.contract_loan = None;
+
+        // -- Verify history --
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // 2025/26: Spartak 25 apps
+        let spartak_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "spartak-moscow");
+        assert!(spartak_2025.is_some(), "Missing Spartak 2025/26.\n{desc}");
+
+        // 2026/27: Floriana 20 apps (loan 1) — should exist as a separate season entry
+        let floriana_2026 = history.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "floriana");
+        assert!(floriana_2026.is_some(), "Missing Floriana 2026/27 (loan 1) — entries from 2026/27 not separately frozen.\n{desc}");
+        assert_eq!(floriana_2026.unwrap().statistics.played, 20, "Floriana 2026/27 apps wrong.\n{desc}");
+
+        // 2027/28: Floriana 22 apps (loan 2, season 1)
+        let floriana_2027 = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "floriana");
+        assert!(floriana_2027.is_some(), "Missing Floriana 2027/28 (loan 2, season 1).\n{desc}");
+        assert_eq!(floriana_2027.unwrap().statistics.played, 22, "Floriana 2027/28 apps wrong.\n{desc}");
+
+        // 2028/29: Floriana 18 apps (loan 2, season 2)
+        let floriana_2028 = history.iter().find(|e| e.season.start_year == 2028 && e.team_slug == "floriana");
+        assert!(floriana_2028.is_some(), "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}");
+        assert_eq!(floriana_2028.unwrap().statistics.played, 18, "Floriana 2028/29 apps wrong.\n{desc}");
+    }
 }

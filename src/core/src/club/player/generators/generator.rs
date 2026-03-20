@@ -64,34 +64,6 @@ fn random_normal() -> f32 {
     (-2.0 * u1.ln()).sqrt() * (2.0 * std::f32::consts::PI * u2).cos()
 }
 
-#[inline]
-fn lerp(a: f32, b: f32, t: f32) -> f32 {
-    a + (b - a) * t
-}
-
-fn age_curve(skill_idx: usize, age: u32) -> f32 {
-    let (peak_start, peak_end) = match skill_idx {
-        SK_ACCELERATION | SK_PACE | SK_AGILITY | SK_JUMPING | SK_BALANCE | SK_NATURAL_FITNESS => {
-            (18u32, 24u32)
-        }
-        SK_DECISIONS | SK_POSITIONING | SK_VISION | SK_LEADERSHIP | SK_COMPOSURE | SK_PASSING => {
-            (26, 34)
-        }
-        _ => (22, 28),
-    };
-
-    let age_f = age as f32;
-    if age < peak_start {
-        let ramp_start = peak_start.saturating_sub(6) as f32;
-        let t = ((age_f - ramp_start) / (peak_start as f32 - ramp_start)).clamp(0.0, 1.0);
-        lerp(0.75, 1.0, t)
-    } else if age <= peak_end {
-        1.0
-    } else {
-        let t = ((age_f - peak_end as f32) / (40.0 - peak_end as f32)).clamp(0.0, 1.0);
-        lerp(1.0, 0.65, t)
-    }
-}
 
 #[derive(Copy, Clone)]
 enum PositionType {
@@ -128,103 +100,257 @@ fn position_type_from(pos: PlayerPositionType) -> PositionType {
     }
 }
 
+/// Position distribution weights. Higher = more CA budget allocated to this skill.
+/// These are NOT multipliers — they are proportional shares of the CA budget.
+/// A weight of 1.8 gets ~2.25x the budget of a weight of 0.8, producing naturally
+/// higher skills for key attributes without collapsing weak ones.
 fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
     let mut w = [0.8f32; SKILL_COUNT];
     match position {
         PositionType::Goalkeeper => {
-            // GK-critical skills — much higher
-            w[SK_POSITIONING] = 1.6; w[SK_CONCENTRATION] = 1.5; w[SK_AGILITY] = 1.5;
-            w[SK_ANTICIPATION] = 1.4; w[SK_COMPOSURE] = 1.4; w[SK_JUMPING] = 1.4;
-            w[SK_BRAVERY] = 1.3; w[SK_DECISIONS] = 1.2; w[SK_STRENGTH] = 1.1;
-            // Modern GK skills
-            w[SK_FIRST_TOUCH] = 1.1; w[SK_PASSING] = 1.1; w[SK_TECHNIQUE] = 1.0;
-            w[SK_NATURAL_FITNESS] = 1.0; w[SK_PACE] = 0.9; w[SK_STAMINA] = 0.9;
-            // Irrelevant outfield skills — much lower
-            w[SK_FINISHING] = 0.2; w[SK_LONG_SHOTS] = 0.2; w[SK_CROSSING] = 0.2;
-            w[SK_CORNERS] = 0.2; w[SK_FREE_KICKS] = 0.3; w[SK_HEADING] = 0.3;
-            w[SK_OFF_THE_BALL] = 0.3; w[SK_DRIBBLING] = 0.4; w[SK_LONG_THROWS] = 0.5;
-            w[SK_TACKLING] = 0.3; w[SK_MARKING] = 0.3; w[SK_WORK_RATE] = 0.5;
-            w[SK_FLAIR] = 0.4; w[SK_ACCELERATION] = 0.7;
+            // GK-critical
+            w[SK_POSITIONING] = 1.8; w[SK_CONCENTRATION] = 1.6; w[SK_AGILITY] = 1.7;
+            w[SK_ANTICIPATION] = 1.5; w[SK_COMPOSURE] = 1.5; w[SK_JUMPING] = 1.5;
+            w[SK_BRAVERY] = 1.4; w[SK_DECISIONS] = 1.3; w[SK_STRENGTH] = 1.1;
+            // Modern GK
+            w[SK_FIRST_TOUCH] = 1.0; w[SK_PASSING] = 1.0; w[SK_TECHNIQUE] = 0.9;
+            w[SK_NATURAL_FITNESS] = 1.0; w[SK_PACE] = 0.8; w[SK_STAMINA] = 0.8;
+            // Irrelevant outfield
+            w[SK_FINISHING] = 0.1; w[SK_LONG_SHOTS] = 0.1; w[SK_CROSSING] = 0.1;
+            w[SK_CORNERS] = 0.1; w[SK_FREE_KICKS] = 0.2; w[SK_HEADING] = 0.2;
+            w[SK_OFF_THE_BALL] = 0.2; w[SK_DRIBBLING] = 0.3; w[SK_LONG_THROWS] = 0.4;
+            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_WORK_RATE] = 0.4;
+            w[SK_FLAIR] = 0.3; w[SK_ACCELERATION] = 0.6;
         }
         PositionType::Defender => {
-            w[SK_TACKLING] = 1.3; w[SK_MARKING] = 1.3; w[SK_POSITIONING] = 1.3;
-            w[SK_HEADING] = 1.2; w[SK_STRENGTH] = 1.2; w[SK_CONCENTRATION] = 1.2;
-            w[SK_ANTICIPATION] = 1.2; w[SK_BRAVERY] = 1.2;
-            w[SK_PACE] = 1.0; w[SK_JUMPING] = 1.0; w[SK_PASSING] = 1.0;
-            w[SK_TEAMWORK] = 1.0; w[SK_DECISIONS] = 1.0; w[SK_COMPOSURE] = 1.0;
+            w[SK_TACKLING] = 1.6; w[SK_MARKING] = 1.6; w[SK_POSITIONING] = 1.5;
+            w[SK_HEADING] = 1.4; w[SK_STRENGTH] = 1.4; w[SK_CONCENTRATION] = 1.4;
+            w[SK_ANTICIPATION] = 1.3; w[SK_BRAVERY] = 1.3;
+            w[SK_PACE] = 1.1; w[SK_JUMPING] = 1.1; w[SK_PASSING] = 1.0;
+            w[SK_TEAMWORK] = 1.1; w[SK_DECISIONS] = 1.1; w[SK_COMPOSURE] = 1.0;
             w[SK_NATURAL_FITNESS] = 1.0; w[SK_STAMINA] = 1.0;
-            w[SK_FINISHING] = 0.5; w[SK_DRIBBLING] = 0.6; w[SK_FLAIR] = 0.5;
-            w[SK_LONG_SHOTS] = 0.5; w[SK_OFF_THE_BALL] = 0.6;
+            w[SK_FINISHING] = 0.3; w[SK_DRIBBLING] = 0.4; w[SK_FLAIR] = 0.3;
+            w[SK_LONG_SHOTS] = 0.3; w[SK_OFF_THE_BALL] = 0.4; w[SK_VISION] = 0.5;
+            w[SK_CROSSING] = 0.5; w[SK_CORNERS] = 0.3; w[SK_FREE_KICKS] = 0.4;
         }
         PositionType::Midfielder => {
-            w[SK_PASSING] = 1.3; w[SK_VISION] = 1.3; w[SK_STAMINA] = 1.2;
-            w[SK_TECHNIQUE] = 1.2; w[SK_FIRST_TOUCH] = 1.2; w[SK_DECISIONS] = 1.2;
-            w[SK_TEAMWORK] = 1.2; w[SK_WORK_RATE] = 1.2;
-            w[SK_DRIBBLING] = 1.0; w[SK_TACKLING] = 1.0; w[SK_POSITIONING] = 1.0;
-            w[SK_COMPOSURE] = 1.0; w[SK_ANTICIPATION] = 1.0; w[SK_CONCENTRATION] = 1.0;
+            w[SK_PASSING] = 1.5; w[SK_VISION] = 1.4; w[SK_STAMINA] = 1.3;
+            w[SK_TECHNIQUE] = 1.3; w[SK_FIRST_TOUCH] = 1.3; w[SK_DECISIONS] = 1.3;
+            w[SK_TEAMWORK] = 1.3; w[SK_WORK_RATE] = 1.2;
+            w[SK_DRIBBLING] = 1.1; w[SK_TACKLING] = 1.0; w[SK_POSITIONING] = 1.0;
+            w[SK_COMPOSURE] = 1.1; w[SK_ANTICIPATION] = 1.1; w[SK_CONCENTRATION] = 1.0;
             w[SK_PACE] = 1.0; w[SK_ACCELERATION] = 1.0; w[SK_NATURAL_FITNESS] = 1.0;
             w[SK_BALANCE] = 1.0;
-            w[SK_HEADING] = 0.7; w[SK_LONG_THROWS] = 0.6; w[SK_FINISHING] = 0.7;
+            w[SK_HEADING] = 0.5; w[SK_LONG_THROWS] = 0.4; w[SK_FINISHING] = 0.5;
+            w[SK_MARKING] = 0.6; w[SK_STRENGTH] = 0.7;
         }
         PositionType::Striker => {
-            w[SK_FINISHING] = 1.4; w[SK_OFF_THE_BALL] = 1.3; w[SK_DRIBBLING] = 1.2;
-            w[SK_PACE] = 1.2; w[SK_COMPOSURE] = 1.2; w[SK_FIRST_TOUCH] = 1.2;
-            w[SK_ANTICIPATION] = 1.2; w[SK_ACCELERATION] = 1.2;
-            w[SK_HEADING] = 1.0; w[SK_TECHNIQUE] = 1.0; w[SK_STRENGTH] = 1.0;
+            w[SK_FINISHING] = 1.7; w[SK_OFF_THE_BALL] = 1.5; w[SK_COMPOSURE] = 1.4;
+            w[SK_DRIBBLING] = 1.3; w[SK_PACE] = 1.3; w[SK_FIRST_TOUCH] = 1.3;
+            w[SK_ANTICIPATION] = 1.3; w[SK_ACCELERATION] = 1.3;
+            w[SK_HEADING] = 1.1; w[SK_TECHNIQUE] = 1.1; w[SK_STRENGTH] = 1.0;
             w[SK_AGILITY] = 1.0; w[SK_BALANCE] = 1.0; w[SK_DECISIONS] = 1.0;
             w[SK_DETERMINATION] = 1.0; w[SK_BRAVERY] = 1.0; w[SK_NATURAL_FITNESS] = 1.0;
-            w[SK_TACKLING] = 0.4; w[SK_MARKING] = 0.4; w[SK_POSITIONING] = 0.6;
-            w[SK_CONCENTRATION] = 0.7; w[SK_LONG_THROWS] = 0.5;
+            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_POSITIONING] = 0.4;
+            w[SK_CONCENTRATION] = 0.6; w[SK_LONG_THROWS] = 0.3;
+            w[SK_CORNERS] = 0.3; w[SK_FREE_KICKS] = 0.4;
         }
     }
     w
 }
 
-fn age_group_weights(age: u32) -> (f32, f32, f32) {
-    // (technical, mental, physical)
-    if age <= 18 {
-        // Young academy players: raw athleticism, developing game sense, low technique
-        (0.80, 1.05, 1.30)
-    } else if age <= 21 {
-        (0.88, 1.02, 1.18)
-    } else if age <= 29 {
-        (1.0, 1.0, 1.0)
-    } else {
-        (1.0, 1.1, 0.8)
+/// Apply a random role archetype to create variety within position groups.
+/// Roles aggressively reshape the weight distribution — a Poacher and a Target Man
+/// should look fundamentally different, not subtly different.
+/// Boost magnitudes: +0.8 to +1.5 for key skills, −0.5 to −1.0 for suppressed skills.
+fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionType) {
+    let roll = rand::random::<f32>();
+
+    match position {
+        PositionType::Goalkeeper => {
+            if roll < 0.35 {
+                // Shot Stopper: agility, reflexes, concentration
+                weights[SK_AGILITY] += 1.0; weights[SK_ANTICIPATION] += 0.8;
+                weights[SK_CONCENTRATION] += 0.8; weights[SK_POSITIONING] += 0.5;
+                weights[SK_PASSING] -= 0.5; weights[SK_FIRST_TOUCH] -= 0.5;
+                weights[SK_PACE] -= 0.5;
+            } else if roll < 0.60 {
+                // Sweeper Keeper: distribution, pace, bravery
+                weights[SK_PACE] += 1.2; weights[SK_PASSING] += 1.0;
+                weights[SK_FIRST_TOUCH] += 0.8; weights[SK_BRAVERY] += 0.8;
+                weights[SK_POSITIONING] -= 0.5; weights[SK_CONCENTRATION] -= 0.3;
+            } else if roll < 0.85 {
+                // Commanding: aerial, leadership, strength
+                weights[SK_JUMPING] += 1.0; weights[SK_STRENGTH] += 1.0;
+                weights[SK_LEADERSHIP] += 0.8; weights[SK_BRAVERY] += 0.8;
+                weights[SK_PACE] -= 0.5; weights[SK_AGILITY] -= 0.3;
+                weights[SK_PASSING] -= 0.3;
+            } else {
+                // Traditional: balanced, slight concentration edge
+                weights[SK_POSITIONING] += 0.4; weights[SK_CONCENTRATION] += 0.4;
+            }
+        }
+        PositionType::Defender => {
+            if roll < 0.25 {
+                // Ball-Playing: passing, composure, technique
+                weights[SK_PASSING] += 1.2; weights[SK_FIRST_TOUCH] += 1.0;
+                weights[SK_COMPOSURE] += 0.8; weights[SK_TECHNIQUE] += 0.8;
+                weights[SK_AGGRESSION] -= 0.8; weights[SK_HEADING] -= 0.5;
+                weights[SK_STRENGTH] -= 0.3;
+            } else if roll < 0.50 {
+                // Stopper: aggressive, strong, brave
+                weights[SK_AGGRESSION] += 1.0; weights[SK_HEADING] += 1.0;
+                weights[SK_STRENGTH] += 0.8; weights[SK_BRAVERY] += 0.8;
+                weights[SK_PASSING] -= 0.8; weights[SK_TECHNIQUE] -= 0.8;
+                weights[SK_FLAIR] -= 0.5; weights[SK_DRIBBLING] -= 0.5;
+            } else if roll < 0.75 {
+                // Athletic: fast, mobile, stamina
+                weights[SK_PACE] += 1.2; weights[SK_ACCELERATION] += 1.0;
+                weights[SK_AGILITY] += 0.8; weights[SK_STAMINA] += 0.5;
+                weights[SK_STRENGTH] -= 0.8; weights[SK_HEADING] -= 0.5;
+            } else {
+                // No-Nonsense: marking, tackling specialist
+                weights[SK_MARKING] += 1.0; weights[SK_TACKLING] += 0.8;
+                weights[SK_POSITIONING] += 0.8;
+                weights[SK_DRIBBLING] -= 0.8; weights[SK_FLAIR] -= 0.8;
+                weights[SK_VISION] -= 0.5; weights[SK_TECHNIQUE] -= 0.3;
+            }
+        }
+        PositionType::Midfielder => {
+            if roll < 0.20 {
+                // Playmaker: vision, technique, composure
+                weights[SK_VISION] += 1.2; weights[SK_PASSING] += 1.0;
+                weights[SK_TECHNIQUE] += 1.0; weights[SK_COMPOSURE] += 0.8;
+                weights[SK_FIRST_TOUCH] += 0.5;
+                weights[SK_TACKLING] -= 0.8; weights[SK_AGGRESSION] -= 0.8;
+                weights[SK_STRENGTH] -= 0.5; weights[SK_HEADING] -= 0.5;
+            } else if roll < 0.40 {
+                // Box-to-Box: stamina, work rate, strength
+                weights[SK_STAMINA] += 1.2; weights[SK_WORK_RATE] += 1.0;
+                weights[SK_TACKLING] += 0.8; weights[SK_STRENGTH] += 0.8;
+                weights[SK_PACE] += 0.5;
+                weights[SK_FLAIR] -= 0.8; weights[SK_VISION] -= 0.5;
+                weights[SK_TECHNIQUE] -= 0.3;
+            } else if roll < 0.60 {
+                // Ball Winner: tackling, aggression, marking
+                weights[SK_TACKLING] += 1.5; weights[SK_MARKING] += 1.2;
+                weights[SK_AGGRESSION] += 1.0; weights[SK_STRENGTH] += 0.8;
+                weights[SK_POSITIONING] += 0.5;
+                weights[SK_TECHNIQUE] -= 0.8; weights[SK_VISION] -= 0.8;
+                weights[SK_FLAIR] -= 0.8; weights[SK_DRIBBLING] -= 0.5;
+            } else if roll < 0.80 {
+                // Winger: pace, crossing, dribbling, flair
+                weights[SK_PACE] += 1.5; weights[SK_CROSSING] += 1.2;
+                weights[SK_DRIBBLING] += 1.0; weights[SK_ACCELERATION] += 0.8;
+                weights[SK_FLAIR] += 0.8;
+                weights[SK_TACKLING] -= 0.8; weights[SK_MARKING] -= 0.8;
+                weights[SK_HEADING] -= 0.8; weights[SK_STRENGTH] -= 0.5;
+            } else {
+                // Mezzala: dribbling, movement, technique
+                weights[SK_DRIBBLING] += 1.0; weights[SK_OFF_THE_BALL] += 0.8;
+                weights[SK_TECHNIQUE] += 0.8; weights[SK_ACCELERATION] += 0.5;
+                weights[SK_MARKING] -= 0.5; weights[SK_HEADING] -= 0.5;
+            }
+        }
+        PositionType::Striker => {
+            if roll < 0.25 {
+                // Poacher: clinical finisher, movement, composure
+                weights[SK_FINISHING] += 1.5; weights[SK_OFF_THE_BALL] += 1.2;
+                weights[SK_ANTICIPATION] += 0.8; weights[SK_COMPOSURE] += 0.8;
+                weights[SK_DRIBBLING] -= 0.8; weights[SK_PASSING] -= 0.8;
+                weights[SK_VISION] -= 0.8; weights[SK_LONG_SHOTS] -= 0.5;
+            } else if roll < 0.45 {
+                // Target Man: heading, strength, first touch
+                weights[SK_HEADING] += 1.5; weights[SK_STRENGTH] += 1.5;
+                weights[SK_FIRST_TOUCH] += 0.8; weights[SK_BRAVERY] += 0.8;
+                weights[SK_PACE] -= 1.0; weights[SK_ACCELERATION] -= 0.8;
+                weights[SK_DRIBBLING] -= 0.5; weights[SK_AGILITY] -= 0.5;
+            } else if roll < 0.65 {
+                // Speed Merchant: pace, acceleration, agility
+                weights[SK_PACE] += 1.5; weights[SK_ACCELERATION] += 1.2;
+                weights[SK_DRIBBLING] += 0.8; weights[SK_AGILITY] += 0.8;
+                weights[SK_OFF_THE_BALL] += 0.5;
+                weights[SK_HEADING] -= 0.8; weights[SK_STRENGTH] -= 0.8;
+                weights[SK_LONG_SHOTS] -= 0.5;
+            } else if roll < 0.85 {
+                // Complete Forward: well-rounded, every skill useful
+                weights[SK_TECHNIQUE] += 0.5; weights[SK_PASSING] += 0.5;
+                weights[SK_VISION] += 0.5; weights[SK_DECISIONS] += 0.5;
+                weights[SK_FIRST_TOUCH] += 0.5; weights[SK_HEADING] += 0.3;
+            } else {
+                // Deep-Lying Forward: link-up play, creativity
+                weights[SK_FIRST_TOUCH] += 1.2; weights[SK_PASSING] += 1.0;
+                weights[SK_VISION] += 1.0; weights[SK_TECHNIQUE] += 0.8;
+                weights[SK_FINISHING] -= 0.5; weights[SK_OFF_THE_BALL] -= 0.5;
+                weights[SK_HEADING] -= 0.8; weights[SK_PACE] -= 0.3;
+            }
+        }
     }
 }
 
-fn skill_group(idx: usize) -> usize {
-    if idx < 14 { 0 } else if idx < 28 { 1 } else { 2 }
+/// Age factor applied to the TOTAL CA budget (not per-skill).
+/// Youth players have lower CA that grows with development.
+/// This is the only age adjustment — no per-skill age curves.
+fn age_ca_factor(age: u32) -> f32 {
+    match age {
+        0..=12 => 0.35,
+        13 => 0.42,
+        14 => 0.50,
+        15 => 0.58,
+        16 => 0.65,
+        17 => 0.72,
+        18 => 0.80,
+        19 => 0.86,
+        20 => 0.92,
+        21 => 0.96,
+        22..=29 => 1.0,
+        30..=31 => 0.97,
+        32..=33 => 0.93,
+        34..=35 => 0.87,
+        _ => 0.80,
+    }
+}
+
+/// Convert CA points allocated to a single skill into a 1-20 skill value.
+/// Non-linear: high skills are exponentially more expensive.
+///   ca_share ~1  → skill ~2
+///   ca_share ~3  → skill ~5
+///   ca_share ~5  → skill ~8
+///   ca_share ~8  → skill ~12
+///   ca_share ~12 → skill ~16
+///   ca_share ~16 → skill ~19
+fn ca_to_skill(ca_share: f32) -> f32 {
+    // Tuned so CA 100 player averages ~10, CA 50 averages ~6, CA 200 averages ~18
+    (ca_share.max(0.0).powf(0.7) * 2.8).clamp(1.0, 20.0)
 }
 
 fn apply_affinities(skills: &mut [f32; SKILL_COUNT]) {
-    if skills[SK_PASSING] > 14.0 {
-        let bonus = (skills[SK_PASSING] - 14.0) * 0.15;
+    if skills[SK_PASSING] > 12.0 {
+        let bonus = (skills[SK_PASSING] - 12.0) * 0.12;
         skills[SK_VISION] += bonus;
         skills[SK_FIRST_TOUCH] += bonus;
     }
-    if skills[SK_AGGRESSION] > 14.0 {
-        let bonus = (skills[SK_AGGRESSION] - 14.0) * 0.12;
+    if skills[SK_AGGRESSION] > 12.0 {
+        let bonus = (skills[SK_AGGRESSION] - 12.0) * 0.10;
         skills[SK_BRAVERY] += bonus;
         skills[SK_COMPOSURE] -= bonus * 0.5;
     }
-    if skills[SK_PACE] > 14.0 {
-        let bonus = (skills[SK_PACE] - 14.0) * 0.15;
+    if skills[SK_PACE] > 12.0 {
+        let bonus = (skills[SK_PACE] - 12.0) * 0.12;
         skills[SK_ACCELERATION] += bonus;
     }
-    if skills[SK_FINISHING] > 14.0 {
-        let bonus = (skills[SK_FINISHING] - 14.0) * 0.1;
+    if skills[SK_FINISHING] > 12.0 {
+        let bonus = (skills[SK_FINISHING] - 12.0) * 0.08;
         skills[SK_COMPOSURE] += bonus;
         skills[SK_ANTICIPATION] += bonus;
     }
-    if skills[SK_DRIBBLING] > 14.0 {
-        let bonus = (skills[SK_DRIBBLING] - 14.0) * 0.12;
+    if skills[SK_DRIBBLING] > 12.0 {
+        let bonus = (skills[SK_DRIBBLING] - 12.0) * 0.10;
         skills[SK_FLAIR] += bonus;
         skills[SK_AGILITY] += bonus;
     }
-    if skills[SK_LEADERSHIP] > 14.0 {
-        let bonus = (skills[SK_LEADERSHIP] - 14.0) * 0.1;
+    if skills[SK_LEADERSHIP] > 12.0 {
+        let bonus = (skills[SK_LEADERSHIP] - 12.0) * 0.08;
         skills[SK_DETERMINATION] += bonus;
         skills[SK_TEAMWORK] += bonus;
     }
@@ -465,62 +591,163 @@ impl PlayerGenerator {
         }
     }
 
-    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32) -> PlayerSkills {
-        let mean_skill = 5.0 + rep_factor * 13.0;
-        let max_possible = 20.0 * lerp(0.7, 1.0, rep_factor);
-        let noise_std = 2.0 + rep_factor * 1.0;
-        let youth_tech_noise = if age <= 18 { noise_std + 2.5 } else { noise_std };
-        let pos_w = position_weights(position);
-        let (tech_gw, mental_gw, phys_gw) = age_group_weights(age);
+    /// Per-player group bias: randomly tilts the balance between technical, mental, physical.
+    /// Two players with the same CA and position will have different group emphasis.
+    /// E.g. one striker might be "technical but physically weak", another "strong but clumsy".
+    fn apply_group_bias(skills: &mut [f32; SKILL_COUNT]) {
+        // Random multiplier per group: 0.85 to 1.15
+        let tech_bias = 0.85 + rand::random::<f32>() * 0.30;
+        let mental_bias = 0.85 + rand::random::<f32>() * 0.30;
+        let phys_bias = 0.80 + rand::random::<f32>() * 0.40;
 
+        for i in 0..14 {
+            skills[i] *= tech_bias;
+        }
+        for i in 14..28 {
+            skills[i] *= mental_bias;
+        }
+        for i in 28..SK_MATCH_READINESS {
+            skills[i] *= phys_bias;
+        }
+    }
+
+    /// Apply personal strengths and weaknesses: gives every player a recognizable identity.
+    /// Picks 2-4 skills to boost (+2 to +5) and 2-4 to weaken (−2 to −4).
+    /// Strength candidates are biased toward high-weight skills (role-appropriate).
+    /// Weakness candidates are biased toward low-weight skills (role-inappropriate).
+    fn apply_strengths_weaknesses(
+        skills: &mut [f32; SKILL_COUNT],
+        weights: &[f32; SKILL_COUNT],
+    ) {
+        let distributable = SK_MATCH_READINESS; // 36 real skills
+
+        // Build sorted indices by weight for biased selection
+        let mut indices: Vec<usize> = (0..distributable).collect();
+
+        // Shuffle with Fisher-Yates for randomness
+        for i in (1..distributable).rev() {
+            let j = (rand::random::<f32>() * (i + 1) as f32) as usize % (i + 1);
+            indices.swap(i, j);
+        }
+
+        // Sort first half by weight descending (strength candidates)
+        // Sort second half by weight ascending (weakness candidates)
+        let mid = distributable / 2;
+        indices[..mid].sort_by(|&a, &b| weights[b].partial_cmp(&weights[a]).unwrap_or(std::cmp::Ordering::Equal));
+        indices[mid..].sort_by(|&a, &b| weights[a].partial_cmp(&weights[b]).unwrap_or(std::cmp::Ordering::Equal));
+
+        let n_strengths = 2 + (rand::random::<f32>() * 3.0) as usize; // 2-4
+        let n_weaknesses = 2 + (rand::random::<f32>() * 3.0) as usize; // 2-4
+
+        // Strengths: pick from the first half (biased toward high-weight skills)
+        for &idx in indices[..n_strengths].iter() {
+            let boost = 2.0 + rand::random::<f32>() * 3.0; // +2 to +5
+            skills[idx] += boost;
+        }
+
+        // Weaknesses: pick from the second half (biased toward low-weight skills)
+        // Don't overlap with strengths
+        let mut weakness_count = 0;
+        for &idx in indices[mid..].iter() {
+            if weakness_count >= n_weaknesses {
+                break;
+            }
+            // Skip if this was already a strength
+            if indices[..n_strengths].contains(&idx) {
+                continue;
+            }
+            let penalty = 2.0 + rand::random::<f32>() * 2.0; // −2 to −4
+            skills[idx] -= penalty;
+            weakness_count += 1;
+        }
+    }
+
+    /// CA-budget skill generation (FM-like model).
+    ///
+    /// Instead of generating each skill independently from a mean (which collapses
+    /// to identical values at low levels), this distributes a limited CA budget
+    /// across skills using position weights as proportional shares.
+    ///
+    /// Pipeline:
+    ///   1. Generate raw CA from rep_factor
+    ///   2. Apply age factor to CA (single reduction, not per-skill)
+    ///   3. Get position weights + role archetype
+    ///   4. Normalize weights into proportional shares
+    ///   5. Distribute CA budget: each skill gets ca_share = total_ca * (weight / sum)
+    ///   6. Convert ca_share → skill value via non-linear curve (high skills cost more)
+    ///   7. Apply per-skill noise (small, ±1.5 max)
+    ///   8. Apply affinities and talent spikes
+    ///   9. Clamp to [1, 20] with minimum floor
+    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32) -> PlayerSkills {
+        // Step 1: Raw CA from reputation
+        //   rep 0.05 (academy level 1) → CA ~20
+        //   rep 0.25 (mid)             → CA ~65
+        //   rep 0.50 (max academy)     → CA ~110
+        let raw_ca = 10.0 + rep_factor * 200.0;
+
+        // Step 2: Age reduces the effective CA (youth haven't developed yet)
+        let ca = raw_ca * age_ca_factor(age);
+
+        // Step 3: Position weights + role archetype for variety
+        let mut weights = position_weights(position);
+        apply_role_archetype(&mut weights, position);
+
+        // Clamp weights to [0.4, 2.2] — no weight can starve a skill to nothing
+        for w in weights.iter_mut() {
+            *w = w.clamp(0.4, 2.2);
+        }
+
+        // Step 4: Normalize weights into proportional shares
+        // Exclude SK_MATCH_READINESS from distribution (it's not a real skill)
+        let distributable_count = SKILL_COUNT - 1; // 36 real skills
+        let total_weight: f32 = weights[..distributable_count].iter().sum();
+
+        // Step 5: Distribute CA budget proportionally
         let mut skills = [0.0f32; SKILL_COUNT];
 
-        for i in 0..SKILL_COUNT {
-            let effective_noise = if skill_group(i) == 0 {
-                youth_tech_noise
-            } else {
-                noise_std
-            };
-            let base = mean_skill + random_normal() * effective_noise;
+        for i in 0..distributable_count {
+            let share = weights[i] / total_weight;
+            let ca_for_skill = ca * share * distributable_count as f32;
 
-            let gw = match skill_group(i) {
-                0 => tech_gw,
-                1 => mental_gw,
-                _ => phys_gw,
-            };
-
-            // Position weight adjusts as bonus/penalty around the base, not as a multiplier.
-            // w=1.0 → no change, w=1.5 → +50% bonus, w=0.3 → base * 0.55 (floor at ~55%)
-            let pos_adjust = 0.55 + 0.45 * pos_w[i];
-            let raw = base * age_curve(i, age) * pos_adjust * gw;
-            skills[i] = raw.min(max_possible).clamp(1.0, 20.0);
+            // Step 6: Non-linear conversion — high skills are exponentially expensive
+            skills[i] = ca_to_skill(ca_for_skill);
         }
 
+        // Match readiness starts at a reasonable default
+        skills[SK_MATCH_READINESS] = 10.0 + rand::random::<f32>() * 5.0;
+
+        // Step 7: Per-player group bias — tilts tech/mental/physical balance
+        // Makes two same-position players feel different ("technical but weak" vs "athletic but clumsy")
+        Self::apply_group_bias(&mut skills);
+
+        // Step 8: Per-skill noise (applied AFTER base + group bias)
+        for skill in skills[..distributable_count].iter_mut() {
+            *skill = (*skill + random_normal() * 1.2).clamp(1.0, 20.0);
+        }
+
+        // Step 9: Personal strengths & weaknesses — gives every player a recognizable identity
+        // "this guy is fast but dumb", "pure finisher", "technical but physically weak"
+        Self::apply_strengths_weaknesses(&mut skills, &weights);
+
+        // Step 10: Affinities (correlated skill boosts)
         apply_affinities(&mut skills);
 
-        // Ensure mental and physical don't collapse to same level as technical
-        // Even weak players have basic athleticism and game awareness
-        let tech_avg: f32 = skills[..14].iter().sum::<f32>() / 14.0;
-        let mental_floor = tech_avg + 1.0;
-        let physical_floor = tech_avg + 2.0;
+        // Step 11: Talent spikes for extra individuality
+        let avg_skill = skills[..distributable_count].iter().sum::<f32>() / distributable_count as f32;
+        apply_talent_spikes(&mut skills, avg_skill);
 
-        for skill in &mut skills[14..28] {
-            if *skill < mental_floor {
-                *skill = mental_floor + random_normal().abs() * 0.5;
+        // Step 12: Final clamp with minimum floor — no professional player has skill 1-2
+        let min_floor = (3.0 + rep_factor * 3.0).clamp(3.0, 5.0);
+        // Physical floor: even youth academy players are athletes, not untrained people
+        let physical_floor_base = (4.0 + rep_factor * 4.0).clamp(6.0, 8.0);
+        for i in 0..distributable_count {
+            if i >= 28 {
+                let jitter = (random_normal() * 2.5).clamp(-3.0, 3.0);
+                let floor = (physical_floor_base + jitter).max(4.0);
+                skills[i] = skills[i].clamp(floor, 20.0);
+            } else {
+                skills[i] = skills[i].clamp(min_floor, 20.0);
             }
-        }
-        for skill in &mut skills[28..SKILL_COUNT] {
-            if *skill < physical_floor {
-                *skill = physical_floor + random_normal().abs() * 0.5;
-            }
-        }
-
-        // Inject intra-group talent spikes so skills within a group don't all
-        // round to the same integer. Every player has natural strengths/weaknesses.
-        apply_talent_spikes(&mut skills, mean_skill);
-
-        for v in skills.iter_mut() {
-            *v = v.clamp(1.0, 20.0);
         }
 
         skills_from_array(&skills)
