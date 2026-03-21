@@ -38,5 +38,12 @@
   "rivals": [
     106755
   ],
-  "philosophy": "SignToCompete"
+  "philosophy": "SignToCompete",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Great",
+    "academy": "Adequate",
+    "recruitment": "Good"
+  },
+  "average_attendance": 55000
 }

@@ -46,5 +46,12 @@
     "background": "#ffffff",
     "foreground": "#dc0000"
   },
-  "philosophy": "Balanced"
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Great",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 966
 }

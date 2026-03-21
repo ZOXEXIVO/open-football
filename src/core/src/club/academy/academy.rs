@@ -58,14 +58,21 @@ impl ClubAcademy {
         };
         let date = ctx.simulation.date.date();
 
+        let youth_quality = ctx.club_facilities_youth();
+        let academy_quality = ctx.club_academy_quality();
+        let recruitment_quality = ctx.club_recruitment_quality();
+
         for i in 0..needed {
             let position = self.select_position_for_youth_player(i, needed);
-            let player = PlayerGenerator::generate(
+            let player = PlayerGenerator::generate_with_facilities(
                 country_id,
                 date,
                 position,
                 self.level,
                 people_names,
+                youth_quality,
+                academy_quality,
+                recruitment_quality,
             );
             self.players.add(player);
         }
@@ -134,11 +141,12 @@ impl ClubAcademy {
             .map(|c| c.name)
             .unwrap_or("Unknown Club");
 
-        // Produce 5-10 players per year based on academy level
-        let players_to_produce = self.calculate_annual_intake();
+        // FM-style: Youth Recruitment affects intake quantity
+        let recruitment_quality = ctx.club_recruitment_quality();
+        let players_to_produce = self.calculate_annual_intake(recruitment_quality);
 
-        debug!("academy: {} producing {} youth players (level {})",
-               club_name, players_to_produce, self.level);
+        debug!("academy: {} producing {} youth players (level {}, recruitment={:.2})",
+               club_name, players_to_produce, self.level, recruitment_quality);
 
         let mut generated_players = Vec::with_capacity(players_to_produce);
 
@@ -149,15 +157,23 @@ impl ClubAcademy {
             None => return ProduceYouthPlayersResult::new(Vec::new()),
         };
 
+        // FM-style: Youth Facilities affect intake CA, Academy affects PA,
+        // Recruitment affects gem chance
+        let youth_facility_quality = ctx.club_facilities_youth();
+        let academy_quality = ctx.club_academy_quality();
+
         for i in 0..players_to_produce {
             let position = self.select_position_for_youth_player(i, players_to_produce);
 
-            let generated_player = PlayerGenerator::generate(
+            let generated_player = PlayerGenerator::generate_with_facilities(
                 country_id,
                 ctx.simulation.date.date(),
                 position,
                 self.level,
                 people_names,
+                youth_facility_quality,
+                academy_quality,
+                recruitment_quality,
             );
 
             generated_players.push(generated_player);
@@ -181,8 +197,8 @@ impl ClubAcademy {
         }
     }
 
-    fn calculate_annual_intake(&self) -> usize {
-        // 5-10 players per year, scaled by academy level
+    fn calculate_annual_intake(&self, recruitment_quality: f32) -> usize {
+        // Base: 5-10 players per year, scaled by academy level
         let (min_intake, max_intake) = match self.level {
             1..=3 => (5, 7),
             4..=6 => (5, 8),
@@ -191,7 +207,14 @@ impl ClubAcademy {
             _ => (5, 7),
         };
 
-        IntegerUtils::random(min_intake, max_intake) as usize
+        // FM-style: Better recruitment network finds more prospects
+        // Poor recruitment (0.05) → -2 players, Average (0.35) → +0,
+        // Exceptional (0.95) → +3 players
+        let recruitment_bonus = ((recruitment_quality - 0.35) * 6.0).round() as i32;
+        let min_adj = (min_intake + recruitment_bonus).max(3);
+        let max_adj = (max_intake + recruitment_bonus).max(min_adj + 1);
+
+        IntegerUtils::random(min_adj, max_adj) as usize
     }
 
     fn select_position_for_youth_player(&self, index: usize, total_players: usize) -> PlayerPositionType {

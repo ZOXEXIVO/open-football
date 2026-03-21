@@ -49,5 +49,12 @@
   "rivals": [
     862
   ],
-  "philosophy": "DevelopAndSell"
+  "philosophy": "DevelopAndSell",
+  "facilities": {
+    "training": "Superb",
+    "youth": "Superb",
+    "academy": "Good",
+    "recruitment": "Good"
+  },
+  "average_attendance": 9348
 }

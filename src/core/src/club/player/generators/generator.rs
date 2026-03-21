@@ -470,39 +470,69 @@ impl PlayerGenerator {
         level: u8,
         people_names: &PeopleNameGeneratorData,
     ) -> Player {
+        Self::generate_with_facilities(
+            country_id, now, position, level, people_names,
+            0.35, 0.35, 0.35, // Average defaults
+        )
+    }
+
+    /// Generate a youth player with FM-style facility modifiers:
+    /// - youth_facility_quality: affects starting CA (skill quality of intake)
+    /// - academy_quality: affects PA ceiling (potential of intake)
+    /// - recruitment_quality: affects gem chance (finding exceptional talent)
+    pub fn generate_with_facilities(
+        country_id: u32,
+        now: NaiveDate,
+        position: PlayerPositionType,
+        level: u8,
+        people_names: &PeopleNameGeneratorData,
+        youth_facility_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+    ) -> Player {
         let year = IntegerUtils::random(now.year() - 14, now.year() - 12) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 28) as u32;
         let age = (now.year() as u32).saturating_sub(year);
 
         // Academy level → reputation factor (level 1-10 maps to 0.05-0.50)
-        let rep_factor = (level as f32 / 20.0).clamp(0.05, 0.50);
+        let base_rep_factor = (level as f32 / 20.0).clamp(0.05, 0.50);
+
+        // FM-style: Youth Facilities boost the effective rep_factor for skill generation
+        // Poor youth facilities (0.05) → -20% CA, Best (1.0) → +30% CA
+        // This means Man City's youth intake starts with better skills than Accrington's
+        let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
+        let rep_factor = (base_rep_factor * youth_boost).clamp(0.05, 0.65);
 
         let pos_type = position_type_from(position);
         let skills = Self::generate_skills(&pos_type, age, rep_factor);
 
-        let positions = PlayerPositions {
-            positions: vec![PlayerPosition {
-                position,
-                level: 20,
-            }],
-        };
-
         let current_ability = skills.calculate_ability_for_position(position);
 
-        // Potential ability with gem mechanic
+        // FM-style: Youth Recruitment affects gem chance
+        // Poor recruitment (0.05) → 3% gem, Average (0.35) → 8%, Exceptional (0.95) → 25%
+        let gem_chance = 0.02 + recruitment_quality * 0.24;
+
         let gem_roll = rand::random::<f32>();
-        let gem_chance = 0.05 + rep_factor * 0.20;
         let is_gem = gem_roll < gem_chance;
 
+        // FM-style: Academy Quality affects PA ceiling
+        // Poor academy (0.05) → low PA cap, Best (1.0) → PA up to 200
+        let academy_pa_boost = 0.70 + academy_quality * 0.60; // 0.73 to 1.30
+
         let potential_ability = if is_gem {
-            let gem_min = 140i32.min(current_ability as i32 + 30);
-            let gem_max = (150 + (rep_factor * 50.0) as i32).min(200);
-            IntegerUtils::random(gem_min, gem_max).min(200) as u8
+            // Gems: academy quality raises the PA ceiling
+            let gem_min = 130i32.min(current_ability as i32 + 30);
+            let gem_max = (140.0 + rep_factor * 50.0 + academy_quality * 30.0) as i32;
+            IntegerUtils::random(gem_min, gem_max.min(200)).min(200) as u8
         } else {
-            let headroom = (30.0 * (0.5 + rep_factor)) as i32;
+            // Normal players: academy quality affects headroom above CA
+            let headroom = (30.0 * (0.5 + rep_factor) * academy_pa_boost) as i32;
             (current_ability as i32 + IntegerUtils::random(5, headroom.max(6))).min(200) as u8
         };
+
+        // Higher PA → higher chance of secondary position
+        let positions = Self::generate_positions(position, potential_ability);
 
         // Generate name from country data
         let full_name = {
@@ -768,5 +798,66 @@ impl PlayerGenerator {
         }
 
         skills_from_array(&skills)
+    }
+
+    /// Generate position profile. Primary position always 20.
+    /// Higher PA → higher chance of having a secondary position.
+    /// PA 60 → ~5%, PA 120 → ~15%, PA 160+ → ~30%
+    fn generate_positions(primary: PlayerPositionType, potential_ability: u8) -> PlayerPositions {
+        let mut positions = vec![PlayerPosition { position: primary, level: 20 }];
+
+        // Higher PA players are more talented → more likely to be versatile (quadratic curve)
+        // PA 30 → 5%, PA 60 → 10%, PA 100 → 22%, PA 140 → 38%, PA 180+ → 45%
+        let pa = potential_ability as i32;
+        let versatility_pct = (3 + (pa * pa) / 550).min(45);
+        let roll = IntegerUtils::random(0, 99);
+
+        if roll < versatility_pct {
+            if let Some(secondary) = Self::pick_secondary_position(primary) {
+                let min_level = 10 + (potential_ability as i32 / 30).min(6);
+                let max_level = 15 + (potential_ability as i32 / 50).min(4);
+                positions.push(PlayerPosition {
+                    position: secondary,
+                    level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
+                });
+            }
+        }
+
+        PlayerPositions { positions }
+    }
+
+    fn pick_secondary_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
+        match primary {
+            PlayerPositionType::Goalkeeper => None,
+            PlayerPositionType::DefenderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
+                PlayerPositionType::DefenderCenterLeft
+            } else {
+                PlayerPositionType::DefenderCenterRight
+            }),
+            PlayerPositionType::DefenderCenterLeft | PlayerPositionType::DefenderCenterRight =>
+                Some(PlayerPositionType::DefenderCenter),
+            PlayerPositionType::DefenderLeft => Some(PlayerPositionType::WingbackLeft),
+            PlayerPositionType::DefenderRight => Some(PlayerPositionType::WingbackRight),
+            PlayerPositionType::DefensiveMidfielder => Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::MidfielderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
+                PlayerPositionType::DefensiveMidfielder
+            } else {
+                PlayerPositionType::AttackingMidfielderCenter
+            }),
+            PlayerPositionType::MidfielderCenterLeft | PlayerPositionType::MidfielderCenterRight =>
+                Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::MidfielderLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
+            PlayerPositionType::MidfielderRight => Some(PlayerPositionType::AttackingMidfielderRight),
+            PlayerPositionType::WingbackLeft => Some(PlayerPositionType::DefenderLeft),
+            PlayerPositionType::WingbackRight => Some(PlayerPositionType::DefenderRight),
+            PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::MidfielderLeft),
+            PlayerPositionType::AttackingMidfielderCenter => Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::MidfielderRight),
+            PlayerPositionType::Striker => Some(PlayerPositionType::ForwardCenter),
+            PlayerPositionType::ForwardLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
+            PlayerPositionType::ForwardCenter => Some(PlayerPositionType::Striker),
+            PlayerPositionType::ForwardRight => Some(PlayerPositionType::AttackingMidfielderRight),
+            _ => None,
+        }
     }
 }

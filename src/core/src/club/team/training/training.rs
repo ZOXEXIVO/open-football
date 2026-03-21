@@ -7,7 +7,11 @@ use std::collections::HashMap;
 pub struct TeamTraining;
 
 impl TeamTraining {
-    pub fn train(team: &mut Team, date: NaiveDateTime) -> TeamTrainingResult {
+    pub fn train(team: &mut Team, date: NaiveDateTime, facility_quality: f32) -> TeamTrainingResult {
+        Self::train_with_facilities(team, date, facility_quality)
+    }
+
+    fn train_with_facilities(team: &mut Team, date: NaiveDateTime, facility_quality: f32) -> TeamTrainingResult {
         let mut result = TeamTrainingResult::new();
 
         // Check if it's training time
@@ -38,6 +42,7 @@ impl TeamTraining {
                     coach,
                     session,
                     date,
+                    facility_quality,
                 );
                 result.player_results.extend(session_results);
             }
@@ -54,6 +59,7 @@ impl TeamTraining {
         coach: &Staff,
         session: &TrainingSession,
         date: NaiveDateTime,
+        facility_quality: f32,
     ) -> Vec<PlayerTrainingResult> {
         let participants = Self::select_participants(team, session);
 
@@ -65,6 +71,7 @@ impl TeamTraining {
                 coach,
                 session,
                 date,
+                facility_quality,
             ));
         }
 

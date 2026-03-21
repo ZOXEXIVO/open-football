@@ -46,5 +46,12 @@
     "background": "#0d56ed",
     "foreground": "#000000"
   },
-  "philosophy": "DevelopAndSell"
+  "philosophy": "DevelopAndSell",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Superb",
+    "academy": "Excellent",
+    "recruitment": "Excellent"
+  },
+  "average_attendance": 18535
 }

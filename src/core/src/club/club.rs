@@ -1,5 +1,6 @@
 use crate::club::academy::ClubAcademy;
 use crate::club::board::{BoardContext, ClubBoard};
+use crate::club::facilities::ClubFacilities;
 use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult};
 use crate::context::GlobalContext;
@@ -60,6 +61,8 @@ pub struct Club {
 
     pub philosophy: ClubPhilosophy,
 
+    pub facilities: ClubFacilities,
+
     pub rivals: Vec<u32>,
 }
 
@@ -77,6 +80,7 @@ impl Club {
         status: ClubStatus,
         colors: ClubColors,
         teams: TeamCollection,
+        facilities: ClubFacilities,
     ) -> Self {
         let philosophy = Self::determine_philosophy(&teams);
 
@@ -92,6 +96,7 @@ impl Club {
             teams,
             transfer_plan: ClubTransferPlan::new(),
             philosophy,
+            facilities,
             rivals: Vec::new(),
         }
     }
@@ -115,12 +120,27 @@ impl Club {
 
         let board_ctx = self.build_board_context();
 
+        // Build club context with facility data for training/academy
+        let club_ctx = ctx.with_club(self.id, &self.name);
+        let club_ctx = {
+            let mut c = club_ctx;
+            if let Some(ref mut cc) = c.club {
+                *cc = cc.clone().with_facilities(
+                    self.facilities.training.multiplier(),
+                    self.facilities.youth.multiplier(),
+                    self.facilities.academy.multiplier(),
+                    self.facilities.recruitment.multiplier(),
+                );
+            }
+            c
+        };
+
         let mut result = ClubResult::new(
             self.id,
             self.finance.simulate(ctx.with_finance()),
-            self.teams.simulate(ctx.with_club(self.id, &self.name)),
+            self.teams.simulate(club_ctx.clone()),
             self.board.simulate(ctx.with_board_data(board_ctx)),
-            self.academy.simulate(ctx.clone()),
+            self.academy.simulate(club_ctx.clone()),
         );
 
         if ctx.simulation.is_week_beginning() {

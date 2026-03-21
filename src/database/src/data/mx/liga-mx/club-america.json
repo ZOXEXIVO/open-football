@@ -50,5 +50,12 @@
     1254,
     1255
   ],
-  "philosophy": "Balanced"
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Great",
+    "youth": "Great",
+    "academy": "Adequate",
+    "recruitment": "Exceptional"
+  },
+  "average_attendance": 42162
 }

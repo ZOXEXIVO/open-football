@@ -49,5 +49,12 @@
   "rivals": [
     676
   ],
-  "philosophy": "Balanced"
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Superb",
+    "youth": "Superb",
+    "academy": "Good",
+    "recruitment": "Average"
+  },
+  "average_attendance": 52000
 }

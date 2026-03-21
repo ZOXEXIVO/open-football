@@ -143,7 +143,7 @@ pub struct PlayerPositions {
     pub positions: Vec<PlayerPosition>,
 }
 
-const REQUIRED_POSITION_LEVEL: u8 = 15;
+const REQUIRED_POSITION_LEVEL: u8 = 5;
 
 impl PlayerPositions {
     pub fn positions(&self) -> Vec<PlayerPositionType> {

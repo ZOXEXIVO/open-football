@@ -50,5 +50,12 @@
     1487,
     1489
   ],
-  "philosophy": "DevelopAndSell"
+  "philosophy": "DevelopAndSell",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Great",
+    "academy": "Excellent",
+    "recruitment": "Excellent"
+  },
+  "average_attendance": 40609
 }

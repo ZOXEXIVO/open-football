@@ -15,7 +15,7 @@ use core::ClubStatus;
 use core::TeamCollection;
 use crate::generators::convert::convert_national_competition;
 use core::{
-    Club, ClubBoard, ClubColors, ClubFinances, ClubPhilosophy, Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution, Player,
+    Club, ClubBoard, ClubColors, ClubFacilities, ClubFinances, ClubPhilosophy, Country, CountryGeneratorData, CountryPricing, CountrySettings, FacilityLevel, SkinColorDistribution, Player,
     PlayerCollection, ReputationLevel, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
     CompetitionScope, NationalCompetitionConfig,
@@ -328,6 +328,17 @@ impl DatabaseGenerator {
                     }
                 };
 
+                let facilities = match &club.facilities {
+                    Some(f) => ClubFacilities {
+                        training: FacilityLevel::from_str(&f.training),
+                        youth: FacilityLevel::from_str(&f.youth),
+                        academy: FacilityLevel::from_str(&f.academy),
+                        recruitment: FacilityLevel::from_str(&f.recruitment),
+                        average_attendance: club.average_attendance.unwrap_or(0),
+                    },
+                    None => ClubFacilities::default(),
+                };
+
                 Club {
                 id: club.id,
                 name: club.name.clone(),
@@ -344,6 +355,7 @@ impl DatabaseGenerator {
                 },
                 transfer_plan: ClubTransferPlan::new(),
                 philosophy,
+                facilities,
                 rivals: club.rivals.clone(),
                 teams: TeamCollection::new(
                     club.teams

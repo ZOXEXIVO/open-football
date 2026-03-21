@@ -31,6 +31,7 @@ impl PlayerTraining {
         coach: &Staff,
         session: &TrainingSession,
         date: NaiveDateTime,
+        facility_quality: f32,
     ) -> PlayerTrainingResult {
         let mut effects = TrainingEffects {
             physical_gains: PhysicalGains::default(),
@@ -144,6 +145,33 @@ impl PlayerTraining {
                 effects.fatigue_change = 10.0 * intensity_multiplier;
                 effects.injury_risk = 0.001 * intensity_multiplier;
             }
+        }
+
+        // ===== FACILITY QUALITY EFFECTS (FM-style) =====
+        // Training facilities directly multiply all skill gains.
+        // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,
+        // Excellent (0.75) → 1.15x, Best (1.0) → 1.30x
+        let facility_modifier = 0.50 + facility_quality * 0.80; // Range: 0.54 to 1.30
+
+        // Better facilities reduce injury risk (better medical, better surfaces)
+        // Poor → 1.4x injury, Average → 1.1x, Good → 1.0x, Excellent → 0.85x, Best → 0.70x
+        let facility_injury_mod = 1.4 - facility_quality * 0.70; // Range: 1.4 to 0.70
+
+        // Better facilities improve recovery (better recovery rooms, pools, medical staff)
+        // Only applies to recovery sessions (negative fatigue_change)
+        let facility_recovery_mod = 0.70 + facility_quality * 0.60; // Range: 0.73 to 1.30
+
+        // Apply facility modifier to all skill gains
+        effects.physical_gains = Self::scale_physical(effects.physical_gains, facility_modifier);
+        effects.technical_gains = Self::scale_technical(effects.technical_gains, facility_modifier);
+        effects.mental_gains = Self::scale_mental(effects.mental_gains, facility_modifier);
+
+        // Apply facility modifier to injury risk
+        effects.injury_risk *= facility_injury_mod;
+
+        // Apply facility modifier to recovery (only when recovering, not when fatiguing)
+        if effects.fatigue_change < 0.0 {
+            effects.fatigue_change *= facility_recovery_mod; // More negative = faster recovery
         }
 
         // Apply player condition modifiers

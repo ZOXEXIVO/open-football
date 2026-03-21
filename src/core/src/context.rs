@@ -112,6 +112,25 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
+    /// Get training facility quality from club context (0.0-1.0)
+    pub fn club_facilities_training(&self) -> f32 {
+        self.club.as_ref().map(|c| c.training_facility_quality).unwrap_or(0.35)
+    }
+
+    /// Get youth facility quality from club context (0.0-1.0)
+    pub fn club_facilities_youth(&self) -> f32 {
+        self.club.as_ref().map(|c| c.youth_facility_quality).unwrap_or(0.35)
+    }
+
+    /// Get academy quality from club context (0.0-1.0)
+    pub fn club_academy_quality(&self) -> f32 {
+        self.club.as_ref().map(|c| c.academy_quality).unwrap_or(0.35)
+    }
+
+    /// Get youth recruitment quality from club context (0.0-1.0)
+    pub fn club_recruitment_quality(&self) -> f32 {
+        self.club.as_ref().map(|c| c.recruitment_quality).unwrap_or(0.35)
+    }
 }
 
 #[derive(Clone)]

@@ -50,5 +50,12 @@
     1870,
     1871
   ],
-  "philosophy": "Balanced"
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Great",
+    "youth": "Below Average",
+    "academy": "Adequate",
+    "recruitment": "Good"
+  },
+  "average_attendance": 29143
 }

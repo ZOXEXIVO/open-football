@@ -51,5 +51,12 @@
     1871,
     1879
   ],
-  "philosophy": "SignToCompete"
+  "philosophy": "SignToCompete",
+  "facilities": {
+    "training": "Great",
+    "youth": "Good",
+    "academy": "Adequate",
+    "recruitment": "Good"
+  },
+  "average_attendance": 34599
 }

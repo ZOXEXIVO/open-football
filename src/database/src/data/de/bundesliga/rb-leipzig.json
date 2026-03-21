@@ -46,5 +46,12 @@
     "background": "#dd0741",
     "foreground": "#ffffff"
   },
-  "philosophy": "SignToCompete"
+  "philosophy": "SignToCompete",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Superb",
+    "academy": "Good",
+    "recruitment": "Good"
+  },
+  "average_attendance": 45045
 }

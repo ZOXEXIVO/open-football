@@ -15,6 +15,18 @@ pub struct ClubEntity {
     pub rivals: Vec<u32>,
     #[serde(default)]
     pub philosophy: Option<String>,
+    #[serde(default)]
+    pub facilities: Option<ClubFacilitiesEntity>,
+    #[serde(default)]
+    pub average_attendance: Option<u32>,
+}
+
+#[derive(Deserialize, Clone)]
+pub struct ClubFacilitiesEntity {
+    pub training: String,
+    pub youth: String,
+    pub academy: String,
+    pub recruitment: String,
 }
 
 #[derive(Deserialize)]

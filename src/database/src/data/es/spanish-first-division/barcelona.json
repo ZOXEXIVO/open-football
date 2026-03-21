@@ -51,5 +51,12 @@
     1725,
     1736
   ],
-  "philosophy": "SignToCompete"
+  "philosophy": "SignToCompete",
+  "facilities": {
+    "training": "Superb",
+    "youth": "Best",
+    "academy": "Exceptional",
+    "recruitment": "Exceptional"
+  },
+  "average_attendance": 70000
 }

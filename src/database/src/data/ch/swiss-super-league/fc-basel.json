@@ -50,5 +50,12 @@
     1854,
     1847
   ],
-  "philosophy": "Balanced"
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Excellent",
+    "academy": "Excellent",
+    "recruitment": "Exceptional"
+  },
+  "average_attendance": 26267
 }

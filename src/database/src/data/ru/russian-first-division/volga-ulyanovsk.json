@@ -46,5 +46,12 @@
     "background": "#003da5",
     "foreground": "#ffffff"
   },
-  "philosophy": "LoanFocused"
+  "philosophy": "LoanFocused",
+  "facilities": {
+    "training": "Below Average",
+    "youth": "Basic",
+    "academy": "Average",
+    "recruitment": "Limited"
+  },
+  "average_attendance": 2670
 }

@@ -50,5 +50,12 @@
     650,
     680
   ],
-  "philosophy": "SignToCompete"
+  "philosophy": "SignToCompete",
+  "facilities": {
+    "training": "Best",
+    "youth": "Best",
+    "academy": "Excellent",
+    "recruitment": "Good"
+  },
+  "average_attendance": 60330
 }

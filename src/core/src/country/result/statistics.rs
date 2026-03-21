@@ -135,6 +135,7 @@ mod tests {
             ClubStatus::Professional,
             ClubColors::default(),
             TeamCollection::new(teams),
+            crate::ClubFacilities::default(),
         )
     }
 

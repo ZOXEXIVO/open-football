@@ -5431,7 +5431,7 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-watchlist-table .wl-apps {
-    width: 4em;
+    width: 6em;
     text-align: center;
 }
 
@@ -5462,7 +5462,7 @@ a:link, a:visited, a:hover, a:active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-align: center;
+    text-align: left;
 }
 
 .fm-watchlist-table .wl-league a {
@@ -5479,7 +5479,7 @@ a:link, a:visited, a:hover, a:active {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    text-align: center;
+    text-align: left;
 }
 
 .fm-watchlist-table .wl-team a {

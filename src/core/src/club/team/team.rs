@@ -43,7 +43,7 @@ impl Team {
             self.staffs.simulate(ctx.with_staff(None)),
             self.behaviour
                 .simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
-            TeamTraining::train(self, ctx.simulation.date),
+            TeamTraining::train(self, ctx.simulation.date, ctx.club_facilities_training()),
         );
 
         if self.tactics.is_none() {

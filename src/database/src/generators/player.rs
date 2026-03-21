@@ -426,8 +426,8 @@ impl PlayerGenerator {
         };
 
         // Generate PA first so skills can target the right ability level
-        let positions = Self::generate_positions(position);
         let potential_ability = Self::generate_potential_ability(rep_factor, age);
+        let positions = Self::generate_positions(position, potential_ability);
 
         // Skills target a CA appropriate for this PA and age, not just team rep
         let skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
@@ -670,122 +670,95 @@ impl PlayerGenerator {
 
     // ── Position generation ─────────────────────────────────────────────
 
-    fn generate_positions(position: PositionType) -> PlayerPositions {
-        let mut positions = Vec::with_capacity(5);
+    /// Generate position profile. Primary position always 20.
+    /// Higher PA → higher chance of having a secondary position.
+    fn generate_positions(position: PositionType, potential_ability: u8) -> PlayerPositions {
+        let mut positions = Vec::with_capacity(3);
 
-        match position {
-            PositionType::Goalkeeper => positions.push(PlayerPosition {
-                position: PlayerPositionType::Goalkeeper,
-                level: 20,
-            }),
-            PositionType::Defender => match IntegerUtils::random(0, 5) {
-                0 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::DefenderLeft,
-                        level: 20,
-                    });
-                }
-                1 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::DefenderCenterLeft,
-                        level: 20,
-                    });
-                }
-                2 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::DefenderCenter,
-                        level: 20,
-                    });
-                }
-                3 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::DefenderCenterRight,
-                        level: 20,
-                    });
-                }
-                4 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::DefenderRight,
-                        level: 20,
-                    });
-                }
-                _ => {}
+        // Pick a specific position within the group
+        let primary = match position {
+            PositionType::Goalkeeper => PlayerPositionType::Goalkeeper,
+            PositionType::Defender => match IntegerUtils::random(0, 4) {
+                0 => PlayerPositionType::DefenderLeft,
+                1 => PlayerPositionType::DefenderCenterLeft,
+                2 => PlayerPositionType::DefenderCenter,
+                3 => PlayerPositionType::DefenderCenterRight,
+                _ => PlayerPositionType::DefenderRight,
             },
-            PositionType::Midfielder => match IntegerUtils::random(0, 7) {
-                0 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::MidfielderLeft,
-                        level: 20,
-                    });
-                }
-                1 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::MidfielderCenterLeft,
-                        level: 20,
-                    });
-                }
-                2 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::MidfielderCenter,
-                        level: 20,
-                    });
-                }
-                3 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::MidfielderCenterRight,
-                        level: 20,
-                    });
-                }
-                4 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::MidfielderRight,
-                        level: 20,
-                    });
-                }
-                5 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::WingbackLeft,
-                        level: 20,
-                    });
-                }
-                6 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::WingbackRight,
-                        level: 20,
-                    });
-                }
-                _ => {}
+            PositionType::Midfielder => match IntegerUtils::random(0, 6) {
+                0 => PlayerPositionType::MidfielderLeft,
+                1 => PlayerPositionType::MidfielderCenterLeft,
+                2 => PlayerPositionType::MidfielderCenter,
+                3 => PlayerPositionType::MidfielderCenterRight,
+                4 => PlayerPositionType::MidfielderRight,
+                5 => PlayerPositionType::WingbackLeft,
+                _ => PlayerPositionType::WingbackRight,
             },
-            PositionType::Striker => match IntegerUtils::random(0, 4) {
-                0 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::Striker,
-                        level: 20,
-                    });
-                }
-                1 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::ForwardLeft,
-                        level: 20,
-                    });
-                }
-                2 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::ForwardCenter,
-                        level: 20,
-                    });
-                }
-                3 => {
-                    positions.push(PlayerPosition {
-                        position: PlayerPositionType::ForwardRight,
-                        level: 20,
-                    });
-                }
-                _ => {}
+            PositionType::Striker => match IntegerUtils::random(0, 3) {
+                0 => PlayerPositionType::Striker,
+                1 => PlayerPositionType::ForwardLeft,
+                2 => PlayerPositionType::ForwardCenter,
+                _ => PlayerPositionType::ForwardRight,
             },
+        };
+
+        positions.push(PlayerPosition { position: primary, level: 20 });
+
+        // Higher PA → higher chance of secondary position (quadratic curve)
+        // PA 30 → 5%, PA 60 → 10%, PA 100 → 22%, PA 140 → 38%, PA 180+ → 45%
+        let pa = potential_ability as i32;
+        let versatility_pct = (3 + (pa * pa) / 550).min(45);
+        let roll = IntegerUtils::random(0, 99);
+
+        if roll < versatility_pct {
+            if let Some(secondary) = Self::pick_secondary_position(primary) {
+                // Secondary level: 14-18 for high PA, 10-15 for low PA
+                let min_level = 10 + (potential_ability as i32 / 30).min(6);
+                let max_level = 15 + (potential_ability as i32 / 50).min(4);
+                positions.push(PlayerPosition {
+                    position: secondary,
+                    level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
+                });
+            }
         }
 
         PlayerPositions { positions }
+    }
+
+    /// Pick a natural secondary position for a given primary.
+    fn pick_secondary_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
+        match primary {
+            PlayerPositionType::Goalkeeper => None,
+            PlayerPositionType::DefenderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
+                PlayerPositionType::DefenderCenterLeft
+            } else {
+                PlayerPositionType::DefenderCenterRight
+            }),
+            PlayerPositionType::DefenderCenterLeft | PlayerPositionType::DefenderCenterRight =>
+                Some(PlayerPositionType::DefenderCenter),
+            PlayerPositionType::DefenderLeft => Some(PlayerPositionType::WingbackLeft),
+            PlayerPositionType::DefenderRight => Some(PlayerPositionType::WingbackRight),
+            PlayerPositionType::DefensiveMidfielder => Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::MidfielderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
+                PlayerPositionType::DefensiveMidfielder
+            } else {
+                PlayerPositionType::AttackingMidfielderCenter
+            }),
+            PlayerPositionType::MidfielderCenterLeft | PlayerPositionType::MidfielderCenterRight =>
+                Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::MidfielderLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
+            PlayerPositionType::MidfielderRight => Some(PlayerPositionType::AttackingMidfielderRight),
+            PlayerPositionType::WingbackLeft => Some(PlayerPositionType::DefenderLeft),
+            PlayerPositionType::WingbackRight => Some(PlayerPositionType::DefenderRight),
+            PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::MidfielderLeft),
+            PlayerPositionType::AttackingMidfielderCenter => Some(PlayerPositionType::MidfielderCenter),
+            PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::MidfielderRight),
+            PlayerPositionType::Striker => Some(PlayerPositionType::ForwardCenter),
+            PlayerPositionType::ForwardLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
+            PlayerPositionType::ForwardCenter => Some(PlayerPositionType::Striker),
+            PlayerPositionType::ForwardRight => Some(PlayerPositionType::AttackingMidfielderRight),
+            _ => None,
+        }
     }
 
     // ── Person attributes ───────────────────────────────────────────────
@@ -939,5 +912,24 @@ impl PlayerGenerator {
         if names.is_empty() { return String::new(); }
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
+    }
+}
+
+#[cfg(test)]
+mod position_tests {
+    use super::*;
+
+    #[test]
+    fn test_versatility_by_pa() {
+        let total = 500;
+        for pa in [30u8, 80, 140] {
+            let multi = (0..total)
+                .filter(|_| PlayerGenerator::generate_positions(PositionType::Midfielder, pa).positions.len() > 1)
+                .count();
+            let pct = multi * 100 / total;
+            eprintln!("PA={pa}: {multi}/{total} = {pct}%");
+            // PA 30 → ~5%, PA 80 → ~15%, PA 140 → ~38%
+            assert!(multi > 5, "PA={pa}: only {multi}/{total} multi-pos");
+        }
     }
 }
