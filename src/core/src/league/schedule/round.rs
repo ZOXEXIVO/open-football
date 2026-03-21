@@ -171,6 +171,7 @@ mod tests {
             tier: 0,
             promotion_spots: 0,
             relegation_spots: 0,
+            league_group: None,
         };
 
         let schedule_tours = schedule

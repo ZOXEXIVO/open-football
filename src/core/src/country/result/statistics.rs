@@ -152,6 +152,7 @@ mod tests {
                 tier: 1,
                 promotion_spots: 0,
                 relegation_spots: 0,
+                league_group: None,
             },
             friendly,
         )

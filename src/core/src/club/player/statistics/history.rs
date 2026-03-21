@@ -273,12 +273,8 @@ impl PlayerStatisticsHistory {
             // Always keep: entries with games, entries with transfer fees, or
             // entries where the player was at the club for a meaningful portion of the season
             //
-            // IMPORTANT: Never drop a parent club entry while the player is on loan.
-            // The parent entry has departed_date set and is_loan=false — it must survive
-            // so career history shows the owning club even when the player has 0 apps there.
             let has_fee = entry.transfer_fee.is_some();
-            let is_parent_during_loan = !entry.is_loan && entry.departed_date.is_some();
-            let trivial_stint = games == 0 && !has_fee && time_pct < 3.0 && !is_parent_during_loan;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 3.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
 
             let keep = !stale_loan_seed && !trivial_stint;

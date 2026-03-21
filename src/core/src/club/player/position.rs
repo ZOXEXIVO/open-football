@@ -258,7 +258,7 @@ mod tests {
 
         let display_positions = positions.display_positions().join(",");
 
-        assert_eq!("WL,WR", display_positions);
+        assert_eq!("SW,ST,WL,WR", display_positions);
     }
 }
 
