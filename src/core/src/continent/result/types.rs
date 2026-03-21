@@ -1,4 +1,5 @@
 use crate::continent::{CompetitionTier, ContinentalMatchResult, ContinentalRankings};
+use crate::r#match::MatchResult;
 use crate::transfers::CompletedTransfer;
 use std::collections::HashMap;
 
@@ -7,6 +8,8 @@ pub struct ContinentalCompetitionResults {
     pub champions_league_results: Option<Vec<ContinentalMatchResult>>,
     pub europa_league_results: Option<Vec<ContinentalMatchResult>>,
     pub conference_league_results: Option<Vec<ContinentalMatchResult>>,
+    /// Real match results from continental competitions for stat processing
+    pub match_results: Vec<MatchResult>,
 }
 
 impl ContinentalCompetitionResults {
@@ -15,6 +18,7 @@ impl ContinentalCompetitionResults {
             champions_league_results: None,
             europa_league_results: None,
             conference_league_results: None,
+            match_results: Vec::new(),
         }
     }
 }

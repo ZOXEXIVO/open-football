@@ -68,6 +68,7 @@ pub struct PlayerViewModel {
     pub player_attributes: PlayerAttributesDto,
     pub statistics: PlayerStatistics,
     pub friendly_statistics: Option<PlayerStatistics>,
+    pub cup_statistics: Option<PlayerStatistics>,
     #[allow(dead_code)]
     pub status: PlayerStatusDto,
     pub position_map: PositionMapDto,
@@ -281,6 +282,7 @@ pub async fn player_get_action(
             player_attributes: get_attributes(player),
             statistics: get_statistics(player),
             friendly_statistics: get_friendly_statistics(player),
+            cup_statistics: get_cup_statistics(player),
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status,
@@ -358,6 +360,7 @@ pub async fn player_get_action(
             player_attributes: get_attributes(player),
             statistics: get_statistics(player),
             friendly_statistics: get_friendly_statistics(player),
+            cup_statistics: get_cup_statistics(player),
             status: PlayerStatusDto::new(player.statuses.get()),
             position_map: get_position_map(player),
             loan_status: None,
@@ -521,6 +524,29 @@ fn get_friendly_statistics(player: &Player) -> Option<PlayerStatistics> {
         average_rating: fs.average_rating_str(),
         conceded: fs.conceded,
         clean_sheets: fs.clean_sheets,
+    })
+}
+
+fn get_cup_statistics(player: &Player) -> Option<PlayerStatistics> {
+    let cs = &player.cup_statistics;
+    if cs.played == 0 && cs.played_subs == 0 {
+        return None;
+    }
+    Some(PlayerStatistics {
+        played: cs.played,
+        played_subs: cs.played_subs,
+        goals: cs.goals,
+        assists: cs.assists,
+        penalties: cs.penalties,
+        player_of_the_match: cs.player_of_the_match,
+        yellow_cards: cs.yellow_cards,
+        red_cards: cs.red_cards,
+        shots_on_target: cs.shots_on_target,
+        tackling: cs.tackling,
+        passes: cs.passes,
+        average_rating: cs.average_rating_str(),
+        conceded: cs.conceded,
+        clean_sheets: cs.clean_sheets,
     })
 }
 

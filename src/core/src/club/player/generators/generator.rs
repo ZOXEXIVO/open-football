@@ -631,6 +631,7 @@ impl PlayerGenerator {
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
             friendly_statistics: PlayerStatistics::default(),
+            cup_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
             languages: Vec::new(), // Academy youth — languages set at graduation

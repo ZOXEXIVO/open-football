@@ -942,6 +942,7 @@ impl NationalTeam {
             relations: Relations::new(),
             statistics: PlayerStatistics::default(),
             friendly_statistics: PlayerStatistics::default(),
+            cup_statistics: PlayerStatistics::default(),
             statistics_history: PlayerStatisticsHistory::new(),
             decision_history: PlayerDecisionHistory::new(),
             languages: Vec::new(),

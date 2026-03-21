@@ -42,6 +42,7 @@ pub struct Player {
 
     pub statistics: PlayerStatistics,
     pub friendly_statistics: PlayerStatistics,
+    pub cup_statistics: PlayerStatistics,
     pub statistics_history: PlayerStatisticsHistory,
     pub decision_history: PlayerDecisionHistory,
 

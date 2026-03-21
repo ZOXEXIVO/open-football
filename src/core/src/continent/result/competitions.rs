@@ -21,36 +21,66 @@ impl ContinentResult {
 
         let continent_id = self.get_continent_id();
 
+        // Collect qualified clubs from league final tables
+        let cl_clubs = if let Some(continent) = data.continent(continent_id) {
+            Self::collect_qualified_clubs(continent)
+        } else {
+            Vec::new()
+        };
+
+        if cl_clubs.is_empty() {
+            return;
+        }
+
         if let Some(continent) = data.continent_mut(continent_id) {
-            let qualified_clubs = continent.continental_rankings.get_qualified_clubs();
+            continent.continental_competitions.champions_league.conduct_draw(
+                &cl_clubs,
+                &continent.continental_rankings,
+                date,
+            );
+        }
+    }
 
-            // Champions League draw
-            if let Some(cl_clubs) = qualified_clubs.get(&CompetitionTier::ChampionsLeague) {
-                continent.continental_competitions.champions_league.conduct_draw(
-                    cl_clubs,
-                    &continent.continental_rankings,
-                    date,
-                );
-            }
+    /// Collect top clubs from each country's top-tier league for CL qualification.
+    /// Top 4 leagues get 4 spots, next 2 get 2 spots, rest get 1 spot.
+    fn collect_qualified_clubs(continent: &crate::continent::Continent) -> Vec<u32> {
+        let mut qualified = Vec::new();
 
-            // Europa League draw
-            if let Some(el_clubs) = qualified_clubs.get(&CompetitionTier::EuropaLeague) {
-                continent.continental_competitions.europa_league.conduct_draw(
-                    el_clubs,
-                    &continent.continental_rankings,
-                    date,
-                );
-            }
+        // Sort countries by reputation (approximation of UEFA coefficient)
+        let mut countries: Vec<&crate::Country> = continent.countries.iter().collect();
+        countries.sort_by(|a, b| b.reputation.cmp(&a.reputation));
 
-            // Conference League draw
-            if let Some(conf_clubs) = qualified_clubs.get(&CompetitionTier::ConferenceLeague) {
-                continent.continental_competitions.conference_league.conduct_draw(
-                    conf_clubs,
-                    &continent.continental_rankings,
-                    date,
-                );
+        for (rank, country) in countries.iter().enumerate() {
+            // Find the top-tier league (tier 1)
+            let top_league = country.leagues.leagues.iter()
+                .find(|l| l.settings.tier == 1 && !l.friendly);
+
+            let league = match top_league {
+                Some(l) => l,
+                None => continue,
+            };
+
+            // How many CL spots based on country rank
+            let spots: usize = if rank < 4 { 4 } else if rank < 6 { 2 } else { 1 };
+
+            // Get top N teams from the league table
+            let table = &league.table;
+            for row in table.rows.iter().take(spots) {
+                if row.team_id > 0 {
+                    // We need the club_id, not team_id. Find the club that owns this team.
+                    if let Some(club) = country.clubs.iter().find(|c|
+                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                    ) {
+                        qualified.push(club.id);
+                    }
+                }
             }
         }
+
+        debug!("Champions League qualification: {} clubs from {} countries",
+            qualified.len(), countries.len());
+
+        qualified
     }
 
     pub(crate) fn simulate_continental_competitions(
@@ -65,13 +95,25 @@ impl ContinentResult {
 
         let clubs_map = Self::get_clubs_map(&continent.countries);
 
-        // Simulate Champions League matches
+        // Simulate Champions League matches with real engine
         if continent.continental_competitions.champions_league.has_matches_today(date) {
-            let cl_results = continent.continental_competitions.champions_league.simulate_round(
+            // Play real matches and collect both ContinentalMatchResults (finances) and MatchResults (stats)
+            let real_results = continent.continental_competitions.champions_league.play_matches(
                 &clubs_map,
                 date,
             );
+            // Convert to ContinentalMatchResult for financial processing
+            let cl_results: Vec<ContinentalMatchResult> = real_results.iter().map(|r| {
+                ContinentalMatchResult {
+                    home_team: r.home_team_id,
+                    away_team: r.away_team_id,
+                    home_score: r.score.home_team.get(),
+                    away_score: r.score.away_team.get(),
+                    competition: CompetitionTier::ChampionsLeague,
+                }
+            }).collect();
             results.champions_league_results = Some(cl_results);
+            results.match_results.extend(real_results);
         }
 
         // Simulate Europa League matches
@@ -122,6 +164,12 @@ impl ContinentResult {
             for match_result in conf_results {
                 self.process_single_match(match_result, data, result);
             }
+        }
+
+        // Process real match results through the stat pipeline (player stats routing)
+        for mut match_result in comp_results.match_results {
+            crate::league::LeagueResult::process_cup_match(&mut match_result, data);
+            result.match_results.push(match_result);
         }
 
         // Distribute competition rewards after all matches processed

@@ -247,6 +247,27 @@
                     <td>{{ fs.average_rating }}</td>
                 </tr>
                 {% endif %}
+                {% if let Some(cs) = player.cup_statistics %}
+                <tr>
+                    <td>{{ i18n.t("european_cup") }}</td>
+                    <td>{{ cs.played }}{% if cs.played_subs > 0 %} ({{ cs.played_subs }}){% endif %}</td>
+                    {% if is_goalkeeper %}
+                    <td>{{ cs.conceded }}</td>
+                    <td>{{ cs.clean_sheets }}</td>
+                    {% else %}
+                    <td>{{ cs.goals }}</td>
+                    <td>{{ cs.assists }}</td>
+                    <td>{{ cs.penalties }}</td>
+                    {% endif %}
+                    <td>{{ cs.player_of_the_match }}</td>
+                    <td>{{ cs.yellow_cards }}</td>
+                    <td>{{ cs.red_cards }}</td>
+                    <td>{{ cs.shots_on_target }}</td>
+                    <td>{{ cs.passes }}</td>
+                    <td>{{ cs.tackling }}</td>
+                    <td>{{ cs.average_rating }}</td>
+                </tr>
+                {% endif %}
                 <tr>
                     <td>{{ i18n.t("league") }}</td>
                     <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>

@@ -25,6 +25,7 @@ pub struct League {
     pub statistics: LeagueStatistics,
     pub milestones: LeagueMilestones,
     pub friendly: bool,
+    pub is_cup: bool,
 }
 
 impl League {
@@ -53,6 +54,7 @@ impl League {
             statistics: LeagueStatistics::new(),
             milestones: LeagueMilestones::new(),
             friendly,
+            is_cup: false,
         }
     }
 
@@ -574,7 +576,7 @@ impl League {
             reputation_change += 1; // Entertaining matches
         }
 
-        self.reputation = (self.reputation as i16 + reputation_change).clamp(0, 1000) as u16;
+        self.reputation = (self.reputation as i32 + reputation_change as i32).clamp(0, 10000) as u16;
     }
 
     // ========== MILESTONES & EVENTS ==========

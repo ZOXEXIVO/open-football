@@ -55,6 +55,7 @@ struct PlayerLlm {
     physical: PlayerPhysicalLlm,
     season_stats: Option<PlayerSeasonStatsLlm>,
     friendly_stats: Option<PlayerSeasonStatsLlm>,
+    cup_stats: Option<PlayerSeasonStatsLlm>,
     training_trend: Option<PlayerTrainingTrendLlm>,
     club_history: Vec<PlayerHistoryLlm>,
     staff_opinion: String,
@@ -165,6 +166,20 @@ impl Player {
             None
         };
 
+        let cs = &self.cup_statistics;
+        let cup_stats = if cs.played > 0 || cs.played_subs > 0 {
+            Some(PlayerSeasonStatsLlm {
+                played: cs.played,
+                played_subs: cs.played_subs,
+                goals: cs.goals,
+                assists: cs.assists,
+                yellow_cards: cs.yellow_cards,
+                average_rating: cs.average_rating,
+            })
+        } else {
+            None
+        };
+
         let t = &self.skills.technical;
         let m = &self.skills.mental;
         let p = &self.skills.physical;
@@ -233,6 +248,7 @@ impl Player {
             },
             season_stats,
             friendly_stats,
+            cup_stats,
             training_trend: self.training_trend_llm(),
             club_history: self.club_history_vec(),
             staff_opinion: Self::staff_relationship_llm(staff, self.id),

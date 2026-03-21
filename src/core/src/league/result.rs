@@ -48,6 +48,12 @@ impl LeagueResult {
         }
     }
 
+    /// Process a cup match result (Champions League, etc.) through the stat pipeline.
+    /// Called from continental competition processing.
+    pub fn process_cup_match(result: &mut MatchResult, data: &mut SimulatorData) {
+        Self::process_match_results(result, data);
+    }
+
     fn process_match_results(result: &mut MatchResult, data: &mut SimulatorData) {
         let now = data.date;
 
@@ -92,15 +98,23 @@ impl LeagueResult {
             None => return,
         };
 
-        // Look up friendly flag before mutable borrows
-        let is_friendly = data.league(result.league_id)
-            .map(|l| l.friendly)
-            .unwrap_or(false);
+        // Look up match type flags before mutable borrows
+        // Continental cup matches (CL/EL/etc.) use a reserved ID range starting at 900_000_000
+        let is_cup = result.league_id >= 900_000_000;
+        let is_friendly = if is_cup {
+            false
+        } else {
+            data.league(result.league_id)
+                .map(|l| l.friendly)
+                .unwrap_or(false)
+        };
 
         // Helper macro to select the correct statistics field
         macro_rules! stats {
             ($player:expr) => {
-                if is_friendly { &mut $player.friendly_statistics } else { &mut $player.statistics }
+                if is_cup { &mut $player.cup_statistics }
+                else if is_friendly { &mut $player.friendly_statistics }
+                else { &mut $player.statistics }
             };
         }
 

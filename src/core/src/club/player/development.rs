@@ -464,12 +464,12 @@ impl Player {
             self.skills.mental.work_rate,
         );
 
-        let official_games = self.statistics.total_games();
+        let official_games = self.statistics.total_games() + self.cup_statistics.total_games();
         let friendly_games = self.friendly_statistics.total_games();
 
         let match_exp = match_experience_multiplier(
-            self.statistics.played,
-            self.statistics.played_subs,
+            self.statistics.played + self.cup_statistics.played,
+            self.statistics.played_subs + self.cup_statistics.played_subs,
             self.friendly_statistics.played,
             self.friendly_statistics.played_subs,
         );

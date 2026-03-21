@@ -9,6 +9,7 @@ impl Player {
     pub fn on_transfer(&mut self, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_transfer(stats, from, to, fee, date);
         self.last_transfer_date = Some(date);
     }
@@ -18,6 +19,7 @@ impl Player {
     pub fn on_loan(&mut self, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_loan(stats, from, to, loan_fee, date);
         self.last_transfer_date = Some(date);
     }
@@ -36,6 +38,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_season_end(
             season, stats, team, is_loan, self.last_transfer_date,
         );
@@ -53,6 +56,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_cancel_loan(stats, borrowing, parent, is_loan, date);
         self.last_transfer_date = Some(date);
     }
@@ -69,6 +73,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_departure_transfer(stats, from, to, fee, is_loan, date);
         self.last_transfer_date = Some(date);
     }
@@ -85,6 +90,7 @@ impl Player {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();
+        self.cup_statistics = Default::default();
         self.statistics_history.record_departure_loan(stats, from, parent, to, is_loan, date);
         self.last_transfer_date = Some(date);
     }

@@ -200,6 +200,7 @@ impl Club {
                 // Reset statistics for new season
                 player.statistics = Default::default();
                 player.friendly_statistics = Default::default();
+                player.cup_statistics = Default::default();
 
                 // Reset days since last match (pre-season training counts)
                 player.player_attributes.days_since_last_match = 7;
