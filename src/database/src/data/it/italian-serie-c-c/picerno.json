@@ -1,0 +1,57 @@
+{
+  "id": 43065074,
+  "name": "Picerno",
+  "location": {
+    "city_id": 43065074
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 43065074,
+      "name": "Picerno",
+      "slug": "picerno",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3445,
+        "national": 3445,
+        "world": 3445
+      }
+    },
+    {
+      "id": 143065074,
+      "name": "Picerno",
+      "slug": "picerno-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1722,
+        "national": 1722,
+        "world": 1722
+      }
+    },
+    {
+      "id": 243065074,
+      "name": "Picerno",
+      "slug": "picerno-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1148,
+        "national": 1148,
+        "world": 1148
+      }
+    }
+  ],
+  "colors": {
+    "background": "#600020",
+    "foreground": "#a00000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 760
+}

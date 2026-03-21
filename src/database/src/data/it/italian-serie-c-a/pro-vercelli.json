@@ -1,0 +1,57 @@
+{
+  "id": 2218,
+  "name": "Pro Vercelli",
+  "location": {
+    "city_id": 2218
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 2218,
+      "name": "Pro Vercelli",
+      "slug": "pro-vercelli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3445,
+        "national": 3445,
+        "world": 3445
+      }
+    },
+    {
+      "id": 100002218,
+      "name": "Pro Vercelli",
+      "slug": "pro-vercelli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1722,
+        "national": 1722,
+        "world": 1722
+      }
+    },
+    {
+      "id": 200002218,
+      "name": "Pro Vercelli",
+      "slug": "pro-vercelli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1148,
+        "national": 1148,
+        "world": 1148
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#000000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 900
+}

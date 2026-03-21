@@ -1,0 +1,57 @@
+{
+  "id": 108985,
+  "name": "Gubbio",
+  "location": {
+    "city_id": 108985
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 108985,
+      "name": "Gubbio",
+      "slug": "gubbio",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3510,
+        "national": 3510,
+        "world": 3510
+      }
+    },
+    {
+      "id": 100108985,
+      "name": "Gubbio",
+      "slug": "gubbio-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1755,
+        "national": 1755,
+        "world": 1755
+      }
+    },
+    {
+      "id": 200108985,
+      "name": "Gubbio",
+      "slug": "gubbio-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1170,
+        "national": 1170,
+        "world": 1170
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c02020",
+    "foreground": "#002020"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1100
+}

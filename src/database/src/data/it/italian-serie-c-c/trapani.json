@@ -1,0 +1,57 @@
+{
+  "id": 1175,
+  "name": "Trapani",
+  "location": {
+    "city_id": 1175
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 1175,
+      "name": "Trapani",
+      "slug": "trapani",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3770,
+        "national": 3770,
+        "world": 3770
+      }
+    },
+    {
+      "id": 100001175,
+      "name": "Trapani",
+      "slug": "trapani-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1885,
+        "national": 1885,
+        "world": 1885
+      }
+    },
+    {
+      "id": 200001175,
+      "name": "Trapani",
+      "slug": "trapani-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1256,
+        "national": 1256,
+        "world": 1256
+      }
+    }
+  ],
+  "colors": {
+    "background": "#800020",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Average",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1160
+}

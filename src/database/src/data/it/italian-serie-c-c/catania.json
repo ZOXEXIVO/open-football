@@ -1,0 +1,57 @@
+{
+  "id": 2193,
+  "name": "Catania",
+  "location": {
+    "city_id": 2193
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 2193,
+      "name": "Catania",
+      "slug": "catania",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3900,
+        "national": 3900,
+        "world": 3900
+      }
+    },
+    {
+      "id": 100002193,
+      "name": "Catania",
+      "slug": "catania-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1950,
+        "national": 1950,
+        "world": 1950
+      }
+    },
+    {
+      "id": 200002193,
+      "name": "Catania",
+      "slug": "catania-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1300,
+        "national": 1300,
+        "world": 1300
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0060a0",
+    "foreground": "#800000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Excellent",
+    "youth": "Adequate",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 16172
+}

@@ -1,0 +1,57 @@
+{
+  "id": 2231,
+  "name": "Vis Pesaro",
+  "location": {
+    "city_id": 2231
+  },
+  "finance": {
+    "balance": 1000000
+  },
+  "teams": [
+    {
+      "id": 2231,
+      "name": "Vis Pesaro",
+      "slug": "vis-pesaro",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3445,
+        "national": 3445,
+        "world": 3445
+      }
+    },
+    {
+      "id": 100002231,
+      "name": "Vis Pesaro",
+      "slug": "vis-pesaro-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1722,
+        "national": 1722,
+        "world": 1722
+      }
+    },
+    {
+      "id": 200002231,
+      "name": "Vis Pesaro",
+      "slug": "vis-pesaro-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1148,
+        "national": 1148,
+        "world": 1148
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a00000",
+    "foreground": "#c0c0c0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Adequate",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1524
+}

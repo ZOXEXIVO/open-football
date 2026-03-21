@@ -1,0 +1,57 @@
+{
+  "id": 2227,
+  "name": "Ternana",
+  "location": {
+    "city_id": 2227
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 2227,
+      "name": "Ternana",
+      "slug": "ternana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3705,
+        "national": 3705,
+        "world": 3705
+      }
+    },
+    {
+      "id": 100002227,
+      "name": "Ternana",
+      "slug": "ternana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1852,
+        "national": 1852,
+        "world": 1852
+      }
+    },
+    {
+      "id": 200002227,
+      "name": "Ternana",
+      "slug": "ternana-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1235,
+        "national": 1235,
+        "world": 1235
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a02020",
+    "foreground": "#008060"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Adequate",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 5559
+}

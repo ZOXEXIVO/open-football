@@ -1,0 +1,57 @@
+{
+  "id": 1181,
+  "name": "Vicenza",
+  "location": {
+    "city_id": 1181
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 1181,
+      "name": "Vicenza",
+      "slug": "vicenza",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3900,
+        "national": 3900,
+        "world": 3900
+      }
+    },
+    {
+      "id": 100001181,
+      "name": "Vicenza",
+      "slug": "vicenza-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1950,
+        "national": 1950,
+        "world": 1950
+      }
+    },
+    {
+      "id": 200001181,
+      "name": "Vicenza",
+      "slug": "vicenza-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1300,
+        "national": 1300,
+        "world": 1300
+      }
+    }
+  ],
+  "colors": {
+    "background": "#800000",
+    "foreground": "#c0c0c0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Great",
+    "youth": "Adequate",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 8539
+}

@@ -1,0 +1,57 @@
+{
+  "id": 2188,
+  "name": "Benevento",
+  "location": {
+    "city_id": 2188
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 2188,
+      "name": "Benevento",
+      "slug": "benevento",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3965,
+        "national": 3965,
+        "world": 3965
+      }
+    },
+    {
+      "id": 100002188,
+      "name": "Benevento",
+      "slug": "benevento-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1982,
+        "national": 1982,
+        "world": 1982
+      }
+    },
+    {
+      "id": 200002188,
+      "name": "Benevento",
+      "slug": "benevento-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1321,
+        "national": 1321,
+        "world": 1321
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c0a000",
+    "foreground": "#a00000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 7132
+}

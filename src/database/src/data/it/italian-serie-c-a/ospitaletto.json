@@ -1,0 +1,57 @@
+{
+  "id": 2213,
+  "name": "Ospitaletto",
+  "location": {
+    "city_id": 2213
+  },
+  "finance": {
+    "balance": 605000
+  },
+  "teams": [
+    {
+      "id": 2213,
+      "name": "Ospitaletto",
+      "slug": "ospitaletto",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3120,
+        "national": 3120,
+        "world": 3120
+      }
+    },
+    {
+      "id": 100002213,
+      "name": "Ospitaletto",
+      "slug": "ospitaletto-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1560,
+        "national": 1560,
+        "world": 1560
+      }
+    },
+    {
+      "id": 200002213,
+      "name": "Ospitaletto",
+      "slug": "ospitaletto-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1040,
+        "national": 1040,
+        "world": 1040
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c04000",
+    "foreground": "#802000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Basic",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 340
+}

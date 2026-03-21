@@ -1,0 +1,57 @@
+{
+  "id": 831114,
+  "name": "Bra",
+  "location": {
+    "city_id": 831114
+  },
+  "finance": {
+    "balance": 432000
+  },
+  "teams": [
+    {
+      "id": 831114,
+      "name": "Bra",
+      "slug": "bra",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2990,
+        "national": 2990,
+        "world": 2990
+      }
+    },
+    {
+      "id": 100831114,
+      "name": "Bra",
+      "slug": "bra-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1495,
+        "national": 1495,
+        "world": 1495
+      }
+    },
+    {
+      "id": 200831114,
+      "name": "Bra",
+      "slug": "bra-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 996,
+        "national": 996,
+        "world": 996
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a00000",
+    "foreground": "#c0c000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Basic",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 314
+}

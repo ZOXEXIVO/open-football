@@ -1,0 +1,57 @@
+{
+  "id": 1413274,
+  "name": "Renate",
+  "location": {
+    "city_id": 1413274
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 1413274,
+      "name": "Renate",
+      "slug": "renate",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3510,
+        "national": 3510,
+        "world": 3510
+      }
+    },
+    {
+      "id": 101413274,
+      "name": "Renate",
+      "slug": "renate-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1755,
+        "national": 1755,
+        "world": 1755
+      }
+    },
+    {
+      "id": 201413274,
+      "name": "Renate",
+      "slug": "renate-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1170,
+        "national": 1170,
+        "world": 1170
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#0040a0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 314
+}

@@ -1,0 +1,57 @@
+{
+  "id": 2195,
+  "name": "Cittadella",
+  "location": {
+    "city_id": 2195
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 2195,
+      "name": "Cittadella",
+      "slug": "cittadella",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3835,
+        "national": 3835,
+        "world": 3835
+      }
+    },
+    {
+      "id": 100002195,
+      "name": "Cittadella",
+      "slug": "cittadella-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1917,
+        "national": 1917,
+        "world": 1917
+      }
+    },
+    {
+      "id": 200002195,
+      "name": "Cittadella",
+      "slug": "cittadella-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1278,
+        "national": 1278,
+        "world": 1278
+      }
+    }
+  ],
+  "colors": {
+    "background": "#802020",
+    "foreground": "#200000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Adequate",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 3521
+}

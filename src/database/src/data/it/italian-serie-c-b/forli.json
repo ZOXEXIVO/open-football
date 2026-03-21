@@ -1,0 +1,57 @@
+{
+  "id": 2198,
+  "name": "Forli",
+  "location": {
+    "city_id": 2198
+  },
+  "finance": {
+    "balance": 432000
+  },
+  "teams": [
+    {
+      "id": 2198,
+      "name": "Forli",
+      "slug": "forli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3250,
+        "national": 3250,
+        "world": 3250
+      }
+    },
+    {
+      "id": 100002198,
+      "name": "Forli",
+      "slug": "forli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1625,
+        "national": 1625,
+        "world": 1625
+      }
+    },
+    {
+      "id": 200002198,
+      "name": "Forli",
+      "slug": "forli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1083,
+        "national": 1083,
+        "world": 1083
+      }
+    }
+  ],
+  "colors": {
+    "background": "#ffffff",
+    "foreground": "#cc0000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 600
+}

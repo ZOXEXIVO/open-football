@@ -1,0 +1,57 @@
+{
+  "id": 7983734,
+  "name": "Monopoli",
+  "location": {
+    "city_id": 7983734
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 7983734,
+      "name": "Monopoli",
+      "slug": "monopoli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3705,
+        "national": 3705,
+        "world": 3705
+      }
+    },
+    {
+      "id": 107983734,
+      "name": "Monopoli",
+      "slug": "monopoli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1852,
+        "national": 1852,
+        "world": 1852
+      }
+    },
+    {
+      "id": 207983734,
+      "name": "Monopoli",
+      "slug": "monopoli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1235,
+        "national": 1235,
+        "world": 1235
+      }
+    }
+  ],
+  "colors": {
+    "background": "#006040",
+    "foreground": "#208060"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Average",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 2336
+}

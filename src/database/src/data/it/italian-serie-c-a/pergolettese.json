@@ -1,0 +1,57 @@
+{
+  "id": 43124315,
+  "name": "Pergolettese",
+  "location": {
+    "city_id": 43124315
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 43124315,
+      "name": "Pergolettese",
+      "slug": "pergolettese",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3315,
+        "national": 3315,
+        "world": 3315
+      }
+    },
+    {
+      "id": 143124315,
+      "name": "Pergolettese",
+      "slug": "pergolettese-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1657,
+        "national": 1657,
+        "world": 1657
+      }
+    },
+    {
+      "id": 243124315,
+      "name": "Pergolettese",
+      "slug": "pergolettese-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1105,
+        "national": 1105,
+        "world": 1105
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c0a000",
+    "foreground": "#2060a0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Basic",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 800
+}

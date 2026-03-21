@@ -294,6 +294,10 @@ impl TransferListManager {
             if !player_exists_in_teams(teams, team_indices, decision.player_id) {
                 continue;
             }
+            // Loaned-in players belong to another club — cannot be listed
+            if is_on_loan(teams, team_indices, decision.player_id) {
+                continue;
+            }
             if teams[main_idx].transfer_list.contains(decision.player_id) {
                 continue;
             }
@@ -342,6 +346,10 @@ impl TransferListManager {
                 continue;
             }
             if !player_exists_in_teams(teams, team_indices, decision.player_id) {
+                continue;
+            }
+            // Loaned-in players belong to another club — cannot be re-loaned
+            if is_on_loan(teams, team_indices, decision.player_id) {
                 continue;
             }
             if has_status(teams, team_indices, decision.player_id, PlayerStatusType::Loa) {
@@ -466,6 +474,19 @@ fn remove_player_status(
             return;
         }
     }
+}
+
+fn is_on_loan(
+    teams: &[Team],
+    indices: &[(usize, &str)],
+    player_id: u32,
+) -> bool {
+    for &(idx, _) in indices {
+        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+            return p.is_on_loan();
+        }
+    }
+    false
 }
 
 fn record_listing_decision(

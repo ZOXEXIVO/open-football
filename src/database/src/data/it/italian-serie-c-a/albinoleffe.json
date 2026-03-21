@@ -1,0 +1,57 @@
+{
+  "id": 1142,
+  "name": "AlbinoLeffe",
+  "location": {
+    "city_id": 1142
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 1142,
+      "name": "AlbinoLeffe",
+      "slug": "albinoleffe",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3445,
+        "national": 3445,
+        "world": 3445
+      }
+    },
+    {
+      "id": 100001142,
+      "name": "AlbinoLeffe",
+      "slug": "albinoleffe-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1722,
+        "national": 1722,
+        "world": 1722
+      }
+    },
+    {
+      "id": 200001142,
+      "name": "AlbinoLeffe",
+      "slug": "albinoleffe-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1148,
+        "national": 1148,
+        "world": 1148
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0060a0",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Great",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 823
+}

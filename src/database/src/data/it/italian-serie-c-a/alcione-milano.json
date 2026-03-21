@@ -1,0 +1,57 @@
+{
+  "id": 43106513,
+  "name": "Alcione Milano",
+  "location": {
+    "city_id": 43106513
+  },
+  "finance": {
+    "balance": 691000
+  },
+  "teams": [
+    {
+      "id": 43106513,
+      "name": "Alcione Milano",
+      "slug": "alcione-milano",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3445,
+        "national": 3445,
+        "world": 3445
+      }
+    },
+    {
+      "id": 143106513,
+      "name": "Alcione Milano",
+      "slug": "alcione-milano-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1722,
+        "national": 1722,
+        "world": 1722
+      }
+    },
+    {
+      "id": 243106513,
+      "name": "Alcione Milano",
+      "slug": "alcione-milano-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1148,
+        "national": 1148,
+        "world": 1148
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c04020",
+    "foreground": "#a02000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Adequate",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 140
+}

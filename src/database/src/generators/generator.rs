@@ -8,7 +8,7 @@ use core::context::NaiveTime;
 use core::continent::Continent;
 use core::competitions::GlobalCompetitions;
 use core::league::LeagueCollection;
-use core::league::{DayMonthPeriod, League, LeagueSettings};
+use core::league::{DayMonthPeriod, League, LeagueGroup, LeagueSettings};
 use core::shared::Location;
 use core::utils::IntegerUtils;
 use core::ClubStatus;
@@ -192,6 +192,11 @@ impl DatabaseGenerator {
                     tier: league.tier,
                     promotion_spots: league.promotion_spots,
                     relegation_spots: league.relegation_spots,
+                    league_group: league.league_group.as_ref().map(|g| LeagueGroup {
+                        name: g.name.clone(),
+                        competition: g.competition.clone(),
+                        total_groups: g.total_groups,
+                    }),
                 };
 
                 League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings, false)
@@ -262,6 +267,7 @@ impl DatabaseGenerator {
                     tier: 99,
                     promotion_spots: 0,
                     relegation_spots: 0,
+                    league_group: None,
                 };
 
                 let youth_league = League::new(

@@ -5,6 +5,11 @@ use chrono::{NaiveDate, NaiveDateTime};
 
 impl Player {
     pub(crate) fn process_contract(&mut self, result: &mut PlayerResult, now: NaiveDateTime) {
+        // Loaned players — contract matters are handled by the parent club
+        if self.is_on_loan() {
+            return;
+        }
+
         if let Some(ref mut contract) = self.contract {
             const ONE_YEAR_DAYS: i64 = 365;
 
@@ -22,6 +27,12 @@ impl Player {
 
     /// Transfer desire based on multiple factors, not just behaviour
     pub(crate) fn process_transfer_desire(&mut self, result: &mut PlayerResult, now: NaiveDate) {
+        // Loaned players belong to their parent club — they cannot request
+        // transfers or be unhappy with salary at the loan club
+        if self.is_on_loan() {
+            return;
+        }
+
         // Under-16 players cannot request transfers — only free release
         let age = DateUtils::age(self.birth_date, now);
         if age < 16 {

@@ -1,0 +1,57 @@
+{
+  "id": 43204872,
+  "name": "Potenza",
+  "location": {
+    "city_id": 43204872
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 43204872,
+      "name": "Potenza",
+      "slug": "potenza",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3640,
+        "national": 3640,
+        "world": 3640
+      }
+    },
+    {
+      "id": 143204872,
+      "name": "Potenza",
+      "slug": "potenza-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1820,
+        "national": 1820,
+        "world": 1820
+      }
+    },
+    {
+      "id": 243204872,
+      "name": "Potenza",
+      "slug": "potenza-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1213,
+        "national": 1213,
+        "world": 1213
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a02020",
+    "foreground": "#002040"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Average",
+    "youth": "Adequate",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 2272
+}

@@ -1,0 +1,57 @@
+{
+  "id": 43204869,
+  "name": "Campobasso",
+  "location": {
+    "city_id": 43204869
+  },
+  "finance": {
+    "balance": 519000
+  },
+  "teams": [
+    {
+      "id": 43204869,
+      "name": "Campobasso",
+      "slug": "campobasso",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3510,
+        "national": 3510,
+        "world": 3510
+      }
+    },
+    {
+      "id": 143204869,
+      "name": "Campobasso",
+      "slug": "campobasso-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1755,
+        "national": 1755,
+        "world": 1755
+      }
+    },
+    {
+      "id": 243204869,
+      "name": "Campobasso",
+      "slug": "campobasso-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1170,
+        "national": 1170,
+        "world": 1170
+      }
+    }
+  ],
+  "colors": {
+    "background": "#002060",
+    "foreground": "#cc0000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 3200
+}

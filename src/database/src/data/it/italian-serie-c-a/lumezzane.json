@@ -1,0 +1,57 @@
+{
+  "id": 1145,
+  "name": "Lumezzane",
+  "location": {
+    "city_id": 1145
+  },
+  "finance": {
+    "balance": 907000
+  },
+  "teams": [
+    {
+      "id": 1145,
+      "name": "Lumezzane",
+      "slug": "lumezzane",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3510,
+        "national": 3510,
+        "world": 3510
+      }
+    },
+    {
+      "id": 100001145,
+      "name": "Lumezzane",
+      "slug": "lumezzane-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1755,
+        "national": 1755,
+        "world": 1755
+      }
+    },
+    {
+      "id": 200001145,
+      "name": "Lumezzane",
+      "slug": "lumezzane-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1170,
+        "national": 1170,
+        "world": 1170
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c02020",
+    "foreground": "#202060"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 262
+}

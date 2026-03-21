@@ -1,0 +1,57 @@
+{
+  "id": 1166,
+  "name": "Salernitana",
+  "location": {
+    "city_id": 1166
+  },
+  "finance": {
+    "balance": 7000000
+  },
+  "teams": [
+    {
+      "id": 1166,
+      "name": "Salernitana",
+      "slug": "salernitana",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3835,
+        "national": 3835,
+        "world": 3835
+      }
+    },
+    {
+      "id": 100001166,
+      "name": "Salernitana",
+      "slug": "salernitana-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1917,
+        "national": 1917,
+        "world": 1917
+      }
+    },
+    {
+      "id": 200001166,
+      "name": "Salernitana",
+      "slug": "salernitana-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1278,
+        "national": 1278,
+        "world": 1278
+      }
+    }
+  ],
+  "colors": {
+    "background": "#800020",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 15134
+}

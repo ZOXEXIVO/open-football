@@ -1,0 +1,57 @@
+{
+  "id": 2229,
+  "name": "Triestina",
+  "location": {
+    "city_id": 2229
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 2229,
+      "name": "Triestina",
+      "slug": "triestina",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3380,
+        "national": 3380,
+        "world": 3380
+      }
+    },
+    {
+      "id": 100002229,
+      "name": "Triestina",
+      "slug": "triestina-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1690,
+        "national": 1690,
+        "world": 1690
+      }
+    },
+    {
+      "id": 200002229,
+      "name": "Triestina",
+      "slug": "triestina-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1126,
+        "national": 1126,
+        "world": 1126
+      }
+    }
+  ],
+  "colors": {
+    "background": "#a02020",
+    "foreground": "#800000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Basic",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 5212
+}

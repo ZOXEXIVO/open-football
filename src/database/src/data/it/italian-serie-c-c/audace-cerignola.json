@@ -1,0 +1,57 @@
+{
+  "id": 43018336,
+  "name": "Audace Cerignola",
+  "location": {
+    "city_id": 43018336
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 43018336,
+      "name": "Audace Cerignola",
+      "slug": "audace-cerignola",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3640,
+        "national": 3640,
+        "world": 3640
+      }
+    },
+    {
+      "id": 143018336,
+      "name": "Audace Cerignola",
+      "slug": "audace-cerignola-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1820,
+        "national": 1820,
+        "world": 1820
+      }
+    },
+    {
+      "id": 243018336,
+      "name": "Audace Cerignola",
+      "slug": "audace-cerignola-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1213,
+        "national": 1213,
+        "world": 1213
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c0a020",
+    "foreground": "#0040a0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1800
+}

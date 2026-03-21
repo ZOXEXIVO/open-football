@@ -1322,6 +1322,19 @@ pub struct LeagueSettings {
     pub tier: u8,
     pub promotion_spots: u8,
     pub relegation_spots: u8,
+    /// Optional group config for multi-group leagues (e.g. Serie C, Regionalliga).
+    pub league_group: Option<LeagueGroup>,
+}
+
+/// Identifies a league as one group within a larger competition.
+#[derive(Debug, Clone)]
+pub struct LeagueGroup {
+    /// Display name of the group (e.g. "A", "B", "C")
+    pub name: String,
+    /// Parent competition name (e.g. "Serie C", "Regionalliga")
+    pub competition: String,
+    /// Total number of groups in the competition
+    pub total_groups: u8,
 }
 
 impl LeagueSettings {

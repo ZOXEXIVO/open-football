@@ -1,0 +1,57 @@
+{
+  "id": 707654,
+  "name": "Crotone",
+  "location": {
+    "city_id": 707654
+  },
+  "finance": {
+    "balance": 4000000
+  },
+  "teams": [
+    {
+      "id": 707654,
+      "name": "Crotone",
+      "slug": "crotone",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3705,
+        "national": 3705,
+        "world": 3705
+      }
+    },
+    {
+      "id": 100707654,
+      "name": "Crotone",
+      "slug": "crotone-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1852,
+        "national": 1852,
+        "world": 1852
+      }
+    },
+    {
+      "id": 200707654,
+      "name": "Crotone",
+      "slug": "crotone-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1235,
+        "national": 1235,
+        "world": 1235
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c00000",
+    "foreground": "#202040"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Average",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 5198
+}

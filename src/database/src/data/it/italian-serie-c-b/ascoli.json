@@ -1,0 +1,57 @@
+{
+  "id": 1105,
+  "name": "Ascoli",
+  "location": {
+    "city_id": 1105
+  },
+  "finance": {
+    "balance": 3000000
+  },
+  "teams": [
+    {
+      "id": 1105,
+      "name": "Ascoli",
+      "slug": "ascoli",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3705,
+        "national": 3705,
+        "world": 3705
+      }
+    },
+    {
+      "id": 100001105,
+      "name": "Ascoli",
+      "slug": "ascoli-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1852,
+        "national": 1852,
+        "world": 1852
+      }
+    },
+    {
+      "id": 200001105,
+      "name": "Ascoli",
+      "slug": "ascoli-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1235,
+        "national": 1235,
+        "world": 1235
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c0c0c0",
+    "foreground": "#000000"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Good",
+    "youth": "Adequate",
+    "academy": "Adequate",
+    "recruitment": "Adequate"
+  },
+  "average_attendance": 6900
+}

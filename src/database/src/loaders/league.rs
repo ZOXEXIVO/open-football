@@ -29,6 +29,21 @@ pub struct LeagueEntity {
     pub foreign_players: Vec<ForeignPlayerEntry>,
     #[serde(default)]
     pub sub_leagues_competitions: Vec<String>,
+    /// Optional group configuration for multi-group leagues (e.g. Serie C Group A/B/C).
+    /// When set, multiple leagues share the same tier but are treated as separate groups
+    /// within the same competition.
+    #[serde(default)]
+    pub league_group: Option<LeagueGroupEntity>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeagueGroupEntity {
+    /// Display name of the group (e.g. "A", "B", "C", "North", "South")
+    pub name: String,
+    /// Parent competition name that groups belong to (e.g. "Serie C", "Regionalliga")
+    pub competition: String,
+    /// Number of groups in the parent competition (e.g. 3 for Serie C)
+    pub total_groups: u8,
 }
 
 fn default_enabled() -> bool {

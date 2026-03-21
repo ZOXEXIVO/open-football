@@ -1,0 +1,57 @@
+{
+  "id": 700059,
+  "name": "Trento",
+  "location": {
+    "city_id": 700059
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 700059,
+      "name": "Trento",
+      "slug": "trento",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3640,
+        "national": 3640,
+        "world": 3640
+      }
+    },
+    {
+      "id": 100700059,
+      "name": "Trento",
+      "slug": "trento-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1820,
+        "national": 1820,
+        "world": 1820
+      }
+    },
+    {
+      "id": 200700059,
+      "name": "Trento",
+      "slug": "trento-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1213,
+        "national": 1213,
+        "world": 1213
+      }
+    }
+  ],
+  "colors": {
+    "background": "#202060",
+    "foreground": "#606040"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1000
+}

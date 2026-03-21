@@ -1,0 +1,44 @@
+{
+  "id": 36,
+  "enabled": true,
+  "slug": "italian-serie-c-c",
+  "name": "Italian Serie C/C",
+  "reputation": 3500,
+  "tier": 3,
+  "promotion_spots": 1,
+  "relegation_spots": 3,
+  "sub_leagues_competitions": ["U18"],
+  "league_group": {
+    "name": "C",
+    "competition": "Serie C",
+    "total_groups": 3
+  },
+  "settings": {
+    "season_starting_half": {
+      "from_day": 26,
+      "from_month": 8,
+      "to_day": 22,
+      "to_month": 12
+    },
+    "season_ending_half": {
+      "from_day": 7,
+      "from_month": 1,
+      "to_day": 28,
+      "to_month": 4
+    }
+  },
+  "foreign_players": [
+    {
+      "country_id": 1649,
+      "weight": 3
+    },
+    {
+      "country_id": 1651,
+      "weight": 2
+    },
+    {
+      "country_id": 769,
+      "weight": 2
+    }
+  ]
+}

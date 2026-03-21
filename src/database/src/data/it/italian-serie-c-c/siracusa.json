@@ -1,0 +1,57 @@
+{
+  "id": 3804379,
+  "name": "Siracusa",
+  "location": {
+    "city_id": 3804379
+  },
+  "finance": {
+    "balance": 916000
+  },
+  "teams": [
+    {
+      "id": 3804379,
+      "name": "Siracusa",
+      "slug": "siracusa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3380,
+        "national": 3380,
+        "world": 3380
+      }
+    },
+    {
+      "id": 103804379,
+      "name": "Siracusa",
+      "slug": "siracusa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1690,
+        "national": 1690,
+        "world": 1690
+      }
+    },
+    {
+      "id": 203804379,
+      "name": "Siracusa",
+      "slug": "siracusa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1126,
+        "national": 1126,
+        "world": 1126
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0040a0",
+    "foreground": "#c0c0c0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1400
+}

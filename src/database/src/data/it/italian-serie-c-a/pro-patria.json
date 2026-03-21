@@ -1,0 +1,57 @@
+{
+  "id": 2217,
+  "name": "Pro Patria",
+  "location": {
+    "city_id": 2217
+  },
+  "finance": {
+    "balance": 2000000
+  },
+  "teams": [
+    {
+      "id": 2217,
+      "name": "Pro Patria",
+      "slug": "pro-patria",
+      "team_type": "Main",
+      "reputation": {
+        "home": 3380,
+        "national": 3380,
+        "world": 3380
+      }
+    },
+    {
+      "id": 100002217,
+      "name": "Pro Patria",
+      "slug": "pro-patria-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 1690,
+        "national": 1690,
+        "world": 1690
+      }
+    },
+    {
+      "id": 200002217,
+      "name": "Pro Patria",
+      "slug": "pro-patria-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 1126,
+        "national": 1126,
+        "world": 1126
+      }
+    }
+  ],
+  "colors": {
+    "background": "#c0c0c0",
+    "foreground": "#2040a0"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Basic",
+    "academy": "Basic",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 672
+}
