@@ -381,6 +381,7 @@ pub struct ClubListItem {
 #[derive(Deserialize)]
 pub struct ClubsQuery {
     pub q: Option<String>,
+    pub exclude: Option<u32>,
 }
 
 pub async fn list_clubs_action(
@@ -390,12 +391,16 @@ pub async fn list_clubs_action(
     let guard = state.data.read().await;
 
     let mut clubs = Vec::new();
+    let exclude_id = query.exclude.unwrap_or(0);
 
     if let Some(ref sim) = *guard {
         let filter = query.q.as_deref().unwrap_or("").to_lowercase();
         for continent in &sim.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
+                    if club.id == exclude_id {
+                        continue;
+                    }
                     if filter.is_empty() || club.name.to_lowercase().contains(&filter) {
                         clubs.push(ClubListItem {
                             id: club.id,

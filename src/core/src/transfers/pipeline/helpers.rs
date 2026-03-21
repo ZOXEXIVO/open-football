@@ -72,8 +72,10 @@ impl PipelineProcessor {
                 ScoutingRecommendation::Consider => "Consider",
                 ScoutingRecommendation::Pass => "Pass",
             };
-            format!("Scout: {} (CA:{}, PA:{}, confidence:{:.0}%)",
-                rec, r.assessed_ability, r.assessed_potential, r.confidence * 100.0)
+            let ability_label = Self::ability_label(r.assessed_ability);
+            let potential_label = Self::ability_label(r.assessed_potential);
+            format!("Scout: {} (ability: {}, potential: {}, confidence: {:.0}%)",
+                rec, ability_label, potential_label, r.confidence * 100.0)
         });
 
         match (need_reason, scout_reason) {
@@ -81,6 +83,22 @@ impl PipelineProcessor {
             (Some(need), None) => need.to_string(),
             (None, Some(scout)) => scout,
             (None, None) => String::new(),
+        }
+    }
+
+    /// Convert a raw assessed ability value to a qualitative label.
+    fn ability_label(value: u8) -> &'static str {
+        match value {
+            0..=30 => "Very poor",
+            31..=60 => "Poor",
+            61..=80 => "Below average",
+            81..=100 => "Average",
+            101..=120 => "Decent",
+            121..=140 => "Good",
+            141..=160 => "Very good",
+            161..=180 => "Excellent",
+            181..=200 => "World class",
+            _ => "Unknown",
         }
     }
 

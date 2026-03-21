@@ -313,37 +313,34 @@ impl PlayerStatisticsHistory {
         }
     }
 
-    // ── Query: pure read, no mutation ──────────────────────
-
-    /// Get the transfer fee for a team in the current season.
-    /// Checks live current-season entries first, falls back to frozen history.
-    pub fn current_transfer_fee(&self, team_slug: &str, season_year: u16) -> Option<f64> {
-        self.current.iter().rev()
-            .find(|e| e.team_slug == team_slug)
-            .and_then(|e| e.transfer_fee)
-            .or_else(|| {
-                self.items.iter()
-                    .find(|h| h.season.start_year == season_year && h.team_slug == team_slug)
-                    .and_then(|h| h.transfer_fee)
-            })
-    }
-
     // ── View: pure read, no mutation ────────────────────────
 
     /// Returns all history (past seasons) + current season entries,
     /// sorted by season desc, then seq_id desc.
-    pub fn view_items(&self) -> Vec<PlayerStatisticsHistoryItem> {
+    ///
+    /// `live_stats` — if provided, replaces the stats on the active current-season
+    /// entry (the one without `departed_date`). This bridges the gap between
+    /// `player.statistics` (continuously updated by matches) and the snapshot
+    /// stored in `current` (only updated at event boundaries).
+    pub fn view_items(&self, live_stats: Option<&PlayerStatistics>) -> Vec<PlayerStatisticsHistoryItem> {
         let current_season = self.current.first()
             .map(|e| Season::from_date(e.joined_date))
             .unwrap_or_else(|| Season::new(0));
 
-        self.view_items_with_season(current_season)
-    }
-
-    pub fn view_items_with_season(&self, current_season: Season) -> Vec<PlayerStatisticsHistoryItem> {
         let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.clone();
 
         for entry in &self.current {
+            let is_active = entry.departed_date.is_none();
+            let statistics = if is_active {
+                if let Some(stats) = live_stats {
+                    stats.clone()
+                } else {
+                    entry.statistics.clone()
+                }
+            } else {
+                entry.statistics.clone()
+            };
+
             result.push(PlayerStatisticsHistoryItem {
                 season: current_season.clone(),
                 team_name: entry.team_name.clone(),
@@ -353,7 +350,7 @@ impl PlayerStatisticsHistory {
                 league_slug: entry.league_slug.clone(),
                 is_loan: entry.is_loan,
                 transfer_fee: entry.transfer_fee,
-                statistics: entry.statistics.clone(),
+                statistics,
                 seq_id: entry.seq_id,
             });
         }

@@ -149,7 +149,9 @@
                 var q = input.value.trim();
                 if (q.length < 1) { list.innerHTML = ''; list.style.display = 'none'; return; }
                 timer = setTimeout(function () {
-                    var url = (f.url || '/api/clubs') + '?q=' + encodeURIComponent(q);
+                    var base = f.url || '/api/clubs';
+                    var sep = base.indexOf('?') >= 0 ? '&' : '?';
+                    var url = base + sep + 'q=' + encodeURIComponent(q);
                     fetch(url).then(function (r) { return r.json(); }).then(function (items) {
                         if (!items.length) { list.innerHTML = ''; list.style.display = 'none'; return; }
                         list.innerHTML = items.slice(0, 20).map(function (item) {

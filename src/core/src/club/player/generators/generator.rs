@@ -313,15 +313,32 @@ fn age_ca_factor(age: u32) -> f32 {
 
 /// Convert CA points allocated to a single skill into a 1-20 skill value.
 /// Non-linear: high skills are exponentially more expensive.
-///   ca_share ~1  → skill ~2
-///   ca_share ~3  → skill ~5
-///   ca_share ~5  → skill ~8
-///   ca_share ~8  → skill ~12
-///   ca_share ~12 → skill ~16
-///   ca_share ~16 → skill ~19
+///   ca_share ~0.5 → skill ~3
+///   ca_share ~1.0 → skill ~5
+///   ca_share ~2.0 → skill ~8
+///   ca_share ~3.0 → skill ~10
+///   ca_share ~4.5 → skill ~14
+///   ca_share ~5.5 → skill ~17
+///   ca_share ~6.0 → skill ~18
 fn ca_to_skill(ca_share: f32) -> f32 {
-    // Tuned so CA 100 player averages ~10, CA 50 averages ~6, CA 200 averages ~18
-    (ca_share.max(0.0).powf(0.7) * 2.8).clamp(1.0, 20.0)
+    // ca_share = total_ca * (weight / sum_weights), typically in [0.5, 12] range.
+    // Tuned so uniform-weight CA 110 → ~10, CA 60 → ~6, CA 200 → ~16.
+    (ca_share.max(0.0).powf(0.7) * 4.2).clamp(1.0, 20.0)
+}
+
+/// Age-based maximum skill cap.
+/// Young players cannot reach elite skill levels regardless of talent — they
+/// need years of training and match experience. Mirrors Football Manager behavior.
+fn age_skill_cap(age: u32) -> f32 {
+    match age {
+        0..=14 => 13.0,
+        15 => 14.0,
+        16 => 15.0,
+        17 => 16.0,
+        18 => 17.0,
+        19 => 18.0,
+        _ => 20.0,
+    }
 }
 
 fn apply_affinities(skills: &mut [f32; SKILL_COUNT]) {
@@ -707,7 +724,7 @@ impl PlayerGenerator {
 
         for i in 0..distributable_count {
             let share = weights[i] / total_weight;
-            let ca_for_skill = ca * share * distributable_count as f32;
+            let ca_for_skill = ca * share;
 
             // Step 6: Non-linear conversion — high skills are exponentially expensive
             skills[i] = ca_to_skill(ca_for_skill);
@@ -736,17 +753,17 @@ impl PlayerGenerator {
         let avg_skill = skills[..distributable_count].iter().sum::<f32>() / distributable_count as f32;
         apply_talent_spikes(&mut skills, avg_skill);
 
-        // Step 12: Final clamp with minimum floor — no professional player has skill 1-2
+        // Step 12: Final clamp with minimum floor and age cap
         let min_floor = (3.0 + rep_factor * 3.0).clamp(3.0, 5.0);
-        // Physical floor: even youth academy players are athletes, not untrained people
         let physical_floor_base = (4.0 + rep_factor * 4.0).clamp(6.0, 8.0);
+        let cap = age_skill_cap(age);
         for i in 0..distributable_count {
             if i >= 28 {
                 let jitter = (random_normal() * 2.5).clamp(-3.0, 3.0);
                 let floor = (physical_floor_base + jitter).max(4.0);
-                skills[i] = skills[i].clamp(floor, 20.0);
+                skills[i] = skills[i].clamp(floor, cap);
             } else {
-                skills[i] = skills[i].clamp(min_floor, 20.0);
+                skills[i] = skills[i].clamp(min_floor, cap);
             }
         }
 

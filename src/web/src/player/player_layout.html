@@ -9,7 +9,7 @@
     <a class="fm-tab{% if active_tab == "decisions" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/decisions">{{ i18n.t("decisions") }}</a>
     <a class="fm-tab{% if active_tab == "events" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/events">{{ i18n.t("events") }}</a>
     <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/players/{{ player_id }}/history">{{ i18n.t("history") }}</a>
-    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}">
+    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}">
         <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">
             {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
         </button>
@@ -28,6 +28,7 @@
     var dd = document.getElementById('player-edit-dd');
     if (!dd) return;
     var playerId = dd.dataset.playerId;
+    var clubId = dd.dataset.clubId;
     var menu = document.getElementById('player-edit-menu');
 
     // Close dropdown on outside click
@@ -82,7 +83,7 @@
             fields: [
                 {
                     name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
-                    placeholder: 'Search club...', url: '/api/clubs'
+                    placeholder: 'Search club...', url: '/api/clubs?exclude=' + clubId
                 },
                 { name: 'fee', label: 'Transfer Fee ($)', type: 'number', placeholder: '0', value: '0' }
             ],
@@ -105,7 +106,7 @@
             fields: [
                 {
                     name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
-                    placeholder: 'Search club...', url: '/api/clubs'
+                    placeholder: 'Search club...', url: '/api/clubs?exclude=' + clubId
                 },
                 {
                     name: 'seasons', label: 'Duration', type: 'select',

@@ -194,7 +194,7 @@
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
         _requestInFlight = true;
-        const url = event.shiftKey ? '/api/game/process?days=380' : '/api/game/process';
+        const url = event.shiftKey ? '/api/game/process?days=30' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});
