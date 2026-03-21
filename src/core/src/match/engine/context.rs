@@ -1,5 +1,5 @@
 use nalgebra::Vector3;
-use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
+use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
 use crate::r#match::engine::result::PlayerMatchEndStats;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
@@ -38,6 +38,10 @@ pub struct MatchContext {
 
     // Stats for players who were substituted out (preserved before replacement)
     pub substituted_out_stats: Vec<(u32, PlayerMatchEndStats)>,
+
+    /// Coach state for each team (home = left initially, away = right initially)
+    pub coach_home: MatchCoach,
+    pub coach_away: MatchCoach,
 }
 
 impl MatchContext {
@@ -58,6 +62,8 @@ impl MatchContext {
             max_substitutions_per_team: if is_friendly { usize::MAX } else { 3 },
             last_goal_tick: 0,
             substituted_out_stats: Vec::new(),
+            coach_home: MatchCoach::new(),
+            coach_away: MatchCoach::new(),
         }
     }
 
@@ -124,6 +130,22 @@ impl MatchContext {
 
     pub fn can_substitute(&self, team_id: u32) -> bool {
         self.subs_used_by_team(team_id) < self.max_substitutions_per_team
+    }
+
+    pub fn coach_for_team(&self, team_id: u32) -> &MatchCoach {
+        if team_id == self.field_home_team_id {
+            &self.coach_home
+        } else {
+            &self.coach_away
+        }
+    }
+
+    pub fn coach_for_team_mut(&mut self, team_id: u32) -> &mut MatchCoach {
+        if team_id == self.field_home_team_id {
+            &mut self.coach_home
+        } else {
+            &mut self.coach_away
+        }
     }
 
     pub fn record_substitution(&mut self, team_id: u32, player_out_id: u32, player_in_id: u32, match_time: u64) {

@@ -1,4 +1,4 @@
-use crate::r#match::{PlayerSide, StateProcessingContext};
+use crate::r#match::{CoachInstruction, MatchCoach, PlayerSide, StateProcessingContext};
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
 
@@ -20,6 +20,33 @@ impl<'b> TeamOperationsImpl<'b> {
             None => {
                 panic!("unknown player side")
             }
+        }
+    }
+
+    /// Get the coach's current instruction for this player's team
+    pub fn coach_instruction(&self) -> CoachInstruction {
+        self.coach().instruction
+    }
+
+    /// Get the coach state for this player's team
+    pub fn coach(&self) -> &MatchCoach {
+        self.ctx.context.coach_for_team(self.ctx.player.team_id)
+    }
+
+    /// Whether the team's coach allows shooting right now (team-level cooldown)
+    pub fn can_shoot(&self) -> bool {
+        let current_tick = self.ctx.context.current_tick();
+        self.coach().can_shoot(current_tick)
+    }
+
+    /// Score difference from this team's perspective (positive = leading)
+    pub fn score_diff(&self) -> i8 {
+        let home_goals = self.ctx.context.score.home_team.get() as i8;
+        let away_goals = self.ctx.context.score.away_team.get() as i8;
+        if self.ctx.player.team_id == self.ctx.context.field_home_team_id {
+            home_goals - away_goals
+        } else {
+            away_goals - home_goals
         }
     }
 

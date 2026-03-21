@@ -6,9 +6,9 @@ use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
-// Shooting distance constants for midfielders
-const MAX_SHOOTING_DISTANCE: f32 = 80.0; // Midfielders rarely shoot from beyond ~40m
-const STANDARD_SHOOTING_DISTANCE: f32 = 55.0; // Standard shooting range for midfielders
+// Shooting distance constants for midfielders — more conservative than forwards
+const MAX_SHOOTING_DISTANCE: f32 = 65.0; // Midfielders rarely shoot from beyond ~32m
+const STANDARD_SHOOTING_DISTANCE: f32 = 40.0; // Standard shooting range for midfielders
 const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
 const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
@@ -19,9 +19,20 @@ pub struct MidfielderRunningState {}
 impl StateProcessingHandler for MidfielderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            let coach = ctx.team().coach_instruction();
+            let can_shoot = ctx.team().can_shoot();
+
+            // Coach tempo: if wasting time or slowing down, prefer possession
+            if coach.prefer_possession() && distance_to_goal > POINT_BLANK_DISTANCE {
+                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+                if ownership_ticks < coach.min_possession_ticks() {
+                    return None;
+                }
+            }
+
             // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
             // This prevents players from colliding with goalkeeper instead of shooting
-            let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
@@ -83,31 +94,33 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Shooting evaluation for midfielders
+            // Shooting evaluation for midfielders — much more restrictive than forwards
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             let long_shots = ctx.player.skills.technical.long_shots / 20.0;
             let finishing = ctx.player.skills.technical.finishing / 20.0;
 
-            // Standard shooting - in range with reasonable skill
-            if goal_dist <= STANDARD_SHOOTING_DISTANCE
+            // Standard shooting - close range only, with clear shot and good angle
+            if can_shoot
+                && coach.shooting_reluctance() < 0.3
+                && goal_dist <= STANDARD_SHOOTING_DISTANCE
                 && ctx.player().shooting().in_shooting_range()
+                && ctx.player().has_clear_shot()
+                && ctx.player().shooting().has_good_angle()
             {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Shooting,
                 ));
             }
 
-            // Unopposed approach — shoot from closer range when path to goal is clear
-            if goal_dist < STANDARD_SHOOTING_DISTANCE && self.has_open_space_ahead(ctx) {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ));
-            }
-
-            // Distance shooting - long range with good long shot skills
-            if goal_dist <= MAX_SHOOTING_DISTANCE
-                && long_shots > 0.6
-                && finishing > 0.5
+            // Distance shooting - long range with excellent long shot skills, rare
+            if can_shoot
+                && coach.shooting_reluctance() <= 0.0
+                && goal_dist <= MAX_SHOOTING_DISTANCE
+                && long_shots > 0.7
+                && finishing > 0.55
+                && ctx.player().has_clear_shot()
+                && ctx.player().shooting().has_good_angle()
+                && !ctx.players().opponents().exists(10.0)
             {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
@@ -259,6 +272,24 @@ impl StateProcessingHandler for MidfielderRunningState {
                             MidfielderState::SwitchingPlay,
                         ));
                     }
+                }
+            }
+
+            // COACH TEMPO: When instructed to slow down, prefer passing back to defenders
+            if coach.prefer_possession() && ownership_ticks > coach.min_possession_ticks()
+                && ctx.ball().has_stable_possession()
+            {
+                if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Standing,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(safe_target.id)
+                                .with_reason("MID_COACH_TEMPO_PASS_BACK")
+                                .build(ctx),
+                        )),
+                    ));
                 }
             }
 
@@ -1140,5 +1171,54 @@ impl MidfielderRunningState {
 
         // Crossing skill must be decent (> 8.0 on 0-20 scale)
         ctx.player.skills.technical.crossing > 8.0
+    }
+
+    /// Find a safe backward/lateral pass target for tempo control.
+    /// Prefers defenders and GK when coach says to slow down.
+    fn find_safe_backward_pass(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        use crate::PlayerFieldPositionGroup;
+        let player_pos = ctx.player.position;
+        let own_goal = ctx.ball().direction_to_own_goal();
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+
+        for teammate in ctx.players().teammates().nearby(250.0) {
+            let dist = (teammate.position - player_pos).magnitude();
+            if dist < 15.0 { continue; }
+
+            if !ctx.player().has_clear_pass(teammate.id) { continue; }
+
+            let opp_near = ctx.tick_context.distances.opponents(teammate.id, 12.0).count();
+            if opp_near >= 2 { continue; }
+
+            let group = teammate.tactical_positions.position_group();
+            let mut score = 0.0f32;
+
+            match group {
+                PlayerFieldPositionGroup::Goalkeeper => score += 45.0,
+                PlayerFieldPositionGroup::Defender => score += 35.0,
+                PlayerFieldPositionGroup::Midfielder => score += 10.0,
+                _ => {}
+            }
+
+            // Prefer players closer to own goal (backward direction)
+            let teammate_to_own = (own_goal - teammate.position).magnitude();
+            let self_to_own = (own_goal - player_pos).magnitude();
+            if teammate_to_own < self_to_own {
+                score += 20.0;
+            }
+
+            if opp_near == 0 { score += 15.0; }
+
+            if let Some((_, best_score)) = &best {
+                if score > *best_score {
+                    best = Some((teammate, score));
+                }
+            } else {
+                best = Some((teammate, score));
+            }
+        }
+
+        best.map(|(t, _)| t)
     }
 }

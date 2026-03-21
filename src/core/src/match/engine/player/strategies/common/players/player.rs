@@ -124,10 +124,19 @@ impl<'p> PlayerOperationsImpl<'p> {
         let accuracy = (base_accuracy * distance_modifier * pressure_modifier * condition_modifier)
             .clamp(0.0, 1.0);
 
-        // Inaccuracy factor: squared so high-skill players are much tighter
-        let inaccuracy = (1.0 - accuracy) * (1.0 - accuracy);
+        // Inaccuracy factor: even good players miss sometimes
+        // Base inaccuracy + distance penalty means long shots are genuinely difficult
+        let base_inaccuracy = (1.0 - accuracy) * (1.0 - accuracy);
+        let distance_inaccuracy = if distance_to_goal > 80.0 {
+            0.15 // significant extra miss chance for long shots
+        } else if distance_to_goal > 40.0 {
+            0.06 // moderate extra miss for medium range
+        } else {
+            0.0
+        };
+        let inaccuracy = (base_inaccuracy + distance_inaccuracy).min(1.0);
 
-        let goal_width = 73.0;
+        let goal_width = 58.0; // matches GOAL_WIDTH * 2 (29 half-width)
         let mut rng = rand::rng();
 
         // Placement shot: skilled finishers pick corners from close range
@@ -374,7 +383,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         // Corridor check: opponents close to the shooting lane block the shot
         // Skip the last 15% of distance (goalkeeper area — GK is handled by save mechanics)
         let check_distance = distance_to_goal * 0.85;
-        let corridor_half_width = 6.0;
+        let corridor_half_width = 10.0; // wider corridor = harder to find clear shot
 
         let has_corridor_blocker = self.ctx.players().opponents().all()
             .any(|opp| {

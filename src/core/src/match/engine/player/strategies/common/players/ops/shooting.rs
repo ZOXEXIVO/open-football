@@ -5,18 +5,19 @@ pub struct ShootingOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
-// Realistic shooting distances (field is typically 840 units) — all +20%
-const MAX_SHOOTING_DISTANCE: f32 = 140.0; // ~80m - absolute max for long shots
+// Realistic shooting distances (field is typically 840 units)
+// Real football: most goals from within 18m (~36 units), rare from 30m+ (~60 units)
+const MAX_SHOOTING_DISTANCE: f32 = 100.0; // ~50m - absolute max for elite long shots
 const MIN_SHOOTING_DISTANCE: f32 = 1.0;
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot (penalty spot)
-const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 96.0; // ~48m - ideal shooting distance
-const MEDIUM_RANGE_DISTANCE: f32 = 100.0; // ~50m - medium range shots
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 28.0; // ~14m - anyone can shoot
+const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 70.0; // ~35m - ideal shooting distance
+const MEDIUM_RANGE_DISTANCE: f32 = 80.0; // ~40m - medium range shots
 
-// Shooting decision thresholds — all +20%
-const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 48.0; // Always prefer shooting if closer than this
-const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 66.0; // Shoot over pass for decent finishers
-const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 96.0; // Distance for close-range excellent opportunity
+// Shooting decision thresholds
+const SHOOT_OVER_PASS_CLOSE_THRESHOLD: f32 = 36.0; // Always prefer shooting if closer than this
+const SHOOT_OVER_PASS_MEDIUM_THRESHOLD: f32 = 50.0; // Shoot over pass for decent finishers
+const EXCELLENT_OPPORTUNITY_CLOSE_RANGE: f32 = 60.0; // Distance for close-range excellent opportunity
 
 // Teammate advantage thresholds (multipliers)
 const TEAMMATE_ADVANTAGE_RATIO: f32 = 0.4; // Teammate must be this much closer to prevent shot
@@ -35,27 +36,27 @@ impl<'p> ShootingOperationsImpl<'p> {
 
         // Very close range - most players should shoot
         if distance_to_goal <= VERY_CLOSE_RANGE_DISTANCE {
-            return shooting_skill >= 0.25; // finishing >= 5
+            return shooting_skill >= 0.3; // finishing >= 6
         }
 
-        // Close range shots — need some finishing ability
+        // Close range shots — need decent finishing ability
         if distance_to_goal <= CLOSE_RANGE_DISTANCE {
-            return shooting_skill >= 0.45; // finishing >= 9
+            return shooting_skill >= 0.5; // finishing >= 10
         }
 
         // Medium range shots - requires good finishing
         if distance_to_goal <= OPTIMAL_SHOOTING_DISTANCE {
-            return shooting_skill >= 0.55; // finishing >= 11
+            return shooting_skill >= 0.6; // finishing >= 12
         }
 
         // Medium-long range shots — need good long shot ability
         if distance_to_goal <= MEDIUM_RANGE_DISTANCE {
-            return long_shot_skill >= 0.6 && shooting_skill >= 0.5;
+            return long_shot_skill >= 0.65 && shooting_skill >= 0.55;
         }
 
-        // Long range shots — skilled players only
+        // Long range shots — elite players only
         if distance_to_goal <= MAX_SHOOTING_DISTANCE {
-            return long_shot_skill >= 0.7 && shooting_skill >= 0.55;
+            return long_shot_skill >= 0.75 && shooting_skill >= 0.6;
         }
 
         false

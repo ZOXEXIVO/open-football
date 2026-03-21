@@ -34,9 +34,9 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
-        // Close to goal — just shoot regardless of conditions
+        // Close to goal — shoot if clear shot and good angle
         let distance_to_goal = ctx.player().goal_distance();
-        if distance_to_goal < 50.0 {
+        if distance_to_goal < 40.0 && ctx.player().has_clear_shot() && ctx.player().shooting().has_good_angle() {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -63,17 +63,10 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
-        // Timeout — don't run forever without shooting
+        // Timeout — prefer passing over forced shot
         if ctx.in_state_time > 60 {
-            return Some(StateChangeResult::with_midfielder_state_and_event(
-                MidfielderState::Shooting,
-                Event::PlayerEvent(PlayerEvent::Shoot(
-                    ShootingEventContext::new()
-                        .with_player_id(ctx.player.id)
-                        .with_target(ctx.player().shooting_direction())
-                        .with_reason("MID_DISTANCE_SHOOTING_TIMEOUT")
-                        .build(ctx),
-                )),
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
             ));
         }
 
@@ -110,17 +103,17 @@ impl MidfielderDistanceShootingState {
         let long_shots = ctx.player.skills.technical.long_shots / 20.0;
 
         // Distance shooting for skilled players from reasonable distance
-        let distance_threshold = 120.0; // ~60m for long shots
-        let angle_threshold = std::f32::consts::PI / 4.0; // 45 degrees (widened)
+        let distance_threshold = 80.0; // ~40m for long shots
+        let angle_threshold = std::f32::consts::PI / 5.0; // 36 degrees — need decent angle
 
         // Check no heavy pressure (but 1 nearby opponent is OK)
         let heavily_marked = ctx.tick_context.distances
-            .opponents(ctx.player.id, 8.0).count() >= 2;
+            .opponents(ctx.player.id, 10.0).count() >= 2;
 
         distance_to_goal <= distance_threshold
             && angle_to_goal <= angle_threshold
             && has_clear_shot
-            && long_shots > 0.55 // Lowered threshold — more players attempt distance shots
+            && long_shots > 0.65 // Only good long-shot players
             && !heavily_marked
     }
 

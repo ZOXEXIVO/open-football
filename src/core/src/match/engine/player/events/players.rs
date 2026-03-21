@@ -196,6 +196,12 @@ impl PlayerEventDispatcher {
                 Self::handle_gain_ball_event(player_id, field);
             }
             PlayerEvent::Shoot(shoot_event_model) => {
+                // Record shot at team level for cooldown
+                if let Some(player) = field.get_player(shoot_event_model.from_player_id) {
+                    let team_id = player.team_id;
+                    let tick = context.current_tick();
+                    context.coach_for_team_mut(team_id).record_shot(tick);
+                }
                 Self::handle_shoot_event(shoot_event_model, field);
             }
             PlayerEvent::CaughtBall(player_id) => {
@@ -930,7 +936,7 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_shoot_event(shoot_event_model: ShootingEventContext, field: &mut MatchField) {
-        const GOAL_WIDTH: f32 = 45.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
+        const GOAL_WIDTH: f32 = 29.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
         const MAX_SHOT_VELOCITY: f32 = 5.6; // Maximum realistic shot velocity per tick

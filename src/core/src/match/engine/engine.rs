@@ -188,9 +188,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut events = EventCollection::new();
 
         let mut tick_parity: u32 = 0;
+        let mut coach_eval_counter: u32 = 0;
 
         while context.increment_time() {
             tick_parity += 1;
+            coach_eval_counter += 1;
+
+            // Coach evaluates every 500 ticks (~5 seconds of match time)
+            if coach_eval_counter >= 500 {
+                coach_eval_counter = 0;
+                Self::evaluate_coaches(field, context);
+            }
 
             // Full tick: ball + player AI + events
             // Light tick: ball + player movement only (no AI re-evaluation)
@@ -220,6 +228,49 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         result
+    }
+
+    /// Have both coaches evaluate the match state and issue instructions
+    fn evaluate_coaches(field: &MatchField, context: &mut MatchContext) {
+        let home_goals = context.score.home_team.get() as i8;
+        let away_goals = context.score.away_team.get() as i8;
+        let current_tick = context.current_tick();
+
+        // Match progress: 0.0 = start, 1.0 = end of full match
+        let match_progress = context.total_match_time as f32 / MATCH_TIME_MS as f32;
+
+        // Compute average condition for each team
+        let (home_condition_sum, home_count, away_condition_sum, away_count) =
+            field.players.iter().fold(
+                (0.0f32, 0u32, 0.0f32, 0u32),
+                |(hc, hn, ac, an), player| {
+                    let cond = player.player_attributes.condition as f32 / 10000.0;
+                    if player.team_id == context.field_home_team_id {
+                        (hc + cond, hn + 1, ac, an)
+                    } else {
+                        (hc, hn, ac + cond, an + 1)
+                    }
+                },
+            );
+
+        let home_avg_condition = if home_count > 0 { home_condition_sum / home_count as f32 } else { 0.5 };
+        let away_avg_condition = if away_count > 0 { away_condition_sum / away_count as f32 } else { 0.5 };
+
+        // Home coach: positive score_diff = leading
+        context.coach_home.evaluate(
+            home_goals - away_goals,
+            match_progress,
+            home_avg_condition,
+            current_tick,
+        );
+
+        // Away coach: positive score_diff = leading
+        context.coach_away.evaluate(
+            away_goals - home_goals,
+            match_progress,
+            away_avg_condition,
+            current_tick,
+        );
     }
 
     pub fn game_tick(
@@ -622,7 +673,7 @@ impl From<&MatchFieldSize> for GoalPosition {
     }
 }
 
-pub const GOAL_WIDTH: f32 = 45.0; // half-width in game units (full goal = 90 units)
+pub const GOAL_WIDTH: f32 = 29.0; // half-width in game units (full goal = 58 units, real = 7.32m)
 pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
 
 impl GoalPosition {

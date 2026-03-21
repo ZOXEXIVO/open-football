@@ -9,7 +9,7 @@ use crate::r#match::{
 use crate::IntegerUtils;
 use nalgebra::Vector3;
 
-const MAX_SHOOTING_DISTANCE: f32 = 50.0; // Defenders almost never shoot, only from very close
+const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
 
 #[derive(Default, Clone)]
 pub struct DefenderRunningState {}
@@ -17,6 +17,35 @@ pub struct DefenderRunningState {}
 impl StateProcessingHandler for DefenderRunningState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
+            let coach = ctx.team().coach_instruction();
+
+            // COACH INSTRUCTION: When told to waste time or slow down,
+            // hold the ball longer before passing (unless under pressure)
+            if coach.prefer_possession() && !self.is_opponent_closing_fast(ctx) {
+                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+                let min_hold = coach.min_possession_ticks();
+                if ownership_ticks < min_hold && !ctx.players().opponents().exists(15.0) {
+                    // Keep holding the ball — slow play
+                    return None;
+                }
+                // When finally passing during slow tempo, prefer backward/lateral passes
+                // to other defenders or GK rather than forward
+                if ownership_ticks >= min_hold {
+                    if let Some(safe_target) = self.find_safe_backward_pass(ctx) {
+                        return Some(StateChangeResult::with_defender_state_and_event(
+                            DefenderState::Standing,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(safe_target.id)
+                                    .with_reason("DEF_COACH_TEMPO_PASS_BACK")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                }
+            }
+
             // EMERGENCY PASS: Opponent closing fast — pass immediately before they arrive
             if self.is_opponent_closing_fast(ctx) {
                 if let Some(target) = self.find_emergency_pass_target(ctx) {
@@ -817,6 +846,61 @@ impl DefenderRunningState {
             .count();
 
         opponents_blocking == 0
+    }
+
+    /// Find a safe backward/lateral pass target for tempo control.
+    /// Prefers: GK, other defenders, defensive midfielders — prioritizes safety over progression.
+    fn find_safe_backward_pass(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
+        use crate::PlayerFieldPositionGroup;
+        let player_pos = ctx.player.position;
+        let own_goal = ctx.ball().direction_to_own_goal();
+
+        let mut best: Option<(MatchPlayerLite, f32)> = None;
+
+        for teammate in ctx.players().teammates().nearby(250.0) {
+            let dist = (teammate.position - player_pos).magnitude();
+            if dist < 15.0 { continue; } // too close
+
+            // Must have clear pass lane
+            if !ctx.player().has_clear_pass(teammate.id) { continue; }
+
+            // Must not be under heavy pressure
+            let opp_near = ctx.tick_context.distances.opponents(teammate.id, 12.0).count();
+            if opp_near >= 2 { continue; }
+
+            let group = teammate.tactical_positions.position_group();
+            let mut score = 0.0f32;
+
+            // Strongly prefer goalkeeper and defenders (backward passes)
+            match group {
+                PlayerFieldPositionGroup::Goalkeeper => score += 50.0,
+                PlayerFieldPositionGroup::Defender => score += 35.0,
+                PlayerFieldPositionGroup::Midfielder => score += 15.0,
+                _ => score += 0.0,
+            }
+
+            // Prefer players closer to own goal (backward direction)
+            let teammate_to_own_goal = (own_goal - teammate.position).magnitude();
+            let self_to_own_goal = (own_goal - player_pos).magnitude();
+            if teammate_to_own_goal < self_to_own_goal {
+                score += 20.0; // backward pass
+            }
+
+            // Prefer open teammates
+            if opp_near == 0 {
+                score += 15.0;
+            }
+
+            if let Some((_, best_score)) = &best {
+                if score > *best_score {
+                    best = Some((teammate, score));
+                }
+            } else {
+                best = Some((teammate, score));
+            }
+        }
+
+        best.map(|(t, _)| t)
     }
 
     fn should_intercept(&self, ctx: &StateProcessingContext) -> bool {

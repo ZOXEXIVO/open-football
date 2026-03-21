@@ -95,7 +95,9 @@ impl<'p> StateProcessor<'p> {
         let mut result = StateProcessingResult::new();
 
         if let Some(velocity) = handler.velocity(&processing_ctx) {
-            result.velocity = Some(velocity);
+            // Apply coach tempo multiplier to all player movement
+            let tempo = processing_ctx.team().coach_instruction().tempo_multiplier();
+            result.velocity = Some(velocity * tempo);
         }
 
         // common logic

@@ -11,20 +11,21 @@ use crate::IntegerUtils;
 use nalgebra::Vector3;
 
 // Realistic shooting distances (field is 840 units)
+// Real football: most goals scored from within 18m (~36 units)
 #[allow(dead_code)]
-const MAX_SHOOTING_DISTANCE: f32 = 120.0; // ~60m - absolute max for long shots
+const MAX_SHOOTING_DISTANCE: f32 = 90.0; // ~45m - absolute max for elite long shots
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const POINT_BLANK_DISTANCE: f32 = 30.0; // ~15m - must shoot, goalkeeper is right there
+const POINT_BLANK_DISTANCE: f32 = 24.0; // ~12m - must shoot, goalkeeper is right there
 #[allow(dead_code)]
-const VERY_CLOSE_RANGE_DISTANCE: f32 = 40.0; // ~20m - anyone can shoot
-const CLOSE_RANGE_DISTANCE: f32 = 60.0; // ~30m - close range shots
+const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot
+const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
 #[allow(dead_code)]
-const OPTIMAL_SHOOTING_DISTANCE: f32 = 80.0; // ~40m - ideal shooting distance
+const OPTIMAL_SHOOTING_DISTANCE: f32 = 60.0; // ~30m - ideal shooting distance
 #[allow(dead_code)]
-const MEDIUM_RANGE_DISTANCE: f32 = 90.0; // ~45m - medium range shots
+const MEDIUM_RANGE_DISTANCE: f32 = 70.0; // ~35m - medium range shots
 
 // Passing decision thresholds for forwards
-const SHOOTING_ZONE_DISTANCE: f32 = 60.0; // Only shoot under pressure from close range
+const SHOOTING_ZONE_DISTANCE: f32 = 48.0; // Only shoot under pressure from close range
 const TEAMMATE_ADVANTAGE_STRICT_RATIO: f32 = 0.7; // Teammate must be 30% closer to override
 
 // Performance thresholds
@@ -38,6 +39,18 @@ impl StateProcessingHandler for ForwardRunningState {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            let coach = ctx.team().coach_instruction();
+            let can_shoot = ctx.team().can_shoot();
+
+            // Coach tempo: if wasting time or slowing down, prefer possession over shooting
+            if coach.prefer_possession() && distance_to_goal > POINT_BLANK_DISTANCE {
+                // Only shoot from point-blank when coach says keep possession
+                let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+                if ownership_ticks < coach.min_possession_ticks() {
+                    // Hold the ball longer before making any decision
+                    return None;
+                }
+            }
 
             // Priority 0: Point-blank range — MUST shoot to avoid running into the goalkeeper
             if distance_to_goal <= POINT_BLANK_DISTANCE {
@@ -50,34 +63,43 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0.5: In shooting range with clear shot — SHOOT
-            if ctx.player().shooting().in_shooting_range() && ctx.player().has_clear_shot() {
+            // Priority 0.5: In shooting range with clear shot — but respect team cooldown and coach
+            if can_shoot
+                && coach.shooting_reluctance() < 0.3
+                && ctx.player().shooting().in_shooting_range()
+                && ctx.player().has_clear_shot()
+                && distance_to_goal < CLOSE_RANGE_DISTANCE // Only auto-shoot from close range
+            {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
             // Priority 0.6: Unopposed approach — shoot from close range with decent finishing
-            if distance_to_goal < CLOSE_RANGE_DISTANCE && self.has_open_space_ahead(ctx) {
+            if can_shoot
+                && distance_to_goal < CLOSE_RANGE_DISTANCE
+                && self.has_open_space_ahead(ctx)
+            {
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
-                if finishing > 0.45 {
+                if finishing > 0.5 && ctx.player().shooting().has_good_angle() {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
                     ));
                 }
             }
 
-            // Priority 0.7: Long-range shooting — skilled players shoot from distance
-            {
+            // Priority 0.7: Long-range shooting — very skilled players only, rare
+            if can_shoot && coach.shooting_reluctance() <= 0.0 {
                 let long_shots = ctx.player.skills.technical.long_shots / 20.0;
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
 
                 if distance_to_goal > CLOSE_RANGE_DISTANCE
                     && distance_to_goal <= MAX_SHOOTING_DISTANCE
-                    && long_shots > 0.6
-                    && finishing > 0.5
+                    && long_shots > 0.7
+                    && finishing > 0.55
                     && ctx.player().has_clear_shot()
-                    && !ctx.players().opponents().exists(8.0)
+                    && ctx.player().shooting().has_good_angle()
+                    && !ctx.players().opponents().exists(10.0)
                 {
                     return Some(StateChangeResult::with_forward_state(
                         ForwardState::Shooting,
@@ -208,10 +230,15 @@ impl StateProcessingHandler for ForwardRunningState {
             }
 
             // ANTI-OSCILLATION: If carrying ball too long without acting, force a decision
-            // But allow extended runs when advancing toward goal with open space
+            // Prefer passing over shooting to maintain realistic play
             if ctx.in_state_time > 120 {
                 let finishing = ctx.player.skills.technical.finishing / 20.0;
-                if distance_to_goal < SHOOTING_ZONE_DISTANCE && finishing > 0.4 && ctx.player().has_clear_shot() {
+                if can_shoot
+                    && distance_to_goal < POINT_BLANK_DISTANCE * 1.5
+                    && finishing > 0.5
+                    && ctx.player().has_clear_shot()
+                    && ctx.player().shooting().has_good_angle()
+                {
                     return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));

@@ -1,4 +1,5 @@
 ﻿pub mod ball;
+pub mod coach;
 pub mod engine;
 pub mod events;
 pub mod field;
@@ -10,6 +11,7 @@ pub mod tactics;
 pub mod context;
 
 pub use ball::*;
+pub use coach::*;
 pub use engine::*;
 pub use field::*;
 pub use raycast::*;
