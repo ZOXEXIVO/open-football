@@ -15,7 +15,7 @@ use core::ClubStatus;
 use core::TeamCollection;
 use crate::generators::convert::convert_national_competition;
 use core::{
-    Club, ClubBoard, ClubColors, ClubFinances, ClubPhilosophy, Country, CountryGeneratorData, CountryPricing, CountrySettings, Player,
+    Club, ClubBoard, ClubColors, ClubFinances, ClubPhilosophy, Country, CountryGeneratorData, CountryPricing, CountrySettings, SkinColorDistribution, Player,
     PlayerCollection, ReputationLevel, SimulatorData, Staff, StaffCollection, StaffPosition, Team,
     TeamReputation, TeamType, TrainingSchedule,
     CompetitionScope, NationalCompetitionConfig,
@@ -144,6 +144,11 @@ impl DatabaseGenerator {
                 let settings = CountrySettings {
                     pricing: CountryPricing {
                         price_level: country.settings.pricing.price_level,
+                    },
+                    skin_colors: SkinColorDistribution {
+                        white: country.skin_colors.white,
+                        black: country.skin_colors.black,
+                        metis: country.skin_colors.metis,
                     },
                 };
 

@@ -149,7 +149,7 @@ pub use country::{
     Country, CountryResult, CountryContext,
     CountryEconomicFactors, InternationalCompetition, MediaCoverage,
     MediaStory, StoryType, CountryRegulations, CountryGeneratorData,
-    PeopleNameGeneratorData, CountrySettings, CountryPricing,
+    PeopleNameGeneratorData, CountrySettings, CountryPricing, SkinColorDistribution,
     NationalTeam, NationalTeamStaffMember, NationalTeamStaffRole,
     NationalSquadPlayer, NationalTeamFixture, NationalTeamMatchResult,
 };

@@ -1,3 +1,63 @@
+use serde::Deserialize;
+use std::sync::OnceLock;
+
+// ── Skin color distribution ───────────────────────────────────
+
+#[derive(Clone, Copy)]
+pub struct SkinDist {
+    pub white: u8,
+    pub black: u8,
+    pub metis: u8,
+}
+
+impl Default for SkinDist {
+    fn default() -> Self {
+        SkinDist { white: 50, black: 20, metis: 30 }
+    }
+}
+
+#[derive(Deserialize)]
+struct CountryJson {
+    code: String,
+    #[serde(default)]
+    skin_colors: Option<SkinColorsJson>,
+}
+
+#[derive(Deserialize)]
+struct SkinColorsJson {
+    white: u8,
+    black: u8,
+    metis: u8,
+}
+
+static SKIN_MAP: OnceLock<Vec<(String, SkinDist)>> = OnceLock::new();
+
+fn load_skin_map() -> Vec<(String, SkinDist)> {
+    let json_str = include_str!("../../../database/src/data/countries.json");
+    let countries: Vec<CountryJson> = serde_json::from_str(json_str).unwrap_or_default();
+    countries.into_iter().map(|c| {
+        let dist = c.skin_colors.map(|sc| SkinDist {
+            white: sc.white,
+            black: sc.black,
+            metis: sc.metis,
+        }).unwrap_or_default();
+        (c.code, dist)
+    }).collect()
+}
+
+pub fn skin_distribution_for_country(code: &str) -> SkinDist {
+    if code.is_empty() {
+        return SkinDist::default();
+    }
+    let map = SKIN_MAP.get_or_init(load_skin_map);
+    map.iter()
+        .find(|(c, _)| c == code)
+        .map(|(_, d)| *d)
+        .unwrap_or_default()
+}
+
+// ── RNG ───────────────────────────────────────────────────────
+
 struct FaceRng {
     state: u64,
 }
@@ -39,6 +99,7 @@ impl FaceRng {
 // ── Color palettes ──────────────────────────────────────────
 
 // 12 skin tones: very light → very dark with warm/cool undertone variety
+// White range: 0-3, Metis range: 3-8, Black range: 8-11
 const SKIN: [&str; 12] = [
     "#FAE0C8", "#F5D0A9", "#EDCBA0", "#E0B68B",
     "#D4A373", "#C49064", "#AD7A52", "#96663D",
@@ -145,12 +206,28 @@ fn face_shape(variant: usize, fw: f32) -> FaceShape {
 
 // ── Main generator ──────────────────────────────────────────
 
+/// Pick a skin tone index based on country skin color distribution.
+/// First rolls white/black/metis, then picks a specific shade within that group.
+fn pick_skin_index(r: &mut FaceRng, dist: SkinDist) -> usize {
+    let roll = r.range(100) as u8;
+    if roll < dist.white {
+        // White: indices 0-3
+        r.range(4)
+    } else if roll < dist.white + dist.black {
+        // Black: indices 8-11
+        8 + r.range(4)
+    } else {
+        // Metis: indices 3-8
+        3 + r.range(6)
+    }
+}
+
 /// viewBox = "0 0 80 100" — portrait rectangle, head centered at x=40
-pub fn generate_face_svg(player_id: u32, age: u8) -> String {
+pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String {
     let mut r = FaceRng::new(player_id);
 
-    // Pick features
-    let skin = SKIN[r.range(SKIN.len())];
+    // Pick features using country-based skin distribution
+    let skin = SKIN[pick_skin_index(&mut r, skin_dist)];
     let hair = HAIR[r.range(HAIR.len())];
     let eye_col = EYES[r.range(EYES.len())];
 

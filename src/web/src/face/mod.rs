@@ -24,6 +24,8 @@ struct FacePathParams {
 struct FaceQueryParams {
     #[serde(default = "default_age")]
     age: u8,
+    #[serde(default)]
+    cc: String,
 }
 
 fn default_age() -> u8 {
@@ -34,7 +36,8 @@ async fn face_action(
     Path(path): Path<FacePathParams>,
     Query(query): Query<FaceQueryParams>,
 ) -> impl IntoResponse {
-    let svg = generate_face_svg(path.player_id, query.age);
+    let skin_dist = generator::skin_distribution_for_country(&query.cc);
+    let svg = generate_face_svg(path.player_id, query.age, skin_dist);
 
     (
         StatusCode::OK,
