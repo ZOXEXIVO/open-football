@@ -615,18 +615,33 @@ impl Club {
             self.finance.balance.push_income(sponsorship_income);
         }
 
-        // Monthly reputation-based revenue (TV deals, matchday, merchandise)
+        // Monthly revenue split into TV/commercial (reputation-based) and matchday (attendance-based)
         let main_team = self.teams.teams.iter().find(|t| t.team_type == TeamType::Main);
         if let Some(team) = main_team {
-            let monthly_revenue = match team.reputation.level() {
-                crate::ReputationLevel::Elite => 2_500_000,
-                crate::ReputationLevel::Continental => 1_000_000,
-                crate::ReputationLevel::National => 400_000,
-                crate::ReputationLevel::Regional => 100_000,
-                crate::ReputationLevel::Local => 30_000,
-                crate::ReputationLevel::Amateur => 10_000,
+            // TV & commercial deals — based on reputation
+            let tv_revenue = match team.reputation.level() {
+                crate::ReputationLevel::Elite => 2_000_000,
+                crate::ReputationLevel::Continental => 800_000,
+                crate::ReputationLevel::National => 300_000,
+                crate::ReputationLevel::Regional => 70_000,
+                crate::ReputationLevel::Local => 20_000,
+                crate::ReputationLevel::Amateur => 5_000,
             };
-            self.finance.balance.push_income(monthly_revenue);
+
+            // Matchday revenue — attendance * average ticket price * ~2 home games/month
+            // Ticket price scales with reputation (elite clubs charge more)
+            let attendance = self.facilities.average_attendance;
+            let ticket_price: u32 = match team.reputation.level() {
+                crate::ReputationLevel::Elite => 55,
+                crate::ReputationLevel::Continental => 40,
+                crate::ReputationLevel::National => 28,
+                crate::ReputationLevel::Regional => 15,
+                crate::ReputationLevel::Local => 8,
+                crate::ReputationLevel::Amateur => 4,
+            };
+            let matchday_revenue = (attendance * ticket_price * 2) as i32;
+
+            self.finance.balance.push_income(tv_revenue + matchday_revenue);
         }
     }
 }
