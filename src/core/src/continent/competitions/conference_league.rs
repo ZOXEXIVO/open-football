@@ -93,12 +93,16 @@ impl ConferenceLeague {
                     away_team: teams[a1],
                     date: matchday_dates[md],
                     stage: CompetitionStage::GroupStage,
+                    match_id: String::new(),
+                    result: None,
                 });
                 self.matches.push(ContinentalMatch {
                     home_team: teams[h2],
                     away_team: teams[a2],
                     date: matchday_dates[md],
                     stage: CompetitionStage::GroupStage,
+                    match_id: String::new(),
+                    result: None,
                 });
             }
         }
@@ -149,12 +153,16 @@ impl ConferenceLeague {
                 away_team: tie.away_team,
                 date: leg1_date,
                 stage: CompetitionStage::RoundOf16,
+                match_id: String::new(),
+                result: None,
             });
             self.matches.push(ContinentalMatch {
                 home_team: tie.away_team,
                 away_team: tie.home_team,
                 date: leg2_date,
                 stage: CompetitionStage::RoundOf16,
+                match_id: String::new(),
+                result: None,
             });
         }
 
@@ -222,6 +230,18 @@ impl ConferenceLeague {
         }
 
         let results = crate::match_engine_pool().play(engine_matches);
+
+        // Store results back on the matches
+        for (cm, result) in todays_matches.iter().zip(results.iter()) {
+            let home_goals = result.score.home_team.get();
+            let away_goals = result.score.away_team.get();
+            if let Some(m) = self.matches.iter_mut().find(|m|
+                m.date == cm.date && m.home_team == cm.home_team && m.away_team == cm.away_team
+            ) {
+                m.match_id = result.id.clone();
+                m.result = Some((home_goals, away_goals));
+            }
+        }
 
         for (cm, result) in todays_matches.iter().zip(results.iter()) {
             let home_goals = result.score.home_team.get();

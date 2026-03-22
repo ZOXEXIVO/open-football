@@ -292,7 +292,19 @@ pub async fn match_get_action(
     let (sub_title, sub_title_link) = if let Some(l) = league {
         (views::league_display_name(l, &i18n, simulator_data), format!("/{}/leagues/{}", &route_params.lang, &l.slug))
     } else {
-        ("International".to_string(), String::new())
+        let name = match match_result.league_slug.as_str() {
+            "champions-league" => "Champions League",
+            "europa-league" => "Europa League",
+            "conference-league" => "Conference League",
+            _ => "International",
+        };
+        let link = match match_result.league_slug.as_str() {
+            "champions-league" => format!("/{}/champions-league", &route_params.lang),
+            "europa-league" => format!("/{}/europa-league", &route_params.lang),
+            "conference-league" => format!("/{}/conference-league", &route_params.lang),
+            _ => String::new(),
+        };
+        (name.to_string(), link)
     };
 
     Ok(MatchGetTemplate {

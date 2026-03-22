@@ -308,8 +308,10 @@ impl ContinentResult {
         }
 
         // Process real match results through the stat pipeline (player stats routing)
+        // and store in global match store so match detail pages can find them
         for mut match_result in comp_results.match_results {
             crate::league::LeagueResult::process_cup_match(&mut match_result, data);
+            data.match_store.push(match_result.clone());
             result.match_results.push(match_result);
         }
 

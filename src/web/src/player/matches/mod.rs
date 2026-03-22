@@ -138,7 +138,7 @@ pub async fn player_matches_action(
 
         // Continental competition matches for this club
         let continental_matches = simulator_data.continental_matches_for_club(team.club_id);
-        for (comp_name, home_club_id, away_club_id, date) in continental_matches {
+        for (comp_name, home_club_id, away_club_id, date, match_id, match_result) in continental_matches {
             let is_home = home_club_id == team.club_id;
             let opponent_club_id = if is_home { away_club_id } else { home_club_id };
 
@@ -159,7 +159,11 @@ pub async fn player_matches_action(
                 opponent_name,
                 is_home,
                 competition_name: comp_name.to_string(),
-                result: None,
+                result: match_result.map(|(home_goals, away_goals)| PlayerMatchResult {
+                    match_id: match_id.to_string(),
+                    home_goals,
+                    away_goals,
+                }),
             }));
         }
 

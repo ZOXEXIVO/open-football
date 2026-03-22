@@ -24,6 +24,8 @@ pub struct ContinentalMatch {
     pub away_team: u32,
     pub date: NaiveDate,
     pub stage: CompetitionStage,
+    pub match_id: String,
+    pub result: Option<(u8, u8)>,
 }
 
 #[derive(Debug, Clone)]
