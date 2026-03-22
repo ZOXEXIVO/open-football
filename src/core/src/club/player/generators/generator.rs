@@ -330,14 +330,24 @@ fn ca_to_skill(ca_share: f32) -> f32 {
 /// Young players cannot reach elite skill levels regardless of talent — they
 /// need years of training and match experience. Mirrors Football Manager behavior.
 fn age_skill_cap(age: u32) -> f32 {
+    // In real FM, even wonderkids rarely exceed 16-17 at age 20.
+    // Only fully mature players (25+) can reach 20 in any attribute.
     match age {
-        0..=14 => 13.0,
-        15 => 14.0,
-        16 => 15.0,
-        17 => 16.0,
-        18 => 17.0,
-        19 => 18.0,
-        _ => 20.0,
+        0..=14 => 12.0,
+        15 => 13.0,
+        16 => 14.0,
+        17 => 15.0,
+        18 => 15.5,
+        19 => 16.0,
+        20 => 17.0,
+        21 => 17.5,
+        22 => 18.0,
+        23 => 18.5,
+        24 => 19.0,
+        25..=30 => 20.0,
+        31..=33 => 19.0,
+        34..=35 => 18.0,
+        _ => 17.0,
     }
 }
 
