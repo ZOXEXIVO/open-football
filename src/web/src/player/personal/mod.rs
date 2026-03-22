@@ -305,7 +305,7 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
             PlayerSquadStatus::HotProspectForTheFuture => i18n.t("squad_hot_prospect"),
             PlayerSquadStatus::DecentYoungster => i18n.t("squad_decent_youngster"),
             PlayerSquadStatus::NotNeeded => i18n.t("squad_not_needed"),
-            _ => i18n.t("squad_first_team_regular"),
+            _ => "",
         };
         let wage = format!("{} {}", FormattingUtils::format_money(contract.salary as f64), i18n.t("per_week"));
         let expiry = contract.expiration.format("%d.%m.%Y").to_string();

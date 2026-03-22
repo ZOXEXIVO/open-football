@@ -221,6 +221,7 @@ impl CountryResult {
 
     /// Deterministic retirement: only for players past absolute max age or with Ret status.
     /// Players still getting games are given a +1 year grace period.
+    /// Uses the same CA/position/jitter logic as should_retire for consistency.
     fn must_retire(player: &crate::Player, date: NaiveDate) -> bool {
         if player.statuses.get().contains(&PlayerStatusType::Ret) {
             return true;
@@ -228,21 +229,38 @@ impl CountryResult {
 
         let age = player.age(date);
         let ca = player.player_attributes.current_ability;
-        let is_gk = player.position().is_goalkeeper();
+        let position = player.position();
 
         let max_retire_age = match ca {
-            0..=59 => 36u8,
-            60..=99 => 37,
-            100..=139 => 38,
-            140..=169 => 39,
-            _ => 40,
+            0..=39   => 37u8,
+            40..=69  => 38,
+            70..=99  => 39,
+            100..=129 => 40,
+            130..=159 => 41,
+            160..=179 => 42,
+            _         => 43,
         };
 
-        let max_age = if is_gk { max_retire_age + 2 } else { max_retire_age };
+        let position_offset: i8 = if position.is_goalkeeper() {
+            2
+        } else if position.is_defender() {
+            1
+        } else if position.is_forward() {
+            -1
+        } else {
+            0
+        };
+
+        let id_jitter: i8 = match player.id % 3 {
+            0 => -1,
+            1 => 0,
+            _ => 1,
+        };
+
+        let max_age = (max_retire_age as i16 + position_offset as i16 + id_jitter as i16)
+            .clamp(35, 47) as u8;
 
         // Players still getting games get a 1-year grace period
-        // At season start current stats are 0, so fall back to last season history;
-        // if no history exists at all, assume the player is active (benefit of the doubt)
         let has_recent_games = player.statistics.total_games() >= 5
             || player.statistics_history.items
                 .last()
@@ -292,24 +310,44 @@ impl CountryResult {
             return true;
         }
 
-        let is_gk = player.position().is_goalkeeper();
+        let position = player.position();
+        let is_gk = position.is_goalkeeper();
 
-        // Base retirement age window by ability
-        // Higher ability players have longer careers
+        // Wider age windows with finer CA granularity (5-6 year spread)
+        // This prevents mass retirement at a single age boundary
         let (min_retire_age, max_retire_age) = match ca {
-            0..=59 => (32u8, 35u8),
-            60..=99 => (33, 36),
-            100..=139 => (34, 37),
-            140..=169 => (35, 38),
-            _ => (36, 39),
+            0..=39   => (31u8, 36u8),
+            40..=69  => (32, 37),
+            70..=99  => (33, 38),
+            100..=129 => (34, 39),
+            130..=159 => (35, 40),
+            160..=179 => (36, 41),
+            _         => (37, 42),
         };
 
-        // Goalkeepers retire ~2 years later
-        let (min_age, max_age) = if is_gk {
-            (min_retire_age + 2, max_retire_age + 2)
+        // Position adjustments: GK +2, defenders +1, forwards -1
+        let position_offset: i8 = if is_gk {
+            2
+        } else if position.is_defender() {
+            1
+        } else if position.is_forward() {
+            -1
         } else {
-            (min_retire_age, max_retire_age)
+            0
         };
+
+        // Per-player jitter based on player ID: spreads ±1 year
+        // so players of the same age/ability don't all retire together
+        let id_jitter: i8 = match player.id % 3 {
+            0 => -1,
+            1 => 0,
+            _ => 1,
+        };
+
+        let min_age = (min_retire_age as i16 + position_offset as i16 + id_jitter as i16)
+            .clamp(30, 44) as u8;
+        let max_age = (max_retire_age as i16 + position_offset as i16 + id_jitter as i16)
+            .clamp(34, 46) as u8;
 
         // Too young to retire
         if age < min_age {
@@ -321,62 +359,62 @@ impl CountryResult {
             return true;
         }
 
-        // Still playing regularly? Don't retire.
-        // Check current season official appearances
+        // Still playing regularly? Reduce chance but don't fully block
         let current_season_games = player.statistics.total_games();
-        if current_season_games >= 10 {
-            return false;
-        }
-
-        // Check last completed season from history
         let last_season_games = player.statistics_history.items
             .last()
             .map(|h| h.statistics.total_games())
             .unwrap_or(0);
 
-        // Players with significant recent game time are much less likely to retire
-        if last_season_games >= 15 {
-            return false;
-        }
+        let total_recent_games = current_season_games + last_season_games;
 
-        // Base retirement probability: increases with age within the window
-        let range = (max_age - min_age).max(1) as i32;
-        let years_over = (age - min_age) as i32;
-        let mut chance: i32 = 15 + (years_over * 50 / range);
+        // Base retirement probability: gentle ramp across the window
+        // Starts at 5%, increases quadratically to ~60% at max_age-1
+        let range = (max_age - min_age).max(1) as f32;
+        let years_over = (age - min_age) as f32;
+        let progress = years_over / range; // 0.0 at min_age, ~1.0 at max_age
+        let mut chance: f32 = 5.0 + 55.0 * progress * progress;
 
-        // Ambitious players want to keep playing
-        // ambition is 0.0-20.0
+        // === Personality modifiers (continuous, not stepped) ===
+
+        // Ambition: 0-20 scale, high ambition reduces chance
         let ambition = player.attributes.ambition;
-        if ambition > 15.0 {
-            chance -= 20;
-        } else if ambition > 10.0 {
-            chance -= 10;
-        }
+        chance -= (ambition - 10.0) * 1.5; // -15 to +15
 
-        // High determination makes players persist
+        // Determination: high determination = persist longer
         let determination = player.skills.mental.determination;
-        if determination > 15.0 {
-            chance -= 15;
-        } else if determination > 10.0 {
-            chance -= 5;
+        chance -= (determination - 10.0) * 1.0; // -10 to +10
+
+        // === Game time modifiers (graduated) ===
+        if total_recent_games >= 30 {
+            chance -= 25.0; // Regular starter across both seasons
+        } else if total_recent_games >= 15 {
+            chance -= 15.0;
+        } else if total_recent_games >= 5 {
+            chance -= 5.0;
+        } else if total_recent_games == 0 {
+            chance += 15.0; // No games at all — likely to retire
         }
 
-        // Players with no games last season are more likely to retire
-        if last_season_games == 0 && current_season_games == 0 {
-            chance += 25;
-        } else if last_season_games < 5 {
-            chance += 10;
-        }
-
-        // Declining ability makes retirement more likely
-        // If CA is well below PA, player has declined
+        // === Ability decline modifier ===
         let pa = player.player_attributes.potential_ability;
-        if pa > 0 && ca < pa / 2 {
-            chance += 15;
+        if pa > 0 {
+            let decline_ratio = 1.0 - (ca as f32 / pa as f32);
+            if decline_ratio > 0.5 {
+                chance += 10.0; // Severely declined
+            } else if decline_ratio > 0.3 {
+                chance += 5.0;
+            }
         }
 
-        chance = chance.clamp(5, 90);
-        IntegerUtils::random(0, 100) < chance
+        // Birth month adds sub-year variance:
+        // players born later in the year get slight chance reduction
+        // (they are effectively slightly younger within the same age bracket)
+        let birth_month = player.birth_date.month() as f32;
+        chance += (birth_month - 6.0) * 0.5; // -2.5 to +3.0
+
+        chance = chance.clamp(3.0, 85.0);
+        IntegerUtils::random(0, 100) < chance as i32
     }
 
     fn process_year_end_finances(_country: &mut Country) {

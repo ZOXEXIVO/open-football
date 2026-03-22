@@ -516,19 +516,31 @@ impl PlayerGenerator {
         let gem_roll = rand::random::<f32>();
         let is_gem = gem_roll < gem_chance;
 
-        // FM-style: Academy Quality affects PA ceiling
-        // Poor academy (0.05) → low PA cap, Best (1.0) → PA up to 200
-        let academy_pa_boost = 0.70 + academy_quality * 0.60; // 0.73 to 1.30
+        // Academy quality is the primary driver of PA ceiling.
+        // Poor academy (0.05): PA cap ~80,  headroom ~10-20 above CA
+        // Average (0.35):      PA cap ~120, headroom ~15-35
+        // Good (0.55):         PA cap ~145, headroom ~20-45
+        // Excellent (0.75):    PA cap ~170, headroom ~25-55
+        // Best (1.0):          PA cap ~200, headroom ~30-65
+        let mut academy_pa_cap = (60.0 + academy_quality * 140.0) as i32; // 67..200
+
+        // Rare prodigy: ~0.5% chance any club produces a 160+ PA talent
+        // Even a village club can occasionally birth a Messi
+        if rand::random::<f32>() < 0.005 {
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(150, 170));
+        }
 
         let potential_ability = if is_gem {
-            // Gems: academy quality raises the PA ceiling
-            let gem_min = 130i32.min(current_ability as i32 + 30);
-            let gem_max = (140.0 + rep_factor * 50.0 + academy_quality * 30.0) as i32;
-            IntegerUtils::random(gem_min, gem_max.min(200)).min(200) as u8
+            // Gems: academy quality sets the ceiling, rep_factor fine-tunes
+            let gem_min = (current_ability as i32 + 20).min(academy_pa_cap);
+            let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.30)) as i32;
+            IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Normal players: academy quality affects headroom above CA
-            let headroom = (30.0 * (0.5 + rep_factor) * academy_pa_boost) as i32;
-            (current_ability as i32 + IntegerUtils::random(5, headroom.max(6))).min(200) as u8
+            // Normal players: academy quality determines both headroom and cap
+            let base_headroom = 10.0 + academy_quality * 55.0; // 10.8..65
+            let headroom = (base_headroom * (0.6 + rep_factor * 0.8)) as i32; // rep_factor scales it
+            let raw_pa = current_ability as i32 + IntegerUtils::random(5, headroom.max(6));
+            raw_pa.min(academy_pa_cap).min(200) as u8
         };
 
         // Higher PA → higher chance of secondary position

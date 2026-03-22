@@ -223,19 +223,39 @@ impl Player {
             return 0.0; // Low ambition players don't care much
         }
 
+        // Squad status dampens ambition frustration:
+        // Rotation/backup players accepted a lesser role — they don't demand
+        // the same club prestige as key players do. Only key players and
+        // first team regulars feel the full weight of ambition mismatch.
+        let status_dampening = if let Some(ref contract) = self.contract {
+            match contract.squad_status {
+                PlayerSquadStatus::KeyPlayer => 1.0,
+                PlayerSquadStatus::FirstTeamRegular => 0.8,
+                PlayerSquadStatus::FirstTeamSquadRotation => 0.4,
+                PlayerSquadStatus::MainBackupPlayer => 0.2,
+                PlayerSquadStatus::HotProspectForTheFuture
+                | PlayerSquadStatus::DecentYoungster => 0.1,
+                PlayerSquadStatus::NotNeeded => 0.3, // unhappy but for different reasons
+                _ => 0.5,
+            }
+        } else {
+            0.5
+        };
+
         // Ambition expects a certain club reputation level
         // ambition 20 expects rep ~8000+, ambition 15 expects ~4000+
         let expected_rep = (ambition - 10.0) * 800.0;
 
-        if club_rep >= expected_rep {
+        let raw = if club_rep >= expected_rep {
             // At or above expected level
             let excess = ((club_rep - expected_rep) / 2000.0).min(1.0);
             excess * 5.0
         } else {
-            // Below expected level
+            // Below expected level — dampened by squad status
             let deficit = ((expected_rep - club_rep) / expected_rep).min(1.0);
-            -deficit * 10.0
-        }
-        .clamp(-10.0, 10.0)
+            -deficit * 10.0 * status_dampening
+        };
+
+        raw.clamp(-10.0, 10.0)
     }
 }

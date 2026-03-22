@@ -12,7 +12,7 @@ pub enum ContractType {
     Loan,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PlayerSquadStatus {
     Invalid,
     NotYetSet,
@@ -24,6 +24,49 @@ pub enum PlayerSquadStatus {
     DecentYoungster,
     NotNeeded,
     SquadStatusCount,
+}
+
+impl PlayerSquadStatus {
+    /// FM-style squad status based on player CA rank within the team.
+    /// `team_cas` should be sorted descending (best first).
+    pub fn calculate(player_ca: u8, player_age: u8, team_cas: &[u8]) -> Self {
+        let squad_size = team_cas.len();
+        if squad_size == 0 {
+            return PlayerSquadStatus::FirstTeamRegular;
+        }
+
+        // Youth players get youth-specific statuses
+        if player_age <= 19 {
+            let avg_ca = team_cas.iter().map(|&c| c as u32).sum::<u32>() / squad_size as u32;
+            return if (player_ca as u32) >= avg_ca {
+                PlayerSquadStatus::HotProspectForTheFuture
+            } else {
+                PlayerSquadStatus::DecentYoungster
+            };
+        }
+
+        // Find player's rank in the squad (0 = best)
+        let rank = team_cas.iter().filter(|&&ca| ca > player_ca).count();
+        let percentile = rank as f32 / squad_size as f32;
+
+        // FM-style thresholds:
+        // Top ~15% = Key Player (typically 3-4 players in a 25-man squad)
+        // Next ~25% = First Team Regular
+        // Next ~20% = Squad Rotation
+        // Next ~20% = Backup
+        // Bottom ~20% = Not Needed
+        if percentile < 0.15 {
+            PlayerSquadStatus::KeyPlayer
+        } else if percentile < 0.40 {
+            PlayerSquadStatus::FirstTeamRegular
+        } else if percentile < 0.60 {
+            PlayerSquadStatus::FirstTeamSquadRotation
+        } else if percentile < 0.80 {
+            PlayerSquadStatus::MainBackupPlayer
+        } else {
+            PlayerSquadStatus::NotNeeded
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

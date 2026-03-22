@@ -199,10 +199,32 @@ pub async fn transfer_action(
 
         player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
 
+        // Clear transfer-related statuses: player is joining a new club
+        player.statuses.remove(core::PlayerStatusType::Lst);
+        player.statuses.remove(core::PlayerStatusType::Trn);
+        player.statuses.remove(core::PlayerStatusType::Bid);
+        player.statuses.remove(core::PlayerStatusType::Enq);
+        player.statuses.remove(core::PlayerStatusType::Wnt);
+        player.statuses.remove(core::PlayerStatusType::Req);
+        player.statuses.remove(core::PlayerStatusType::Frt);
+
         let expiration = chrono::NaiveDate::from_ymd_opt(date.year() + 3, 6, 30)
             .unwrap_or(date);
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        player.contract = Some(PlayerClubContract::new(salary, expiration));
+        let mut new_contract = PlayerClubContract::new(salary, expiration);
+
+        // Calculate squad status relative to destination team
+        let player_ca = player.player_attributes.current_ability;
+        let player_age = core::utils::DateUtils::age(player.birth_date, date);
+        let mut dest_cas: Vec<u8> = sim.continents[dci].countries[dcoi].clubs[dcli]
+            .teams.teams[dti].players.players.iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        dest_cas.push(player_ca); // include the player themselves
+        dest_cas.sort_unstable_by(|a, b| b.cmp(a));
+        new_contract.squad_status = core::PlayerSquadStatus::calculate(player_ca, player_age, &dest_cas);
+
+        player.contract = Some(new_contract);
         player.contract_loan = None;
 
         sim.continents[dci].countries[dcoi].clubs[dcli]
@@ -310,6 +332,15 @@ pub async fn loan_action(
         };
 
         player.on_manual_loan(&source.info, &parent.info, &dest.info, date);
+
+        // Clear transfer-related statuses
+        player.statuses.remove(core::PlayerStatusType::Lst);
+        player.statuses.remove(core::PlayerStatusType::Trn);
+        player.statuses.remove(core::PlayerStatusType::Bid);
+        player.statuses.remove(core::PlayerStatusType::Enq);
+        player.statuses.remove(core::PlayerStatusType::Wnt);
+        player.statuses.remove(core::PlayerStatusType::Req);
+        player.statuses.remove(core::PlayerStatusType::Loa);
 
         // Loan contract with original parent — expiration from league season end
         let seasons = body.seasons.unwrap_or(1).clamp(1, 5) as i32;

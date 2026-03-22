@@ -2,7 +2,8 @@ use crate::club::team::behaviour::TeamBehaviour;
 use crate::club::team::builder::TeamBuilder;
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
-use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
+use chrono::Datelike;
+use crate::{MatchHistory, MatchTacticType, Player, PlayerCollection, PlayerSquadStatus, StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem, Transfers};
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -35,6 +36,11 @@ impl Team {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
+        // Recalculate squad statuses monthly (1st of month)
+        if ctx.simulation.date.day() == 1 {
+            self.update_squad_statuses(ctx.simulation.date.date());
+        }
+
         // Pass team reputation to players via context
         let player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
         let result = TeamResult::new(
@@ -55,6 +61,26 @@ impl Team {
         }
 
         result
+    }
+
+    /// FM-style: assign squad status based on CA rank within the team.
+    fn update_squad_statuses(&mut self, date: chrono::NaiveDate) {
+        // Collect sorted CAs (descending)
+        let mut team_cas: Vec<u8> = self.players.players.iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        team_cas.sort_unstable_by(|a, b| b.cmp(a));
+
+        for player in &mut self.players.players {
+            if let Some(ref mut contract) = player.contract {
+                let age = crate::utils::DateUtils::age(player.birth_date, date);
+                contract.squad_status = PlayerSquadStatus::calculate(
+                    player.player_attributes.current_ability,
+                    age,
+                    &team_cas,
+                );
+            }
+        }
     }
 
     pub fn players(&self) -> Vec<&Player> {
