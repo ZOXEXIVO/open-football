@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod contract;
 pub mod decisions;
 pub mod events;
 pub mod get;
@@ -15,6 +16,7 @@ use axum::Router;
 pub fn player_routes() -> Router<GameAppData> {
     Router::new()
         .merge(get::routes::routes())
+        .merge(contract::routes::routes())
         .merge(personal::routes::routes())
         .merge(events::routes::routes())
         .merge(matches::routes::routes())

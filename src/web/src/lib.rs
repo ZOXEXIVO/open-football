@@ -1,4 +1,5 @@
 pub mod ai;
+mod champions_league;
 mod countries;
 mod date;
 mod error;

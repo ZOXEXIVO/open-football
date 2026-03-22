@@ -2475,6 +2475,75 @@ a:link, a:visited, a:hover, a:active {
     background: #e53935;
 }
 
+/* --- Contract tab --- */
+
+.fm-contract-wage {
+    color: #8cc87a;
+    font-weight: 600;
+    font-size: 1em;
+}
+
+.fm-contract-shirt {
+    color: #c8d4de;
+    font-weight: 700;
+    font-size: 1em;
+}
+
+.fm-contract-status {
+    color: #94a3af;
+    font-weight: 500;
+}
+
+.fm-contract-expiry {
+    color: #c8d4de;
+    font-weight: 500;
+}
+
+.fm-contract-bonus-val {
+    color: #8cc87a;
+    font-weight: 500;
+}
+
+.fm-contract-alert {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: rgba(229, 57, 53, 0.1);
+    border: 1px solid rgba(229, 57, 53, 0.25);
+    border-radius: 4px;
+    color: #ef5350;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.fm-contract-alert-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: rgba(229, 57, 53, 0.2);
+    color: #ef5350;
+    font-weight: 700;
+    font-size: 12px;
+    flex-shrink: 0;
+}
+
+.fm-contract-loan-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    background: rgba(66, 165, 245, 0.15);
+    border: 1px solid rgba(66, 165, 245, 0.3);
+    border-radius: 3px;
+    color: #42a5f5;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
 /* --- Content grid: positions + attributes --- */
 
 .fm-player-grid {

@@ -1,0 +1,117 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab active" href="/{{ lang }}/champions-league">{{ i18n.t("champions_league") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <div class="fm-panel-head">
+        <h3>{{ current_stage }}</h3>
+    </div>
+
+    {% if groups.is_empty() && knockout_ties.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-empty">Champions League has not started yet</div>
+    </section>
+    {% endif %}
+
+    {% if !groups.is_empty() %}
+    <div class="row g-3">
+        {% for group in groups %}
+        <div class="col-md-6 col-xl-3">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ group.name }}</h3>
+                </div>
+                <table class="fm-standings">
+                    <thead>
+                        <tr>
+                            <th class="st-pos">#</th>
+                            <th class="st-club">{{ i18n.t("club") }}</th>
+                            <th>{{ i18n.t("p") }}</th>
+                            <th>{{ i18n.t("w") }}</th>
+                            <th>{{ i18n.t("d") }}</th>
+                            <th>{{ i18n.t("l") }}</th>
+                            <th>{{ i18n.t("gd") }}</th>
+                            <th class="st-pts">{{ i18n.t("pts") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in group.rows %}
+                        <tr class="{% if loop.index <= 2 %}zone-ucl{% endif %}">
+                            <td class="st-pos">{{ loop.index }}</td>
+                            <td class="st-club">
+                                <a href="/{{ lang }}/teams/{{ row.club_slug }}">{{ row.club_name }}</a>
+                            </td>
+                            <td>{{ row.played }}</td>
+                            <td>{{ row.won }}</td>
+                            <td>{{ row.drawn }}</td>
+                            <td>{{ row.lost }}</td>
+                            <td class="st-gd">
+                                {% if row.gf as i16 - row.ga as i16 > 0 %}+{% endif %}{{ row.gf as i16 - row.ga as i16 }}
+                            </td>
+                            <td class="st-pts">{{ row.points }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="fm-legend mt-2">
+        <span><i class="legend-dot ucl"></i> Knockout stage</span>
+    </div>
+    {% endif %}
+
+    {% if !knockout_ties.is_empty() %}
+    <div class="row g-3 mt-1">
+        <div class="col-12">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>Knockout Stage</h3>
+                </div>
+                <div class="fm-fixtures">
+                    {% for tie in knockout_ties %}
+                    <div class="fm-fixture">
+                        <div class="fx-home">
+                            <a href="/{{ lang }}/teams/{{ tie.home_slug }}">{{ tie.home_name }}</a>
+                        </div>
+                        <div class="fx-score">
+                            {% if let Some(s) = tie.leg1_score %}
+                            {{ s.0 }} – {{ s.1 }}
+                            {% else %}
+                            –
+                            {% endif %}
+                        </div>
+                        <div class="fx-away">
+                            <a href="/{{ lang }}/teams/{{ tie.away_slug }}">{{ tie.away_name }}</a>
+                        </div>
+                    </div>
+                    {% if let Some(s2) = tie.leg2_score %}
+                    <div class="fm-fixture">
+                        <div class="fx-home">
+                            <a href="/{{ lang }}/teams/{{ tie.away_slug }}">{{ tie.away_name }}</a>
+                        </div>
+                        <div class="fx-score">
+                            {{ s2.0 }} – {{ s2.1 }}
+                        </div>
+                        <div class="fx-away">
+                            <a href="/{{ lang }}/teams/{{ tie.home_slug }}">{{ tie.home_name }}</a>
+                        </div>
+                    </div>
+                    {% endif %}
+                    {% if let Some(winner) = tie.winner_name %}
+                    <div class="fm-matchday-hd">Winner: {{ winner }}</div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </section>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

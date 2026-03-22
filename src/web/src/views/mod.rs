@@ -111,6 +111,18 @@ fn source_code_section() -> MenuSection {
     }
 }
 
+fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
+    let cl_url = format!("/{}/champions-league", lang);
+    MenuSection {
+        items: vec![MenuItem {
+            active: current_path == cl_url,
+            title: i18n.t("champions_league").to_string(),
+            url: cl_url,
+            icon: "fa-star".to_string(),
+        }],
+    }
+}
+
 fn watchlist_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let watchlist_url = format!("/{}/watchlist", lang);
     MenuSection {
@@ -152,6 +164,7 @@ pub fn league_menu(p: &MenuParams, league_slug: &str, country_leagues: &[(&str, 
         }],
     });
 
+    sections.push(continental_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
     sections
@@ -291,6 +304,7 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
         });
     }
 
+    sections.push(continental_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
 
@@ -310,4 +324,28 @@ pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSectio
     sections.push(watchlist_section(i18n, lang, current_path));
     sections.push(source_code_section());
     sections
+}
+
+pub fn champions_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    let cl_url = format!("/{}/champions-league", lang);
+    vec![
+        MenuSection {
+            items: vec![MenuItem {
+                title: i18n.t("home").to_string(),
+                url: format!("/{}", lang),
+                icon: "fa-home".to_string(),
+                active: false,
+            }],
+        },
+        MenuSection {
+            items: vec![MenuItem {
+                active: current_path == cl_url,
+                title: i18n.t("champions_league").to_string(),
+                url: cl_url,
+                icon: "fa-trophy".to_string(),
+            }],
+        },
+        watchlist_section(i18n, lang, current_path),
+        source_code_section(),
+    ]
 }

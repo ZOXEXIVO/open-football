@@ -62,12 +62,6 @@
                         </div>
                         {% endif %}
                         {% endif %}
-                        {% if let Some(loan_contract) = player.contract_loan %}
-                        <div class="fm-ph-meta fm-ph-contract">
-                            <span class="fm-detail-value fm-salary">{{ i18n.t("loan") }}: ${{ loan_contract.salary }} {{ i18n.t("per_week") }}</span>
-                            <span class="fm-detail-value">{{ i18n.t("salary_until") }} {{ loan_contract.expiration }}</span>
-                        </div>
-                        {% endif %}
                         {% if let Some(days) = player.injury_days %}
                         <div class="fm-ph-meta">
                             <span class="fm-ph-injury">{{ i18n.t("injured_for_days").replace("{days}", &days.to_string()) }}</span>
@@ -205,88 +199,88 @@
         </div>
         <table class="fm-stats">
             <thead>
-                <tr>
-                    <th>{{ i18n.t("competition") }}</th>
-                    <th>{{ i18n.t("apps") }}</th>
-                    {% if is_goalkeeper %}
-                    <th>{{ i18n.t("con") }}</th>
-                    <th>{{ i18n.t("cln") }}</th>
-                    {% else %}
-                    <th>{{ i18n.t("gls") }}</th>
-                    <th>{{ i18n.t("ast") }}</th>
-                    <th>{{ i18n.t("pen") }}</th>
-                    {% endif %}
-                    <th>{{ i18n.t("pom") }}</th>
-                    <th>{{ i18n.t("yc") }}</th>
-                    <th>{{ i18n.t("rc") }}</th>
-                    <th>{{ i18n.t("sot") }}</th>
-                    <th>{{ i18n.t("pass_pct") }}</th>
-                    <th>{{ i18n.t("tck_w") }}</th>
-                    <th>{{ i18n.t("av_rat") }}</th>
-                </tr>
+            <tr>
+                <th>{{ i18n.t("competition") }}</th>
+                <th>{{ i18n.t("apps") }}</th>
+                {% if is_goalkeeper %}
+                <th>{{ i18n.t("con") }}</th>
+                <th>{{ i18n.t("cln") }}</th>
+                {% else %}
+                <th>{{ i18n.t("gls") }}</th>
+                <th>{{ i18n.t("ast") }}</th>
+                <th>{{ i18n.t("pen") }}</th>
+                {% endif %}
+                <th>{{ i18n.t("pom") }}</th>
+                <th>{{ i18n.t("yc") }}</th>
+                <th>{{ i18n.t("rc") }}</th>
+                <th>{{ i18n.t("sot") }}</th>
+                <th>{{ i18n.t("pass_pct") }}</th>
+                <th>{{ i18n.t("tck_w") }}</th>
+                <th>{{ i18n.t("av_rat") }}</th>
+            </tr>
             </thead>
             <tbody>
-                {% if let Some(fs) = player.friendly_statistics %}
-                <tr>
-                    <td>{{ i18n.t("friendly") }}</td>
-                    <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
-                    {% if is_goalkeeper %}
-                    <td>{{ fs.conceded }}</td>
-                    <td>{{ fs.clean_sheets }}</td>
-                    {% else %}
-                    <td>{{ fs.goals }}</td>
-                    <td>{{ fs.assists }}</td>
-                    <td>{{ fs.penalties }}</td>
-                    {% endif %}
-                    <td>{{ fs.player_of_the_match }}</td>
-                    <td>{{ fs.yellow_cards }}</td>
-                    <td>{{ fs.red_cards }}</td>
-                    <td>{{ fs.shots_on_target }}</td>
-                    <td>{{ fs.passes }}</td>
-                    <td>{{ fs.tackling }}</td>
-                    <td>{{ fs.average_rating }}</td>
-                </tr>
+            {% if let Some(fs) = player.friendly_statistics %}
+            <tr>
+                <td>{{ i18n.t("friendly") }}</td>
+                <td>{{ fs.played }}{% if fs.played_subs > 0 %} ({{ fs.played_subs }}){% endif %}</td>
+                {% if is_goalkeeper %}
+                <td>{{ fs.conceded }}</td>
+                <td>{{ fs.clean_sheets }}</td>
+                {% else %}
+                <td>{{ fs.goals }}</td>
+                <td>{{ fs.assists }}</td>
+                <td>{{ fs.penalties }}</td>
                 {% endif %}
-                {% if let Some(cs) = player.cup_statistics %}
-                <tr>
-                    <td>{{ i18n.t("european_cup") }}</td>
-                    <td>{{ cs.played }}{% if cs.played_subs > 0 %} ({{ cs.played_subs }}){% endif %}</td>
-                    {% if is_goalkeeper %}
-                    <td>{{ cs.conceded }}</td>
-                    <td>{{ cs.clean_sheets }}</td>
-                    {% else %}
-                    <td>{{ cs.goals }}</td>
-                    <td>{{ cs.assists }}</td>
-                    <td>{{ cs.penalties }}</td>
-                    {% endif %}
-                    <td>{{ cs.player_of_the_match }}</td>
-                    <td>{{ cs.yellow_cards }}</td>
-                    <td>{{ cs.red_cards }}</td>
-                    <td>{{ cs.shots_on_target }}</td>
-                    <td>{{ cs.passes }}</td>
-                    <td>{{ cs.tackling }}</td>
-                    <td>{{ cs.average_rating }}</td>
-                </tr>
+                <td>{{ fs.player_of_the_match }}</td>
+                <td>{{ fs.yellow_cards }}</td>
+                <td>{{ fs.red_cards }}</td>
+                <td>{{ fs.shots_on_target }}</td>
+                <td>{{ fs.passes }}</td>
+                <td>{{ fs.tackling }}</td>
+                <td>{{ fs.average_rating }}</td>
+            </tr>
+            {% endif %}
+            {% if let Some(cs) = player.cup_statistics %}
+            <tr>
+                <td>{{ i18n.t("european_cup") }}</td>
+                <td>{{ cs.played }}{% if cs.played_subs > 0 %} ({{ cs.played_subs }}){% endif %}</td>
+                {% if is_goalkeeper %}
+                <td>{{ cs.conceded }}</td>
+                <td>{{ cs.clean_sheets }}</td>
+                {% else %}
+                <td>{{ cs.goals }}</td>
+                <td>{{ cs.assists }}</td>
+                <td>{{ cs.penalties }}</td>
                 {% endif %}
-                <tr>
-                    <td>{{ i18n.t("league") }}</td>
-                    <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
-                    {% if is_goalkeeper %}
-                    <td>{{ player.statistics.conceded }}</td>
-                    <td>{{ player.statistics.clean_sheets }}</td>
-                    {% else %}
-                    <td>{{ player.statistics.goals }}</td>
-                    <td>{{ player.statistics.assists }}</td>
-                    <td>{{ player.statistics.penalties }}</td>
-                    {% endif %}
-                    <td>{{ player.statistics.player_of_the_match }}</td>
-                    <td>{{ player.statistics.yellow_cards }}</td>
-                    <td>{{ player.statistics.red_cards }}</td>
-                    <td>{{ player.statistics.shots_on_target }}</td>
-                    <td>{{ player.statistics.passes }}</td>
-                    <td>{{ player.statistics.tackling }}</td>
-                    <td>{{ player.statistics.average_rating }}</td>
-                </tr>
+                <td>{{ cs.player_of_the_match }}</td>
+                <td>{{ cs.yellow_cards }}</td>
+                <td>{{ cs.red_cards }}</td>
+                <td>{{ cs.shots_on_target }}</td>
+                <td>{{ cs.passes }}</td>
+                <td>{{ cs.tackling }}</td>
+                <td>{{ cs.average_rating }}</td>
+            </tr>
+            {% endif %}
+            <tr>
+                <td>{{ i18n.t("league") }}</td>
+                <td>{{ player.statistics.played }}{% if player.statistics.played_subs > 0 %} ({{ player.statistics.played_subs }}){% endif %}</td>
+                {% if is_goalkeeper %}
+                <td>{{ player.statistics.conceded }}</td>
+                <td>{{ player.statistics.clean_sheets }}</td>
+                {% else %}
+                <td>{{ player.statistics.goals }}</td>
+                <td>{{ player.statistics.assists }}</td>
+                <td>{{ player.statistics.penalties }}</td>
+                {% endif %}
+                <td>{{ player.statistics.player_of_the_match }}</td>
+                <td>{{ player.statistics.yellow_cards }}</td>
+                <td>{{ player.statistics.red_cards }}</td>
+                <td>{{ player.statistics.shots_on_target }}</td>
+                <td>{{ player.statistics.passes }}</td>
+                <td>{{ player.statistics.tackling }}</td>
+                <td>{{ player.statistics.average_rating }}</td>
+            </tr>
             </tbody>
         </table>
     </section>

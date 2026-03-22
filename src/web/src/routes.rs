@@ -1,4 +1,5 @@
 use crate::ai::ai_routes;
+use crate::champions_league::champions_league_routes;
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
 use crate::face::face_routes;
@@ -76,6 +77,7 @@ impl ServerRoutes {
         Router::<GameAppData>::new()
             .route("/", get(root_redirect))
             .route("/sitemap.xml", get(sitemap_xml))
+            .merge(champions_league_routes())
             .merge(country_routes())
             .merge(game_routes())
             .merge(league_routes())
