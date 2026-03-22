@@ -93,10 +93,11 @@ pub async fn champions_league_get_action(
     let guard = state.data.read().await;
     let simulator_data = guard.as_ref().unwrap();
 
-    // Find first continent with CL data
+    // Find European continent's CL data
     let cl = simulator_data.continents.iter()
+        .find(|c| c.name == "Europe")
         .map(|c| &c.continental_competitions.champions_league)
-        .find(|cl| !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted));
+        .filter(|cl| !cl.groups.is_empty() || !matches!(cl.current_stage, CompetitionStage::NotStarted));
 
     let mut groups = Vec::new();
     let mut knockout_ties = Vec::new();

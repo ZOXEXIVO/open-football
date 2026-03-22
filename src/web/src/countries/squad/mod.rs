@@ -42,6 +42,7 @@ pub struct NationalSquadPlayerDto {
     pub position: String,
     pub position_sort: PlayerPositionType,
     pub club_name: String,
+    pub club_slug: String,
     pub age: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
@@ -94,6 +95,10 @@ pub async fn country_squad_action(
             let player = simulator_data.player(squad_player.player_id)?;
             let club = simulator_data.club(squad_player.club_id);
             let club_name = club.map(|c| c.name.clone()).unwrap_or_default();
+            let club_slug = club
+                .and_then(|c| c.teams.teams.first())
+                .map(|t| t.slug.clone())
+                .unwrap_or_default();
 
             let position = player.positions.display_positions().join(", ");
 
@@ -113,6 +118,7 @@ pub async fn country_squad_action(
                 position,
                 position_sort: player.position(),
                 club_name,
+                club_slug,
                 age: DateUtils::age(player.birth_date, now),
                 current_ability: get_current_ability_stars(player),
                 potential_ability: get_potential_ability_stars_by_staff(

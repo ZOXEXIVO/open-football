@@ -34,7 +34,7 @@
                         </a>
                     </td>
                     <td class="sq-age">{{ player.age }}</td>
-                    <td>{{ player.club_name }}</td>
+                    <td>{% if !player.club_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ player.club_slug }}">{{ player.club_name }}</a>{% else %}{{ player.club_name }}{% endif %}</td>
                     <td>
                         <div class="fm-stars">
                             {% for _ in 0..player.current_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.current_ability) %}<span class="star"></span>{% endfor %}

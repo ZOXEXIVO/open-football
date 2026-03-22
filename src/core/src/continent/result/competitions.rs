@@ -3,55 +3,93 @@ use crate::continent::{CompetitionTier, ContinentalMatchResult};
 use crate::simulator::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
-use log::{debug};
+use log::debug;
 use std::collections::HashMap;
 
 impl ContinentResult {
     pub(crate) fn is_competition_draw_period(&self, date: NaiveDate) -> bool {
-        // Champions League draw typically in August
+        // Champions League draw: August 15
         (date.month() == 8 && date.day() == 15) ||
-            // Europa League draw
+            // Europa League draw: August 20
             (date.month() == 8 && date.day() == 20) ||
+            // Conference League draw: August 25
+            (date.month() == 8 && date.day() == 25) ||
             // Knockout stage draws in December
             (date.month() == 12 && date.day() == 15)
     }
 
     pub(crate) fn conduct_competition_draws(&self, data: &mut SimulatorData, date: NaiveDate) {
-        debug!("🎲 Conducting continental competition draws");
-
         let continent_id = self.get_continent_id();
 
-        // Collect qualified clubs from league final tables
-        let cl_clubs = if let Some(continent) = data.continent(continent_id) {
-            Self::collect_qualified_clubs(continent)
-        } else {
-            Vec::new()
+        // Collect qualified clubs while holding immutable borrow, then drop it
+        let clubs = {
+            let continent = match data.continent(continent_id) {
+                Some(c) => c,
+                None => return,
+            };
+
+            let mut countries: Vec<&Country> = continent.countries.iter().collect();
+            countries.sort_by(|a, b| b.reputation.cmp(&a.reputation));
+
+            match (date.month(), date.day()) {
+                (8, 15) => {
+                    let cl = Self::collect_cl_qualified_clubs(&countries);
+                    if cl.is_empty() { return; }
+                    (cl, Vec::new(), Vec::new(), 0u8)
+                }
+                (8, 20) => {
+                    let el = Self::collect_el_qualified_clubs(&countries);
+                    if el.is_empty() { return; }
+                    (Vec::new(), el, Vec::new(), 1u8)
+                }
+                (8, 25) => {
+                    let conf = Self::collect_conference_qualified_clubs(&countries);
+                    if conf.is_empty() { return; }
+                    (Vec::new(), Vec::new(), conf, 2u8)
+                }
+                _ => return,
+            }
         };
 
-        if cl_clubs.is_empty() {
-            return;
-        }
+        let (cl_clubs, el_clubs, conf_clubs, which) = clubs;
 
         if let Some(continent) = data.continent_mut(continent_id) {
-            continent.continental_competitions.champions_league.conduct_draw(
-                &cl_clubs,
-                &continent.continental_rankings,
-                date,
-            );
+            match which {
+                0 => {
+                    debug!("Champions League draw: {} qualified clubs", cl_clubs.len());
+                    continent.continental_competitions.champions_league.conduct_draw(
+                        &cl_clubs,
+                        &continent.continental_rankings,
+                        date,
+                    );
+                }
+                1 => {
+                    debug!("Europa League draw: {} qualified clubs", el_clubs.len());
+                    continent.continental_competitions.europa_league.conduct_draw(
+                        &el_clubs,
+                        &continent.continental_rankings,
+                        date,
+                    );
+                }
+                2 => {
+                    debug!("Conference League draw: {} qualified clubs", conf_clubs.len());
+                    continent.continental_competitions.conference_league.conduct_draw(
+                        &conf_clubs,
+                        &continent.continental_rankings,
+                        date,
+                    );
+                }
+                _ => {}
+            }
         }
     }
 
-    /// Collect top clubs from each country's top-tier league for CL qualification.
-    /// Top 4 leagues get 4 spots, next 2 get 2 spots, rest get 1 spot.
-    fn collect_qualified_clubs(continent: &crate::continent::Continent) -> Vec<u32> {
+    /// Champions League: top clubs from each country.
+    /// Top 4 countries get 4 spots, next 2 get 2 spots, rest get 1.
+    fn collect_cl_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
         let mut qualified = Vec::new();
 
-        // Sort countries by reputation (approximation of UEFA coefficient)
-        let mut countries: Vec<&crate::Country> = continent.countries.iter().collect();
-        countries.sort_by(|a, b| b.reputation.cmp(&a.reputation));
-
         for (rank, country) in countries.iter().enumerate() {
-            // Find the top-tier league (tier 1)
             let top_league = country.leagues.leagues.iter()
                 .find(|l| l.settings.tier == 1 && !l.friendly);
 
@@ -60,14 +98,11 @@ impl ContinentResult {
                 None => continue,
             };
 
-            // How many CL spots based on country rank
             let spots: usize = if rank < 4 { 4 } else if rank < 6 { 2 } else { 1 };
 
-            // Get top N teams from the league table
             let table = &league.table;
             for row in table.rows.iter().take(spots) {
                 if row.team_id > 0 {
-                    // We need the club_id, not team_id. Find the club that owns this team.
                     if let Some(club) = country.clubs.iter().find(|c|
                         c.teams.teams.iter().any(|t| t.id == row.team_id)
                     ) {
@@ -78,6 +113,94 @@ impl ContinentResult {
         }
 
         debug!("Champions League qualification: {} clubs from {} countries",
+            qualified.len(), countries.len());
+
+        qualified
+    }
+
+    /// Europa League: next tier of clubs after CL qualification.
+    /// Top 4 countries: positions 5-7 (3 spots), next 4: positions 3-4 (2 spots),
+    /// next 12: position 2 (1 spot).
+    fn collect_el_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
+        let mut qualified = Vec::new();
+
+        for (rank, country) in countries.iter().enumerate() {
+            let top_league = country.leagues.leagues.iter()
+                .find(|l| l.settings.tier == 1 && !l.friendly);
+
+            let league = match top_league {
+                Some(l) => l,
+                None => continue,
+            };
+
+            // Determine which table positions to take (after CL spots)
+            let (skip, take) = if rank < 4 {
+                (4, 3usize) // positions 5-7
+            } else if rank < 8 {
+                (2, 2) // positions 3-4
+            } else if rank < 20 {
+                (1, 1) // position 2
+            } else {
+                continue;
+            };
+
+            let table = &league.table;
+            for row in table.rows.iter().skip(skip).take(take) {
+                if row.team_id > 0 {
+                    if let Some(club) = country.clubs.iter().find(|c|
+                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                    ) {
+                        qualified.push(club.id);
+                    }
+                }
+            }
+        }
+
+        debug!("Europa League qualification: {} clubs from {} countries",
+            qualified.len(), countries.len());
+
+        qualified
+    }
+
+    /// Conference League: third tier of clubs after CL and EL.
+    /// Top 4 countries: position 8 (1 spot), next 4: positions 5-6 (2 spots),
+    /// next 12: position 3 (1 spot), rest: position 2 (1 spot).
+    fn collect_conference_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
+        let mut qualified = Vec::new();
+
+        for (rank, country) in countries.iter().enumerate() {
+            let top_league = country.leagues.leagues.iter()
+                .find(|l| l.settings.tier == 1 && !l.friendly);
+
+            let league = match top_league {
+                Some(l) => l,
+                None => continue,
+            };
+
+            // Determine which table positions to take (after CL + EL spots)
+            let (skip, take) = if rank < 4 {
+                (7, 1usize) // position 8
+            } else if rank < 8 {
+                (4, 2) // positions 5-6
+            } else if rank < 20 {
+                (2, 1) // position 3
+            } else {
+                (1, 1) // position 2
+            };
+
+            let table = &league.table;
+            for row in table.rows.iter().skip(skip).take(take) {
+                if row.team_id > 0 {
+                    if let Some(club) = country.clubs.iter().find(|c|
+                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                    ) {
+                        qualified.push(club.id);
+                    }
+                }
+            }
+        }
+
+        debug!("Conference League qualification: {} clubs from {} countries",
             qualified.len(), countries.len());
 
         qualified
@@ -97,12 +220,10 @@ impl ContinentResult {
 
         // Simulate Champions League matches with real engine
         if continent.continental_competitions.champions_league.has_matches_today(date) {
-            // Play real matches and collect both ContinentalMatchResults (finances) and MatchResults (stats)
             let real_results = continent.continental_competitions.champions_league.play_matches(
                 &clubs_map,
                 date,
             );
-            // Convert to ContinentalMatchResult for financial processing
             let cl_results: Vec<ContinentalMatchResult> = real_results.iter().map(|r| {
                 ContinentalMatchResult {
                     home_team: r.home_team_id,
@@ -116,22 +237,42 @@ impl ContinentResult {
             results.match_results.extend(real_results);
         }
 
-        // Simulate Europa League matches
+        // Simulate Europa League matches with real engine
         if continent.continental_competitions.europa_league.has_matches_today(date) {
-            let el_results = continent.continental_competitions.europa_league.simulate_round(
+            let real_results = continent.continental_competitions.europa_league.play_matches(
                 &clubs_map,
                 date,
             );
+            let el_results: Vec<ContinentalMatchResult> = real_results.iter().map(|r| {
+                ContinentalMatchResult {
+                    home_team: r.home_team_id,
+                    away_team: r.away_team_id,
+                    home_score: r.score.home_team.get(),
+                    away_score: r.score.away_team.get(),
+                    competition: CompetitionTier::EuropaLeague,
+                }
+            }).collect();
             results.europa_league_results = Some(el_results);
+            results.match_results.extend(real_results);
         }
 
-        // Simulate Conference League matches
+        // Simulate Conference League matches with real engine
         if continent.continental_competitions.conference_league.has_matches_today(date) {
-            let conf_results = continent.continental_competitions.conference_league.simulate_round(
+            let real_results = continent.continental_competitions.conference_league.play_matches(
                 &clubs_map,
                 date,
             );
+            let conf_results: Vec<ContinentalMatchResult> = real_results.iter().map(|r| {
+                ContinentalMatchResult {
+                    home_team: r.home_team_id,
+                    away_team: r.away_team_id,
+                    home_score: r.score.home_team.get(),
+                    away_score: r.score.away_team.get(),
+                    competition: CompetitionTier::ConferenceLeague,
+                }
+            }).collect();
             results.conference_league_results = Some(conf_results);
+            results.match_results.extend(real_results);
         }
 
         Some(results)
@@ -143,7 +284,7 @@ impl ContinentResult {
         data: &mut SimulatorData,
         result: &mut SimulationResult,
     ) {
-        debug!("🏆 Processing continental competition results");
+        debug!("Processing continental competition results");
 
         // Process Champions League results
         if let Some(cl_results) = comp_results.champions_league_results {
@@ -195,9 +336,6 @@ impl ContinentResult {
 
         // Update statistics for away team
         self.update_club_continental_stats(match_result.away_team, &match_result, false, data);
-
-        // Store match in simulation result for output/history
-        // _result.continental_matches.push(match_result);
     }
 
     fn update_club_continental_stats(
@@ -208,7 +346,6 @@ impl ContinentResult {
         data: &mut SimulatorData,
     ) {
         if let Some(club) = data.club_mut(club_id) {
-            // Determine match outcome for this club
             let (goals_for, goals_against) = if is_home {
                 (match_result.home_score, match_result.away_score)
             } else {
@@ -217,7 +354,6 @@ impl ContinentResult {
 
             let won = goals_for > goals_against;
             let drawn = goals_for == goals_against;
-            let _lost = goals_for < goals_against;
 
             // Update finances with match revenue
             let match_revenue = self.calculate_match_revenue(match_result);
@@ -236,7 +372,7 @@ impl ContinentResult {
             self.update_players_after_match(club, won, drawn);
 
             debug!(
-                "Club {} stats updated: revenue +€{:.0}",
+                "Club {} stats updated: revenue +{}",
                 club_id,
                 match_revenue
             );
@@ -244,29 +380,25 @@ impl ContinentResult {
     }
 
     fn calculate_match_revenue(&self, match_result: &ContinentalMatchResult) -> f64 {
-        // Base revenue by competition tier
         let base_revenue = match match_result.competition {
-            CompetitionTier::ChampionsLeague => 3_000_000.0,   // €3M per match
-            CompetitionTier::EuropaLeague => 1_000_000.0,      // €1M per match
-            CompetitionTier::ConferenceLeague => 500_000.0,    // €500K per match
+            CompetitionTier::ChampionsLeague => 3_000_000.0,
+            CompetitionTier::EuropaLeague => 1_000_000.0,
+            CompetitionTier::ConferenceLeague => 500_000.0,
         };
 
-        // Add ticket revenue (simplified - would depend on stadium capacity)
         let ticket_revenue = 200_000.0;
-
         base_revenue + ticket_revenue
     }
 
     fn calculate_win_bonus(&self, match_result: &ContinentalMatchResult) -> f64 {
         match match_result.competition {
-            CompetitionTier::ChampionsLeague => 2_800_000.0,   // €2.8M win bonus
-            CompetitionTier::EuropaLeague => 570_000.0,        // €570K win bonus
-            CompetitionTier::ConferenceLeague => 500_000.0,    // €500K win bonus
+            CompetitionTier::ChampionsLeague => 2_800_000.0,
+            CompetitionTier::EuropaLeague => 570_000.0,
+            CompetitionTier::ConferenceLeague => 500_000.0,
         }
     }
 
     fn update_club_reputation(&self, club: &mut Club, match_result: &ContinentalMatchResult, won: bool, drawn: bool) {
-        // Reputation changes based on continental performance
         let reputation_change = if won {
             match match_result.competition {
                 CompetitionTier::ChampionsLeague => 5,
@@ -283,7 +415,6 @@ impl ContinentResult {
     }
 
     fn update_players_after_match(&self, club: &mut Club, won: bool, _drawn: bool) {
-        // Update player morale and form after continental match
         let _morale_change = if won { 5 } else { -3 };
 
         for team in &mut club.teams.teams {
@@ -294,11 +425,10 @@ impl ContinentResult {
     }
 
     fn distribute_competition_rewards(&self, data: &mut SimulatorData) {
-        debug!("💰 Distributing continental competition rewards");
+        debug!("Distributing continental competition rewards");
 
         let continent_id = self.get_continent_id();
 
-        // Collect participating clubs data first to avoid borrow conflicts
         let (cl_clubs, el_clubs, conf_clubs) = if let Some(continent) = data.continent(continent_id) {
             (
                 continent.continental_competitions.champions_league.participating_clubs.clone(),
@@ -309,22 +439,18 @@ impl ContinentResult {
             return;
         };
 
-        // Now we can mutably borrow data without conflicts
-        // Distribute Champions League rewards
         self.distribute_competition_tier_rewards(
             &cl_clubs,
             CompetitionTier::ChampionsLeague,
             data,
         );
 
-        // Distribute Europa League rewards
         self.distribute_competition_tier_rewards(
             &el_clubs,
             CompetitionTier::EuropaLeague,
             data,
         );
 
-        // Distribute Conference League rewards
         self.distribute_competition_tier_rewards(
             &conf_clubs,
             CompetitionTier::ConferenceLeague,
@@ -338,11 +464,10 @@ impl ContinentResult {
         tier: CompetitionTier,
         data: &mut SimulatorData,
     ) {
-        // Participation bonus
         let participation_bonus = match tier {
-            CompetitionTier::ChampionsLeague => 15_640_000.0,   // €15.64M base
-            CompetitionTier::EuropaLeague => 3_630_000.0,       // €3.63M base
-            CompetitionTier::ConferenceLeague => 2_940_000.0,   // €2.94M base
+            CompetitionTier::ChampionsLeague => 15_640_000.0,
+            CompetitionTier::EuropaLeague => 3_630_000.0,
+            CompetitionTier::ConferenceLeague => 2_940_000.0,
         };
 
         for &club_id in participating_clubs {
@@ -350,7 +475,7 @@ impl ContinentResult {
                 club.finance.balance.push_income(participation_bonus as i32);
 
                 debug!(
-                    "Club {} received participation bonus: €{:.2}M",
+                    "Club {} received participation bonus: {:.2}M",
                     club_id,
                     participation_bonus / 1_000_000.0
                 );

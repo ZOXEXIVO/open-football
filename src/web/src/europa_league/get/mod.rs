@@ -29,22 +29,35 @@ pub struct EuropaLeagueGetTemplate {
     pub i18n: crate::I18n,
     pub lang: String,
     pub current_stage: String,
-    pub participants: Vec<ParticipantDto>,
-    pub matches: Vec<MatchDto>,
+    pub groups: Vec<GroupDto>,
+    pub knockout_ties: Vec<KnockoutTieDto>,
 }
 
-pub struct ParticipantDto {
+pub struct GroupDto {
+    pub name: String,
+    pub rows: Vec<GroupRowDto>,
+}
+
+pub struct GroupRowDto {
     pub club_name: String,
     pub club_slug: String,
+    pub played: u8,
+    pub won: u8,
+    pub drawn: u8,
+    pub lost: u8,
+    pub gf: u8,
+    pub ga: u8,
+    pub points: u8,
 }
 
-pub struct MatchDto {
+pub struct KnockoutTieDto {
     pub home_name: String,
     pub home_slug: String,
     pub away_name: String,
     pub away_slug: String,
-    pub date: String,
-    pub stage: String,
+    pub leg1_score: Option<(u8, u8)>,
+    pub leg2_score: Option<(u8, u8)>,
+    pub winner_name: Option<String>,
 }
 
 fn stage_label(stage: &CompetitionStage) -> &'static str {
@@ -80,31 +93,53 @@ pub async fn europa_league_get_action(
     let simulator_data = guard.as_ref().unwrap();
 
     let el = simulator_data.continents.iter()
+        .find(|c| c.name == "Europe")
         .map(|c| &c.continental_competitions.europa_league)
-        .find(|el| !el.participating_clubs.is_empty() || !matches!(el.current_stage, CompetitionStage::NotStarted));
+        .filter(|el| !el.groups.is_empty() || !matches!(el.current_stage, CompetitionStage::NotStarted));
 
-    let mut participants = Vec::new();
-    let mut matches = Vec::new();
+    let mut groups = Vec::new();
+    let mut knockout_ties = Vec::new();
     let mut current_stage = "Not Started";
 
     if let Some(el) = el {
         current_stage = stage_label(&el.current_stage);
 
-        for &club_id in &el.participating_clubs {
-            let (name, slug) = club_display(simulator_data, club_id);
-            participants.push(ParticipantDto { club_name: name, club_slug: slug });
+        for (idx, group) in el.groups.iter().enumerate() {
+            let letter = (b'A' + idx as u8) as char;
+            let rows = group.rows.iter().map(|row| {
+                let (name, slug) = club_display(simulator_data, row.team_id);
+                GroupRowDto {
+                    club_name: name,
+                    club_slug: slug,
+                    played: row.played,
+                    won: row.won,
+                    drawn: row.drawn,
+                    lost: row.lost,
+                    gf: row.gf,
+                    ga: row.ga,
+                    points: row.points,
+                }
+            }).collect();
+
+            groups.push(GroupDto {
+                name: format!("Group {}", letter),
+                rows,
+            });
         }
 
-        for m in &el.matches {
-            let (home_name, home_slug) = club_display(simulator_data, m.home_team);
-            let (away_name, away_slug) = club_display(simulator_data, m.away_team);
-            matches.push(MatchDto {
+        for tie in &el.knockout_round {
+            let (home_name, home_slug) = club_display(simulator_data, tie.home_team);
+            let (away_name, away_slug) = club_display(simulator_data, tie.away_team);
+            let winner_name = tie.winner.map(|w| club_display(simulator_data, w).0);
+
+            knockout_ties.push(KnockoutTieDto {
                 home_name,
                 home_slug,
                 away_name,
                 away_slug,
-                date: m.date.format("%d.%m.%Y").to_string(),
-                stage: stage_label(&m.stage).to_string(),
+                leg1_score: tie.leg1_score,
+                leg2_score: tie.leg2_score,
+                winner_name,
             });
         }
     }
@@ -125,7 +160,7 @@ pub async fn europa_league_get_action(
         lang: route_params.lang,
         i18n,
         current_stage: current_stage.to_string(),
-        participants,
-        matches,
+        groups,
+        knockout_ties,
     })
 }
