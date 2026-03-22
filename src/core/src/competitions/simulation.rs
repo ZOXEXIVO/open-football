@@ -1,8 +1,6 @@
 use crate::continent::Continent;
-use crate::NationalTeam;
 use crate::SimulatorData;
 use log::info;
-use std::collections::HashMap;
 
 pub struct GlobalCompetitionSimulator;
 
@@ -31,18 +29,14 @@ impl GlobalCompetitionSimulator {
             })
             .collect();
 
-        // Run match engines in parallel
-        let engine_results: Vec<(usize, u8, u8, HashMap<u32, u16>)> = prepared
-            .into_iter()
-            .map(|(idx, home_squad, away_squad)| {
-                let (home_score, away_score, player_goals) =
-                    NationalTeam::play_competition_match(home_squad, away_squad);
-                (idx, home_score, away_score, player_goals)
-            })
-            .collect();
+        // Run matches through the bounded engine thread pool
+        let engine_results = crate::match_engine_pool().play_squads(prepared);
 
         // Apply results
-        for (fixture_idx, home_score, away_score, _player_goals) in engine_results {
+        for (fixture_idx, match_result) in engine_results {
+            let score = match_result.score.as_ref().expect("match should have score");
+            let home_score = score.home_team.get();
+            let away_score = score.away_team.get();
             let fixture = &todays_matches[fixture_idx];
             let home_country_id = fixture.home_country_id;
             let away_country_id = fixture.away_country_id;

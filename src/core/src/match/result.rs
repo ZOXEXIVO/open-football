@@ -162,6 +162,12 @@ impl ResultMatchPositionData {
         self.track_events
     }
 
+    /// Check if position tracking is enabled
+    #[inline]
+    pub fn is_tracking_positions(&self) -> bool {
+        self.track_positions
+    }
+
     pub fn add_player_positions(&mut self, player_id: u32, timestamp: u64, position: Vector3<f32>) {
         if !self.track_positions {
             return;

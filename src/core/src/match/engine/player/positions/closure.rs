@@ -14,9 +14,9 @@ pub struct PlayerDistanceClosure {
     dist_matrix: [f32; MAX_PLAYERS * MAX_PLAYERS],
     // Open-addressing hash: id_slots[hash(id)] = (player_id, slot)
     id_slots: [(u32, u8); SLOT_TABLE_SIZE],
-    // Flat per-player neighbor data: per_player_data[slot * MAX_NEIGHBORS .. (slot+1) * MAX_NEIGHBORS]
-    per_player_data: Vec<(u32, bool, f32)>, // (other_id, same_team, distance)
-    per_player_len: [u8; MAX_PLAYERS],       // count per slot
+    // Flat per-player neighbor data: fixed array avoids heap indirection
+    per_player_data: [(u32, bool, f32); MAX_PLAYERS * MAX_NEIGHBORS],
+    per_player_len: [u8; MAX_PLAYERS],
     num_players: usize,
 }
 
@@ -35,7 +35,7 @@ impl PlayerDistanceClosure {
         PlayerDistanceClosure {
             dist_matrix: [MAX_DISTANCE; MAX_PLAYERS * MAX_PLAYERS],
             id_slots: [(0, SLOT_EMPTY); SLOT_TABLE_SIZE],
-            per_player_data: vec![(0, false, 0.0); MAX_PLAYERS * MAX_NEIGHBORS],
+            per_player_data: [(0, false, 0.0); MAX_PLAYERS * MAX_NEIGHBORS],
             per_player_len: [0; MAX_PLAYERS],
             num_players: 0,
         }

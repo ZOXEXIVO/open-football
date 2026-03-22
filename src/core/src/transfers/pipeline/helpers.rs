@@ -174,6 +174,9 @@ impl PipelineProcessor {
                         technical_avg: player.skills.technical.average(),
                         mental_avg: player.skills.mental.average(),
                         physical_avg: player.skills.physical.average(),
+                        current_reputation: player.player_attributes.current_reputation,
+                        home_reputation: player.player_attributes.home_reputation,
+                        world_reputation: player.player_attributes.world_reputation,
                     });
                 }
             }

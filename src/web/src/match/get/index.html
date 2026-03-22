@@ -229,7 +229,7 @@
         if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || loadingChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
         loadingChunks.add(chunkNum);
         try {
-            const res = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/${chunkNum}`);
+            const res = await fetch(`/api/match/${matchId}/chunk/${chunkNum}`);
             const data = await res.json();
             mergeData(data, chunkNum);
             loadedChunks.add(chunkNum);
@@ -492,7 +492,7 @@
     }
 
     async function fetchMetadata() {
-        const metaRes = await fetch(`/api/match/${leagueSlug}/${matchId}/metadata`);
+        const metaRes = await fetch(`/api/match/${matchId}/metadata`);
         if (!metaRes.ok) return null;
         return await metaRes.json();
     }

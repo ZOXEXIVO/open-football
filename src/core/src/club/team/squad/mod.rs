@@ -7,7 +7,7 @@ pub use composition::SquadComposition;
 pub use satisfaction::compute_squad_satisfaction;
 pub use transfer_listing::TransferListManager;
 
-use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
+use crate::club::staff::perception::{CoachDecisionState, RecentMoveType};
 use crate::utils::DateUtils;
 use crate::{PlayerStatusType, Team};
 use chrono::NaiveDate;

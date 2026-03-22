@@ -116,6 +116,7 @@ impl MatchPlayer {
         self.move_to();
     }
 
+    #[inline]
     pub fn check_boundary_collision(&mut self, context: &MatchContext) {
         let field_width = context.field_size.width as f32 + 1.0;
         let field_height = context.field_size.height as f32 + 1.0;
@@ -174,6 +175,7 @@ impl MatchPlayer {
         }
     }
 
+    #[inline]
     pub fn move_to(&mut self) {
         #[cfg(debug_assertions)]
         let old_position = self.position;
@@ -192,8 +194,7 @@ impl MatchPlayer {
             let position_delta = self.position - old_position;
             let position_change = position_delta.norm();
 
-            // Thresholds for detecting issues
-            const MAX_REASONABLE_POSITION_CHANGE: f32 = 20.0; // Max reasonable position change per tick
+            const MAX_REASONABLE_POSITION_CHANGE: f32 = 20.0;
 
             if position_change > MAX_REASONABLE_POSITION_CHANGE {
                 warn!(

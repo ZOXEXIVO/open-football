@@ -45,7 +45,7 @@ impl<'p> GameFieldContextInput<'p> {
         let players_positions: Vec<f64> = self
             .object_positions
             .players
-            .items
+            .as_slice()
             .iter()
             .sorted_by_key(|m| m.player_id)
             .flat_map(|p| p.position.as_slice().to_vec())

@@ -1,4 +1,4 @@
-use super::{CompetitionStage, CompetitionTier, ContinentalMatch, ContinentalMatchResult};
+use super::{CompetitionStage, CompetitionTier, ContinentalMatch, ContinentalMatchResult, CHAMPIONS_LEAGUE_ID};
 use crate::continent::ContinentalRankings;
 use crate::r#match::{Match, MatchResult, MatchSquad, SelectionContext};
 use crate::Club;
@@ -6,8 +6,6 @@ use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use std::collections::HashMap;
 
-/// Champions League competition ID used for league lookups and stat routing.
-pub const CHAMPIONS_LEAGUE_ID: u32 = 900_000_001;
 pub const CHAMPIONS_LEAGUE_SLUG: &str = "champions-league";
 
 // ─── Group stage table ──────────────────────────────────────────────

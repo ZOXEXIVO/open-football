@@ -82,9 +82,10 @@
                                 {% endif %}
                                 <div class="fm-header-title">
                                     <h1>{{ title }}</h1>
-                                    <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<span
+                                    <span class="fm-header-sub">{% if !sub_title_prefix.is_empty() %}<span>{{ sub_title_prefix }}</span>  -  {% endif %}{% if !sub_title_country_code.is_empty() %}<a
+                                            href="/{{ lang }}/countries/{{ sub_title_country_code }}/leagues"><span
                                             class="flag flag-{{ sub_title_country_code }}"
-                                            style="vertical-align: middle; margin-right: 6px;"></span>{% endif %}<a
+                                            style="vertical-align: middle; margin-right: 6px;"></span></a>{% endif %}<a
                                             href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
                                 <div class="fm-header-actions">
@@ -194,7 +195,7 @@
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
         _requestInFlight = true;
-        const url = event.shiftKey ? '/api/game/process?days=90' : '/api/game/process';
+        const url = event.shiftKey ? '/api/game/process?days=60' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});

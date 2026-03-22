@@ -1,12 +1,15 @@
 pub mod ai;
 mod champions_league;
+mod conference_league;
 mod countries;
 mod date;
 mod error;
+mod europa_league;
 mod face;
 mod game;
 pub mod i18n;
 mod leagues;
+mod national_competitions;
 mod r#match;
 mod player;
 mod routes;

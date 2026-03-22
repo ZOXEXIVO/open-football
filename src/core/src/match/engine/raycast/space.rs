@@ -1,8 +1,11 @@
 use nalgebra::Vector3;
 use crate::r#match::MatchField;
 
+const MAX_COLLIDERS: usize = 24; // 1 ball + 22 players + 1 spare
+
 pub struct Space {
-    colliders: Vec<SphereCollider>,
+    colliders: [SphereCollider; MAX_COLLIDERS],
+    len: usize,
 }
 
 impl From<&MatchField> for Space {
@@ -10,22 +13,19 @@ impl From<&MatchField> for Space {
         let mut space = Space::new();
 
         // Add ball collider
-        let ball_collider = SphereCollider {
+        space.push(SphereCollider {
             center: field.ball.position,
             radius: 0.11,
             player_id: None,
-        };
+        });
 
-        space.add_collider(ball_collider);
-
-        // Add player colliders (no cloning — just store position + id)
+        // Add player colliders
         for player in &field.players {
-            let player_collider = SphereCollider {
+            space.push(SphereCollider {
                 center: player.position,
                 radius: 0.5,
                 player_id: Some(player.id),
-            };
-            space.add_collider(player_collider);
+            });
         }
 
         space
@@ -35,23 +35,31 @@ impl From<&MatchField> for Space {
 impl Space {
     pub fn new() -> Self {
         Space {
-            colliders: Vec::with_capacity(30),
+            colliders: [SphereCollider::EMPTY; MAX_COLLIDERS],
+            len: 0,
         }
     }
 
+    #[inline]
+    fn push(&mut self, collider: SphereCollider) {
+        debug_assert!(self.len < MAX_COLLIDERS);
+        self.colliders[self.len] = collider;
+        self.len += 1;
+    }
+
     pub fn add_collider(&mut self, collider: SphereCollider) {
-        self.colliders.push(collider);
+        self.push(collider);
     }
 
     pub fn update(&mut self, field: &MatchField) {
-        self.colliders.clear();
-        self.colliders.push(SphereCollider {
+        self.len = 0;
+        self.push(SphereCollider {
             center: field.ball.position,
             radius: 0.11,
             player_id: None,
         });
         for player in &field.players {
-            self.colliders.push(SphereCollider {
+            self.push(SphereCollider {
                 center: player.position,
                 radius: 0.5,
                 player_id: Some(player.id),
@@ -69,7 +77,9 @@ impl Space {
         let mut closest_hit: Option<RaycastHit<SphereCollider>> = None;
         let mut closest_distance = max_distance;
 
-        for collider in &self.colliders {
+        for i in 0..self.len {
+            let collider = &self.colliders[i];
+
             if collider.is_player() && !include_players {
                 continue;
             }
@@ -80,7 +90,7 @@ impl Space {
                 if distance < closest_distance {
                     closest_distance = distance;
                     closest_hit = Some(RaycastHit {
-                        collider: collider.clone(),
+                        collider: *collider,
                         _point: intersection,
                         _normal: collider.normal(intersection),
                         _distance: distance,
@@ -100,20 +110,29 @@ pub struct RaycastHit<T: Collider> {
     _distance: f32,
 }
 
-pub trait Collider: Clone {
+pub trait Collider: Copy {
     fn intersect_ray(&self, origin: Vector3<f32>, direction: Vector3<f32>) -> Option<Vector3<f32>>;
     fn normal(&self, point: Vector3<f32>) -> Vector3<f32>;
     fn is_player(&self) -> bool;
 }
 
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 pub struct SphereCollider {
     pub center: Vector3<f32>,
     pub radius: f32,
     pub player_id: Option<u32>,
 }
 
+impl SphereCollider {
+    const EMPTY: Self = SphereCollider {
+        center: Vector3::new(0.0, 0.0, 0.0),
+        radius: 0.0,
+        player_id: None,
+    };
+}
+
 impl Collider for SphereCollider {
+    #[inline]
     fn intersect_ray(&self, origin: Vector3<f32>, direction: Vector3<f32>) -> Option<Vector3<f32>> {
         let oc = origin - self.center;
         let a = direction.dot(&direction);
@@ -124,8 +143,10 @@ impl Collider for SphereCollider {
         if discriminant < 0.0 {
             None
         } else {
-            let t1 = (-b - discriminant.sqrt()) / (2.0 * a);
-            let t2 = (-b + discriminant.sqrt()) / (2.0 * a);
+            let sqrt_disc = discriminant.sqrt();
+            let inv_2a = 1.0 / (2.0 * a);
+            let t1 = (-b - sqrt_disc) * inv_2a;
+            let t2 = (-b + sqrt_disc) * inv_2a;
 
             if t1 >= 0.0 && t2 >= 0.0 {
                 let t = t1.min(t2);
@@ -140,10 +161,12 @@ impl Collider for SphereCollider {
         }
     }
 
+    #[inline]
     fn normal(&self, point: Vector3<f32>) -> Vector3<f32> {
         (point - self.center).normalize()
     }
 
+    #[inline]
     fn is_player(&self) -> bool {
         self.player_id.is_some()
     }

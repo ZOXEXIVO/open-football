@@ -2153,6 +2153,12 @@ a:link, a:visited, a:hover, a:active {
     width: 36px;
     flex-shrink: 0;
     margin-left: 8px;
+    text-align: right;
+}
+
+.fm-bar-row .fm-rep-label {
+    width: 110px;
+    white-space: nowrap;
 }
 
 @media (min-width: 600px) {
@@ -3043,7 +3049,6 @@ a:link, a:visited, a:hover, a:active {
 .fm-stats thead th:first-child {
     text-align: left;
     padding-left: 14px;
-    width: 3em;
     white-space: nowrap;
 }
 

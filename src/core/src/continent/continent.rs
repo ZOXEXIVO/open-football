@@ -49,18 +49,15 @@ impl Continent {
             self.countries.len()
         );
         
-        // Phase 0: National team competition matches (parallel engine runs)
-        //self.simulate_national_competitions(date);
-
-        // Phase 0.5: International friendly matches (parallel engine runs)
-        //self.simulate_international_friendlies(date);
+        // Phase 0: National team competition matches (full engine via pool)
+        let national_match_results = self.simulate_national_competitions(date);
 
         // Phase 1+: Simulate all child entities and accumulate results
         let country_results = self.simulate_countries(&ctx);
 
         debug!("Continent {} simulation complete", continent_name);
 
-        ContinentResult::new(self.id, country_results)
+        ContinentResult::new(self.id, country_results, national_match_results)
     }
 
     fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
@@ -86,7 +83,7 @@ impl Continent {
             .par_iter_mut()
             .zip(candidates_vec.into_par_iter())
             .map(|(country, candidates)| {
-                let message = &format!("simulate country: {} (Continental)", &country.name);
+                let message = &format!("simulate country: {}", &country.name);
                 Logging::estimate_result(
                     || country.simulate(ctx.with_country_and_names(country.id, country.code.clone(), country.generator_data.people_names.clone(), country.season_dates()), &country_ids, candidates),
                     message,

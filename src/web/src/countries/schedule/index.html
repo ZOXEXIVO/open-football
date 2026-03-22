@@ -33,9 +33,13 @@
                     </td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
-                        <span class="fm-result">
+                        {% if !result.match_id.is_empty() %}
+                        <a href="/{{ lang }}/match/{{ result.match_id }}" class="fm-result">
                             {{ result.home_goals }} – {{ result.away_goals }}
-                        </span>
+                        </a>
+                        {% else %}
+                        <span class="fm-result">{{ result.home_goals }} – {{ result.away_goals }}</span>
+                        {% endif %}
                         {% else %}
                         <span class="fm-pending">–</span>
                         {% endif %}

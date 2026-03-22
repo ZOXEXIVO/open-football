@@ -1,0 +1,107 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab active" href="/{{ lang }}/national-competitions">{{ i18n.t("national_competitions") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    {% if competitions.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-empty">No active national team competitions</div>
+    </section>
+    {% endif %}
+
+    {% for comp in competitions %}
+    <div class="fm-panel-head">
+        <h3>{{ comp.name }} — {{ comp.phase }}</h3>
+    </div>
+
+    {% if !comp.groups.is_empty() %}
+    <div class="row g-3">
+        {% for group in comp.groups %}
+        <div class="col-md-6 col-xl-4">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ group.name }}</h3>
+                </div>
+                <table class="fm-standings">
+                    <thead>
+                        <tr>
+                            <th class="st-pos">#</th>
+                            <th class="st-club">{{ i18n.t("country") }}</th>
+                            <th>{{ i18n.t("p") }}</th>
+                            <th>{{ i18n.t("w") }}</th>
+                            <th>{{ i18n.t("d") }}</th>
+                            <th>{{ i18n.t("l") }}</th>
+                            <th>{{ i18n.t("gd") }}</th>
+                            <th class="st-pts">{{ i18n.t("pts") }}</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for row in group.rows %}
+                        <tr class="{% if loop.index <= 1 %}zone-ucl{% endif %}">
+                            <td class="st-pos">{{ loop.index }}</td>
+                            <td class="st-club">
+                                <a href="/{{ lang }}/countries/{{ row.country_slug }}/squad">{{ row.country_name }}</a>
+                            </td>
+                            <td>{{ row.played }}</td>
+                            <td>{{ row.won }}</td>
+                            <td>{{ row.drawn }}</td>
+                            <td>{{ row.lost }}</td>
+                            <td class="st-gd">
+                                {% if row.gf as i16 - row.ga as i16 > 0 %}+{% endif %}{{ row.gf as i16 - row.ga as i16 }}
+                            </td>
+                            <td class="st-pts">{{ row.points }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </section>
+        </div>
+        {% endfor %}
+    </div>
+    <div class="fm-legend mt-2">
+        <span><i class="legend-dot ucl"></i> Qualified</span>
+    </div>
+    {% endif %}
+
+    {% if !comp.knockout.is_empty() %}
+    {% for bracket in comp.knockout %}
+    <div class="row g-3 mt-1">
+        <div class="col-12">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>{{ bracket.round_name }}</h3>
+                </div>
+                <div class="fm-fixtures">
+                    {% for fix in bracket.fixtures %}
+                    <div class="fm-fixture">
+                        <div class="fx-home"><a href="/{{ lang }}/countries/{{ fix.home_slug }}/squad">{{ fix.home_name }}</a></div>
+                        <div class="fx-score">
+                            {% if let Some(hs) = fix.home_score %}
+                            {% if let Some(as_) = fix.away_score %}
+                            {{ hs }} – {{ as_ }}
+                            {% endif %}
+                            {% else %}
+                            –
+                            {% endif %}
+                        </div>
+                        <div class="fx-away"><a href="/{{ lang }}/countries/{{ fix.away_slug }}/squad">{{ fix.away_name }}</a></div>
+                    </div>
+                    {% if let Some(winner) = fix.winner_name %}
+                    <div class="fm-matchday-hd">Winner: {{ winner }}</div>
+                    {% endif %}
+                    {% endfor %}
+                </div>
+            </section>
+        </div>
+    </div>
+    {% endfor %}
+    {% endif %}
+
+    {% endfor %}
+</div>
+{% endblock %}

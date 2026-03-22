@@ -89,6 +89,43 @@ impl SimulatorData {
             })
     }
 
+    /// Get the continent a club belongs to
+    pub fn continent_by_club(&self, club_id: u32) -> Option<&Continent> {
+        self.indexes
+            .as_ref()
+            .and_then(|indexes| indexes.get_club_location(club_id))
+            .and_then(|(continent_id, _)| self.continent(continent_id))
+    }
+
+    /// Get all continental competition matches (CL, EL, Conference) for a club.
+    /// Returns (competition_name, home_club_id, away_club_id, date).
+    pub fn continental_matches_for_club(&self, club_id: u32) -> Vec<(&str, u32, u32, chrono::NaiveDate)> {
+        let Some(continent) = self.continent_by_club(club_id) else {
+            return Vec::new();
+        };
+
+        let cc = &continent.continental_competitions;
+        let mut matches = Vec::new();
+
+        for m in &cc.champions_league.matches {
+            if m.home_team == club_id || m.away_team == club_id {
+                matches.push(("Champions League", m.home_team, m.away_team, m.date));
+            }
+        }
+        for m in &cc.europa_league.matches {
+            if m.home_team == club_id || m.away_team == club_id {
+                matches.push(("Europa League", m.home_team, m.away_team, m.date));
+            }
+        }
+        for m in &cc.conference_league.matches {
+            if m.home_team == club_id || m.away_team == club_id {
+                matches.push(("Conference League", m.home_team, m.away_team, m.date));
+            }
+        }
+
+        matches
+    }
+
     pub fn club(&self, id: u32) -> Option<&Club> {
         self.indexes
             .as_ref()

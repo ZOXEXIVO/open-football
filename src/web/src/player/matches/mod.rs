@@ -90,7 +90,8 @@ pub async fn player_matches_action(
     let league_refs: Vec<(&str, &str)> = country_leagues.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
 
     let items: Vec<PlayerMatchItem> = if let Some(team) = team_opt {
-        schedule
+        // League matches the player participated in
+        let mut match_items: Vec<(chrono::NaiveDateTime, PlayerMatchItem)> = schedule
             .iter()
             .filter(|schedule_item| {
                 if schedule_item.result.is_none() {
@@ -111,7 +112,7 @@ pub async fn player_matches_action(
                 let home_team_data = simulator_data.team_data(schedule_item.home_team_id).unwrap();
                 let away_team_data = simulator_data.team_data(schedule_item.away_team_id).unwrap();
 
-                PlayerMatchItem {
+                (schedule_item.date, PlayerMatchItem {
                     date: schedule_item.date.format("%d.%m.%Y").to_string(),
                     time: schedule_item.date.format("%H:%M").to_string(),
                     opponent_slug: if is_home {
@@ -131,9 +132,65 @@ pub async fn player_matches_action(
                         home_goals: res.home_team.get(),
                         away_goals: res.away_team.get(),
                     }),
-                }
+                })
             })
-            .collect()
+            .collect();
+
+        // Continental competition matches for this club
+        let continental_matches = simulator_data.continental_matches_for_club(team.club_id);
+        for (comp_name, home_club_id, away_club_id, date) in continental_matches {
+            let is_home = home_club_id == team.club_id;
+            let opponent_club_id = if is_home { away_club_id } else { home_club_id };
+
+            let (opponent_name, opponent_slug) = simulator_data.club(opponent_club_id)
+                .and_then(|club| {
+                    club.teams.main_team_id()
+                        .and_then(|tid| simulator_data.team(tid))
+                        .map(|t| (t.name.clone(), t.slug.clone()))
+                })
+                .unwrap_or_else(|| ("Unknown".to_string(), String::new()));
+
+            let datetime = date.and_hms_opt(20, 0, 0).unwrap();
+
+            match_items.push((datetime, PlayerMatchItem {
+                date: date.format("%d.%m.%Y").to_string(),
+                time: "20:00".to_string(),
+                opponent_slug,
+                opponent_name,
+                is_home,
+                competition_name: comp_name.to_string(),
+                result: None,
+            }));
+        }
+
+        // National team competition matches (qualifying, tournament)
+        if let Some(country) = simulator_data.country_by_club(team.club_id) {
+            let is_in_squad = country.national_team.squad.iter().any(|s| s.player_id == player.id);
+            if is_in_squad || player.player_attributes.international_apps > 0 {
+                for fixture in &country.national_team.schedule {
+                    if let Some(ref result) = fixture.result {
+                        let datetime = fixture.date.and_hms_opt(20, 0, 0).unwrap();
+                        match_items.push((datetime, PlayerMatchItem {
+                            date: fixture.date.format("%d.%m.%Y").to_string(),
+                            time: "20:00".to_string(),
+                            opponent_slug: String::new(),
+                            opponent_name: fixture.opponent_country_name.clone(),
+                            is_home: fixture.is_home,
+                            competition_name: fixture.competition_name.clone(),
+                            result: Some(PlayerMatchResult {
+                                match_id: fixture.match_id.clone(),
+                                home_goals: result.home_score,
+                                away_goals: result.away_score,
+                            }),
+                        }));
+                    }
+                }
+            }
+        }
+
+        // Sort all matches by date
+        match_items.sort_by_key(|(dt, _)| *dt);
+        match_items.into_iter().map(|(_, item)| item).collect()
     } else {
         Vec::new()
     };

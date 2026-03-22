@@ -12,9 +12,17 @@ pub struct EventCollection {
 }
 
 impl EventCollection {
+    /// Create empty collection without heap allocation.
+    /// Use `with_capacity` only for the reusable per-tick collection.
     pub fn new() -> Self {
         EventCollection {
-            events: Vec::with_capacity(10),
+            events: Vec::new(),
+        }
+    }
+
+    pub fn with_capacity(cap: usize) -> Self {
+        EventCollection {
+            events: Vec::with_capacity(cap),
         }
     }
 

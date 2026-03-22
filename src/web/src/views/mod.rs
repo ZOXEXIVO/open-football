@@ -113,12 +113,40 @@ fn source_code_section() -> MenuSection {
 
 fn continental_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
     let cl_url = format!("/{}/champions-league", lang);
+    let el_url = format!("/{}/europa-league", lang);
+    let conf_url = format!("/{}/conference-league", lang);
+    MenuSection {
+        items: vec![
+            MenuItem {
+                active: current_path == cl_url,
+                title: i18n.t("champions_league").to_string(),
+                url: cl_url,
+                icon: "fa-star".to_string(),
+            },
+            MenuItem {
+                active: current_path == el_url,
+                title: i18n.t("europa_league").to_string(),
+                url: el_url,
+                icon: "fa-star".to_string(),
+            },
+            MenuItem {
+                active: current_path == conf_url,
+                title: i18n.t("conference_league").to_string(),
+                url: conf_url,
+                icon: "fa-star".to_string(),
+            },
+        ],
+    }
+}
+
+fn national_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
+    let nat_url = format!("/{}/national-competitions", lang);
     MenuSection {
         items: vec![MenuItem {
-            active: current_path == cl_url,
-            title: i18n.t("champions_league").to_string(),
-            url: cl_url,
-            icon: "fa-star".to_string(),
+            active: current_path == nat_url,
+            title: i18n.t("national_competitions").to_string(),
+            url: nat_url,
+            icon: "fa-flag".to_string(),
         }],
     }
 }
@@ -165,6 +193,7 @@ pub fn league_menu(p: &MenuParams, league_slug: &str, country_leagues: &[(&str, 
     });
 
     sections.push(continental_section(p.i18n, p.lang, p.current_path));
+    sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
     sections
@@ -305,6 +334,7 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
     }
 
     sections.push(continental_section(p.i18n, p.lang, p.current_path));
+    sections.push(national_section(p.i18n, p.lang, p.current_path));
     sections.push(watchlist_section(p.i18n, p.lang, p.current_path));
     sections.push(source_code_section());
 
@@ -326,8 +356,11 @@ pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSectio
     sections
 }
 
-pub fn champions_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     let cl_url = format!("/{}/champions-league", lang);
+    let el_url = format!("/{}/europa-league", lang);
+    let conf_url = format!("/{}/conference-league", lang);
+    let nat_url = format!("/{}/national-competitions", lang);
     vec![
         MenuSection {
             items: vec![MenuItem {
@@ -338,14 +371,52 @@ pub fn champions_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec
             }],
         },
         MenuSection {
+            items: vec![
+                MenuItem {
+                    active: current_path == cl_url,
+                    title: i18n.t("champions_league").to_string(),
+                    url: cl_url,
+                    icon: "fa-trophy".to_string(),
+                },
+                MenuItem {
+                    active: current_path == el_url,
+                    title: i18n.t("europa_league").to_string(),
+                    url: el_url,
+                    icon: "fa-trophy".to_string(),
+                },
+                MenuItem {
+                    active: current_path == conf_url,
+                    title: i18n.t("conference_league").to_string(),
+                    url: conf_url,
+                    icon: "fa-trophy".to_string(),
+                },
+            ],
+        },
+        MenuSection {
             items: vec![MenuItem {
-                active: current_path == cl_url,
-                title: i18n.t("champions_league").to_string(),
-                url: cl_url,
-                icon: "fa-trophy".to_string(),
+                active: current_path == nat_url,
+                title: i18n.t("national_competitions").to_string(),
+                url: nat_url,
+                icon: "fa-flag".to_string(),
             }],
         },
         watchlist_section(i18n, lang, current_path),
         source_code_section(),
     ]
+}
+
+pub fn champions_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    continental_competitions_menu(i18n, lang, current_path)
+}
+
+pub fn europa_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    continental_competitions_menu(i18n, lang, current_path)
+}
+
+pub fn conference_league_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    continental_competitions_menu(i18n, lang, current_path)
+}
+
+pub fn national_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    continental_competitions_menu(i18n, lang, current_path)
 }

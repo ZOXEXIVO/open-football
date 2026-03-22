@@ -182,23 +182,20 @@ impl PassEvaluator {
     ) -> f32 {
         const PRESSURE_RADIUS: f32 = 15.0;
 
-        let nearby_opponents: Vec<(u32, f32)> = ctx.tick_context
-            .distances
-            .opponents(passer.id, PRESSURE_RADIUS)
-            .collect();
+        // Compute closest distance and count without allocation
+        let mut closest_distance = PRESSURE_RADIUS;
+        let mut num_opponents: f32 = 0.0;
 
-        if nearby_opponents.is_empty() {
-            return 1.0; // No pressure
+        for (_, dist) in ctx.tick_context.distances.opponents(passer.id, PRESSURE_RADIUS) {
+            num_opponents += 1.0;
+            if dist < closest_distance {
+                closest_distance = dist;
+            }
         }
 
-        // Calculate pressure based on closest opponent and number of opponents
-        let closest_distance = nearby_opponents
-            .iter()
-            .map(|(_, dist)| *dist)
-            .min_by(|a, b| a.partial_cmp(b).unwrap())
-            .unwrap_or(PRESSURE_RADIUS);
-
-        let num_opponents = nearby_opponents.len() as f32;
+        if num_opponents == 0.0 {
+            return 1.0; // No pressure
+        }
 
         // Pressure from distance
         let distance_pressure = (closest_distance / PRESSURE_RADIUS).clamp(0.0, 1.0);
@@ -225,24 +222,20 @@ impl PassEvaluator {
         const CLOSE_RADIUS: f32 = 18.0;
         const MEDIUM_RADIUS: f32 = 30.0;
 
-        // Check opponents at multiple distance ranges for nuanced space evaluation
-        let all_opponents: Vec<(u32, f32)> = ctx.tick_context
-            .distances
-            .opponents(receiver.id, MEDIUM_RADIUS)
-            .collect();
+        // Count opponents in each zone without allocation (single pass)
+        let mut very_close_opponents: usize = 0;
+        let mut close_opponents: usize = 0;
+        let mut medium_opponents: usize = 0;
 
-        // Count opponents in each zone
-        let very_close_opponents = all_opponents.iter()
-            .filter(|(_, dist)| *dist < VERY_CLOSE_RADIUS)
-            .count();
-
-        let close_opponents = all_opponents.iter()
-            .filter(|(_, dist)| *dist >= VERY_CLOSE_RADIUS && *dist < CLOSE_RADIUS)
-            .count();
-
-        let medium_opponents = all_opponents.iter()
-            .filter(|(_, dist)| *dist >= CLOSE_RADIUS && *dist < MEDIUM_RADIUS)
-            .count();
+        for (_, dist) in ctx.tick_context.distances.opponents(receiver.id, MEDIUM_RADIUS) {
+            if dist < VERY_CLOSE_RADIUS {
+                very_close_opponents += 1;
+            } else if dist < CLOSE_RADIUS {
+                close_opponents += 1;
+            } else {
+                medium_opponents += 1;
+            }
+        }
 
         // Calculate space quality with heavy penalties for nearby opponents
         let space_factor = if very_close_opponents > 0 {

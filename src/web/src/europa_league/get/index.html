@@ -1,0 +1,74 @@
+{% extends "layout.html" %}
+
+{% block submenu %}
+<div class="fm-tabbar">
+    <a class="fm-tab active" href="/{{ lang }}/europa-league">{{ i18n.t("europa_league") }}</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="fm-page">
+    <div class="fm-panel-head">
+        <h3>{{ current_stage }}</h3>
+    </div>
+
+    {% if participants.is_empty() && matches.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-empty">Europa League has not started yet</div>
+    </section>
+    {% endif %}
+
+    {% if !participants.is_empty() %}
+    <section class="fm-panel">
+        <div class="fm-panel-head">
+            <h3>Participants</h3>
+        </div>
+        <table class="fm-standings">
+            <thead>
+                <tr>
+                    <th class="st-pos">#</th>
+                    <th class="st-club">{{ i18n.t("club") }}</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for p in participants %}
+                <tr>
+                    <td class="st-pos">{{ loop.index }}</td>
+                    <td class="st-club">
+                        <a href="/{{ lang }}/teams/{{ p.club_slug }}">{{ p.club_name }}</a>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </section>
+    {% endif %}
+
+    {% if !matches.is_empty() %}
+    <div class="row g-3 mt-1">
+        <div class="col-12">
+            <section class="fm-panel">
+                <div class="fm-panel-head">
+                    <h3>Fixtures</h3>
+                </div>
+                <div class="fm-fixtures">
+                    {% for m in matches %}
+                    <div class="fm-fixture">
+                        <div class="fx-home">
+                            <a href="/{{ lang }}/teams/{{ m.home_slug }}">{{ m.home_name }}</a>
+                        </div>
+                        <div class="fx-score">
+                            {{ m.date }}
+                        </div>
+                        <div class="fx-away">
+                            <a href="/{{ lang }}/teams/{{ m.away_slug }}">{{ m.away_name }}</a>
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </section>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 use std::collections::VecDeque;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
@@ -144,13 +143,13 @@ impl Ball {
 
                 let dx = target_player.position.x - effective_ball_pos.x;
                 let dy = target_player.position.y - effective_ball_pos.y;
-                let distance = (dx * dx + dy * dy).sqrt();
+                let dist_sq = dx * dx + dy * dy;
 
                 // Generous claim radius for intended receiver (3.5m vs normal 2.0m)
-                const RECEIVER_CLAIM_DISTANCE: f32 = 3.5;
+                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 3.5 * 3.5;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
-                if distance < RECEIVER_CLAIM_DISTANCE && self.position.z <= RECEIVER_MAX_HEIGHT {
+                if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
@@ -217,8 +216,8 @@ impl Ball {
 
         // Check if ball has moved significantly from last boundary position
         let has_escaped_boundary = if let Some(last_pos) = self.last_boundary_position {
-            let distance_from_boundary = (self.position - last_pos).magnitude();
-            distance_from_boundary > 2.0 // Reduced from 5.0 to allow re-notification for slow rolling balls
+            let dist_sq = (self.position - last_pos).norm_squared();
+            dist_sq > 4.0 // 2.0^2
         } else {
             true // No previous boundary position recorded
         };
@@ -408,8 +407,9 @@ impl Ball {
             DEADLOCK_VELOCITY_ENTER
         };
 
-        let velocity_norm = self.velocity.norm();
-        let is_slow = velocity_norm < velocity_threshold;
+        let velocity_sq = self.velocity.norm_squared();
+        let threshold_sq = velocity_threshold * velocity_threshold;
+        let is_slow = velocity_sq < threshold_sq;
         let is_low = self.position.z < DEADLOCK_HEIGHT_THRESHOLD;
 
         if is_slow && is_low {
@@ -429,14 +429,15 @@ impl Ball {
             };
 
             if should_claim {
-                // Find nearest player within current claim distance
+                // Find nearest player within current claim distance (use squared to avoid sqrt)
+                let claim_distance_sq = claim_distance * claim_distance;
                 if let Some(nearest_player) = players.iter()
                     .filter_map(|p| {
                         let dx = p.position.x - self.position.x;
                         let dy = p.position.y - self.position.y;
-                        let distance = (dx * dx + dy * dy).sqrt();
-                        if distance <= claim_distance {
-                            Some((p, distance))
+                        let dist_sq = dx * dx + dy * dy;
+                        if dist_sq <= claim_distance_sq {
+                            Some((p, dist_sq))
                         } else {
                             None
                         }
@@ -469,7 +470,7 @@ impl Ball {
                 }
             }
         } else {
-            if velocity_norm >= velocity_threshold {
+            if velocity_sq >= threshold_sq {
                 self.unowned_stopped_ticks = 0;
             }
         }
@@ -509,35 +510,52 @@ impl Ball {
         events: &mut EventCollection,
     ) -> Vec<u32> {
         let ball_position = self.position;
-        const NOTIFICATION_RADIUS: f32 = 500.0; // Cover entire field - all players can be notified
+        const NOTIFICATION_RADIUS_SQ: f32 = 500.0 * 500.0;
 
-        // Group players by team and find nearest from each team
-        let mut team_nearest: HashMap<u32, (&MatchPlayer, f32)> = HashMap::new();
+        // Only 2 teams — use fixed variables instead of HashMap
+        let mut team_a_id: u32 = 0;
+        let mut team_a_best: Option<(u32, f32)> = None; // (player_id, dist_sq)
+        let mut team_b_best: Option<(u32, f32)> = None;
 
         for player in players {
             let dx = player.position.x - ball_position.x;
             let dy = player.position.y - ball_position.y;
-            let distance_squared = dx * dx + dy * dy;
+            let dist_sq = dx * dx + dy * dy;
 
-            // Only consider players within notification radius
-            if distance_squared < NOTIFICATION_RADIUS * NOTIFICATION_RADIUS {
-                // Check if this is the nearest player for their team
-                team_nearest
-                    .entry(player.team_id)
-                    .and_modify(|current| {
-                        if distance_squared < current.1 {
-                            *current = (player, distance_squared);
-                        }
-                    })
-                    .or_insert((player, distance_squared));
+            if dist_sq >= NOTIFICATION_RADIUS_SQ {
+                continue;
+            }
+
+            // Assign first team encountered as team_a
+            if team_a_best.is_none() {
+                team_a_id = player.team_id;
+            }
+
+            let slot = if player.team_id == team_a_id {
+                &mut team_a_best
+            } else {
+                &mut team_b_best
+            };
+
+            match slot {
+                Some((_, best_dist)) if dist_sq < *best_dist => {
+                    *slot = Some((player.id, dist_sq));
+                }
+                None => {
+                    *slot = Some((player.id, dist_sq));
+                }
+                _ => {}
             }
         }
 
-        // Notify one player from each team and collect their IDs
         let mut notified_players = Vec::new();
-        for (player, _) in team_nearest.values() {
-            events.add_ball_event(BallEvent::TakeMe(player.id));
-            notified_players.push(player.id);
+        if let Some((id, _)) = team_a_best {
+            events.add_ball_event(BallEvent::TakeMe(id));
+            notified_players.push(id);
+        }
+        if let Some((id, _)) = team_b_best {
+            events.add_ball_event(BallEvent::TakeMe(id));
+            notified_players.push(id);
         }
 
         notified_players
@@ -661,10 +679,10 @@ impl Ball {
                 let dx = owner.position.x - self.position.x;
                 let dy = owner.position.y - self.position.y;
                 let dz = self.position.z;
-                let distance_3d = (dx * dx + dy * dy + dz * dz).sqrt();
+                let dist_3d_sq = dx * dx + dy * dy + dz * dz;
 
-                // Clear previous owner once they're far enough - allow normal claiming to proceed
-                if distance_3d > BALL_DISTANCE_THRESHOLD {
+                // Clear previous owner once they're far enough
+                if dist_3d_sq > BALL_DISTANCE_THRESHOLD_SQUARED {
                     self.previous_owner = None;
                 }
                 // Don't block claiming - just track who previously had the ball
@@ -678,12 +696,12 @@ impl Ball {
             if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
                 let dx = target_player.position.x - self.position.x;
                 let dy = target_player.position.y - self.position.y;
-                let distance = (dx * dx + dy * dy).sqrt();
+                let dist_sq = dx * dx + dy * dy;
 
-                const RECEIVER_PRIORITY_DISTANCE: f32 = 3.5;
+                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 3.5 * 3.5;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
-                if distance < RECEIVER_PRIORITY_DISTANCE && self.position.z <= RECEIVER_MAX_HEIGHT {
+                if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
                     self.previous_owner = self.current_owner;
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
@@ -695,106 +713,98 @@ impl Ball {
             }
         }
 
-        // Velocity thresholds
-        const MAX_CLAIMABLE_VELOCITY: f32 = 10.0; // Ball moving faster than 10 m/s is hard to claim
-        const SLOW_BALL_VELOCITY: f32 = 4.0; // Ball moving slower than 4 m/s is easy to claim
+        // Velocity thresholds (squared for comparison without sqrt)
+        const MAX_CLAIMABLE_VELOCITY_SQ: f32 = 10.0 * 10.0;
+        const SLOW_BALL_VELOCITY_SQ: f32 = 4.0 * 4.0;
 
-        let ball_speed = self.velocity.norm();
+        let ball_speed_sq = self.velocity.norm_squared();
 
-        // Find all players within ball distance threshold
-        let nearby_players: Vec<&MatchPlayer> = players
-            .iter()
-            .filter(|player| {
-                let dx = player.position.x - self.position.x;
-                let dy = player.position.y - self.position.y;
-                let horizontal_distance_squared = dx * dx + dy * dy;
-                let horizontal_distance = horizontal_distance_squared.sqrt();
+        // Collect nearby player IDs into a small inline buffer (no heap allocation)
+        const MAX_NEARBY: usize = 8;
+        let mut nearby_ids: [u32; MAX_NEARBY] = [0; MAX_NEARBY];
+        let mut nearby_count: usize = 0;
 
-                // Check if within claiming distance
-                if horizontal_distance_squared > BALL_DISTANCE_THRESHOLD_SQUARED {
-                    return false;
-                }
+        let ball_height_reachable = self.position.z <= PLAYER_JUMP_REACH;
 
-                // For slow/stopped balls, always allow claiming if close enough
-                if ball_speed <= SLOW_BALL_VELOCITY {
-                    return self.position.z <= PLAYER_JUMP_REACH;
-                }
+        for player in players.iter() {
+            let dx = player.position.x - self.position.x;
+            let dy = player.position.y - self.position.y;
+            let dist_sq = dx * dx + dy * dy;
 
-                // For fast balls, apply direction check
-                if ball_speed > MAX_CLAIMABLE_VELOCITY {
-                    // Very fast ball - must be very close
-                    if horizontal_distance > 1.0 {
-                        return false;
-                    }
-                }
+            if dist_sq > BALL_DISTANCE_THRESHOLD_SQUARED {
+                continue;
+            }
 
-                // Check ball height is reachable
-                self.position.z <= PLAYER_JUMP_REACH
-            })
-            .collect();
+            if ball_speed_sq <= SLOW_BALL_VELOCITY_SQ {
+                if !ball_height_reachable { continue; }
+            } else if ball_speed_sq > MAX_CLAIMABLE_VELOCITY_SQ {
+                if dist_sq > 1.0 { continue; }
+                if !ball_height_reachable { continue; }
+            } else {
+                if !ball_height_reachable { continue; }
+            }
+
+            if nearby_count < MAX_NEARBY {
+                nearby_ids[nearby_count] = player.id;
+                nearby_count += 1;
+            }
+        }
 
         // Early exit if no nearby players
-        if nearby_players.is_empty() {
+        if nearby_count == 0 {
             return;
         }
 
+        let nearby_slice = &nearby_ids[..nearby_count];
+
         // Check if current owner is nearby
         if let Some(current_owner_id) = self.current_owner {
-            // Check if current owner is still nearby
-            let current_owner_nearby = nearby_players
-                .iter()
-                .any(|player| player.id == current_owner_id);
+            let current_owner_nearby = nearby_slice.contains(&current_owner_id);
 
             if current_owner_nearby {
-                // Check if any opponent is also nearby and could challenge
                 let owner_team_id = context.players.by_id(current_owner_id)
                     .map(|p| p.team_id);
 
                 let opponent_nearby = owner_team_id.is_some_and(|team_id| {
-                    nearby_players.iter().any(|p| p.team_id != team_id)
+                    nearby_slice.iter().any(|&id| {
+                        context.players.by_id(id).is_some_and(|p| p.team_id != team_id)
+                    })
                 });
 
                 if !opponent_nearby {
-                    // No opponents close - owner keeps the ball unchallenged
                     self.ownership_duration += 1;
                     return;
                 }
-                // Opponent is close enough to challenge — fall through to tackling logic
             } else {
-                // Current owner is NOT nearby - clear ownership so ball can be claimed
                 self.previous_owner = self.current_owner;
                 self.current_owner = None;
             }
         }
 
-        // Ownership stability constants — give the ball holder time to act
-        // Escalate minimum duration when contested to break ping-pong
+        // Ownership stability constants
         let min_ownership_duration: u32 = if self.contested_claim_count > 3 {
-            60 // ~1s - much harder to flip during active contest
+            60
         } else {
-            25 // ~0.4s minimum before ownership can change
+            25
         };
-        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25; // Challenger must be 25% better to steal
+        const TAKEOVER_ADVANTAGE_THRESHOLD: f32 = 1.25;
 
-        // Determine the best tackler from nearby players
-        let best_tackler = if nearby_players.len() == 1 {
-            nearby_players.first().copied()
+        // Determine the best tackler from nearby players (no Vec allocation)
+        let best_tackler = if nearby_count == 1 {
+            players.iter().find(|p| p.id == nearby_ids[0])
         } else {
-            nearby_players
-                .iter()
-                .max_by(|player_a, player_b| {
-                    let score_a = context.players.by_id(player_a.id)
-                        .map(|p| Self::calculate_tackling_score(p))
-                        .unwrap_or(0.0);
-                    let score_b = context.players.by_id(player_b.id)
-                        .map(|p| Self::calculate_tackling_score(p))
-                        .unwrap_or(0.0);
-
-                    score_a
-                        .partial_cmp(&score_b)
-                        .unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .copied()
+            let mut best: Option<&MatchPlayer> = None;
+            let mut best_score: f32 = -1.0;
+            for &pid in nearby_slice {
+                if let Some(p) = players.iter().find(|p| p.id == pid) {
+                    let score = Self::calculate_tackling_score(p);
+                    if score > best_score {
+                        best_score = score;
+                        best = Some(p);
+                    }
+                }
+            }
+            best
         };
 
         // Transfer ownership to the best tackler (with stability checks)
@@ -806,10 +816,8 @@ impl Ball {
                 // Prevent rapid ownership changes by requiring significant advantage
                 if self.ownership_duration < min_ownership_duration {
                     if let Some(current_owner_id) = self.current_owner {
-                        // Find current owner in nearby players
-                        if let Some(_current_owner) = nearby_players.iter()
-                            .find(|p| p.id == current_owner_id)
-                        {
+                        // Check if current owner is among nearby players
+                        if nearby_slice.contains(&current_owner_id) {
                             if let (Some(current_owner_full), Some(challenger_full)) = (
                                 context.players.by_id(current_owner_id),
                                 context.players.by_id(player.id),

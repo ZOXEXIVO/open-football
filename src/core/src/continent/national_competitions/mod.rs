@@ -2,6 +2,9 @@ pub mod competition;
 pub mod config;
 pub mod national_team_competition;
 pub mod schedule;
+mod simulation;
+mod squad_builder;
+mod stats;
 
 pub use competition::*;
 pub use config::*;

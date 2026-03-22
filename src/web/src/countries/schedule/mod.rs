@@ -44,6 +44,7 @@ pub struct CountryScheduleItem {
 }
 
 pub struct CountryScheduleResult {
+    pub match_id: String,
     pub home_goals: u8,
     pub away_goals: u8,
 }
@@ -95,8 +96,6 @@ pub async fn country_schedule_action(
             ))
         })?;
 
-    let friendly_label = i18n.t("friendly").to_string();
-
     let items: Vec<CountryScheduleItem> = country
         .national_team
         .schedule
@@ -121,8 +120,9 @@ pub async fn country_schedule_action(
                 opponent_name,
                 opponent_slug,
                 is_home: fixture.is_home,
-                competition_name: friendly_label.clone(),
+                competition_name: fixture.competition_name.clone(),
                 result: fixture.result.as_ref().map(|res| CountryScheduleResult {
+                    match_id: fixture.match_id.clone(),
                     home_goals: res.home_score,
                     away_goals: res.away_score,
                 }),

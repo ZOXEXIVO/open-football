@@ -69,7 +69,7 @@ impl<'b> TeamOperationsImpl<'b> {
                     let ball_velocity = self.ctx.tick_context.positions.ball.velocity;
 
                     // If ball has significant velocity and is heading toward opponent's goal
-                    if ball_velocity.magnitude() > 1.0 {
+                    if ball_velocity.norm_squared() > 1.0 {
                         // Determine which way is "forward" based on team side
                         let forward_direction = match self.ctx.player.side {
                             Some(PlayerSide::Left) => Vector3::new(1.0, 0.0, 0.0),  // Left team attacks right
@@ -96,17 +96,18 @@ impl<'b> TeamOperationsImpl<'b> {
         // is closer to the ball than any opponent
         let ball_pos = self.ctx.tick_context.positions.ball.position;
 
-        let closest_teammate_dist = self.ctx.players().teammates().all()
-            .map(|p| (p.position - ball_pos).magnitude())
+        let closest_teammate_dist_sq = self.ctx.players().teammates().all()
+            .map(|p| (p.position - ball_pos).norm_squared())
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
-        let closest_opponent_dist = self.ctx.players().opponents().all()
-            .map(|p| (p.position - ball_pos).magnitude())
+        let closest_opponent_dist_sq = self.ctx.players().opponents().all()
+            .map(|p| (p.position - ball_pos).norm_squared())
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
 
         // If a teammate is significantly closer to the ball than any opponent
-        if let (Some(team_dist), Some(opp_dist)) = (closest_teammate_dist, closest_opponent_dist) {
-            if team_dist < opp_dist * 0.7 { // Teammate is at least 30% closer
+        // 0.7 distance ratio = 0.49 squared ratio
+        if let (Some(team_sq), Some(opp_sq)) = (closest_teammate_dist_sq, closest_opponent_dist_sq) {
+            if team_sq < opp_sq * 0.49 {
                 return true;
             }
         }
@@ -161,7 +162,7 @@ impl<'b> TeamOperationsImpl<'b> {
                 let player_position = self.ctx.tick_context.positions.players.position(player.id);
                 let player_velocity = self.ctx.tick_context.positions.players.velocity(player.id);
 
-                if player_velocity.magnitude() < 0.1 {
+                if player_velocity.norm_squared() < 0.01 {
                     return false;
                 }
 
@@ -169,11 +170,10 @@ impl<'b> TeamOperationsImpl<'b> {
                 let player_direction = player_velocity.normalize();
                 let dot_product = direction_to_ball.dot(&player_direction);
 
-                // Player is moving toward the ball
+                // Player is moving toward the ball (use norm_squared for distance comparison)
                 dot_product > 0.85 &&
-                    // And is closer or has better position
-                    (ball_position - player_position).magnitude() <
-                        (ball_position - self.ctx.player.position).magnitude() * 1.2
+                    (ball_position - player_position).norm_squared() <
+                        (ball_position - self.ctx.player.position).norm_squared() * 1.44 // 1.2^2
             })
     }
 
@@ -190,9 +190,9 @@ impl<'b> TeamOperationsImpl<'b> {
             }
         }
 
-        // Score for current player — single HashMap lookup
+        // Score for current player (use norm_squared to avoid sqrt)
+        let player_dist_sq = (ball_position - self.ctx.player.position).norm_squared();
         let player_score = {
-            let dist = (ball_position - self.ctx.player.position).magnitude();
             let skills = &self.ctx.player.skills;
             let pace_factor = skills.physical.pace / 20.0;
             let acceleration_factor = skills.physical.acceleration / 20.0;
@@ -202,21 +202,21 @@ impl<'b> TeamOperationsImpl<'b> {
                 PlayerFieldPositionGroup::Defender => 0.9,
                 PlayerFieldPositionGroup::Goalkeeper => 0.5,
             };
-            dist / (pace_factor * acceleration_factor * position_factor * 0.5 + 0.5)
+            let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
+            player_dist_sq / (ability * ability)
         };
 
-        let threshold = player_score * 0.8;
+        let threshold = player_score * 0.64; // 0.8^2
 
-        // Compare against teammates — use data already in MatchPlayerLite + single by_id lookup
+        // Compare against teammates
         !self.ctx
             .players()
             .teammates()
             .all()
             .any(|teammate| {
-                let dist = (ball_position - teammate.position).magnitude();
-                // Quick distance check: if teammate is farther than our raw distance,
-                // they can't beat our score (since position_factor <= 1.2)
-                if dist > player_score {
+                let dist_sq = (ball_position - teammate.position).norm_squared();
+                // Quick distance check
+                if dist_sq > player_dist_sq {
                     return false;
                 }
 
@@ -234,7 +234,8 @@ impl<'b> TeamOperationsImpl<'b> {
                     PlayerFieldPositionGroup::Goalkeeper => 0.5,
                 };
 
-                let score = dist / (pace_factor * acceleration_factor * position_factor * 0.5 + 0.5);
+                let ability = pace_factor * acceleration_factor * position_factor * 0.5 + 0.5;
+                let score = dist_sq / (ability * ability);
                 score < threshold
             })
     }

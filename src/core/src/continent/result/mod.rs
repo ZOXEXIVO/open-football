@@ -21,10 +21,13 @@ pub struct ContinentResult {
     pub rankings_update: Option<ContinentalRankingsUpdate>,
     pub transfer_summary: Option<CrossBorderTransferSummary>,
     pub economic_impact: Option<EconomicZoneImpact>,
+
+    /// Match results from national team competitions (for global match_store)
+    pub national_match_results: Vec<crate::r#match::MatchResult>,
 }
 
 impl ContinentResult {
-    pub fn new(continent_id: u32, countries: Vec<CountryResult>) -> Self {
+    pub fn new(continent_id: u32, countries: Vec<CountryResult>, national_match_results: Vec<crate::r#match::MatchResult>) -> Self {
         ContinentResult {
             continent_id,
             countries,
@@ -32,11 +35,17 @@ impl ContinentResult {
             rankings_update: None,
             transfer_summary: None,
             economic_impact: None,
+            national_match_results,
         }
     }
 
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
-        let current_date = data.date.date(); // Assuming SimulationResult has date
+        let current_date = data.date.date();
+
+        // Store national team match results in global match store
+        for match_result in &self.national_match_results {
+            data.match_store.push(match_result.clone());
+        }
 
         // Phase 2: Update Continental Rankings (monthly)
         if current_date.day() == 1 {

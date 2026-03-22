@@ -3,7 +3,6 @@ pub mod context;
 mod continent;
 pub mod economics;
 mod friendlies;
-mod national_competition_sim;
 pub mod national_competitions;
 pub mod rankings;
 pub mod regulations;

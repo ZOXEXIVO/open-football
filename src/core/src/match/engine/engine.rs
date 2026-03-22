@@ -185,7 +185,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // Pre-allocate tick context and events, reuse across ticks
         let mut tick_ctx = GameTickContext::new(field);
-        let mut events = EventCollection::new();
+        let mut events = EventCollection::with_capacity(10);
 
         let mut tick_parity: u32 = 0;
         let mut coach_eval_counter: u32 = 0;
@@ -279,7 +279,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         match_data: &mut ResultMatchPositionData,
         tick_ctx: &mut GameTickContext,
     ) {
-        let mut events = EventCollection::new();
+        let mut events = EventCollection::with_capacity(10);
         Self::game_tick_inner(field, context, match_data, tick_ctx, &mut events);
     }
 
@@ -316,8 +316,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         tick_ctx: &mut GameTickContext,
         events: &mut EventCollection,
     ) {
-        // Recalculate N² distance matrix every 5 ticks
-        field.update_distances(5);
+        // Recalculate N² distance matrix every 8 ticks (amortize O(N²) cost)
+        field.update_distances(8);
 
         tick_ctx.update(field);
 
@@ -373,11 +373,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context.record_goal_tick();
     }
 
+    #[inline]
     pub fn write_match_positions(
         field: &mut MatchField,
         timestamp: u64,
         match_data: &mut ResultMatchPositionData,
     ) {
+        if !match_data.is_tracking_positions() {
+            return;
+        }
+
         // player positions
         field.players.iter().for_each(|player| {
             match_data.add_player_positions(player.id, timestamp, player.position);
@@ -728,35 +733,40 @@ impl MatchFieldSize {
     }
 }
 
+/// Compact player entry for fast iteration in hot loops
+#[derive(Clone, Copy)]
+pub struct PlayerEntry {
+    pub id: u32,
+    pub team_id: u32,
+    pub position: PlayerPositionType,
+}
+
 pub struct MatchPlayerCollection {
-    pub players: HashMap<u32, MatchPlayer>,
+    players: HashMap<u32, MatchPlayer>,
+    /// Compact index for fast cache-friendly iteration
+    pub entries: Vec<PlayerEntry>,
 }
 
 impl MatchPlayerCollection {
     pub fn from_squads(home_squad: &MatchSquad, away_squad: &MatchSquad) -> Self {
-        let mut result = HashMap::new();
+        let mut players = HashMap::new();
+        let mut entries = Vec::with_capacity(44);
 
-        // home_main
-        for hs_m in &home_squad.main_squad {
-            result.insert(hs_m.id, hs_m.clone());
-        }
+        let add = |p: &MatchPlayer, map: &mut HashMap<u32, MatchPlayer>, entries: &mut Vec<PlayerEntry>| {
+            entries.push(PlayerEntry {
+                id: p.id,
+                team_id: p.team_id,
+                position: p.tactical_position.current_position,
+            });
+            map.insert(p.id, p.clone());
+        };
 
-        // home_subs
-        for hs_s in &home_squad.substitutes {
-            result.insert(hs_s.id, hs_s.clone());
-        }
+        for p in &home_squad.main_squad { add(p, &mut players, &mut entries); }
+        for p in &home_squad.substitutes { add(p, &mut players, &mut entries); }
+        for p in &away_squad.main_squad { add(p, &mut players, &mut entries); }
+        for p in &away_squad.substitutes { add(p, &mut players, &mut entries); }
 
-        // home_main
-        for as_m in &away_squad.main_squad {
-            result.insert(as_m.id, as_m.clone());
-        }
-
-        // home_subs
-        for as_s in &away_squad.substitutes {
-            result.insert(as_s.id, as_s.clone());
-        }
-
-        MatchPlayerCollection { players: result }
+        MatchPlayerCollection { players, entries }
     }
 
     pub fn by_id(&self, player_id: u32) -> Option<&MatchPlayer> {
@@ -769,9 +779,19 @@ impl MatchPlayerCollection {
 
     pub fn remove_player(&mut self, player_id: u32) {
         self.players.remove(&player_id);
+        self.entries.retain(|e| e.id != player_id);
     }
 
     pub fn update_player(&mut self, player_id: u32, player: MatchPlayer) {
+        // Update compact entry
+        let pos = player.tactical_position.current_position;
+        let team_id = player.team_id;
+        if let Some(entry) = self.entries.iter_mut().find(|e| e.id == player_id) {
+            entry.position = pos;
+            entry.team_id = team_id;
+        } else {
+            self.entries.push(PlayerEntry { id: player_id, team_id, position: pos });
+        }
         self.players.insert(player_id, player);
     }
 }

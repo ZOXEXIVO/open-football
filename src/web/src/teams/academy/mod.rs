@@ -159,7 +159,7 @@ pub async fn team_academy_action(
         sub_title_link: league
             .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_country_code: simulator_data.country_by_club(team.club_id).map(|c| c.code.to_lowercase()).unwrap_or_default(),
         header_color: club.colors.background.clone(),
         foreground_color: club.colors.foreground.clone(),
         menu_sections,

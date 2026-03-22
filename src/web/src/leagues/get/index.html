@@ -71,7 +71,7 @@
                         <div class="fx-home">
                             <a href="/{{ lang }}/teams/{{ item.home_team_slug }}">{{ item.home_team_name }}</a>
                         </div>
-                        <a href="/{{ lang }}/match/{{ league_slug }}/{{ item.match_id }}" class="fx-score">
+                        <a href="/{{ lang }}/match/{{ item.match_id }}" class="fx-score">
                             {% if let Some(result) = item.result %}
                             {{ result.home_goals }} – {{ result.away_goals }}
                             {% else %}

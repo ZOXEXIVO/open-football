@@ -1,5 +1,11 @@
 use chrono::NaiveDate;
 
+/// Reserved league_id values for continental competitions.
+/// Used in match result processing to identify competition type.
+pub const CHAMPIONS_LEAGUE_ID: u32 = 900_000_001;
+pub const EUROPA_LEAGUE_ID: u32 = 900_000_002;
+pub const CONFERENCE_LEAGUE_ID: u32 = 900_000_003;
+
 #[derive(Debug, Clone)]
 pub enum CompetitionStage {
     NotStarted,

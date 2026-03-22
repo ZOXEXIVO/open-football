@@ -63,6 +63,9 @@ mod processor {
         pub technical_avg: f32,
         pub mental_avg: f32,
         pub physical_avg: f32,
+        pub current_reputation: i16,
+        pub home_reputation: i16,
+        pub world_reputation: i16,
     }
 }
 

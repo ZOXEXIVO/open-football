@@ -72,6 +72,8 @@ pub struct NationalTeamFixture {
     pub opponent_country_id: u32,
     pub opponent_country_name: String,
     pub is_home: bool,
+    pub competition_name: String,
+    pub match_id: String,
     pub result: Option<NationalTeamMatchResult>,
 }
 
@@ -159,6 +161,8 @@ pub(crate) struct CallUpCandidate {
     determination: f32,
     pressure_handling: f32,
     world_reputation: i16,
+    /// League reputation where the player competes (0-1000, higher = stronger league)
+    league_reputation: u16,
     position_levels: Vec<(PlayerPositionType, u8)>,
     position_group: PlayerFieldPositionGroup,
 }
@@ -239,14 +243,15 @@ impl NationalTeam {
             self.call_up_squad(clubs, candidates, date, country_id, country_ids);
         }
 
-        // Release squad at break end
+        // Release squad at break end — clear Int status but keep squad data
+        // so the national squad page can still display the last selection
         if Self::is_break_end(date) {
-            self.release_squad(clubs);
+            self.release_player_status(clubs);
         }
 
         // Release squad at tournament end
         if Self::is_tournament_end(date) && !self.squad.is_empty() {
-            self.release_squad(clubs);
+            self.release_player_status(clubs);
         }
     }
 
@@ -319,7 +324,8 @@ impl NationalTeam {
     }
 
     /// Collect eligible national team candidates from clubs.
-    /// Scans all provided clubs for players matching the given country_id.
+    /// Filters out players from very low divisions and those below minimum ability.
+    /// Like real FM: national coaches primarily select from top divisions.
     pub(crate) fn collect_candidates(
         clubs: &[Club],
         country_id: u32,
@@ -329,9 +335,16 @@ impl NationalTeam {
 
         for club in clubs.iter() {
             for team in club.teams.teams.iter() {
+                // Only main teams (no reserves/youth)
                 if team.team_type != TeamType::Main {
                     continue;
                 }
+
+                // Get league reputation for this team
+                let league_rep = team.league_id
+                    .map(|_| team.reputation.world)
+                    .unwrap_or(0);
+
                 for player in team.players.players.iter() {
                     if player.country_id != country_id {
                         continue;
@@ -343,7 +356,16 @@ impl NationalTeam {
                         continue;
                     }
 
+                    // Minimum ability threshold: skip clearly unfit players
+                    // Exception: allow young high-potential players (future stars)
+                    let ability = player.player_attributes.current_ability;
+                    let potential = player.player_attributes.potential_ability;
                     let age = date.year() - player.birth_date.year();
+
+                    if ability < 80 && !(age <= 21 && potential >= 130) {
+                        continue;
+                    }
+
                     let condition_pct =
                         (player.player_attributes.condition as f32 / 10000.0) * 100.0;
 
@@ -366,8 +388,8 @@ impl NationalTeam {
                         player_id: player.id,
                         club_id: club.id,
                         team_id: team.id,
-                        current_ability: player.player_attributes.current_ability,
-                        potential_ability: player.player_attributes.potential_ability,
+                        current_ability: ability,
+                        potential_ability: potential,
                         age,
                         condition_pct,
                         match_readiness: player.skills.physical.match_readiness,
@@ -381,6 +403,7 @@ impl NationalTeam {
                         determination: player.skills.mental.determination,
                         pressure_handling: player.attributes.pressure,
                         world_reputation: player.player_attributes.world_reputation,
+                        league_reputation: league_rep,
                         position_levels,
                         position_group,
                     });
@@ -391,8 +414,9 @@ impl NationalTeam {
         candidates
     }
 
-    /// Collect eligible candidates from all clubs, grouped by player nationality.
-    /// Used at the continent level to search across ALL countries' clubs.
+    /// Collect eligible candidates from all clubs across all countries, grouped by nationality.
+    /// Used at the continent level to find players playing abroad.
+    /// Applies same quality filters as collect_candidates.
     pub(crate) fn collect_all_candidates_by_country(
         countries: &[Country],
         date: NaiveDate,
@@ -405,6 +429,11 @@ impl NationalTeam {
                     if team.team_type != TeamType::Main {
                         continue;
                     }
+
+                    let league_rep = team.league_id
+                        .map(|_| team.reputation.world)
+                        .unwrap_or(0);
+
                     for player in &team.players.players {
                         if player.player_attributes.is_injured
                             || player.player_attributes.is_banned
@@ -413,7 +442,15 @@ impl NationalTeam {
                             continue;
                         }
 
+                        let ability = player.player_attributes.current_ability;
+                        let potential = player.player_attributes.potential_ability;
                         let age = date.year() - player.birth_date.year();
+
+                        // Minimum ability filter (same as collect_candidates)
+                        if ability < 80 && !(age <= 21 && potential >= 130) {
+                            continue;
+                        }
+
                         let condition_pct =
                             (player.player_attributes.condition as f32 / 10000.0) * 100.0;
 
@@ -436,8 +473,8 @@ impl NationalTeam {
                             player_id: player.id,
                             club_id: club.id,
                             team_id: team.id,
-                            current_ability: player.player_attributes.current_ability,
-                            potential_ability: player.player_attributes.potential_ability,
+                            current_ability: ability,
+                            potential_ability: potential,
                             age,
                             condition_pct,
                             match_readiness: player.skills.physical.match_readiness,
@@ -451,6 +488,7 @@ impl NationalTeam {
                             determination: player.skills.mental.determination,
                             pressure_handling: player.attributes.pressure,
                             world_reputation: player.player_attributes.world_reputation,
+                            league_reputation: league_rep,
                             position_levels,
                             position_group,
                         });
@@ -530,6 +568,8 @@ impl NationalTeam {
                     opponent_country_id: opp_id_1,
                     opponent_country_name: opp_name_1,
                     is_home: true,
+                    competition_name: "Friendly".to_string(),
+                    match_id: String::new(),
                     result: None,
                 });
                 self.schedule.push(NationalTeamFixture {
@@ -537,6 +577,8 @@ impl NationalTeam {
                     opponent_country_id: opp_id_2,
                     opponent_country_name: opp_name_2,
                     is_home: false,
+                    competition_name: "Friendly".to_string(),
+                    match_id: String::new(),
                     result: None,
                 });
             }
@@ -553,18 +595,29 @@ impl NationalTeam {
     }
 
     /// Score a candidate player for national team selection.
-    /// Returns a weighted score based on ability, tactical fit, form,
-    /// experience, mentality, and age profile — adjusted for match context.
+    ///
+    /// Like real FM national team AI:
+    /// - Ability is the primary factor (you must be good enough)
+    /// - Playing at a high level (top division) is strongly favored
+    /// - World reputation matters (coaches watch famous players)
+    /// - Current form/match rating matters more than raw stats
+    /// - International experience gives proven reliability
+    /// - Age profile: tournaments prefer prime, friendlies prefer youth
     fn score_candidate(
         candidate: &CallUpCandidate,
         tactics: &Tactics,
         is_tournament: bool,
         country_id: u32,
     ) -> f32 {
-        // 1. Ability (0-100)
+        // 1. Ability (0-100) — the core factor
         let ability_score = (candidate.current_ability as f32 / 200.0) * 100.0;
 
-        // 2. Tactical fit — best match to any required position (0-100)
+        // 2. League level bonus (0-100) — playing in a top league is a major signal
+        // Serie A (rep ~800+) = 80-100, Championship (~500) = 50, Serie C (~200) = 20
+        // This is the key factor that prevents Serie C players from being selected
+        let league_score = (candidate.league_reputation as f32 / 10.0).clamp(0.0, 100.0);
+
+        // 3. Tactical fit — best match to any required position (0-100)
         let required_positions = tactics.positions();
         let tactical_score = required_positions
             .iter()
@@ -579,7 +632,7 @@ impl NationalTeam {
             / 20.0
             * 100.0;
 
-        // 3. Form & match readiness (0-100)
+        // 4. Form & match readiness (0-100)
         let condition_norm = candidate.condition_pct.clamp(0.0, 100.0);
         let readiness_norm = (candidate.match_readiness / 20.0).clamp(0.0, 1.0) * 100.0;
         let rating_norm = if candidate.average_rating > 0.0 {
@@ -589,16 +642,16 @@ impl NationalTeam {
         };
         let games_bonus = (candidate.played as f32).min(30.0) / 30.0 * 20.0;
         let form_score =
-            condition_norm * 0.25 + readiness_norm * 0.25 + rating_norm * 0.35 + games_bonus * 0.15;
+            condition_norm * 0.2 + readiness_norm * 0.2 + rating_norm * 0.4 + games_bonus * 0.2;
 
-        // 4. International experience (0-100)
-        let apps_norm = (candidate.international_apps as f32).min(100.0);
-        let goals_bonus = (candidate.international_goals as f32).min(50.0) / 50.0 * 20.0;
-        let rep_bonus =
-            (candidate.world_reputation as f32).max(0.0).min(600.0) / 600.0 * 30.0;
-        let experience_score = (apps_norm + goals_bonus + rep_bonus).min(100.0);
+        // 5. Reputation & international experience (0-100)
+        // World reputation is on 0-10000 scale — top players are 5000+
+        let rep_norm = (candidate.world_reputation.max(0) as f32 / 8000.0).clamp(0.0, 1.0) * 60.0;
+        let apps_norm = (candidate.international_apps as f32).min(80.0) / 80.0 * 25.0;
+        let goals_bonus = (candidate.international_goals as f32).min(40.0) / 40.0 * 15.0;
+        let experience_score = (rep_norm + apps_norm + goals_bonus).min(100.0);
 
-        // 5. Mental & personality (0-100)
+        // 6. Mental & personality (0-100)
         let mental_avg = (candidate.leadership
             + candidate.composure
             + candidate.teamwork
@@ -607,53 +660,49 @@ impl NationalTeam {
             / 5.0;
         let mental_score = (mental_avg / 20.0).clamp(0.0, 1.0) * 100.0;
 
-        // 6. Age profile (0-100) — tournaments favour prime age,
-        //    friendlies favour youth development
+        // 7. Age profile (0-100)
         let age_score = if is_tournament {
             match candidate.age {
                 ..=20 => 40.0,
-                21..=23 => 60.0,
-                24..=29 => 85.0,
+                21..=23 => 65.0,
+                24..=29 => 90.0,
                 30..=32 => 75.0,
-                33..=35 => 55.0,
-                _ => 35.0,
+                33..=35 => 50.0,
+                _ => 30.0,
             }
         } else {
             match candidate.age {
-                ..=20 => 80.0,
-                21..=23 => 90.0,
+                ..=20 => 75.0,
+                21..=23 => 85.0,
                 24..=29 => 70.0,
                 30..=32 => 45.0,
                 33..=35 => 30.0,
-                _ => 20.0,
+                _ => 15.0,
             }
         };
 
-        // 7. Potential (only meaningful in friendlies)
+        // 8. Potential (only meaningful in friendlies)
         let potential_score = (candidate.potential_ability as f32 / 200.0) * 100.0;
 
-        // 8. Coach bias — deterministic per country, adds a small preference
+        // 9. Coach bias — deterministic per country
         let coach_bias = match country_id % 4 {
             0 => (candidate.international_apps as f32).min(80.0) / 80.0 * 5.0,
-            1 => {
-                if candidate.age <= 24 {
-                    5.0
-                } else {
-                    0.0
-                }
-            }
-            2 => (candidate.world_reputation as f32).max(0.0).min(500.0) / 500.0 * 5.0,
+            1 => if candidate.age <= 24 { 5.0 } else { 0.0 },
+            2 => (candidate.world_reputation.max(0) as f32 / 5000.0).clamp(0.0, 1.0) * 5.0,
             _ => (candidate.leadership / 20.0).clamp(0.0, 1.0) * 5.0,
         };
 
         // Apply context-dependent weights
+        // Tournament: proven quality + big club players + experience
+        // Friendly: experiment with youth + potential
         let weighted = if is_tournament {
-            ability_score * 0.35
-                + tactical_score * 0.20
-                + form_score * 0.15
+            ability_score * 0.30
+                + league_score * 0.15
+                + tactical_score * 0.15
+                + form_score * 0.10
                 + experience_score * 0.15
-                + mental_score * 0.10
-                + age_score * 0.05
+                + mental_score * 0.08
+                + age_score * 0.07
         } else {
             let youth_bonus = if candidate.age <= 23 && candidate.international_apps < 10 {
                 8.0
@@ -661,11 +710,12 @@ impl NationalTeam {
                 0.0
             };
             ability_score * 0.20
+                + league_score * 0.10
                 + tactical_score * 0.10
-                + form_score * 0.15
+                + form_score * 0.10
                 + experience_score * 0.05
-                + mental_score * 0.10
-                + age_score * 0.15
+                + mental_score * 0.08
+                + age_score * 0.12
                 + potential_score * 0.15
                 + youth_bonus
         };
@@ -1106,32 +1156,6 @@ impl NationalTeam {
         }
     }
 
-    /// Play a competition match between two national teams.
-    /// Returns (home_score, away_score, player_goals: HashMap<player_id, goals>).
-    /// This is called from the continent level for cross-country matches.
-    pub fn play_competition_match(
-        home_squad: MatchSquad,
-        away_squad: MatchSquad,
-    ) -> (u8, u8, HashMap<u32, u16>) {
-        let match_result = FootballEngine::<840, 545>::play(home_squad, away_squad, crate::is_match_recordings_mode(), false);
-
-        let score = match_result
-            .score
-            .as_ref()
-            .expect("match should have score");
-        let home_score = score.home_team.get();
-        let away_score = score.away_team.get();
-
-        // Collect player goals
-        let player_goals: HashMap<u32, u16> = match_result
-            .player_stats
-            .iter()
-            .filter(|(_, stats)| stats.goals > 0)
-            .map(|(&id, stats)| (id, stats.goals))
-            .collect();
-
-        (home_score, away_score, player_goals)
-    }
 
     /// Build a synthetic opponent squad for friendly matches
     pub fn build_synthetic_opponent_squad(opponent_country_id: u32, opponent_name: &str) -> MatchSquad {
@@ -1212,6 +1236,20 @@ impl NationalTeam {
             vice_captain_id: None,
             penalty_taker_id: None,
             free_kick_taker_id: None,
+        }
+    }
+
+    /// Remove Int status from players but keep squad data for display
+    fn release_player_status(&mut self, clubs: &mut [Club]) {
+        let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
+        for club in clubs.iter_mut() {
+            for team in club.teams.teams.iter_mut() {
+                for player in team.players.players.iter_mut() {
+                    if squad_player_ids.contains(&player.id) {
+                        player.statuses.remove(PlayerStatusType::Int);
+                    }
+                }
+            }
         }
     }
 

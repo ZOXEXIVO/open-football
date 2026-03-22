@@ -40,16 +40,16 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .context
             .players
-            .players
-            .values()
-            .filter(move |player| {
-                player.team_id == team_id
-                    && player.tactical_position.current_position.position_group() == position_group
+            .entries
+            .iter()
+            .filter(move |entry| {
+                entry.team_id == team_id
+                    && entry.position.position_group() == position_group
             })
-            .map(|player| MatchPlayerLite {
-                id: player.id,
-                position: self.ctx.tick_context.positions.players.position(player.id),
-                tactical_positions: player.tactical_position.current_position
+            .map(|entry| MatchPlayerLite {
+                id: entry.id,
+                position: self.ctx.tick_context.positions.players.position(entry.id),
+                tactical_positions: entry.position,
             })
     }
 
@@ -62,25 +62,23 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
         self.ctx
             .context
             .players
-            .players
-            .values()
-            .filter(move |player| {
-                // Check if player matches team criteria
-                if player.id == player_id || player.team_id != team_id {
+            .entries
+            .iter()
+            .filter(move |entry| {
+                if entry.id == player_id || entry.team_id != team_id {
                     return false;
                 }
 
-                // Check if player matches has_ball criteria
                 match has_ball {
-                    None => true,  // No filter, include all teammates
-                    Some(true) => self.ctx.ball().owner_id() == Some(player.id),  // Only teammates with ball
-                    Some(false) => self.ctx.ball().owner_id() != Some(player.id)  // Only teammates without ball
+                    None => true,
+                    Some(true) => self.ctx.ball().owner_id() == Some(entry.id),
+                    Some(false) => self.ctx.ball().owner_id() != Some(entry.id),
                 }
             })
-            .map(|player| MatchPlayerLite {
-                id: player.id,
-                position: self.ctx.tick_context.positions.players.position(player.id),
-                tactical_positions: player.tactical_position.current_position
+            .map(|entry| MatchPlayerLite {
+                id: entry.id,
+                position: self.ctx.tick_context.positions.players.position(entry.id),
+                tactical_positions: entry.position,
             })
     }
 

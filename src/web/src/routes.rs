@@ -1,7 +1,10 @@
 use crate::ai::ai_routes;
 use crate::champions_league::champions_league_routes;
+use crate::conference_league::conference_league_routes;
 use crate::countries::country_routes;
 use crate::date::current_date_routes;
+use crate::europa_league::europa_league_routes;
+use crate::national_competitions::national_competitions_routes;
 use crate::face::face_routes;
 use crate::game::game_routes;
 use crate::i18n::{detect_language, SUPPORTED_LANG_CODES};
@@ -78,6 +81,9 @@ impl ServerRoutes {
             .route("/", get(root_redirect))
             .route("/sitemap.xml", get(sitemap_xml))
             .merge(champions_league_routes())
+            .merge(europa_league_routes())
+            .merge(conference_league_routes())
+            .merge(national_competitions_routes())
             .merge(country_routes())
             .merge(game_routes())
             .merge(league_routes())

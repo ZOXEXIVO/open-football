@@ -1,4 +1,4 @@
-use crate::club::team::coach_perception::CoachDecisionState;
+use crate::club::staff::perception::CoachDecisionState;
 use crate::{PlayerFieldPositionGroup, Team};
 
 /// Computes overall squad satisfaction (0.0–1.0) from four weighted factors:

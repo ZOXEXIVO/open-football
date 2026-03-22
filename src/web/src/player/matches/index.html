@@ -32,11 +32,15 @@
                         <span class="fm-venue venue-a">A</span>
                         {% endif %}
                     </td>
-                    <td class="sch-opponent"><a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a></td>
+                    <td class="sch-opponent">{% if !item.opponent_slug.is_empty() %}<a href="/{{ lang }}/teams/{{ item.opponent_slug }}">{{ item.opponent_name }}</a>{% else %}{{ item.opponent_name }}{% endif %}</td>
                     <td class="sch-comp">{{ item.competition_name }}</td>
                     <td class="sch-result">
                         {% if let Some(result) = item.result %}
-                        <a href="/{{ lang }}/match/{{ league_slug }}/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
+                        {% if !result.match_id.is_empty() %}
+                        <a href="/{{ lang }}/match/{{ result.match_id }}" class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</a>
+                        {% else %}
+                        <span class="fm-result">{{ result.home_goals }} - {{ result.away_goals }}</span>
+                        {% endif %}
                         {% else %}
                         <span class="fm-pending">-</span>
                         {% endif %}

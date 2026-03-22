@@ -7,11 +7,11 @@ pub fn match_routes() -> Router<GameAppData> {
     Router::new()
         .merge(super::get::routes::routes())
         .route(
-            "/api/match/{league_slug}/{match_id}/metadata",
+            "/api/match/{match_id}/metadata",
             get(match_metadata_action),
         )
         .route(
-            "/api/match/{league_slug}/{match_id}/chunk/{chunk_number}",
+            "/api/match/{match_id}/chunk/{chunk_number}",
             get(match_chunk_action),
         )
 }

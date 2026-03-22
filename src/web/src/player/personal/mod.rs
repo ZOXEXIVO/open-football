@@ -44,6 +44,7 @@ pub struct PlayerPersonalTemplate {
     pub behaviour: String,
     pub manager_relationship: Option<ManagerRelationshipDto>,
     pub player_info: PlayerInfoDto,
+    pub reputation: ReputationDto,
 }
 
 pub struct PersonalityDto {
@@ -92,6 +93,15 @@ pub struct ManagerRelationshipDto {
     pub label: String,
     pub trust: u8,
     pub respect: u8,
+}
+
+pub struct ReputationDto {
+    pub current: u8,
+    pub current_label: String,
+    pub home: u8,
+    pub home_label: String,
+    pub world: u8,
+    pub world_label: String,
 }
 
 pub struct PlayerInfoDto {
@@ -161,6 +171,7 @@ pub async fn player_personal_action(
         })
         .flatten();
     let player_info = get_player_info(player, &i18n);
+    let reputation = get_reputation(player, &i18n);
 
     Ok(PlayerPersonalTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
@@ -195,6 +206,7 @@ pub async fn player_personal_action(
         behaviour,
         manager_relationship,
         player_info,
+        reputation,
     })
 }
 
@@ -480,6 +492,39 @@ fn get_manager_relationship(player: &Player, head_coach: &core::Staff, i18n: &cr
         trust: (rel.trust_in_abilities.round().clamp(0.0, 100.0)) as u8,
         respect: (rel.authority_respect.round().clamp(0.0, 100.0)) as u8,
     })
+}
+
+fn reputation_label(value: i16, i18n: &crate::I18n) -> String {
+    if value >= 8000 {
+        i18n.t("rep_world_class")
+    } else if value >= 6000 {
+        i18n.t("rep_continental")
+    } else if value >= 4000 {
+        i18n.t("rep_national")
+    } else if value >= 2000 {
+        i18n.t("rep_regional")
+    } else if value >= 500 {
+        i18n.t("rep_local")
+    } else {
+        i18n.t("rep_unknown")
+    }.to_string()
+}
+
+fn get_reputation(player: &Player, i18n: &crate::I18n) -> ReputationDto {
+    let pa = &player.player_attributes;
+    // Scale 0-10000 to 0-100 for progress bar percentage
+    let current_pct = (pa.current_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+    let home_pct = (pa.home_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+    let world_pct = (pa.world_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
+
+    ReputationDto {
+        current: current_pct,
+        current_label: reputation_label(pa.current_reputation, i18n),
+        home: home_pct,
+        home_label: reputation_label(pa.home_reputation, i18n),
+        world: world_pct,
+        world_label: reputation_label(pa.world_reputation, i18n),
+    }
 }
 
 fn get_neighbor_teams(

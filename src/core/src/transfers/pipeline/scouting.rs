@@ -610,6 +610,9 @@ impl PipelineProcessor {
                         technical_avg: player.skills.technical.average(),
                         mental_avg: player.skills.mental.average(),
                         physical_avg: player.skills.physical.average(),
+                        current_reputation: player.player_attributes.current_reputation,
+                        home_reputation: player.player_attributes.home_reputation,
+                        world_reputation: player.player_attributes.world_reputation,
                     });
                 }
             }
@@ -665,6 +668,9 @@ impl PipelineProcessor {
                         technical_avg: player.skills.technical.average(),
                         mental_avg: player.skills.mental.average(),
                         physical_avg: player.skills.physical.average(),
+                        current_reputation: player.player_attributes.current_reputation,
+                        home_reputation: player.player_attributes.home_reputation,
+                        world_reputation: player.player_attributes.world_reputation,
                     });
                 }
             }
@@ -788,19 +794,16 @@ impl PipelineProcessor {
                             .or_else(|| matching.first())
                             .unwrap()
                     } else {
-                        // Discover new player
+                        // Discover new player — reputation-weighted selection
+                        // Famous players are more visible to scouts (media coverage, word of mouth)
                         let new_players: Vec<&&PlayerSummary> = matching
                             .iter()
                             .filter(|p| !already_observed_ids.contains(&p.player_id))
                             .collect();
                         if !new_players.is_empty() {
-                            let idx = (IntegerUtils::random(0, new_players.len() as i32) as usize)
-                                .min(new_players.len() - 1);
-                            new_players[idx]
+                            Self::pick_reputation_weighted(&new_players)
                         } else {
-                            let idx = (IntegerUtils::random(0, matching.len() as i32) as usize)
-                                .min(matching.len() - 1);
-                            matching[idx]
+                            Self::pick_reputation_weighted(&matching.iter().collect::<Vec<_>>())
                         }
                     };
 
@@ -1021,5 +1024,34 @@ impl PipelineProcessor {
                 }
             }
         }
+    }
+
+    /// Pick a player from a list with probability weighted by reputation.
+    /// Higher reputation = more likely to be discovered (media exposure, word of mouth).
+    /// A player with 5000 world_rep is ~6x more likely to be picked than one with 0.
+    fn pick_reputation_weighted<'a>(players: &[&'a &PlayerSummary]) -> &'a PlayerSummary {
+        if players.len() <= 1 {
+            return players.first().unwrap();
+        }
+
+        // Weight = base(1.0) + reputation bonus (0.0 to 5.0)
+        // Uses max of world and home reputation for visibility
+        let weights: Vec<f32> = players.iter().map(|p| {
+            let rep = p.world_reputation.max(p.home_reputation) as f32;
+            1.0 + (rep / 2000.0).min(5.0)
+        }).collect();
+
+        let total: f32 = weights.iter().sum();
+        let roll = IntegerUtils::random(0, (total * 100.0) as i32) as f32 / 100.0;
+
+        let mut cumulative = 0.0;
+        for (i, w) in weights.iter().enumerate() {
+            cumulative += w;
+            if roll < cumulative {
+                return players[i];
+            }
+        }
+
+        players.last().unwrap()
     }
 }

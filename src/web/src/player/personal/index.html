@@ -33,12 +33,12 @@
                     <div class="fm-personal-detail fm-bar-row">
                         <span class="fm-detail-label">{{ i18n.t("condition") }}</span>
                         <div class="fm-mini-bar"><div class="fm-mini-fill{% if player_info.condition >= 70 %} fm-condition-good{% elif player_info.condition >= 40 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ player_info.condition }}%"></div></div>
-                        <span class="fm-detail-value-sm">{{ player_info.condition }}%</span>
+                        <span class="fm-detail-value-sm fm-rep-label">{{ player_info.condition }}%</span>
                     </div>
                     <div class="fm-personal-detail fm-bar-row">
                         <span class="fm-detail-label">{{ i18n.t("natural_fitness") }}</span>
                         <div class="fm-mini-bar"><div class="fm-mini-fill" style="width:{{ player_info.fitness }}%"></div></div>
-                        <span class="fm-detail-value-sm">{{ player_info.fitness }}%</span>
+                        <span class="fm-detail-value-sm fm-rep-label">{{ player_info.fitness }}%</span>
                     </div>
                 </div>
                 {% if !player_info.squad_status.is_empty() %}
@@ -69,6 +69,24 @@
                     </div>
                 </div>
                 {% endif %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("reputation") }}</h4>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("rep_current") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if reputation.current >= 60 %} fm-condition-good{% elif reputation.current >= 30 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ reputation.current }}%"></div></div>
+                        <span class="fm-detail-value-sm fm-rep-label">{{ reputation.current_label }}</span>
+                    </div>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("rep_home") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if reputation.home >= 60 %} fm-condition-good{% elif reputation.home >= 30 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ reputation.home }}%"></div></div>
+                        <span class="fm-detail-value-sm fm-rep-label">{{ reputation.home_label }}</span>
+                    </div>
+                    <div class="fm-personal-detail fm-bar-row">
+                        <span class="fm-detail-label">{{ i18n.t("rep_world") }}</span>
+                        <div class="fm-mini-bar"><div class="fm-mini-fill{% if reputation.world >= 60 %} fm-condition-good{% elif reputation.world >= 30 %} fm-condition-okay{% else %} fm-condition-poor{% endif %}" style="width:{{ reputation.world }}%"></div></div>
+                        <span class="fm-detail-value-sm fm-rep-label">{{ reputation.world_label }}</span>
+                    </div>
+                </div>
             </section>
         </div>
 

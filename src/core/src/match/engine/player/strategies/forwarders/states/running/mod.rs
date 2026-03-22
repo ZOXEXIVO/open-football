@@ -415,14 +415,20 @@ impl StateProcessingHandler for ForwardRunningState {
             let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.45);
 
             // === UNIQUE FORWARD SLOT: spread forwards vertically ===
-            let mut teammate_fwd_ids: Vec<u32> = ctx.players().teammates().all()
-                .filter(|t| t.tactical_positions.is_forward())
-                .map(|t| t.id)
-                .collect();
-            teammate_fwd_ids.push(ctx.player.id);
-            teammate_fwd_ids.sort();
-            let slot_index = teammate_fwd_ids.iter().position(|&id| id == ctx.player.id).unwrap_or(0);
-            let total_fwds = teammate_fwd_ids.len().max(1);
+            // Count forwards and determine slot by ID ordering (no allocation)
+            let my_id = ctx.player.id;
+            let mut slot_index = 0u32;
+            let mut total_fwds = 1u32; // count self
+            for t in ctx.players().teammates().all() {
+                if t.tactical_positions.is_forward() {
+                    total_fwds += 1;
+                    if t.id < my_id {
+                        slot_index += 1;
+                    }
+                }
+            }
+            let slot_index = slot_index as usize;
+            let total_fwds = total_fwds as usize;
 
             // Spread forwards across 25%-75% of field height
             let slot_y = field_height * 0.25

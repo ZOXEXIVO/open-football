@@ -1,4 +1,4 @@
-use crate::club::team::coach_perception::{CoachDecisionState, RecentMoveType};
+use crate::club::staff::perception::{CoachDecisionState, RecentMoveType};
 use crate::Team;
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};

@@ -20,6 +20,7 @@ impl GameTickContext {
         }
     }
 
+    #[inline]
     pub fn update(&mut self, field: &MatchField) {
         self.ball.update(field);
         self.positions.update(field);

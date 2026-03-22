@@ -1,5 +1,5 @@
 use crate::ai::PendingAiRequest;
-use crate::club::team::coach_perception::{CoachDecisionState, date_to_week};
+use crate::club::staff::perception::{CoachDecisionState, date_to_week};
 use crate::club::team::squad::{SquadComposition, SquadManager, TransferListManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;

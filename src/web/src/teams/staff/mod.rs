@@ -226,7 +226,7 @@ pub async fn team_staff_action(
         sub_title_link: league
             .map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug))
             .unwrap_or_default(),
-        sub_title_country_code: String::new(),
+        sub_title_country_code: simulator_data.country_by_club(team.club_id).map(|c| c.code.to_lowercase()).unwrap_or_default(),
         header_color: simulator_data
             .club(team.club_id)
             .map(|c| c.colors.background.clone())

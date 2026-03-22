@@ -7,6 +7,15 @@ pub struct BallFieldData {
     pub landing_position: Vector3<f32>,
 }
 
+impl BallFieldData {
+    #[inline]
+    pub fn update_from(&mut self, ball: &Ball) {
+        self.position = ball.position;
+        self.velocity = ball.velocity;
+        self.landing_position = ball.calculate_landing_position();
+    }
+}
+
 impl From<&Ball> for BallFieldData {
     #[inline]
     fn from(ball: &Ball) -> Self {

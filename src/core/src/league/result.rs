@@ -1,4 +1,5 @@
 use crate::club::player::injury::InjuryType;
+use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
 use crate::league::{LeagueTableResult, ScheduleItem};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{FieldSquad, GoalDetail, MatchResult, MatchResultRaw, Score, TeamScore};
@@ -243,10 +244,33 @@ impl LeagueResult {
         Self::apply_post_match_physical_effects(details, data);
 
         // Update player reputations based on match performance
-        let league_reputation = data.league(result.league_id)
-            .map(|l| l.reputation)
-            .unwrap_or(500) as f32;
-        let league_weight = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
+        //
+        // Continental competitions (CL/EL/Conference) use reserved league_id >= 900_000_000:
+        //   Champions League:    900_000_001
+        //   Europa League:       900_000_002
+        //   Conference League:   900_000_003
+        //
+        // These get special reputation weights — especially for world reputation,
+        // since playing in European competition is the primary driver of global recognition.
+        let (league_weight, world_weight) = if result.league_id == CHAMPIONS_LEAGUE_ID {
+            // Champions League: highest prestige, massive world reputation boost
+            (1.5, 1.2)
+        } else if result.league_id == EUROPA_LEAGUE_ID {
+            // Europa League: high prestige
+            (1.3, 0.8)
+        } else if result.league_id == CONFERENCE_LEAGUE_ID {
+            // Conference League: moderate prestige
+            (1.1, 0.5)
+        } else if is_cup {
+            // Other cup competitions
+            (1.0, 0.3)
+        } else {
+            let league_reputation = data.league(result.league_id)
+                .map(|l| l.reputation)
+                .unwrap_or(500) as f32;
+            let w = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
+            (w, 0.2)
+        };
 
         for (player_id, stats_data) in &details.player_stats {
             let rating_delta = (stats_data.match_rating - 6.0) * 20.0;
@@ -263,7 +287,7 @@ impl LeagueResult {
             } else {
                 let current_delta = (raw_delta * league_weight) as i16;
                 let home_delta = (raw_delta * 0.6 * league_weight) as i16;
-                let world_delta = (raw_delta * 0.2 * league_weight) as i16;
+                let world_delta = (raw_delta * world_weight * league_weight) as i16;
                 if let Some(player) = data.player_mut(*player_id) {
                     player.player_attributes.update_reputation(current_delta, home_delta, world_delta);
                 }

@@ -12,7 +12,6 @@ use serde::{Deserialize, Serialize};
 #[derive(Deserialize)]
 pub struct MatchGetRequest {
     pub lang: String,
-    pub league_slug: String,
     pub match_id: String,
 }
 
@@ -101,34 +100,47 @@ pub async fn match_get_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let league_id = simulator_data
-        .indexes
-        .as_ref()
-        .ok_or_else(|| ApiError::InternalError("Indexes not available".to_string()))?
-        .slug_indexes
-        .get_league_by_slug(&route_params.league_slug)
-        .ok_or_else(|| {
-            ApiError::NotFound(format!("League '{}' not found", route_params.league_slug))
-        })?;
-
-    let league = simulator_data
-        .league(league_id)
-        .ok_or_else(|| ApiError::NotFound(format!("League with ID {} not found", league_id)))?;
-
-    let match_result = league
-        .matches
-        .get(&route_params.match_id)
+    // Look up match from global store, then fall back to scanning leagues
+    let match_result = simulator_data.match_store.get(&route_params.match_id)
+        .or_else(|| {
+            // Fall back: scan all leagues for the match (league matches stored per-league)
+            simulator_data.continents.iter()
+                .flat_map(|c| &c.countries)
+                .flat_map(|c| &c.leagues.leagues)
+                .find_map(|l| l.matches.get(&route_params.match_id))
+        })
         .ok_or_else(|| {
             ApiError::NotFound(format!("Match '{}' not found", route_params.match_id))
         })?;
 
-    let home_team = simulator_data
-        .team(match_result.home_team_id)
-        .ok_or_else(|| ApiError::NotFound("Home team not found".to_string()))?;
+    let league = simulator_data.league(match_result.league_id);
 
-    let away_team = simulator_data
-        .team(match_result.away_team_id)
-        .ok_or_else(|| ApiError::NotFound("Away team not found".to_string()))?;
+    let is_international = match_result.league_slug == "international";
+
+    // For international matches, team IDs are country IDs — resolve names differently
+    let (home_team_name, home_team_slug, home_club_id) = if is_international {
+        let name = simulator_data.country(match_result.home_team_id)
+            .map(|c| c.name.clone()).unwrap_or_else(|| "Home".to_string());
+        let slug = simulator_data.country(match_result.home_team_id)
+            .map(|c| c.slug.clone()).unwrap_or_default();
+        (name, slug, 0u32)
+    } else {
+        let t = simulator_data.team(match_result.home_team_id)
+            .ok_or_else(|| ApiError::NotFound("Home team not found".to_string()))?;
+        (t.name.clone(), t.slug.clone(), t.club_id)
+    };
+
+    let (away_team_name, away_team_slug, away_club_id) = if is_international {
+        let name = simulator_data.country(match_result.away_team_id)
+            .map(|c| c.name.clone()).unwrap_or_else(|| "Away".to_string());
+        let slug = simulator_data.country(match_result.away_team_id)
+            .map(|c| c.slug.clone()).unwrap_or_default();
+        (name, slug, 0u32)
+    } else {
+        let t = simulator_data.team(match_result.away_team_id)
+            .ok_or_else(|| ApiError::NotFound("Away team not found".to_string()))?;
+        (t.name.clone(), t.slug.clone(), t.club_id)
+    };
 
     let result_details = match_result
         .details
@@ -275,30 +287,32 @@ pub async fn match_get_action(
         .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
         .unwrap_or_default();
 
-    let title = format!(
-        "{} - {}",
-        home_team.name,
-        away_team.name
-    );
+    let title = format!("{} - {}", home_team_name, away_team_name);
+
+    let (sub_title, sub_title_link) = if let Some(l) = league {
+        (views::league_display_name(l, &i18n, simulator_data), format!("/{}/leagues/{}", &route_params.lang, &l.slug))
+    } else {
+        ("International".to_string(), String::new())
+    };
 
     Ok(MatchGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
-        sub_title: views::league_display_name(&league, &i18n, simulator_data),
-        sub_title_link: format!("/{}/leagues/{}", &route_params.lang, &league.slug),
+        sub_title,
+        sub_title_link,
         sub_title_country_code: String::new(),
         header_color: String::new(),
         foreground_color: String::new(),
         menu_sections: vec![],
         i18n,
         lang: route_params.lang.clone(),
-        league_slug: league.slug.clone(),
-        league_name: league.name.clone(),
+        league_slug: league.map(|l| l.slug.clone()).unwrap_or_else(|| "international".to_string()),
+        league_name: league.map(|l| l.name.clone()).unwrap_or_else(|| "International".to_string()),
         match_id: route_params.match_id.clone(),
-        home_team_name: home_team.name.clone(),
-        home_team_slug: home_team.slug.clone(),
+        home_team_name: home_team_name.clone(),
+        home_team_slug: home_team_slug.clone(),
         home_goals,
         home_goal_events,
         home_squad_main: result_details
@@ -329,8 +343,8 @@ pub async fn match_get_action(
                 Some(p)
             })
             .collect(),
-        away_team_name: away_team.name.clone(),
-        away_team_slug: away_team.slug.clone(),
+        away_team_name: away_team_name.clone(),
+        away_team_slug: away_team_slug.clone(),
         away_goals,
         away_goal_events,
         away_squad_main: result_details
@@ -364,25 +378,25 @@ pub async fn match_get_action(
         match_time_ms: result_details.match_time_ms,
         goals_json: serde_json::to_string(&goals_json).unwrap_or_else(|_| "[]".to_string()),
         players_json: serde_json::to_string(&players_json).unwrap_or_else(|_| "[]".to_string()),
-        home_color_background: simulator_data
-            .club(home_team.club_id)
+        home_color_background: if home_club_id > 0 { simulator_data
+            .club(home_club_id)
             .map(|c| c.colors.background.clone())
-            .unwrap_or_else(|| "#00307d".to_string()),
-        home_color_foreground: simulator_data
-            .club(home_team.club_id)
+            .unwrap_or_else(|| "#00307d".to_string()) } else { "#00307d".to_string() },
+        home_color_foreground: if home_club_id > 0 { simulator_data
+            .club(home_club_id)
             .map(|c| c.colors.foreground.clone())
-            .unwrap_or_else(|| "#ffffff".to_string()),
-        away_color_background: simulator_data
-            .club(away_team.club_id)
+            .unwrap_or_else(|| "#ffffff".to_string()) } else { "#ffffff".to_string() },
+        away_color_background: if away_club_id > 0 { simulator_data
+            .club(away_club_id)
             .map(|c| c.colors.background.clone())
-            .unwrap_or_else(|| "#b33f00".to_string()),
-        away_color_foreground: simulator_data
-            .club(away_team.club_id)
+            .unwrap_or_else(|| "#b33f00".to_string()) } else { "#b33f00".to_string() },
+        away_color_foreground: if away_club_id > 0 { simulator_data
+            .club(away_club_id)
             .map(|c| c.colors.foreground.clone())
-            .unwrap_or_else(|| "#ffffff".to_string()),
+            .unwrap_or_else(|| "#ffffff".to_string()) } else { "#ffffff".to_string() },
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_name: motm_name,
-        match_recordings_enabled: core::is_match_recordings_mode() && !league.friendly,
+        match_recordings_enabled: core::is_match_recordings_mode() && league.is_some_and(|l| !l.friendly),
     })
 }
 

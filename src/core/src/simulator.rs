@@ -88,6 +88,9 @@ pub struct SimulatorData {
 
     /// All countries by id (for nationality lookups — includes countries without active leagues)
     pub country_info: HashMap<u32, CountryInfo>,
+
+    /// Global match result storage — all match types (league, cup, national team) write here
+    pub match_store: crate::league::MatchStorage,
 }
 
 impl SimulatorData {
@@ -112,6 +115,7 @@ impl SimulatorData {
             watchlist: Vec::new(),
             global_competitions,
             country_info,
+            match_store: crate::league::MatchStorage::new(),
         };
 
         let mut indexes = SimulatorDataIndexes::new();
