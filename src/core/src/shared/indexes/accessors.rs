@@ -274,6 +274,10 @@ impl SimulatorData {
                 if let Some(player) = country.retired_players.iter().find(|p| p.id == id) {
                     return Some(player);
                 }
+                // Also check national team generated (synthetic) players
+                if let Some(player) = country.national_team.generated_squad.iter().find(|p| p.id == id) {
+                    return Some(player);
+                }
             }
         }
         None
