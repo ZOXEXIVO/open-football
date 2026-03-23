@@ -57,32 +57,42 @@ volumes:
 ---
 
 kind: pipeline
-name: release-windows
+name: release
 
 steps:
-  - name: build-windows
-    image: rust:1.94
+  - name: build-releases
+    image: docker:latest
+    depends_on: [ clone ]
+    volumes:
+      - name: docker_sock
+        path: /var/run/docker.sock
     commands:
-      - apt-get update && apt-get install -y gcc-mingw-w64-x86-64 zip
-      - rustup target add x86_64-pc-windows-gnu
-      - cargo build --release --target x86_64-pc-windows-gnu
+      - docker build --target artifacts -t open-football-release:${DRONE_TAG} -f "build/Football.Release.Dockerfile" .
       - mkdir -p dist
-      - cp target/x86_64-pc-windows-gnu/release/open_football.exe dist/
-      - cd dist && zip open-football-${DRONE_TAG}-windows-x86_64.zip open_football.exe
+      - docker create --name release-tmp open-football-release:${DRONE_TAG}
+      - docker cp release-tmp:/release/. dist/
+      - docker rm release-tmp
 
   - name: publish-github
     image: plugins/github-release
-    depends_on: [ build-windows ]
+    depends_on: [ build-releases ]
     settings:
       api_key:
         from_secret: github_token
       files:
-        - dist/open-football-*.zip
-      title: ${DRONE_TAG}
+        - dist/open-football-*
+      title: "OpenFootball Release v${DRONE_TAG##release-}"
     when:
       event:
         - tag
 
+volumes:
+  - name: docker_sock
+    host:
+      path: /var/run/docker.sock
+
 trigger:
   event:
     - tag
+  ref:
+    - refs/tags/release-*
