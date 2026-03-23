@@ -74,14 +74,29 @@ steps:
       - docker rm release-tmp
 
   - name: publish-github
-    image: plugins/github-release
+    image: alpine:latest
     depends_on: [ build-releases ]
-    settings:
-      api_key:
+    environment:
+      GITHUB_TOKEN:
         from_secret: github_token
-      files:
-        - dist/open-football-*
-      title: "OpenFootball Release v${DRONE_TAG##release-}"
+    commands:
+      - apk add --no-cache curl jq
+      - VERSION=$${DRONE_TAG#release-}
+      - >
+        RELEASE_ID=$(curl -s -X POST
+        -H "Authorization: token $${GITHUB_TOKEN}"
+        -H "Content-Type: application/json"
+        -d "{\"tag_name\":\"$${DRONE_TAG}\",\"name\":\"OpenFootball Release v$${VERSION}\"}"
+        "https://api.github.com/repos/$${DRONE_REPO}/releases"
+        | jq -r '.id')
+      - >
+        for FILE in dist/open-football-*; do
+        curl -s -X POST
+        -H "Authorization: token $${GITHUB_TOKEN}"
+        -H "Content-Type: application/octet-stream"
+        --data-binary "@$${FILE}"
+        "https://uploads.github.com/repos/$${DRONE_REPO}/releases/$${RELEASE_ID}/assets?name=$$(basename $${FILE})";
+        done
     when:
       event:
         - tag
