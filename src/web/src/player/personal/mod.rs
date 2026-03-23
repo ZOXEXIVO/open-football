@@ -20,6 +20,7 @@ pub struct PlayerPersonalRequest {
 #[template(path = "player/personal/index.html")]
 pub struct PlayerPersonalTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -175,6 +176,7 @@ pub async fn player_personal_action(
 
     Ok(PlayerPersonalTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
@@ -319,7 +321,7 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
             PlayerSquadStatus::NotNeeded => i18n.t("squad_not_needed"),
             _ => "",
         };
-        let wage = format!("{} {}", FormattingUtils::format_money(contract.salary as f64), i18n.t("per_week"));
+        let wage = format!("{} {}", FormattingUtils::format_money(contract.salary as f64), i18n.t("per_year"));
         let expiry = contract.expiration.format("%d.%m.%Y").to_string();
         (status.to_string(), wage, expiry)
     } else {

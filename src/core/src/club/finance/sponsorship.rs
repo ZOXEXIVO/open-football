@@ -41,6 +41,6 @@ impl ClubSponsorshipContract {
     }
 
     pub fn is_expired(&self, date: NaiveDate) -> bool {
-        self.expiration >= date
+        date >= self.expiration
     }
 }

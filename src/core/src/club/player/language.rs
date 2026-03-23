@@ -341,7 +341,9 @@ impl PlayerLanguage {
 /// - **Already fluent**: Diminishing returns near 100%.
 ///
 /// A typical player with adaptability 12, professionalism 12, age 24 reaches
-/// functional fluency (~70%) in about 1.5 years and near-fluency (~90%) in 2 years.
+/// basic conversational (~40%) in about 1.5 years, functional fluency (~70%)
+/// in about 3 years, and near-fluency (~90%) in 4-5 years.
+/// Exceptionally adaptable young players may learn faster; older stars much slower.
 pub fn weekly_language_progress(
     adaptability: f32,
     professionalism: f32,
@@ -353,8 +355,8 @@ pub fn weekly_language_progress(
         return 0;
     }
 
-    // Base weekly rate: ~0.8% per week → ~42% per year at baseline
-    let base_rate: f32 = 0.8;
+    // Base weekly rate: ~0.35% per week → ~18% per year at baseline
+    let base_rate: f32 = 0.35;
 
     // Adaptability factor (0.3 at 0, 1.0 at 10, 1.8 at 20)
     let adapt_factor = 0.3 + (adaptability / 20.0) * 1.5;

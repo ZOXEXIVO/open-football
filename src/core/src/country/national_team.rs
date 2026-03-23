@@ -326,6 +326,10 @@ impl NationalTeam {
     /// Collect eligible national team candidates from clubs.
     /// Filters out players from very low divisions and those below minimum ability.
     /// Like real FM: national coaches primarily select from top divisions.
+    /// Maximum candidate pool size returned to the squad selection stage.
+    /// The coach scouts broadly but narrows down to a shortlist.
+    const MAX_CANDIDATE_POOL: usize = 60;
+
     pub(crate) fn collect_candidates(
         clubs: &[Club],
         country_id: u32,
@@ -335,12 +339,10 @@ impl NationalTeam {
 
         for club in clubs.iter() {
             for team in club.teams.teams.iter() {
-                // Only main teams (no reserves/youth)
                 if team.team_type != TeamType::Main {
                     continue;
                 }
 
-                // Get league reputation for this team
                 let league_rep = team.league_id
                     .map(|_| team.reputation.world)
                     .unwrap_or(0);
@@ -349,6 +351,8 @@ impl NationalTeam {
                     if player.country_id != country_id {
                         continue;
                     }
+
+                    // Skip unavailable players
                     if player.player_attributes.is_injured
                         || player.player_attributes.is_banned
                         || player.statuses.get().contains(&PlayerStatusType::Loa)
@@ -356,67 +360,18 @@ impl NationalTeam {
                         continue;
                     }
 
-                    // Minimum ability threshold: skip clearly unfit players
-                    // Exception: allow young high-potential players (future stars)
-                    let ability = player.player_attributes.current_ability;
-                    let potential = player.player_attributes.potential_ability;
-                    let age = date.year() - player.birth_date.year();
-
-                    if ability < 80 && !(age <= 21 && potential >= 130) {
-                        continue;
+                    if let Some(candidate) = Self::build_candidate(player, club.id, team.id, league_rep, date) {
+                        candidates.push(candidate);
                     }
-
-                    let condition_pct =
-                        (player.player_attributes.condition as f32 / 10000.0) * 100.0;
-
-                    let position_levels: Vec<(PlayerPositionType, u8)> = player
-                        .positions
-                        .positions
-                        .iter()
-                        .map(|pp| (pp.position, pp.level))
-                        .collect();
-
-                    let position_group = player
-                        .positions
-                        .positions
-                        .iter()
-                        .max_by_key(|p| p.level)
-                        .map(|p| p.position.position_group())
-                        .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-
-                    candidates.push(CallUpCandidate {
-                        player_id: player.id,
-                        club_id: club.id,
-                        team_id: team.id,
-                        current_ability: ability,
-                        potential_ability: potential,
-                        age,
-                        condition_pct,
-                        match_readiness: player.skills.physical.match_readiness,
-                        average_rating: player.statistics.average_rating,
-                        played: player.statistics.played + player.statistics.played_subs,
-                        international_apps: player.player_attributes.international_apps,
-                        international_goals: player.player_attributes.international_goals,
-                        leadership: player.skills.mental.leadership,
-                        composure: player.skills.mental.composure,
-                        teamwork: player.skills.mental.teamwork,
-                        determination: player.skills.mental.determination,
-                        pressure_handling: player.attributes.pressure,
-                        world_reputation: player.player_attributes.world_reputation,
-                        league_reputation: league_rep,
-                        position_levels,
-                        position_group,
-                    });
                 }
             }
         }
 
-        candidates
+        Self::rank_and_trim_candidates(candidates)
     }
 
     /// Collect eligible candidates from all clubs across all countries, grouped by nationality.
     /// Used at the continent level to find players playing abroad.
-    /// Applies same quality filters as collect_candidates.
     pub(crate) fn collect_all_candidates_by_country(
         countries: &[Country],
         date: NaiveDate,
@@ -442,62 +397,140 @@ impl NationalTeam {
                             continue;
                         }
 
-                        let ability = player.player_attributes.current_ability;
-                        let potential = player.player_attributes.potential_ability;
-                        let age = date.year() - player.birth_date.year();
-
-                        // Minimum ability filter (same as collect_candidates)
-                        if ability < 80 && !(age <= 21 && potential >= 130) {
-                            continue;
+                        if let Some(candidate) = Self::build_candidate(player, club.id, team.id, league_rep, date) {
+                            map.entry(player.country_id).or_default().push(candidate);
                         }
-
-                        let condition_pct =
-                            (player.player_attributes.condition as f32 / 10000.0) * 100.0;
-
-                        let position_levels: Vec<(PlayerPositionType, u8)> = player
-                            .positions
-                            .positions
-                            .iter()
-                            .map(|pp| (pp.position, pp.level))
-                            .collect();
-
-                        let position_group = player
-                            .positions
-                            .positions
-                            .iter()
-                            .max_by_key(|p| p.level)
-                            .map(|p| p.position.position_group())
-                            .unwrap_or(PlayerFieldPositionGroup::Midfielder);
-
-                        map.entry(player.country_id).or_default().push(CallUpCandidate {
-                            player_id: player.id,
-                            club_id: club.id,
-                            team_id: team.id,
-                            current_ability: ability,
-                            potential_ability: potential,
-                            age,
-                            condition_pct,
-                            match_readiness: player.skills.physical.match_readiness,
-                            average_rating: player.statistics.average_rating,
-                            played: player.statistics.played + player.statistics.played_subs,
-                            international_apps: player.player_attributes.international_apps,
-                            international_goals: player.player_attributes.international_goals,
-                            leadership: player.skills.mental.leadership,
-                            composure: player.skills.mental.composure,
-                            teamwork: player.skills.mental.teamwork,
-                            determination: player.skills.mental.determination,
-                            pressure_handling: player.attributes.pressure,
-                            world_reputation: player.player_attributes.world_reputation,
-                            league_reputation: league_rep,
-                            position_levels,
-                            position_group,
-                        });
                     }
                 }
             }
         }
 
+        // Rank and trim each country's pool independently
+        for candidates in map.values_mut() {
+            let trimmed = Self::rank_and_trim_candidates(std::mem::take(candidates));
+            *candidates = trimmed;
+        }
+
         map
+    }
+
+    /// Build a CallUpCandidate from a player, if the player is worth scouting.
+    /// Only rejects players who have never played a match and have negligible ability.
+    fn build_candidate(
+        player: &Player,
+        club_id: u32,
+        team_id: u32,
+        league_rep: u16,
+        date: NaiveDate,
+    ) -> Option<CallUpCandidate> {
+        let ability = player.player_attributes.current_ability;
+        let potential = player.player_attributes.potential_ability;
+        let age = date.year() - player.birth_date.year();
+        let total_games = player.statistics.played + player.statistics.played_subs;
+
+        // Only skip players who are clearly unfit for any national team:
+        // very low ability, no games played, no reputation, and no youth potential
+        if ability < 20
+            && total_games == 0
+            && player.player_attributes.world_reputation <= 0
+            && !(age <= 21 && potential >= 60)
+        {
+            return None;
+        }
+
+        let condition_pct =
+            (player.player_attributes.condition as f32 / 10000.0) * 100.0;
+
+        let position_levels: Vec<(PlayerPositionType, u8)> = player
+            .positions
+            .positions
+            .iter()
+            .map(|pp| (pp.position, pp.level))
+            .collect();
+
+        let position_group = player
+            .positions
+            .positions
+            .iter()
+            .max_by_key(|p| p.level)
+            .map(|p| p.position.position_group())
+            .unwrap_or(PlayerFieldPositionGroup::Midfielder);
+
+        Some(CallUpCandidate {
+            player_id: player.id,
+            club_id,
+            team_id,
+            current_ability: ability,
+            potential_ability: potential,
+            age,
+            condition_pct,
+            match_readiness: player.skills.physical.match_readiness,
+            average_rating: player.statistics.average_rating,
+            played: total_games,
+            international_apps: player.player_attributes.international_apps,
+            international_goals: player.player_attributes.international_goals,
+            leadership: player.skills.mental.leadership,
+            composure: player.skills.mental.composure,
+            teamwork: player.skills.mental.teamwork,
+            determination: player.skills.mental.determination,
+            pressure_handling: player.attributes.pressure,
+            world_reputation: player.player_attributes.world_reputation,
+            league_reputation: league_rep,
+            position_levels,
+            position_group,
+        })
+    }
+
+    /// Rank candidates by a scouting score (ability + reputation + match results)
+    /// and trim to MAX_CANDIDATE_POOL. This ensures weaker nations still produce
+    /// a full candidate pool with their best available players.
+    fn rank_and_trim_candidates(mut candidates: Vec<CallUpCandidate>) -> Vec<CallUpCandidate> {
+        if candidates.len() <= Self::MAX_CANDIDATE_POOL {
+            return candidates;
+        }
+
+        candidates.sort_by(|a, b| {
+            let score_a = Self::scouting_score(a);
+            let score_b = Self::scouting_score(b);
+            score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        candidates.truncate(Self::MAX_CANDIDATE_POOL);
+        candidates
+    }
+
+    /// Quick scouting score used to rank candidates before detailed squad selection.
+    /// Combines current ability, match performance, and reputation.
+    fn scouting_score(c: &CallUpCandidate) -> f32 {
+        // Ability: 0-200 scale, primary factor
+        let ability = c.current_ability as f32;
+
+        // Match performance: players who play regularly and perform well
+        let games_factor = (c.played as f32).min(30.0) / 30.0;
+        let rating_factor = if c.average_rating > 0.0 {
+            c.average_rating / 10.0
+        } else {
+            0.4
+        };
+        let performance = games_factor * 40.0 + rating_factor * 30.0;
+
+        // Reputation: world reputation is a strong signal coaches use
+        let reputation = (c.world_reputation.max(0) as f32 / 100.0).min(50.0);
+
+        // Goals and assists boost for proven performers
+        let goals_bonus = (c.international_goals as f32).min(20.0);
+
+        // League level: playing in a stronger league is a signal
+        let league_bonus = (c.league_reputation as f32 / 50.0).min(20.0);
+
+        // Youth potential bonus: young players with high ceiling
+        let youth_bonus = if c.age <= 23 {
+            (c.potential_ability as f32 - c.current_ability as f32).max(0.0) * 0.3
+        } else {
+            0.0
+        };
+
+        ability + performance + reputation + goals_bonus + league_bonus + youth_bonus
     }
 
     /// Call up squad using weighted scoring — considers ability, tactical fit,

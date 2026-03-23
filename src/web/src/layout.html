@@ -22,11 +22,11 @@
                     <ul class="fm-nav-section">
                         {% for item in section.items %}
                         <li
-                        {% if item.active %} class="active"{% endif %}>
-                        <a href="{{ item.url }}">
-                            <i class="fa {{ item.icon }}"></i>
-                            <span>{{ item.title }}</span>
-                        </a>
+                                {% if item.active %} class="active" {% endif %}>
+                            <a href="{{ item.url }}">
+                                <i class="fa {{ item.icon }}"></i>
+                                <span>{{ item.title }}</span>
+                            </a>
                         </li>
                         {% endfor %}
                     </ul>
@@ -152,7 +152,7 @@
             const oldScripts = document.getElementById('page-scripts');
             if (newScripts && oldScripts) {
                 oldScripts.innerHTML = '';
-                newScripts.querySelectorAll('script').forEach(function(orig) {
+                newScripts.querySelectorAll('script').forEach(function (orig) {
                     var s = document.createElement('script');
                     if (orig.src) {
                         // Skip src scripts already loaded
@@ -195,7 +195,7 @@
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
         _requestInFlight = true;
-        const url = event.shiftKey ? '/api/game/process?days=90' : '/api/game/process';
+        const url = event.shiftKey ? '/api/game/process?days=380' : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});
@@ -205,6 +205,7 @@
             }
         } catch (e) {
             setProcessing(true);
+            return;
             return;
         } finally {
             _requestInFlight = false;
@@ -242,20 +243,20 @@
 
 <!-- Google tag (gtag.js) -->
 <script>
-    if (location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') {
-        const s = document.createElement('script');
-        s.async = true;
-        s.src = 'https://www.googletagmanager.com/gtag/js?id=G-2WTTN499YZ';
-        document.head.appendChild(s);
-        window.dataLayer = window.dataLayer || [];
+    const s = document.createElement('script');
+    s.async = true;
+    s.src = 'https://www.googletagmanager.com/gtag/js?id=G-2WTTN499YZ';
+    document.head.appendChild(s);
+    window.dataLayer = window.dataLayer || [];
 
-        function gtag() {
-            dataLayer.push(arguments);
-        }
-
-        gtag('js', new Date());
-        gtag('config', 'G-2WTTN499YZ');
+    function gtag() {
+        dataLayer.push(arguments);
     }
+
+    gtag('js', new Date());
+    gtag('config', 'G-2WTTN499YZ', {
+        'computer_name': '{{ hostname }}'
+    });
 </script>
 </body>
 </html>

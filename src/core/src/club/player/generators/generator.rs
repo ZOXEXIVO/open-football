@@ -829,58 +829,104 @@ impl PlayerGenerator {
     fn generate_positions(primary: PlayerPositionType, potential_ability: u8) -> PlayerPositions {
         let mut positions = vec![PlayerPosition { position: primary, level: 20 }];
 
-        // Higher PA players are more talented → more likely to be versatile (quadratic curve)
-        // PA 30 → 5%, PA 60 → 10%, PA 100 → 22%, PA 140 → 38%, PA 180+ → 45%
-        let pa = potential_ability as i32;
-        let versatility_pct = (3 + (pa * pa) / 550).min(45);
-        let roll = IntegerUtils::random(0, 99);
+        // ~40% chance of one natural adjacent position
+        let adjacent = natural_adjacent_positions(primary);
+        if !adjacent.is_empty() && IntegerUtils::random(0, 99) < 40 {
+            let pick = adjacent[IntegerUtils::random(0, adjacent.len() as i32 - 1) as usize];
+            let level = IntegerUtils::random(14, 18) as u8;
+            positions.push(PlayerPosition { position: pick, level });
+        }
 
-        if roll < versatility_pct {
-            if let Some(secondary) = Self::pick_secondary_position(primary) {
-                let min_level = 10 + (potential_ability as i32 / 30).min(6);
-                let max_level = 15 + (potential_ability as i32 / 50).min(4);
-                positions.push(PlayerPosition {
-                    position: secondary,
-                    level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
-                });
+        // Higher PA → additional chance of a versatile position
+        let pa = potential_ability as i32;
+        let versatility_pct = (pa * pa / 800).min(35);
+        if IntegerUtils::random(0, 99) < versatility_pct {
+            if let Some(extra) = pick_extra_position(primary) {
+                if !positions.iter().any(|p| p.position == extra) {
+                    let min_level = 10 + (potential_ability as i32 / 30).min(6);
+                    let max_level = 14 + (potential_ability as i32 / 50).min(4);
+                    positions.push(PlayerPosition {
+                        position: extra,
+                        level: IntegerUtils::random(min_level, max_level.max(min_level + 1)) as u8,
+                    });
+                }
             }
         }
 
         PlayerPositions { positions }
     }
+}
 
-    fn pick_secondary_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
-        match primary {
-            PlayerPositionType::Goalkeeper => None,
-            PlayerPositionType::DefenderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
-                PlayerPositionType::DefenderCenterLeft
+/// Natural adjacent positions that most players at a given position can also play.
+fn natural_adjacent_positions(primary: PlayerPositionType) -> Vec<PlayerPositionType> {
+    match primary {
+        PlayerPositionType::Goalkeeper => vec![],
+        PlayerPositionType::DefenderCenter => {
+            if IntegerUtils::random(0, 2) == 0 {
+                vec![PlayerPositionType::DefenderCenterLeft, PlayerPositionType::DefenderCenterRight]
+            } else if IntegerUtils::random(0, 1) == 0 {
+                vec![PlayerPositionType::DefenderCenterLeft]
             } else {
-                PlayerPositionType::DefenderCenterRight
-            }),
-            PlayerPositionType::DefenderCenterLeft | PlayerPositionType::DefenderCenterRight =>
-                Some(PlayerPositionType::DefenderCenter),
-            PlayerPositionType::DefenderLeft => Some(PlayerPositionType::WingbackLeft),
-            PlayerPositionType::DefenderRight => Some(PlayerPositionType::WingbackRight),
-            PlayerPositionType::DefensiveMidfielder => Some(PlayerPositionType::MidfielderCenter),
-            PlayerPositionType::MidfielderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
-                PlayerPositionType::DefensiveMidfielder
-            } else {
-                PlayerPositionType::AttackingMidfielderCenter
-            }),
-            PlayerPositionType::MidfielderCenterLeft | PlayerPositionType::MidfielderCenterRight =>
-                Some(PlayerPositionType::MidfielderCenter),
-            PlayerPositionType::MidfielderLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
-            PlayerPositionType::MidfielderRight => Some(PlayerPositionType::AttackingMidfielderRight),
-            PlayerPositionType::WingbackLeft => Some(PlayerPositionType::DefenderLeft),
-            PlayerPositionType::WingbackRight => Some(PlayerPositionType::DefenderRight),
-            PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::MidfielderLeft),
-            PlayerPositionType::AttackingMidfielderCenter => Some(PlayerPositionType::MidfielderCenter),
-            PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::MidfielderRight),
-            PlayerPositionType::Striker => Some(PlayerPositionType::ForwardCenter),
-            PlayerPositionType::ForwardLeft => Some(PlayerPositionType::AttackingMidfielderLeft),
-            PlayerPositionType::ForwardCenter => Some(PlayerPositionType::Striker),
-            PlayerPositionType::ForwardRight => Some(PlayerPositionType::AttackingMidfielderRight),
-            _ => None,
+                vec![PlayerPositionType::DefenderCenterRight]
+            }
         }
+        PlayerPositionType::DefenderCenterLeft => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderLeft],
+        PlayerPositionType::DefenderCenterRight => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderRight],
+        PlayerPositionType::DefenderLeft => vec![PlayerPositionType::WingbackLeft],
+        PlayerPositionType::DefenderRight => vec![PlayerPositionType::WingbackRight],
+        PlayerPositionType::MidfielderCenter => {
+            if IntegerUtils::random(0, 2) == 0 {
+                vec![PlayerPositionType::MidfielderCenterLeft, PlayerPositionType::MidfielderCenterRight]
+            } else if IntegerUtils::random(0, 1) == 0 {
+                vec![PlayerPositionType::MidfielderCenterLeft]
+            } else {
+                vec![PlayerPositionType::MidfielderCenterRight]
+            }
+        }
+        PlayerPositionType::MidfielderCenterLeft => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderLeft],
+        PlayerPositionType::MidfielderCenterRight => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderRight],
+        PlayerPositionType::MidfielderLeft => vec![PlayerPositionType::AttackingMidfielderLeft],
+        PlayerPositionType::MidfielderRight => vec![PlayerPositionType::AttackingMidfielderRight],
+        PlayerPositionType::WingbackLeft => vec![PlayerPositionType::DefenderLeft],
+        PlayerPositionType::WingbackRight => vec![PlayerPositionType::DefenderRight],
+        PlayerPositionType::DefensiveMidfielder => vec![PlayerPositionType::MidfielderCenter],
+        PlayerPositionType::AttackingMidfielderCenter => vec![PlayerPositionType::MidfielderCenter],
+        PlayerPositionType::AttackingMidfielderLeft => vec![PlayerPositionType::MidfielderLeft],
+        PlayerPositionType::AttackingMidfielderRight => vec![PlayerPositionType::MidfielderRight],
+        PlayerPositionType::Striker => vec![PlayerPositionType::ForwardCenter],
+        PlayerPositionType::ForwardCenter => vec![PlayerPositionType::Striker],
+        PlayerPositionType::ForwardLeft => vec![PlayerPositionType::AttackingMidfielderLeft],
+        PlayerPositionType::ForwardRight => vec![PlayerPositionType::AttackingMidfielderRight],
+        _ => vec![],
+    }
+}
+
+/// Extra position for versatile players (beyond natural adjacent).
+fn pick_extra_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
+    match primary {
+        PlayerPositionType::Goalkeeper => None,
+        PlayerPositionType::DefenderCenter => Some(PlayerPositionType::DefensiveMidfielder),
+        PlayerPositionType::DefenderCenterLeft => Some(PlayerPositionType::DefenderCenterRight),
+        PlayerPositionType::DefenderCenterRight => Some(PlayerPositionType::DefenderCenterLeft),
+        PlayerPositionType::DefenderLeft => Some(PlayerPositionType::MidfielderLeft),
+        PlayerPositionType::DefenderRight => Some(PlayerPositionType::MidfielderRight),
+        PlayerPositionType::DefensiveMidfielder => Some(PlayerPositionType::DefenderCenter),
+        PlayerPositionType::MidfielderCenter => Some(if IntegerUtils::random(0, 1) == 0 {
+            PlayerPositionType::DefensiveMidfielder
+        } else {
+            PlayerPositionType::AttackingMidfielderCenter
+        }),
+        PlayerPositionType::MidfielderLeft => Some(PlayerPositionType::WingbackLeft),
+        PlayerPositionType::MidfielderRight => Some(PlayerPositionType::WingbackRight),
+        PlayerPositionType::WingbackLeft => Some(PlayerPositionType::MidfielderLeft),
+        PlayerPositionType::WingbackRight => Some(PlayerPositionType::MidfielderRight),
+        PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::ForwardLeft),
+        PlayerPositionType::AttackingMidfielderCenter => Some(PlayerPositionType::Striker),
+        PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::ForwardRight),
+        PlayerPositionType::Striker => Some(PlayerPositionType::AttackingMidfielderCenter),
+        PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardCenter),
+        PlayerPositionType::ForwardCenter => Some(PlayerPositionType::AttackingMidfielderCenter),
+        PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardCenter),
+        _ => None,
     }
 }

@@ -53,7 +53,7 @@
                         </div>
                         {% if let Some(contract) = player.contract %}
                         <div class="fm-ph-meta fm-ph-contract">
-                            <span class="fm-detail-value fm-salary">${{ contract.salary }} {{ i18n.t("per_week") }}</span>
+                            <span class="fm-detail-value fm-salary">${{ contract.salary }} {{ i18n.t("per_year") }}</span>
                             <span class="fm-detail-value">{{ i18n.t("salary_until") }} {{ contract.expiration }}</span>
                         </div>
                         {% if !contract.squad_status.is_empty() %}

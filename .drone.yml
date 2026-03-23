@@ -41,7 +41,7 @@ steps:
       - name: docker_sock
         path: /var/run/docker.sock
     commands:
-      - docker run -d -p 0.0.0.0:18000:18000 --restart always -v /data/match_results:/app/match_results -e MATCH_RECORD_ENABLED=false --name open-football open-football:1.0.0.$$DRONE_BUILD_NUMBER
+      - docker run -d -p 0.0.0.0:18000:18000 --restart always -v /data/match_results:/app/match_results --name open-football open-football:1.0.0.$$DRONE_BUILD_NUMBER
     when:
       branch:
         - master
@@ -53,3 +53,36 @@ volumes:
   - name: docker_sock
     host:
       path: /var/run/docker.sock
+
+---
+
+kind: pipeline
+name: release-windows
+
+steps:
+  - name: build-windows
+    image: rust:1.94
+    commands:
+      - apt-get update && apt-get install -y gcc-mingw-w64-x86-64 zip
+      - rustup target add x86_64-pc-windows-gnu
+      - cargo build --release --target x86_64-pc-windows-gnu
+      - mkdir -p dist
+      - cp target/x86_64-pc-windows-gnu/release/open_football.exe dist/
+      - cd dist && zip open-football-${DRONE_TAG}-windows-x86_64.zip open_football.exe
+
+  - name: publish-github
+    image: plugins/github-release
+    depends_on: [ build-windows ]
+    settings:
+      api_key:
+        from_secret: github_token
+      files:
+        - dist/open-football-*.zip
+      title: ${DRONE_TAG}
+    when:
+      event:
+        - tag
+
+trigger:
+  event:
+    - tag

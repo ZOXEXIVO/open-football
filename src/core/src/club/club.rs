@@ -173,6 +173,14 @@ impl Club {
         // Season start: reset player states and graduate academy players
         let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
+            // Sync wage budget from board targets to finance system
+            if let Some(targets) = &self.board.season_targets {
+                self.finance.wage_budget = Some(crate::shared::CurrencyValue {
+                    amount: targets.wage_budget as f64,
+                    currency: crate::shared::Currency::Usd,
+                });
+            }
+
             self.process_pre_season_reset();
             result.academy_transfers = self.process_academy_graduations(date);
         }
@@ -215,16 +223,11 @@ impl Club {
     fn process_academy_graduations(&mut self, date: NaiveDate) -> Vec<CompletedTransfer> {
         let mut transfers = Vec::new();
 
-        // Release aged-out academy players first
-        let released = self.academy.release_aged_out(date);
-        if released > 0 {
-            debug!("academy {}: {} aged-out players released", self.name, released);
-        }
-
         // Find U18 team index
         let u18_idx = self.teams.teams.iter().position(|t| t.team_type == TeamType::U18);
 
-        // Graduate best academy players — sign youth contract with main team, stay in U18
+        // Graduate best academy players BEFORE releasing aged-out ones,
+        // so 16+ year olds get a chance to graduate instead of being deleted
         if let Some(idx) = u18_idx {
             let u18_count = self.teams.teams[idx].players.players.len();
             let target = 20usize;
@@ -258,6 +261,12 @@ impl Club {
                     self.teams.teams[idx].players.add(player);
                 }
             }
+        }
+
+        // Release aged-out academy players (16+) that were NOT graduated
+        let released = self.academy.release_aged_out(date);
+        if released > 0 {
+            debug!("academy {}: {} aged-out players released", self.name, released);
         }
 
         // Move overage players from youth teams to main team
@@ -360,15 +369,22 @@ impl Club {
         let deficit = min_squad - main_count;
 
         // Collect candidates from youth teams (U18, U19, U20, U21, U23, B, Reserve)
+        // Skip youth teams that would drop below minimum viable squad (11 players)
+        let min_youth_squad = 11usize;
         let youth_team_indices: Vec<usize> = self.teams.teams.iter()
             .enumerate()
             .filter(|(i, t)| *i != main_idx && t.team_type != TeamType::Main)
             .map(|(i, _)| i)
             .collect();
 
-        // Gather all youth candidates with their team index and ability
+        // Gather youth candidates, but protect teams from going below minimum
         let mut candidates: Vec<(usize, u32, u8, u8)> = Vec::new(); // (team_idx, player_id, ability, age)
         for &ti in &youth_team_indices {
+            let team_size = self.teams.teams[ti].players.players.len();
+            // Only take from teams that have players to spare
+            if team_size <= min_youth_squad && self.teams.teams[ti].team_type.max_age().is_some() {
+                continue;
+            }
             for p in &self.teams.teams[ti].players.players {
                 candidates.push((ti, p.id, p.player_attributes.current_ability, p.age(date)));
             }
@@ -602,14 +618,14 @@ impl Club {
         for team in &self.teams.teams {
             let annual_salary = team.get_annual_salary();
             let monthly_salary = annual_salary / 12;
-            self.finance.push_salary(club_name, monthly_salary as i32);
+            self.finance.push_salary(club_name, monthly_salary as i64);
         }
 
         // Monthly sponsorship income
-        let sponsorship_income: i32 = self.finance.sponsorship
+        let sponsorship_income: i64 = self.finance.sponsorship
             .get_sponsorship_incomes(date)
             .iter()
-            .map(|c| c.wage / 12)
+            .map(|c| (c.wage / 12) as i64)
             .sum();
 
         if sponsorship_income > 0 {
@@ -620,7 +636,7 @@ impl Club {
         let main_team = self.teams.teams.iter().find(|t| t.team_type == TeamType::Main);
         if let Some(team) = main_team {
             // TV & commercial deals — based on reputation
-            let tv_revenue = match team.reputation.level() {
+            let tv_revenue: i64 = match team.reputation.level() {
                 crate::ReputationLevel::Elite => 2_000_000,
                 crate::ReputationLevel::Continental => 800_000,
                 crate::ReputationLevel::National => 300_000,
@@ -631,8 +647,8 @@ impl Club {
 
             // Matchday revenue — attendance * average ticket price * ~2 home games/month
             // Ticket price scales with reputation (elite clubs charge more)
-            let attendance = self.facilities.average_attendance;
-            let ticket_price: u32 = match team.reputation.level() {
+            let attendance = self.facilities.average_attendance as i64;
+            let ticket_price: i64 = match team.reputation.level() {
                 crate::ReputationLevel::Elite => 55,
                 crate::ReputationLevel::Continental => 40,
                 crate::ReputationLevel::National => 28,
@@ -640,7 +656,7 @@ impl Club {
                 crate::ReputationLevel::Local => 8,
                 crate::ReputationLevel::Amateur => 4,
             };
-            let matchday_revenue = (attendance * ticket_price * 2) as i32;
+            let matchday_revenue = attendance * ticket_price * 2;
 
             self.finance.balance.push_income(tv_revenue + matchday_revenue);
         }

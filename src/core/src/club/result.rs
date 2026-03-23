@@ -53,32 +53,43 @@ impl ClubResult {
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
         if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
-            // Step 1: Resolve contract renewal staff and extract their skills
-            let (negotiation_skill, judging_ability) = data.club(club_id)
-                .and_then(|club| club.teams.teams.first())
-                .map(|team| {
-                    let staff = team.staffs.responsibility.contract_renewal.handle_first_team_contracts
-                        .and_then(|id| team.staffs.staffs.iter().find(|s| s.id == id));
-                    match staff {
-                        Some(s) => {
-                            // Check if staff has active contract (not resigned/expired)
-                            let is_active = s.contract.as_ref()
-                                .map(|c| matches!(c.status, StaffStatus::Active))
-                                .unwrap_or(false);
-                            if is_active {
-                                (
-                                    s.staff_attributes.mental.man_management,
-                                    s.staff_attributes.knowledge.judging_player_ability,
-                                )
-                            } else {
-                                // Staff resigned or contract expired — poor negotiation
-                                (3u8, 3u8)
+            // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
+            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill) = data.club(club_id)
+                .map(|club| {
+                    let (neg, judge) = club.teams.teams.first()
+                        .map(|team| {
+                            let staff = team.staffs.responsibility.contract_renewal.handle_first_team_contracts
+                                .and_then(|id| team.staffs.staffs.iter().find(|s| s.id == id));
+                            match staff {
+                                Some(s) => {
+                                    let is_active = s.contract.as_ref()
+                                        .map(|c| matches!(c.status, StaffStatus::Active))
+                                        .unwrap_or(false);
+                                    if is_active {
+                                        (
+                                            s.staff_attributes.mental.man_management,
+                                            s.staff_attributes.knowledge.judging_player_ability,
+                                        )
+                                    } else {
+                                        (3u8, 3u8)
+                                    }
+                                }
+                                None => (5u8, 5u8),
                             }
-                        }
-                        None => (5u8, 5u8), // No staff assigned — below average
-                    }
+                        })
+                        .unwrap_or((5, 5));
+
+                    let wb = club.board.season_targets.as_ref()
+                        .map(|t| t.wage_budget as u32)
+                        .unwrap_or(0);
+
+                    let total_wages: u32 = club.teams.teams.iter()
+                        .map(|t| t.get_annual_salary())
+                        .sum();
+
+                    (neg, judge, wb, total_wages)
                 })
-                .unwrap_or((5, 5));
+                .unwrap_or((5, 5, 0, 0));
 
             // Step 2: Look up the player
             let player = data.player(result.player_id).expect(&format!("player {} not found", result.player_id));
@@ -123,6 +134,29 @@ impl ClubResult {
                 // Extension/no-contract: offer at least their current salary
                 adjusted_base.max(current_salary)
             };
+
+            // Wage budget enforcement: don't offer salary that would bust the budget
+            // The new salary replaces the current one, so check the net increase
+            let salary_increase = offered_salary.saturating_sub(current_salary);
+            if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
+                // Over budget: cap the offer to what the budget allows
+                let remaining = wage_budget.saturating_sub(current_wage_bill);
+                let capped_salary = current_salary + remaining;
+                // If we can't even match current salary, skip the offer entirely
+                if capped_salary <= current_salary && result.contract.want_improve_contract {
+                    return;
+                }
+                let final_salary = capped_salary.max(current_salary);
+
+                player.mailbox.push(PlayerMessage {
+                    message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
+                        salary: final_salary,
+                        years: 3,
+                        negotiation_skill,
+                    }),
+                });
+                return;
+            }
 
             player.mailbox.push(PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {

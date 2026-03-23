@@ -32,6 +32,7 @@ pub struct SeasonOption {
 #[template(path = "teams/transfers/index.html")]
 pub struct TeamTransfersTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -289,6 +290,7 @@ pub async fn team_transfers_action(
 
     Ok(TeamTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         i18n,
         lang: route_params.lang.clone(),
         title,
@@ -296,7 +298,7 @@ pub async fn team_transfers_action(
         sub_title_suffix: String::new(),
         sub_title: league_title,
         sub_title_link: league.map(|l| format!("/{}/leagues/{}", &route_params.lang, &l.slug)).unwrap_or_default(),
-        sub_title_country_code: simulator_data.country_by_club(team.club_id).map(|c| c.code.to_lowercase()).unwrap_or_default(),
+        sub_title_country_code: String::new(),
         header_color: simulator_data.club(team.club_id).map(|c| c.colors.background.clone()).unwrap_or_default(),
         foreground_color: simulator_data.club(team.club_id).map(|c| c.colors.foreground.clone()).unwrap_or_default(),
         menu_sections,

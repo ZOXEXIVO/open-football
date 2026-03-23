@@ -12,6 +12,7 @@ log = { version = "0.4.29", features = ["release_max_level_info"] }
 env_logger = "0.11.9"
 color-eyre = "0.6.5"
 tokio = { version = "1.50.0", features = ["full"] }
+hostname = "0.4.2"
 
 [profile.release]
 opt-level = 3          # Highest optimization for speed (default in release, but explicit is fine).

@@ -1106,4 +1106,114 @@ mod tests {
         assert!(floriana_2028.is_some(), "Missing Floriana 2028/29 (loan 2, season 2).\n{desc}");
         assert_eq!(floriana_2028.unwrap().statistics.played, 18, "Floriana 2028/29 apps wrong.\n{desc}");
     }
+
+    // ---------------------------------------------------------------
+    // Multi-league country: snapshot runs multiple times for same season
+    // when different leagues start new seasons on different dates
+    // (e.g., Italy: Serie A starts Aug 20, Serie B starts Aug 26).
+    // Must not create duplicate history entries.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn multi_league_double_snapshot_no_duplicate() {
+        let mut player = make_player();
+
+        let floriana = TeamInfo {
+            name: "Floriana".to_string(),
+            slug: "floriana".to_string(),
+            reputation: 100,
+            league_name: "Maltese Premier League".to_string(),
+            league_slug: "maltese-premier-league".to_string(),
+        };
+        let bari = TeamInfo {
+            name: "Bari".to_string(),
+            slug: "bari".to_string(),
+            reputation: 300,
+            league_name: "Serie B".to_string(),
+            league_slug: "italian-serie-b".to_string(),
+        };
+
+        // -- Season 2025/26: player at Floriana --
+        player.statistics_history.seed_initial_team(&floriana, make_date(2025, 8, 1));
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2025), &floriana, make_date(2026, 8, 1));
+
+        // -- Manual 3-season loan: Floriana → Bari --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&floriana, &floriana, &bari, make_date(2026, 8, 15));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            500, make_date(2029, 5, 31), 99, 0, 100,
+        ));
+
+        // -- Season 2026/27: player at Bari, plays 15 games --
+        player.statistics = make_stats(15, 3);
+        // Italy snapshot (Serie A starts Aug 20) — first snapshot
+        player.on_season_end(Season::new(2026), &bari, make_date(2027, 8, 20));
+
+        // -- Season 2027/28: player at Bari, plays 10 games --
+        player.statistics = make_stats(10, 2);
+
+        // Italy snapshot #1: Serie A starts new season (Aug 20)
+        player.on_season_end(Season::new(2027), &bari, make_date(2028, 8, 20));
+
+        // Player plays 1 more game between Serie A and Serie B season starts
+        player.statistics = make_stats(1, 0);
+
+        // Italy snapshot #2: Serie B starts new season (Aug 26) — DUPLICATE!
+        player.on_season_end(Season::new(2027), &bari, make_date(2028, 8, 26));
+
+        // -- Verify: only ONE entry for 2027/28, with merged stats (10+1=11) --
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        let bari_2027: Vec<_> = history.iter()
+            .filter(|e| e.season.start_year == 2027 && e.team_slug == "bari")
+            .collect();
+        assert_eq!(bari_2027.len(), 1,
+            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}", bari_2027.len());
+        assert_eq!(bari_2027[0].statistics.played, 11,
+            "Bari 2027/28 should have 11 apps (10 + 1 merged).\n{desc}");
+        assert!(bari_2027[0].is_loan, "Should be loan.\n{desc}");
+    }
+
+    #[test]
+    fn multi_league_double_snapshot_zero_games_between() {
+        let mut player = make_player();
+
+        let bari = TeamInfo {
+            name: "Bari".to_string(),
+            slug: "bari".to_string(),
+            reputation: 300,
+            league_name: "Serie B".to_string(),
+            league_slug: "italian-serie-b".to_string(),
+        };
+
+        // Seed and play a season
+        player.statistics_history.seed_initial_team(&bari, make_date(2026, 8, 1));
+        player.statistics = make_stats(20, 5);
+        player.on_season_end(Season::new(2026), &bari, make_date(2027, 8, 20));
+
+        // -- Season 2027/28: plays 12 games --
+        player.statistics = make_stats(12, 3);
+
+        // First snapshot (Serie A starts)
+        player.on_season_end(Season::new(2027), &bari, make_date(2028, 8, 20));
+
+        // Zero games between snapshots
+        player.statistics = make_stats(0, 0);
+
+        // Second snapshot (Serie B starts) — 0 remaining games
+        player.on_season_end(Season::new(2027), &bari, make_date(2028, 8, 26));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        let bari_2027: Vec<_> = history.iter()
+            .filter(|e| e.season.start_year == 2027 && e.team_slug == "bari")
+            .collect();
+        assert_eq!(bari_2027.len(), 1,
+            "Expected exactly 1 Bari entry for 2027/28, got {}.\n{desc}", bari_2027.len());
+        assert_eq!(bari_2027[0].statistics.played, 12,
+            "Bari 2027/28 should have 12 apps (no merge needed).\n{desc}");
+    }
 }

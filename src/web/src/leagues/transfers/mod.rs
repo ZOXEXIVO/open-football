@@ -25,6 +25,7 @@ pub struct SeasonQuery {
 #[template(path = "leagues/transfers/index.html")]
 pub struct LeagueTransfersTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -224,6 +225,7 @@ pub async fn league_transfers_action(
 
     Ok(LeagueTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title: format!("{} - Transfers", league_title),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

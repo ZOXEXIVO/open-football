@@ -82,6 +82,17 @@ impl ContinentResult {
                 _ => {}
             }
         }
+
+        // Distribute one-time participation bonus at draw time (not every match day)
+        let clubs_for_bonus: Vec<(Vec<u32>, CompetitionTier)> = match which {
+            0 => vec![(cl_clubs, CompetitionTier::ChampionsLeague)],
+            1 => vec![(el_clubs, CompetitionTier::EuropaLeague)],
+            2 => vec![(conf_clubs, CompetitionTier::ConferenceLeague)],
+            _ => vec![],
+        };
+        for (club_ids, tier) in clubs_for_bonus {
+            self.distribute_competition_tier_rewards(&club_ids, tier, data);
+        }
     }
 
     /// Champions League: top clubs from each country.
@@ -275,6 +286,11 @@ impl ContinentResult {
             results.match_results.extend(real_results);
         }
 
+        // Only return Some when there are actual match results to process
+        if results.match_results.is_empty() {
+            return None;
+        }
+
         Some(results)
     }
 
@@ -314,9 +330,6 @@ impl ContinentResult {
             data.match_store.push(match_result.clone());
             result.match_results.push(match_result);
         }
-
-        // Distribute competition rewards after all matches processed
-        self.distribute_competition_rewards(data);
     }
 
     fn process_single_match(
@@ -359,12 +372,12 @@ impl ContinentResult {
 
             // Update finances with match revenue
             let match_revenue = self.calculate_match_revenue(match_result);
-            club.finance.balance.push_income(match_revenue as i32);
+            club.finance.balance.push_income(match_revenue as i64);
 
             // Win bonus
             if won {
                 let win_bonus = self.calculate_win_bonus(match_result);
-                club.finance.balance.push_income(win_bonus as i32);
+                club.finance.balance.push_income(win_bonus as i64);
             }
 
             // Update club reputation based on result
@@ -426,40 +439,6 @@ impl ContinentResult {
         }
     }
 
-    fn distribute_competition_rewards(&self, data: &mut SimulatorData) {
-        debug!("Distributing continental competition rewards");
-
-        let continent_id = self.get_continent_id();
-
-        let (cl_clubs, el_clubs, conf_clubs) = if let Some(continent) = data.continent(continent_id) {
-            (
-                continent.continental_competitions.champions_league.participating_clubs.clone(),
-                continent.continental_competitions.europa_league.participating_clubs.clone(),
-                continent.continental_competitions.conference_league.participating_clubs.clone(),
-            )
-        } else {
-            return;
-        };
-
-        self.distribute_competition_tier_rewards(
-            &cl_clubs,
-            CompetitionTier::ChampionsLeague,
-            data,
-        );
-
-        self.distribute_competition_tier_rewards(
-            &el_clubs,
-            CompetitionTier::EuropaLeague,
-            data,
-        );
-
-        self.distribute_competition_tier_rewards(
-            &conf_clubs,
-            CompetitionTier::ConferenceLeague,
-            data,
-        );
-    }
-
     fn distribute_competition_tier_rewards(
         &self,
         participating_clubs: &[u32],
@@ -474,7 +453,7 @@ impl ContinentResult {
 
         for &club_id in participating_clubs {
             if let Some(club) = data.club_mut(club_id) {
-                club.finance.balance.push_income(participation_bonus as i32);
+                club.finance.balance.push_income(participation_bonus as i64);
 
                 debug!(
                     "Club {} received participation bonus: {:.2}M",

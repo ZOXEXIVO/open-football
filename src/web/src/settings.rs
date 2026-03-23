@@ -14,10 +14,10 @@ impl Settings {
 
         let match_events = args.iter().any(|arg| arg == "--match-events");
 
-        let match_recordings = !(args.iter().any(|arg| arg == "--skip-match-recording")
-            || env::var("MATCH_RECORD_ENABLED")
-                .map(|v| v == "false")
-                .unwrap_or(false));
+        let match_recordings = args.iter().any(|arg| arg == "--match-recording")
+            || env::var("MATCH_RECORDING_ENABLED")
+                .map(|v| v == "true")
+                .unwrap_or(false);
 
         let match_threads = args.iter()
             .find(|arg| arg.starts_with("--match-threads="))
@@ -54,8 +54,8 @@ impl Settings {
         if self.match_events {
             info!("Match events recording enabled");
         }
-        if !self.match_recordings {
-            info!("Match recordings mode disabled");
+        if self.match_recordings {
+            info!("Match recordings mode enabled");
         }
         info!("Match engine pool: {} threads", self.match_threads);
         info!("Match store pool: {} threads", self.match_store_threads);

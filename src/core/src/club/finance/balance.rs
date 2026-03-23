@@ -14,7 +14,7 @@ pub struct ClubFinances {
 }
 
 impl ClubFinances {
-    pub fn new(amount: i32, sponsorship_contract: Vec<ClubSponsorshipContract>) -> Self {
+    pub fn new(amount: i64, sponsorship_contract: Vec<ClubSponsorshipContract>) -> Self {
         ClubFinances {
             balance: ClubFinancialBalance::new(amount),
             history: ClubFinancialBalanceHistory::new(),
@@ -26,7 +26,7 @@ impl ClubFinances {
 
     // New constructor with budgets
     pub fn with_budgets(
-        amount: i32,
+        amount: i64,
         sponsorship_contract: Vec<ClubSponsorshipContract>,
         transfer_budget: Option<CurrencyValue>,
         wage_budget: Option<CurrencyValue>,
@@ -72,7 +72,7 @@ impl ClubFinances {
         self.balance.clear();
     }
 
-    pub fn push_salary(&mut self, club_name: &str, amount: i32) {
+    pub fn push_salary(&mut self, club_name: &str, amount: i64) {
         debug!(
             "club: {}, finance: push salary, amount = {}",
             club_name, amount
@@ -122,7 +122,7 @@ impl ClubFinances {
         if let Some(ref mut budget) = self.transfer_budget {
             if budget.amount >= amount {
                 budget.amount -= amount;
-                self.balance.push_outcome(amount as i32);
+                self.balance.push_outcome(amount as i64);
                 return true;
             }
         }
@@ -131,7 +131,7 @@ impl ClubFinances {
 
     // Helper method to add transfer income
     pub fn add_transfer_income(&mut self, amount: f64) {
-        self.balance.push_income(amount as i32);
+        self.balance.push_income(amount as i64);
 
         // Add 50% of transfer income to transfer budget
         if let Some(ref mut budget) = self.transfer_budget {
@@ -148,9 +148,9 @@ impl ClubFinances {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct ClubFinancialBalance {
-    pub balance: i32,
-    pub income: i32,
-    pub outcome: i32,
+    pub balance: i64,
+    pub income: i64,
+    pub outcome: i64,
     highest_wage_paid: i32,
     latest_season_tickets: i32,
     remaining_budget: i32,
@@ -162,7 +162,7 @@ pub struct ClubFinancialBalance {
 }
 
 impl ClubFinancialBalance {
-    pub fn new(balance: i32) -> Self {
+    pub fn new(balance: i64) -> Self {
         ClubFinancialBalance {
             balance,
             income: 0,
@@ -178,14 +178,14 @@ impl ClubFinancialBalance {
         }
     }
 
-    pub fn push_income(&mut self, wage: i32) {
-        self.balance = self.balance + wage;
-        self.income = self.income + wage;
+    pub fn push_income(&mut self, amount: i64) {
+        self.balance += amount;
+        self.income += amount;
     }
 
-    pub fn push_outcome(&mut self, wage: i32) {
-        self.balance = self.balance - wage;
-        self.outcome = self.outcome + wage;
+    pub fn push_outcome(&mut self, amount: i64) {
+        self.balance -= amount;
+        self.outcome += amount;
     }
 
     pub fn clear(&mut self) {

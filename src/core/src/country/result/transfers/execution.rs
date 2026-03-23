@@ -97,7 +97,10 @@ pub(crate) fn execute_transfer_within_country(
             }
         }
 
-        selling_club.finance.add_transfer_income(fee);
+        // Only credit income when player was actually found and taken
+        if player.is_some() {
+            selling_club.finance.add_transfer_income(fee);
+        }
     }
 
     if let Some(mut player) = player {
@@ -210,7 +213,10 @@ fn execute_loan_within_country(
             }
         }
 
-        selling_club.finance.add_transfer_income(loan_fee);
+        // Only credit income when player was actually found and taken
+        if player.is_some() {
+            selling_club.finance.add_transfer_income(loan_fee);
+        }
     }
 
     if let Some(mut player) = player {
@@ -288,7 +294,6 @@ fn take_player_from_selling_country(
     let country = data.country_mut(selling_country_id)?;
 
     let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
-    selling_club.finance.add_transfer_income(fee);
 
     let league_id = selling_club.teams.teams.iter()
         .find(|t| t.team_type == crate::TeamType::Main)
@@ -326,6 +331,11 @@ fn take_player_from_selling_country(
             team.transfer_list.remove(player_id);
             break;
         }
+    }
+
+    // Only credit income when player was actually found and taken
+    if player.is_some() {
+        selling_club.finance.add_transfer_income(fee);
     }
 
     // Resolve league name

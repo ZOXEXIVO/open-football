@@ -50,6 +50,7 @@ pub struct WatchlistPageRequest {
 #[template(path = "watchlist/index.html")]
 pub struct WatchlistPageTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -168,6 +169,7 @@ pub async fn watchlist_page_action(
 
     Ok(WatchlistPageTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         i18n,
         lang: route_params.lang.clone(),
         title: "Watch List".to_string(),

@@ -226,33 +226,31 @@ impl ClubAcademy {
             match position_roll {
                 0..=5 => PlayerPositionType::Goalkeeper,
                 6..=20 => {
-                    match IntegerUtils::random(0, 5) {
+                    match IntegerUtils::random(0, 7) {
                         0 => PlayerPositionType::DefenderLeft,
                         1 => PlayerPositionType::DefenderRight,
-                        2 => PlayerPositionType::DefenderCenter,
-                        3 => PlayerPositionType::DefenderCenterLeft,
-                        4 => PlayerPositionType::DefenderCenterRight,
-                        _ => PlayerPositionType::DefenderCenter,
+                        2 | 3 => PlayerPositionType::DefenderCenter,
+                        4 => PlayerPositionType::DefenderCenterLeft,
+                        5 => PlayerPositionType::DefenderCenterRight,
+                        6 => PlayerPositionType::WingbackLeft,
+                        _ => PlayerPositionType::WingbackRight,
                     }
                 },
                 21..=50 => {
-                    match IntegerUtils::random(0, 6) {
+                    match IntegerUtils::random(0, 5) {
                         0 => PlayerPositionType::DefensiveMidfielder,
                         1 => PlayerPositionType::MidfielderLeft,
                         2 => PlayerPositionType::MidfielderRight,
                         3 => PlayerPositionType::MidfielderCenter,
                         4 => PlayerPositionType::MidfielderCenterLeft,
-                        5 => PlayerPositionType::MidfielderCenterRight,
-                        _ => PlayerPositionType::MidfielderCenter,
+                        _ => PlayerPositionType::MidfielderCenterRight,
                     }
                 },
                 51..=75 => {
-                    match IntegerUtils::random(0, 4) {
+                    match IntegerUtils::random(0, 2) {
                         0 => PlayerPositionType::AttackingMidfielderLeft,
                         1 => PlayerPositionType::AttackingMidfielderRight,
-                        2 => PlayerPositionType::AttackingMidfielderCenter,
-                        3 => PlayerPositionType::WingbackLeft,
-                        _ => PlayerPositionType::WingbackRight,
+                        _ => PlayerPositionType::AttackingMidfielderCenter,
                     }
                 },
                 _ => {

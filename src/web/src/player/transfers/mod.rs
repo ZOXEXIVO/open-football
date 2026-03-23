@@ -22,6 +22,7 @@ pub struct PlayerTransfersRequest {
 #[template(path = "player/transfers/index.html")]
 pub struct PlayerTransfersTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -57,6 +58,7 @@ pub struct PlayerTransferStatusDto {
     pub has_bid_accepted: bool,
     pub has_enquiry: bool,
     pub status_keys: Vec<String>,
+    pub reason: String,
 }
 
 pub struct PlayerListingDto {
@@ -221,6 +223,9 @@ pub async fn player_transfers_action(
             .iter()
             .map(|s| status_type_to_i18n_key(s).to_string())
             .collect(),
+        reason: player.decision_history.items.last()
+            .map(|d| d.decision.clone())
+            .unwrap_or_default(),
     };
 
     // Get transfer listing for this player
@@ -335,6 +340,7 @@ pub async fn player_transfers_action(
 
     Ok(PlayerTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),

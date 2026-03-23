@@ -395,7 +395,7 @@ impl PipelineProcessor {
         country: &Country,
         player_id: u32,
         date: NaiveDate,
-        buying_club_balance: i32,
+        buying_club_balance: i64,
         philosophy: &ClubPhilosophy,
     ) -> TransferApproach {
         let is_january = Self::is_january_window(date);

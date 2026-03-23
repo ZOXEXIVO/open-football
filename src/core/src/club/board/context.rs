@@ -1,6 +1,6 @@
 #[derive(Clone)]
 pub struct BoardContext {
-    pub balance: i32,
+    pub balance: i64,
     pub total_annual_wages: u32,
     pub reputation_score: f32,
     pub main_squad_size: usize,

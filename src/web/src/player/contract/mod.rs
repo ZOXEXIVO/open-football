@@ -19,6 +19,7 @@ pub struct PlayerContractRequest {
 #[template(path = "player/contract/index.html")]
 pub struct PlayerContractTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -114,6 +115,7 @@ pub async fn player_contract_action(
 
     Ok(PlayerContractTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
@@ -264,8 +266,8 @@ fn build_contract_detail(
         contract_type: contract_type.to_string(),
         squad_status: squad_status.to_string(),
         shirt_number: contract.shirt_number,
-        salary: FormattingUtils::format_money(contract.salary as f64),
-        salary_annual: FormattingUtils::format_money(contract.salary as f64 * 52.0),
+        salary: FormattingUtils::format_money(contract.salary as f64 / 52.0),
+        salary_annual: FormattingUtils::format_money(contract.salary as f64),
         started: contract.started.map(|d| d.format("%d.%m.%Y").to_string()).unwrap_or_else(|| "-".to_string()),
         expiration: contract.expiration.format("%d.%m.%Y").to_string(),
         years_remaining,

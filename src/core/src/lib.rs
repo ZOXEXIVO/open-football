@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 static STORE_MATCH_EVENTS_MODE: AtomicBool = AtomicBool::new(false);
-static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(true);
+static MATCH_RECORDINGS_MODE: AtomicBool = AtomicBool::new(false);
 
 pub fn set_match_events_mode(enabled: bool) {
     STORE_MATCH_EVENTS_MODE.store(enabled, Ordering::SeqCst);

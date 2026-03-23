@@ -308,8 +308,18 @@ impl CountryResult {
     ) {
         let is_foreign = neg_data.selling_country_id.is_some();
 
-        // For domestic: verify the player is still at the selling club
-        if !is_foreign {
+        // Verify the player is still at the selling club (domestic) or not
+        // already claimed by another deferred transfer (foreign)
+        if is_foreign {
+            // Reject if another negotiation for this player is already deferred
+            if deferred.iter().any(|d| d.player_id == neg_data.player_id) {
+                if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                    negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
+                }
+                PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, false);
+                return;
+            }
+        } else {
             let player_at_selling_club = country.clubs.iter()
                 .find(|c| c.id == neg_data.selling_club_id)
                 .map(|c| c.teams.teams.iter().any(|t|

@@ -19,6 +19,7 @@ pub struct StaffGetRequest {
 #[template(path = "staff/get/index.html")]
 pub struct StaffGetTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -210,6 +211,7 @@ pub async fn staff_get_action(
 
     Ok(StaffGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title,
         sub_title_prefix: i18n.t(&role_key).to_string(),
         sub_title_suffix: if team.team_type == core::TeamType::Main {

@@ -19,6 +19,7 @@ pub struct CountryStaffRequest {
 #[template(path = "countries/staff/index.html")]
 pub struct CountryStaffTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -104,6 +105,7 @@ pub async fn country_staff_action(
 
     Ok(CountryStaffTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title: country.name.clone(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

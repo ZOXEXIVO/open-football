@@ -2,11 +2,19 @@ use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect};
 
 use rust_embed::RustEmbed;
+use std::sync::LazyLock;
 
 // Include the CSS hash to force recompilation when CSS files change
 // This ensures rust-embed picks up the updated styles.min.css
 // Also provides CSS_VERSION for cache-busting query params
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
+
+/// Machine hostname, resolved once at startup.
+pub static HOSTNAME: LazyLock<String> = LazyLock::new(|| {
+    hostname::get()
+        .map(|h| h.to_string_lossy().into_owned())
+        .unwrap_or_else(|_| "unknown".to_string())
+});
 
 #[derive(RustEmbed)]
 #[folder = "assets/"]

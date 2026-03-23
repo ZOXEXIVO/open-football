@@ -19,6 +19,7 @@ pub struct MatchGetRequest {
 #[template(path = "match/get/index.html")]
 pub struct MatchGetTemplate {
     pub css_version: &'static str,
+    pub hostname: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -309,6 +310,7 @@ pub async fn match_get_action(
 
     Ok(MatchGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
+        hostname: &crate::common::default_handler::HOSTNAME,
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

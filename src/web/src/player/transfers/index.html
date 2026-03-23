@@ -32,6 +32,12 @@
                         {% endif %}
                     </span>
                 </div>
+                {% if !transfer_status.reason.is_empty() %}
+                <div class="fm-pt-info-row">
+                    <span class="fm-pt-label">{{ i18n.t("reason") }}</span>
+                    <span class="fm-pt-value">{{ transfer_status.reason }}</span>
+                </div>
+                {% endif %}
             </div>
         </div>
     </section>

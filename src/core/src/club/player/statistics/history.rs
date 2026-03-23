@@ -243,10 +243,26 @@ impl PlayerStatisticsHistory {
         is_loan: bool,
         _last_transfer_date: Option<NaiveDate>,
     ) {
-        // Guard: if this season was already frozen (cross-country loan scenario
-        // where both countries snapshot the same player), skip to avoid duplicates
-        if self.current.is_empty() && self.items.iter().any(|i| i.season.start_year == season.start_year) {
-            // Already snapshotted by another country — just seed the new season
+        // Guard: if this season was already frozen (multi-league country where
+        // different leagues start new seasons on different dates, or cross-country
+        // loan where both countries snapshot the same player), avoid duplicates.
+        // Merge any remaining stats into the existing frozen entry and re-seed.
+        if self.items.iter().any(|i| i.season.start_year == season.start_year) {
+            // Merge remaining stats (games played between first and second snapshot)
+            if current_stats.total_games() > 0 {
+                if let Some(existing) = self.items.iter_mut().rev()
+                    .find(|i| i.season.start_year == season.start_year
+                        && i.team_slug == team.slug
+                        && i.is_loan == is_loan)
+                {
+                    let mut remaining = current_stats;
+                    remaining.played += remaining.played_subs;
+                    remaining.played_subs = 0;
+                    existing.statistics.merge_from(&remaining);
+                }
+            }
+            // Clear stale seeded entries and re-seed for next season
+            self.current.clear();
             let new_season_start = Season::new(season.start_year + 1).start_date();
             self.upsert_current(team, PlayerStatistics::default(), is_loan, None, new_season_start);
             return;

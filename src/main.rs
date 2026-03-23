@@ -52,5 +52,25 @@ async fn main() {
         ai_registry,
     };
 
+    // Open browser
+    #[cfg(target_os = "windows")]
+    {
+        let _ = std::process::Command::new("cmd")
+            .args(["/C", "start", "http://localhost:18000"])
+            .spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open")
+            .arg("http://localhost:18000")
+            .spawn();
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let _ = std::process::Command::new("xdg-open")
+            .arg("http://localhost:18000")
+            .spawn();
+    }
+
     FootballSimulatorServer::new(data).run().await;
 }
