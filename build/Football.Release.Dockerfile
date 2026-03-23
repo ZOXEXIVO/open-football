@@ -85,14 +85,33 @@ RUN mkdir -p /dist && \
     cp target/aarch64-apple-darwin/release/open_football /dist/ && \
     cd /dist && tar czf open-football-macos-aarch64.tar.gz open_football
 
-# ── Collect artifacts ─────────────────────────────────────────────────
+# ── Publish GitHub Release ────────────────────────────────────────────
 
-FROM alpine:latest AS artifacts
+FROM alpine:latest AS publish
+
+ARG GITHUB_TOKEN
+ARG DRONE_TAG
+ARG DRONE_REPO
+
+RUN apk add --no-cache curl jq
+
 WORKDIR /release
-
 COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
 COPY --from=build-linux /dist/open-football-linux-x86_64.tar.gz .
 COPY --from=build-macos-x86_64 /dist/open-football-macos-x86_64.tar.gz .
 COPY --from=build-macos-aarch64 /dist/open-football-macos-aarch64.tar.gz .
 
-ENTRYPOINT ["ls", "-la", "/release"]
+RUN VERSION="${DRONE_TAG#release-}" && \
+    RELEASE_ID=$(curl -sf -X POST \
+      -H "Authorization: token ${GITHUB_TOKEN}" \
+      -H "Content-Type: application/json" \
+      -d "{\"tag_name\":\"${DRONE_TAG}\",\"name\":\"OpenFootball Release v${VERSION}\"}" \
+      "https://api.github.com/repos/${DRONE_REPO}/releases" \
+      | jq -r '.id') && \
+    for FILE in /release/*; do \
+      curl -sf -X POST \
+        -H "Authorization: token ${GITHUB_TOKEN}" \
+        -H "Content-Type: application/octet-stream" \
+        --data-binary "@${FILE}" \
+        "https://uploads.github.com/repos/${DRONE_REPO}/releases/${RELEASE_ID}/assets?name=$(basename ${FILE})"; \
+    done

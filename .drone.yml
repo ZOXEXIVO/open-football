@@ -60,46 +60,17 @@ kind: pipeline
 name: release
 
 steps:
-  - name: build-releases
+  - name: release
     image: docker:latest
     depends_on: [ clone ]
+    environment:
+      GITHUB_TOKEN:
+        from_secret: github_token
     volumes:
       - name: docker_sock
         path: /var/run/docker.sock
     commands:
-      - docker build --target artifacts -t open-football-release:${DRONE_TAG} -f "build/Football.Release.Dockerfile" .
-      - mkdir -p dist
-      - docker create --name release-tmp open-football-release:${DRONE_TAG}
-      - docker cp release-tmp:/release/. dist/
-      - docker rm release-tmp
-
-  - name: publish-github
-    image: alpine:latest
-    depends_on: [ build-releases ]
-    environment:
-      GITHUB_TOKEN:
-        from_secret: github_token
-    commands:
-      - apk add --no-cache curl jq
-      - VERSION=$${DRONE_TAG#release-}
-      - >
-        RELEASE_ID=$(curl -s -X POST
-        -H "Authorization: token $${GITHUB_TOKEN}"
-        -H "Content-Type: application/json"
-        -d "{\"tag_name\":\"$${DRONE_TAG}\",\"name\":\"OpenFootball Release v$${VERSION}\"}"
-        "https://api.github.com/repos/$${DRONE_REPO}/releases"
-        | jq -r '.id')
-      - >
-        for FILE in dist/open-football-*; do
-        curl -s -X POST
-        -H "Authorization: token $${GITHUB_TOKEN}"
-        -H "Content-Type: application/octet-stream"
-        --data-binary "@$${FILE}"
-        "https://uploads.github.com/repos/$${DRONE_REPO}/releases/$${RELEASE_ID}/assets?name=$$(basename $${FILE})";
-        done
-    when:
-      event:
-        - tag
+      - docker build --target publish --build-arg GITHUB_TOKEN=$${GITHUB_TOKEN} --build-arg DRONE_TAG=${DRONE_TAG} --build-arg DRONE_REPO=${DRONE_REPO} -f "build/Football.Release.Dockerfile" .
 
 volumes:
   - name: docker_sock
