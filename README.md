@@ -21,9 +21,10 @@ The goal is to get as close as possible to a real soccer simulation and based on
 You can run it locally, just download release and run single binary that contains fully simulation
 
 Be carefully, it can consume all you CPU cores.
-Screenshot on 256 CPU cores
+Experiment with running it on 256 CPU cores
 
-Don't worry, i can run in simple consumers CPUs
+(Don't worry, it can run on all consumers CPUs) 
+
 ![alt text](.docs/images/cores.png "256 CPU Core utilization")
 
 
