@@ -88,4 +88,4 @@ trigger:
   event:
     - tag
   ref:
-    - refs/tags/release-*
+    - refs/tags/v*

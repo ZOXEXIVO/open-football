@@ -43,12 +43,11 @@ COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
 COPY --from=build-linux /dist/open-football-linux-x86_64.tar.gz .
 
 RUN --mount=type=secret,id=github_token \
-    VERSION="${DRONE_TAG#release-}" && \
     GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
     RELEASE_ID=$(curl -sf -X POST \
       -H "Authorization: token ${GITHUB_TOKEN}" \
       -H "Content-Type: application/json" \
-      -d "{\"tag_name\":\"${DRONE_TAG}\",\"name\":\"OpenFootball Release v${VERSION}\"}" \
+      -d "{\"tag_name\":\"${DRONE_TAG}\",\"name\":\"OpenFootball Release ${DRONE_TAG}\"}" \
       "https://api.github.com/repos/${DRONE_REPO}/releases" \
       | jq -r '.id') && \
     for FILE in /release/*; do \
