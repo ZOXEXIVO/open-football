@@ -10,7 +10,7 @@ echo "Creating release: OpenFootball Release ${TAG}"
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST \
   -H "Authorization: token ${GITHUB_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d "{\"tag_name\":\"${TAG}\",\"name\":\"OpenFootball Release ${TAG}\"}" \
+  -d "{\"tag_name\":\"${TAG}\",\"name\":\"OpenFootball ${TAG}\"}" \
   "https://api.github.com/repos/${REPO}/releases")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)

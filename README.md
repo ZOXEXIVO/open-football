@@ -1,22 +1,31 @@
 
-![OpenFootball logo](.docs/images/logo.jpg)
-
 # Open Football
 
-Attempt to implement Sigames Football Manager simulation engine without manual control.
 
-The project is NOT a game, it is a simulation without the possibility of control.
+Attempt to implement Football Manager (Sigames) simulation engine without manual control.
+
+The project is NOT a game, it's a football simulation without the possibility of control.
 
 The goal is to get as close as possible to a real soccer simulation and based on this data:
 
 - Predict match results
 - Predict the success of future player transfers
-- Simulate other football data
+
 
 ---
 **[Live Demo](https://open-football.org)**
 
+![alt text](.docs/images/logo.jpg "OpenFootball Logo")
+
 ---
+You can run it locally, just download release and run single binary that contains fully simulation
+
+Be carefully, it can consume all you CPU cores.
+Screenshot on 256 CPU cores
+
+Don't worry, i can run in simple consumers CPUs
+![alt text](.docs/images/cores.png "256 CPU Core utilization")
+
 
 [Player page example (click on any player)](https://open-football.org/en/teams/napoli)
 ![alt text](.docs/images/player.jpg "Player page")
