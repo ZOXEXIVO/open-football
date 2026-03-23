@@ -75,7 +75,9 @@ steps:
       - name: docker_sock
         path: /var/run/docker.sock
     commands:
-      - docker build --target publish --build-arg GITHUB_TOKEN=$${GITHUB_TOKEN} --build-arg DRONE_TAG=${DRONE_TAG} --build-arg DRONE_REPO=${DRONE_REPO} -f "build/Football.Release.Dockerfile" .
+      - echo "$${GITHUB_TOKEN}" > /tmp/github_token
+      - docker build --target publish --secret id=github_token,src=/tmp/github_token --build-arg DRONE_TAG=${DRONE_TAG} --build-arg DRONE_REPO=${DRONE_REPO} -f "build/Football.Release.Dockerfile" .
+      - rm -f /tmp/github_token
 
 volumes:
   - name: docker_sock
