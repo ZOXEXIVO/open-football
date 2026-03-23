@@ -14,6 +14,9 @@ color-eyre = "0.6.5"
 tokio = { version = "1.50.0", features = ["full"] }
 hostname = "0.4.2"
 
+[target.'cfg(not(target_env = "msvc"))'.dependencies]
+tikv-jemallocator = "0.6"
+
 [profile.release]
 opt-level = 3          # Highest optimization for speed (default in release, but explicit is fine).
 lto = "fat"            # Enables full link-time optimization for better inlining and dead code elimination across crates.

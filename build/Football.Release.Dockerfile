@@ -41,19 +41,6 @@ RUN apk add --no-cache curl jq
 WORKDIR /release
 COPY --from=build-windows /dist/open-football-windows-x86_64.zip .
 COPY --from=build-linux /dist/open-football-linux-x86_64.tar.gz .
+COPY build/publish-release.sh /usr/local/bin/publish-release.sh
 
-RUN --mount=type=secret,id=github_token \
-    GITHUB_TOKEN=$(cat /run/secrets/github_token) && \
-    RELEASE_ID=$(curl -sf -X POST \
-      -H "Authorization: token ${GITHUB_TOKEN}" \
-      -H "Content-Type: application/json" \
-      -d "{\"tag_name\":\"${DRONE_TAG}\",\"name\":\"OpenFootball Release ${DRONE_TAG}\"}" \
-      "https://api.github.com/repos/${DRONE_REPO}/releases" \
-      | jq -r '.id') && \
-    for FILE in /release/*; do \
-      curl -sf -X POST \
-        -H "Authorization: token ${GITHUB_TOKEN}" \
-        -H "Content-Type: application/octet-stream" \
-        --data-binary "@${FILE}" \
-        "https://uploads.github.com/repos/${DRONE_REPO}/releases/${RELEASE_ID}/assets?name=$(basename ${FILE})"; \
-    done
+RUN --mount=type=secret,id=github_token sh /usr/local/bin/publish-release.sh
