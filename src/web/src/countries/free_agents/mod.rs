@@ -105,7 +105,7 @@ pub async fn country_free_agents_action(
                     .iter()
                     .filter(|p| p.contract.is_none())
                     .map(|player| {
-                        let position = player.positions.display_positions().join(", ");
+                        let position = player.positions.display_positions_compact();
                         FreeAgentPlayerDto {
                             id: player.id,
                             first_name: player.full_name.display_first_name().to_string(),

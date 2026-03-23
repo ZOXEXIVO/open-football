@@ -112,6 +112,8 @@
                 <div class="fm-match-recording-disabled">
                     <i class="fa fa-video-slash"></i>
                     <p>{{ i18n.t("match_recording_disabled") }}</p>
+                    <p>{{ i18n.t("match_recording_disabled_local") }}</p>
+                    <p class="fm-match-recording-note"><code>open_football --match-recording-enabled</code></p>
                     <a href="https://github.com/ZOXEXIVO/open-football" target="_blank" rel="noopener">{{ i18n.t("match_recording_disabled_link") }}</a>
                 </div>
                 {% endif %}
@@ -144,6 +146,64 @@
                         </a>
                         {% endfor %}
                     </div>
+                </div>
+            </div>
+        </div>
+        <div class="fm-match-squads-mobile d-lg-none">
+            <div class="fm-match-squad fm-match-squad-home">
+                <div class="fm-squad-hdr">
+                    <span class="fm-squad-hdr-dot fm-squad-hdr-dot-home"></span>
+                    <a href="/{{ lang }}/teams/{{ home_team_slug }}" class="fm-squad-title">{{ home_team_name }}</a>
+                </div>
+                <div class="fm-squad-section">
+                    {% for player in home_squad_main %}
+                    <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                <div class="fm-squad-section">
+                    {% for player in home_squad_subs %}
+                    <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+            </div>
+            <div class="fm-match-squad fm-match-squad-away">
+                <div class="fm-squad-hdr">
+                    <span class="fm-squad-hdr-dot fm-squad-hdr-dot-away"></span>
+                    <a href="/{{ lang }}/teams/{{ away_team_slug }}" class="fm-squad-title">{{ away_team_name }}</a>
+                </div>
+                <div class="fm-squad-section">
+                    {% for player in away_squad_main %}
+                    <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                    </a>
+                    {% endfor %}
+                </div>
+                <div class="fm-squad-divider">{{ i18n.t("substitutes") }}</div>
+                <div class="fm-squad-section">
+                    {% for player in away_squad_subs %}
+                    <a href="/{{ lang }}/players/{{ player.id }}" class="fm-squad-player{% if player.sub_minute.is_some() %} fm-squad-player-subbed{% else %} fm-squad-player-bench{% endif %}{% if player.subbed_off_minute.is_some() %} fm-squad-player-off{% endif %}{% if player.is_player_of_the_match %} fm-squad-player-motm{% endif %}">
+                        {% if let Some(min) = player.sub_minute %}<span class="fm-sub-badge fm-sub-in"><i class="fa fa-arrow-up"></i> {{ min }}'</span>{% endif %}
+                        <small>{{ player.position }}</small>
+                        <span class="fm-sp-name">{{ player.last_name }}</span>
+                        {% if player.is_player_of_the_match %}<span class="fm-motm-badge">&#9733;</span>{% endif %}
+                        {% if let Some(min) = player.subbed_off_minute %}<span class="fm-sub-badge fm-sub-out"><i class="fa fa-arrow-down"></i> {{ min }}'</span>{% endif %}
+                    </a>
+                    {% endfor %}
                 </div>
             </div>
         </div>

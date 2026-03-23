@@ -125,7 +125,7 @@ pub async fn team_get_action(
                 .or_else(|| simulator_data.country_info.get(&p.country_id)
                     .map(|i| (i.slug.clone(), i.code.clone(), i.name.clone())))
                 .unwrap_or_default();
-            let position = p.positions.display_positions().join(", ");
+            let position = p.positions.display_positions_compact();
 
             let is_loan = p.is_on_loan();
 
@@ -187,7 +187,7 @@ pub async fn team_get_action(
                             .or_else(|| simulator_data.country_info.get(&player.country_id)
                                 .map(|i| (i.slug.clone(), i.code.clone(), i.name.clone())))
                             .unwrap_or_default();
-                        let position = player.positions.display_positions().join(", ");
+                        let position = player.positions.display_positions_compact();
 
                         players.push(TeamPlayer {
                             id: player.id,

@@ -26,6 +26,37 @@ pub struct League {
     pub milestones: LeagueMilestones,
     pub friendly: bool,
     pub is_cup: bool,
+    pub financials: LeagueFinancials,
+}
+
+#[derive(Debug, Clone)]
+pub struct LeagueFinancials {
+    /// Total prize pool distributed at season end by league position
+    pub prize_pool: i64,
+    /// Total TV deal value distributed to clubs
+    pub tv_deal_total: i64,
+}
+
+impl LeagueFinancials {
+    pub fn from_reputation_and_tier(reputation: u16, tier: u8) -> Self {
+        let rep_factor = (reputation as f64 / 10000.0).clamp(0.0, 1.0);
+
+        let tier_factor = match tier {
+            1 => 1.0,
+            2 => 0.30,
+            _ => 0.10,
+        };
+
+        let base_prize = 200_000_000.0;
+        let base_tv = 500_000_000.0;
+
+        let scale = rep_factor * rep_factor * rep_factor * tier_factor;
+
+        LeagueFinancials {
+            prize_pool: (base_prize * scale) as i64,
+            tv_deal_total: (base_tv * scale) as i64,
+        }
+    }
 }
 
 impl League {
@@ -38,6 +69,8 @@ impl League {
         settings: LeagueSettings,
         friendly: bool,
     ) -> Self {
+        let financials = LeagueFinancials::from_reputation_and_tier(reputation, settings.tier);
+
         League {
             id,
             name,
@@ -55,6 +88,7 @@ impl League {
             milestones: LeagueMilestones::new(),
             friendly,
             is_cup: false,
+            financials,
         }
     }
 

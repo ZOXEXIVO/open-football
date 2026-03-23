@@ -59,8 +59,84 @@ impl CountryResult {
         }
     }
 
-    fn process_season_awards(_country: &mut Country, _club_results: &[ClubResult]) {
+    fn process_season_awards(country: &mut Country, _club_results: &[ClubResult]) {
         debug!("Processing season awards");
+
+        // Build team_id -> club index mapping
+        let team_to_club: HashMap<u32, usize> = country.clubs.iter()
+            .enumerate()
+            .flat_map(|(ci, club)| {
+                club.teams.teams.iter().map(move |t| (t.id, ci))
+            })
+            .collect();
+
+        // Collect awards per club: (club_idx, prize_money, tv_money)
+        let mut club_awards: HashMap<usize, (i64, i64)> = HashMap::new();
+
+        for league in &country.leagues.leagues {
+            if league.friendly {
+                continue;
+            }
+
+            let table = match &league.final_table {
+                Some(t) if !t.is_empty() => t,
+                _ => continue,
+            };
+
+            let total_teams = table.len();
+            let prize_pool = league.financials.prize_pool;
+            let tv_deal = league.financials.tv_deal_total;
+
+            if prize_pool == 0 && tv_deal == 0 {
+                continue;
+            }
+
+            // Calculate normalization factor: sum of (1 - i/n)^2
+            let total_shares: f64 = (0..total_teams)
+                .map(|i| {
+                    let r = i as f64 / (total_teams - 1).max(1) as f64;
+                    (1.0 - r).powi(2)
+                })
+                .sum();
+
+            for (position, row) in table.iter().enumerate() {
+                let club_idx = match team_to_club.get(&row.team_id) {
+                    Some(&idx) => idx,
+                    None => continue,
+                };
+
+                // Prize money: quadratic decay by position (top-heavy)
+                let share = if total_teams > 1 {
+                    let pos_ratio = position as f64 / (total_teams - 1) as f64;
+                    (1.0 - pos_ratio).powi(2)
+                } else {
+                    1.0
+                };
+
+                let prize_amount = (prize_pool as f64 * share / total_shares) as i64;
+
+                // TV money: 50% equal + 50% merit-based
+                let tv_equal = tv_deal / (2 * total_teams as i64);
+                let tv_merit = (tv_deal as f64 * 0.5 * share / total_shares) as i64;
+                let tv_amount = tv_equal + tv_merit;
+
+                let entry = club_awards.entry(club_idx).or_insert((0, 0));
+                entry.0 += prize_amount;
+                entry.1 += tv_amount;
+            }
+        }
+
+        // Apply awards to clubs
+        for (club_idx, (prize, tv)) in club_awards {
+            let club = &mut country.clubs[club_idx];
+            if prize > 0 {
+                club.finance.balance.push_income_prize_money(prize);
+            }
+            if tv > 0 {
+                club.finance.balance.push_income_tv(tv);
+            }
+            debug!("Season awards: {} - prize: ${}, TV: ${}", club.name, prize, tv);
+        }
     }
 
     /// Process loan returns — must run AFTER club_result.process() so that
@@ -417,8 +493,21 @@ impl CountryResult {
         IntegerUtils::random(0, 100) < chance as i32
     }
 
-    fn process_year_end_finances(_country: &mut Country) {
+    fn process_year_end_finances(country: &mut Country) {
         debug!("Processing year-end finances");
+
+        for club in &mut country.clubs {
+            let balance = club.finance.balance.balance;
+            if balance > 0 {
+                // 2% return on positive balance (savings/investments)
+                let interest = (balance as f64 * 0.02) as i64;
+                club.finance.balance.push_income(interest);
+            } else if balance < 0 {
+                // 5% penalty on negative balance (debt interest)
+                let penalty = (balance.abs() as f64 * 0.05) as i64;
+                club.finance.balance.push_outcome(penalty);
+            }
+        }
     }
 
     fn process_promotion_relegation(country: &mut Country) {

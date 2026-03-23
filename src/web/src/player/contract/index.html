@@ -34,7 +34,7 @@
                 <div class="fm-personal-section">
                     <div class="fm-personal-detail">
                         <span class="fm-detail-label">Wage</span>
-                        <span class="fm-detail-value fm-contract-wage">${{ ct.salary_annual }} p/a</span>
+                        <span class="fm-detail-value fm-contract-wage">${{ ct.salary_annual }} {{ i18n.t("per_year") }}</span>
                     </div>
                     <div class="fm-personal-detail">
                         <span class="fm-detail-label">Wage (Weekly)</span>
@@ -88,7 +88,7 @@
                     {% endif %}
                     <div class="fm-personal-detail">
                         <span class="fm-detail-label">Loan Wage</span>
-                        <span class="fm-detail-value">${{ loan.salary }} p/a</span>
+                        <span class="fm-detail-value">${{ loan.salary }} {{ i18n.t("per_year") }}</span>
                     </div>
                     <div class="fm-personal-detail">
                         <span class="fm-detail-label">Loan Expiry</span>

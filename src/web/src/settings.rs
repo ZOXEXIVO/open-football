@@ -14,7 +14,7 @@ impl Settings {
 
         let match_events = args.iter().any(|arg| arg == "--match-events");
 
-        let match_recordings = args.iter().any(|arg| arg == "--match-recording")
+        let match_recordings = args.iter().any(|arg| arg == "--match-recording-enabled")
             || env::var("MATCH_RECORDING_ENABLED")
                 .map(|v| v == "true")
                 .unwrap_or(false);

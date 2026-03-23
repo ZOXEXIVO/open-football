@@ -47,16 +47,6 @@ impl ClubFinances {
         if ctx.simulation.is_month_beginning() {
             debug!("club: {}, finance: start new month", club_name);
             self.start_new_month(club_name, ctx.simulation.date.date());
-
-            // Update budgets at month beginning
-            self.update_budgets();
-        }
-
-        if ctx.simulation.is_year_beginning() {
-            // ... sponsorship income code ...
-
-            // Reset budgets for new year
-            self.reset_annual_budgets();
         }
 
         result
@@ -78,43 +68,7 @@ impl ClubFinances {
             club_name, amount
         );
 
-        self.balance.push_outcome(amount);
-    }
-
-    fn update_budgets(&mut self) {
-        // Update transfer and wage budgets based on current financial situation
-        let available_funds = self.balance.balance as f64;
-
-        // Allocate 30% of available funds to transfers if positive balance
-        if available_funds > 0.0 {
-            self.transfer_budget = Some(CurrencyValue {
-                amount: available_funds * 0.3,
-                currency: crate::shared::Currency::Usd,
-            });
-        }
-    }
-
-    fn reset_annual_budgets(&mut self) {
-        // Reset budgets based on overall financial health
-        let available_funds = self.balance.balance as f64;
-
-        if available_funds > 0.0 {
-            // Set annual transfer budget (40% of available funds)
-            self.transfer_budget = Some(CurrencyValue {
-                amount: available_funds * 0.4,
-                currency: crate::shared::Currency::Usd,
-            });
-
-            // Set annual wage budget (50% of available funds)
-            self.wage_budget = Some(CurrencyValue {
-                amount: available_funds * 0.5,
-                currency: crate::shared::Currency::Usd,
-            });
-        } else {
-            // No budget if in debt
-            self.transfer_budget = None;
-            self.wage_budget = None;
-        }
+        self.balance.push_expense_player_wages(amount);
     }
 
     // Helper method to spend from transfer budget
@@ -146,19 +100,22 @@ impl ClubFinances {
 }
 
 #[derive(Debug, Clone)]
-#[allow(dead_code)]
 pub struct ClubFinancialBalance {
     pub balance: i64,
     pub income: i64,
     pub outcome: i64,
-    highest_wage_paid: i32,
-    latest_season_tickets: i32,
-    remaining_budget: i32,
-    season_transfer_funds: i32,
-    transfer_income_percentage: i32,
-    weekly_wage_budget: i32,
-    highest_wage: i32,
-    youth_grant_income: i32,
+
+    // Income categories
+    pub income_tv: i64,
+    pub income_matchday: i64,
+    pub income_sponsorship: i64,
+    pub income_merchandising: i64,
+    pub income_prize_money: i64,
+
+    // Expense categories
+    pub expense_player_wages: i64,
+    pub expense_staff_wages: i64,
+    pub expense_facilities: i64,
 }
 
 impl ClubFinancialBalance {
@@ -167,14 +124,14 @@ impl ClubFinancialBalance {
             balance,
             income: 0,
             outcome: 0,
-            highest_wage_paid: 0,
-            latest_season_tickets: 0,
-            remaining_budget: 0,
-            season_transfer_funds: 0,
-            transfer_income_percentage: 0,
-            weekly_wage_budget: 0,
-            highest_wage: 0,
-            youth_grant_income: 0,
+            income_tv: 0,
+            income_matchday: 0,
+            income_sponsorship: 0,
+            income_merchandising: 0,
+            income_prize_money: 0,
+            expense_player_wages: 0,
+            expense_staff_wages: 0,
+            expense_facilities: 0,
         }
     }
 
@@ -188,8 +145,58 @@ impl ClubFinancialBalance {
         self.outcome += amount;
     }
 
+    // Categorized income methods
+    pub fn push_income_tv(&mut self, amount: i64) {
+        self.income_tv += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_matchday(&mut self, amount: i64) {
+        self.income_matchday += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_sponsorship(&mut self, amount: i64) {
+        self.income_sponsorship += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_merchandising(&mut self, amount: i64) {
+        self.income_merchandising += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_income_prize_money(&mut self, amount: i64) {
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    // Categorized expense methods
+    pub fn push_expense_player_wages(&mut self, amount: i64) {
+        self.expense_player_wages += amount;
+        self.push_outcome(amount);
+    }
+
+    pub fn push_expense_staff_wages(&mut self, amount: i64) {
+        self.expense_staff_wages += amount;
+        self.push_outcome(amount);
+    }
+
+    pub fn push_expense_facilities(&mut self, amount: i64) {
+        self.expense_facilities += amount;
+        self.push_outcome(amount);
+    }
+
     pub fn clear(&mut self) {
         self.income = 0;
         self.outcome = 0;
+        self.income_tv = 0;
+        self.income_matchday = 0;
+        self.income_sponsorship = 0;
+        self.income_merchandising = 0;
+        self.income_prize_money = 0;
+        self.expense_player_wages = 0;
+        self.expense_staff_wages = 0;
+        self.expense_facilities = 0;
     }
 }

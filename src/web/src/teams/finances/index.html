@@ -62,6 +62,36 @@
         </div>
     </div>
 
+    <!-- ═══ INCOME & EXPENSE BREAKDOWN ═══ -->
+    <div class="fin-breakdown-row">
+        <section class="fm-panel fin-breakdown-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("fin_income_breakdown") }}</h3>
+            </div>
+            <table class="fin-table">
+                <tbody>
+                    <tr><td>{{ i18n.t("fin_tv_revenue") }}</td><td class="fin-col-num fin-income-text">{{ income_tv }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_matchday_revenue") }}</td><td class="fin-col-num fin-income-text">{{ income_matchday }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_sponsorship_income") }}</td><td class="fin-col-num fin-income-text">{{ income_sponsorship }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_merchandising") }}</td><td class="fin-col-num fin-income-text">{{ income_merchandising }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_prize_money") }}</td><td class="fin-col-num fin-income-text">{{ income_prize_money }}</td></tr>
+                </tbody>
+            </table>
+        </section>
+        <section class="fm-panel fin-breakdown-panel">
+            <div class="fm-panel-head">
+                <h3>{{ i18n.t("fin_expense_breakdown") }}</h3>
+            </div>
+            <table class="fin-table">
+                <tbody>
+                    <tr><td>{{ i18n.t("fin_player_wages") }}</td><td class="fin-col-num fin-expense-text">{{ expense_player_wages }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_staff_wages") }}</td><td class="fin-col-num fin-expense-text">{{ expense_staff_wages }}</td></tr>
+                    <tr><td>{{ i18n.t("fin_facility_maintenance") }}</td><td class="fin-col-num fin-expense-text">{{ expense_facilities }}</td></tr>
+                </tbody>
+            </table>
+        </section>
+    </div>
+
     <!-- ═══ CHART: Balance History ═══ -->
     <section class="fm-panel fin-chart-panel">
         <div class="fm-panel-head">

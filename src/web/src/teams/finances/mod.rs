@@ -47,6 +47,16 @@ pub struct TeamFinancesTemplate {
     pub net_monthly_positive: bool,
     pub sponsors: Vec<SponsorDto>,
     pub history_entries: Vec<FinanceHistoryEntry>,
+    // Income breakdown
+    pub income_tv: String,
+    pub income_matchday: String,
+    pub income_sponsorship: String,
+    pub income_merchandising: String,
+    pub income_prize_money: String,
+    // Expense breakdown
+    pub expense_player_wages: String,
+    pub expense_staff_wages: String,
+    pub expense_facilities: String,
     // Chart data (JSON-encoded for JS)
     pub chart_labels: String,
     pub chart_balances: String,
@@ -128,14 +138,26 @@ pub async fn team_finances_get_action(
     let annual_wages = format_currency(total_annual_wages as i64);
 
     // Monthly income/expenses (use latest completed month from history, not in-progress month)
-    let (monthly_income_val, monthly_expenses_val) = finance.history.iter().next()
-        .map(|(_, bal)| (bal.income, bal.outcome))
-        .unwrap_or((finance.balance.income, finance.balance.outcome));
-    let monthly_income = format_currency(monthly_income_val as i64);
-    let monthly_expenses = format_currency(monthly_expenses_val as i64);
+    let latest_bal = finance.history.iter().next()
+        .map(|(_, bal)| bal)
+        .unwrap_or(&finance.balance);
+    let monthly_income_val = latest_bal.income;
+    let monthly_expenses_val = latest_bal.outcome;
+    let monthly_income = format_currency(monthly_income_val);
+    let monthly_expenses = format_currency(monthly_expenses_val);
     let net = monthly_income_val - monthly_expenses_val;
     let net_monthly_positive = net >= 0;
-    let net_monthly = format_currency(net as i64);
+    let net_monthly = format_currency(net);
+
+    // Income/expense category breakdown
+    let income_tv = format_currency(latest_bal.income_tv);
+    let income_matchday = format_currency(latest_bal.income_matchday);
+    let income_sponsorship = format_currency(latest_bal.income_sponsorship);
+    let income_merchandising = format_currency(latest_bal.income_merchandising);
+    let income_prize_money = format_currency(latest_bal.income_prize_money);
+    let expense_player_wages = format_currency(latest_bal.expense_player_wages);
+    let expense_staff_wages = format_currency(latest_bal.expense_staff_wages);
+    let expense_facilities = format_currency(latest_bal.expense_facilities);
 
     // Sponsorship
     let sponsors: Vec<SponsorDto> = club.finance.sponsorship.sponsorship_contracts.iter()
@@ -218,6 +240,14 @@ pub async fn team_finances_get_action(
         net_monthly_positive,
         sponsors,
         history_entries,
+        income_tv,
+        income_matchday,
+        income_sponsorship,
+        income_merchandising,
+        income_prize_money,
+        expense_player_wages,
+        expense_staff_wages,
+        expense_facilities,
         chart_labels: serde_json::to_string(&chart_labels).unwrap_or_default(),
         chart_balances: serde_json::to_string(&chart_balances).unwrap_or_default(),
         chart_incomes: serde_json::to_string(&chart_incomes).unwrap_or_default(),

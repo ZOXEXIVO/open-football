@@ -121,7 +121,16 @@ impl Country {
         
         self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids, candidates);
 
-        // Phase 3: Club Operations
+        // Phase 3: Club Operations (with economic factors)
+        let ctx = {
+            let mut c = ctx;
+            if let Some(ref mut country_ctx) = c.country {
+                country_ctx.tv_revenue_multiplier = self.economic_factors.tv_revenue_multiplier;
+                country_ctx.sponsorship_market_strength = self.economic_factors.sponsorship_market_strength;
+                country_ctx.stadium_attendance_factor = self.economic_factors.stadium_attendance_factor;
+            }
+            c
+        };
         let clubs_results = self.simulate_clubs(&ctx);
 
         debug!("✅ Country {} simulation complete", country_name);

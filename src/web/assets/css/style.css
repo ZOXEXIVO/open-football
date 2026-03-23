@@ -1572,7 +1572,8 @@ a:link, a:visited, a:hover, a:active {
 .fm-squad .sq-pos {
     color: #7a868e;
     font-size: 12px;
-    width: 2em;
+    white-space: nowrap;
+    width: 3em;
 }
 
 .fm-squad .sq-nat {
@@ -3796,6 +3797,31 @@ a:link, a:visited, a:hover, a:active {
     }
 }
 
+/* --- Mobile Squads (below match area) --- */
+
+.fm-match-squads-mobile {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    margin-top: 8px;
+}
+
+.fm-match-squads-mobile .fm-match-squad-away {
+    border-left: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+@media (max-width: 480px) {
+    .fm-match-squads-mobile {
+        grid-template-columns: 1fr;
+    }
+
+    .fm-match-squads-mobile .fm-match-squad-away {
+        border-left: none;
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
+    }
+}
+
 /* --- Squad Panels --- */
 
 .fm-match-squad {
@@ -4878,6 +4904,22 @@ a:link, a:visited, a:hover, a:active {
     font-weight: 500;
 }
 
+/* ── Breakdown Row: Income + Expenses ── */
+.fin-breakdown-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 16px;
+}
+
+.fin-breakdown-panel {
+    flex: 1;
+}
+
+.fin-breakdown-panel .fin-table td:first-child {
+    color: #8a939b;
+    font-size: 12px;
+}
+
 /* ── Bottom Row: History + Sponsors ── */
 .fin-bottom-row {
     display: flex;
@@ -5055,6 +5097,10 @@ a:link, a:visited, a:hover, a:active {
     .fin-flow-card {
         flex: 1 1 calc(50% - 6px);
         min-width: 180px;
+    }
+
+    .fin-breakdown-row {
+        flex-direction: column;
     }
 
     .fin-bottom-row {

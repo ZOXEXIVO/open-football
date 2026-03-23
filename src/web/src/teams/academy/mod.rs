@@ -105,7 +105,7 @@ pub async fn team_academy_action(
         .iter()
         .filter_map(|p| {
             let country = simulator_data.country(p.country_id)?;
-            let position = p.positions.display_positions().join(", ");
+            let position = p.positions.display_positions_compact();
 
             Some(AcademyPlayer {
                 _id: p.id,

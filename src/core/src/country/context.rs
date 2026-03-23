@@ -7,15 +7,30 @@ pub struct CountryContext {
     pub code: String,
     pub people_names: Option<PeopleNameGeneratorData>,
     pub season_dates: SeasonDates,
+    pub tv_revenue_multiplier: f32,
+    pub sponsorship_market_strength: f32,
+    pub stadium_attendance_factor: f32,
 }
 
 impl CountryContext {
     pub fn new(id: u32) -> Self {
-        CountryContext { id, code: String::new(), people_names: None, season_dates: SeasonDates::default() }
+        CountryContext {
+            id, code: String::new(), people_names: None,
+            season_dates: SeasonDates::default(),
+            tv_revenue_multiplier: 1.0,
+            sponsorship_market_strength: 1.0,
+            stadium_attendance_factor: 1.0,
+        }
     }
 
     pub fn with_people_names(id: u32, people_names: PeopleNameGeneratorData) -> Self {
-        CountryContext { id, code: String::new(), people_names: Some(people_names), season_dates: SeasonDates::default() }
+        CountryContext {
+            id, code: String::new(), people_names: Some(people_names),
+            season_dates: SeasonDates::default(),
+            tv_revenue_multiplier: 1.0,
+            sponsorship_market_strength: 1.0,
+            stadium_attendance_factor: 1.0,
+        }
     }
 
     pub fn with_code(mut self, code: String) -> Self {

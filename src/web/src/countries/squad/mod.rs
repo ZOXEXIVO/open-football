@@ -101,7 +101,7 @@ pub async fn country_squad_action(
                 .map(|t| t.slug.clone())
                 .unwrap_or_default();
 
-            let position = player.positions.display_positions().join(", ");
+            let position = player.positions.display_positions_compact();
 
             // Use the player's team's head coach for ability assessment
             let (judging, coach_id) = simulator_data

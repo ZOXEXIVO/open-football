@@ -91,7 +91,7 @@ pub async fn watchlist_page_action(
                     .or_else(|| simulator_data.country_info.get(&player.country_id)
                         .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
                     .unwrap_or_default();
-                let position = player.positions.display_positions().join(", ");
+                let position = player.positions.display_positions_compact();
                 let league = team.league_id.and_then(|id| simulator_data.league(id));
                 let head_coach = team.staffs.head_coach();
 
@@ -133,7 +133,7 @@ pub async fn watchlist_page_action(
                     .or_else(|| simulator_data.country_info.get(&player.country_id)
                         .map(|i| (i.code.clone(), i.name.clone(), i.slug.clone())))
                     .unwrap_or_default();
-                let position = player.positions.display_positions().join(", ");
+                let position = player.positions.display_positions_compact();
 
                 Some(WatchlistPlayerDto {
                     id: player.id,
