@@ -54,6 +54,11 @@ volumes:
     host:
       path: /var/run/docker.sock
 
+trigger:
+  event:
+    exclude:
+      - tag
+
 ---
 
 kind: pipeline
