@@ -140,7 +140,7 @@ impl PlayerStatisticsHistory {
             let days_at_club = (end_date - entry.joined_date).num_days().max(0);
             let season_days = (season_end - entry_season.start_date()).num_days().max(1);
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
-            let trivial_stint = games == 0 && !has_fee && time_pct < 3.0;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
 
             if !stale_loan_seed && !trivial_stint {
                 let mut stats = entry.statistics;
@@ -241,7 +241,7 @@ impl PlayerStatisticsHistory {
         current_stats: PlayerStatistics,
         team: &TeamInfo,
         is_loan: bool,
-        _last_transfer_date: Option<NaiveDate>,
+        last_transfer_date: Option<NaiveDate>,
     ) {
         // Guard: if this season was already frozen (multi-league country where
         // different leagues start new seasons on different dates, or cross-country
@@ -268,8 +268,18 @@ impl PlayerStatisticsHistory {
             return;
         }
 
+        // When the player has no tracked entry for this team (e.g. returned from
+        // loan mid-season), use last_transfer_date as joined_date so the trivial
+        // stint filter can accurately measure time at this club.
+        let has_existing = self.current.iter().any(|e| e.team_slug == team.slug && e.is_loan == is_loan);
+        let join_date = if has_existing {
+            season.start_date()
+        } else {
+            last_transfer_date.unwrap_or(season.start_date())
+        };
+
         // Apply live stats to the current club entry
-        self.upsert_current(team, current_stats, is_loan, None, season.start_date());
+        self.upsert_current(team, current_stats, is_loan, None, join_date);
 
         // Drain everything into frozen items
         let season_end = season.end_date();
@@ -284,13 +294,13 @@ impl PlayerStatisticsHistory {
 
             // Drop entries where the player barely stayed and never played:
             // - Loan entries with 0 games and no fee are stale seeds (phantom entries)
-            // - Any entry with 0 games and no fee that covers < 3% of the season is noise
-            //   (e.g. returned from loan 5 days before season end, 0 apps at parent)
+            // - Any entry with 0 games and no fee that covers < 15% of the season is noise
+            //   (e.g. returned from loan near season end, 0 apps at parent club)
             // Always keep: entries with games, entries with transfer fees, or
             // entries where the player was at the club for a meaningful portion of the season
             //
             let has_fee = entry.transfer_fee.is_some();
-            let trivial_stint = games == 0 && !has_fee && time_pct < 3.0;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
 
             let keep = !stale_loan_seed && !trivial_stint;

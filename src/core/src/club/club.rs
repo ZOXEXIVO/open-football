@@ -209,10 +209,10 @@ impl Club {
                 // Reset ban flags for new season
                 player.player_attributes.is_banned = false;
 
-                // Reset statistics for new season
-                player.statistics = Default::default();
-                player.friendly_statistics = Default::default();
-                player.cup_statistics = Default::default();
+                // NOTE: Do NOT reset player.statistics here!
+                // The season-end snapshot (snapshot_player_season_statistics) takes
+                // stats via std::mem::take in on_season_end. If we reset here first,
+                // the snapshot captures zeroed stats and the season's history is lost.
 
                 // Reset days since last match (pre-season training counts)
                 player.player_attributes.days_since_last_match = 7;

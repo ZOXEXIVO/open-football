@@ -1216,4 +1216,137 @@ mod tests {
         assert_eq!(bari_2027[0].statistics.played, 12,
             "Bari 2027/28 should have 12 apps (no merge needed).\n{desc}");
     }
+
+    // ---------------------------------------------------------------
+    // 2-season loan: stats from first season must survive into frozen history
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn two_season_loan_preserves_first_season_stats() {
+        let mut player = make_player();
+
+        let parent = make_team("Sporting CP", "sporting");
+        let zabbar = make_team("Zabbar St. Patrick", "zabbar");
+
+        // -- Setup: player at Sporting CP --
+        player.statistics_history.seed_initial_team(&parent, make_date(2025, 8, 1));
+        player.statistics = make_stats(10, 2);
+        player.on_season_end(Season::new(2025), &parent, make_date(2026, 8, 25));
+
+        // -- Season 2026/27: manually loaned to Zabbar for 2 seasons --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&parent, &parent, &zabbar, make_date(2026, 9, 1));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            200, make_date(2028, 4, 30), 99, 0, 100,
+        ));
+
+        // Player plays 20 matches at Zabbar in 2026/27
+        player.statistics = make_stats(20, 3);
+
+        // Season end 2026/27 → should freeze 20 apps
+        player.on_season_end(Season::new(2026), &zabbar, make_date(2027, 8, 25));
+
+        // Verify: frozen 2026/27 entry must have 20 games
+        let zabbar_2026 = player.statistics_history.items.iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
+        assert!(zabbar_2026.is_some(), "Missing Zabbar 2026/27 entry.\n{}",
+            describe_history(&player.statistics_history.items));
+        assert_eq!(zabbar_2026.unwrap().statistics.played, 20,
+            "Zabbar 2026/27 should have 20 apps.\n{}",
+            describe_history(&player.statistics_history.items));
+
+        // -- Season 2027/28: continues at Zabbar, plays 15 matches --
+        player.statistics = make_stats(15, 2);
+
+        // View during season: both seasons should be visible
+        let view = player.statistics_history.view_items(Some(&player.statistics));
+        let view_2026 = view.iter().find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
+        assert!(view_2026.is_some(), "2026/27 Zabbar should be in view.\n");
+        assert_eq!(view_2026.unwrap().statistics.played, 20,
+            "2026/27 Zabbar view should still show 20 apps");
+
+        let view_2027 = view.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "zabbar");
+        assert!(view_2027.is_some(), "2027/28 Zabbar should be in view");
+        assert_eq!(view_2027.unwrap().statistics.played, 15,
+            "2027/28 Zabbar view should show 15 live apps");
+
+        // Season end 2027/28
+        player.on_season_end(Season::new(2027), &zabbar, make_date(2028, 8, 25));
+
+        // Verify both seasons frozen correctly
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        let zabbar_2026 = history.iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "zabbar");
+        assert!(zabbar_2026.is_some(), "Missing Zabbar 2026/27.\n{desc}");
+        assert_eq!(zabbar_2026.unwrap().statistics.played, 20,
+            "Zabbar 2026/27 should have 20 apps after second season end.\n{desc}");
+        assert!(zabbar_2026.unwrap().is_loan, "Zabbar 2026/27 should be loan.\n{desc}");
+
+        let zabbar_2027 = history.iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "zabbar");
+        assert!(zabbar_2027.is_some(), "Missing Zabbar 2027/28.\n{desc}");
+        assert_eq!(zabbar_2027.unwrap().statistics.played, 15,
+            "Zabbar 2027/28 should have 15 apps.\n{desc}");
+        assert!(zabbar_2027.unwrap().is_loan, "Zabbar 2027/28 should be loan.\n{desc}");
+    }
+
+    // ---------------------------------------------------------------
+    // Loan return mid-season: no phantom parent entry after return
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn loan_return_no_phantom_parent_entry() {
+        let mut player = make_player();
+
+        let floriana = make_team("Floriana", "floriana");
+        let zabbar = make_team("Zabbar St. Patrick", "zabbar");
+
+        // -- Setup: player at Floriana --
+        player.statistics_history.seed_initial_team(&floriana, make_date(2027, 8, 1));
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 25));
+
+        // -- Season 2028/29: loaned to Zabbar --
+        player.statistics = make_stats(0, 0);
+        player.on_manual_loan(&floriana, &floriana, &zabbar, make_date(2028, 9, 1));
+        player.contract_loan = Some(crate::PlayerClubContract::new_loan(
+            200, make_date(2030, 4, 30), 99, 0, 100,
+        ));
+        player.statistics = make_stats(23, 5);
+        player.on_season_end(Season::new(2028), &zabbar, make_date(2029, 8, 25));
+
+        // -- Season 2029/30: continues at Zabbar --
+        player.statistics = make_stats(20, 3);
+
+        // Loan expires in May → player returns mid-season
+        player.on_loan_return(&zabbar, make_date(2030, 5, 1));
+        player.contract_loan = None;
+
+        // -- Season end snapshot: player is now at Floriana --
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2029), &floriana, make_date(2030, 8, 25));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // 2028/29: Zabbar 23 apps (loan)
+        let zabbar_2028 = history.iter()
+            .find(|e| e.season.start_year == 2028 && e.team_slug == "zabbar");
+        assert!(zabbar_2028.is_some(), "Missing Zabbar 2028/29.\n{desc}");
+        assert_eq!(zabbar_2028.unwrap().statistics.played, 23, "Zabbar 2028/29.\n{desc}");
+
+        // 2029/30: Zabbar 20 apps (loan) — from loan_return snapshot
+        let zabbar_2029 = history.iter()
+            .find(|e| e.season.start_year == 2029 && e.team_slug == "zabbar");
+        assert!(zabbar_2029.is_some(), "Missing Zabbar 2029/30.\n{desc}");
+        assert_eq!(zabbar_2029.unwrap().statistics.played, 20, "Zabbar 2029/30.\n{desc}");
+
+        // NO phantom Floriana 2029/30 — player only spent a few weeks there
+        let floriana_2029 = history.iter()
+            .find(|e| e.season.start_year == 2029 && e.team_slug == "floriana");
+        assert!(floriana_2029.is_none(),
+            "Phantom Floriana 2029/30 should be dropped (0 apps, arrived late).\n{desc}");
+    }
 }

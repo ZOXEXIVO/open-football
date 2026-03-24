@@ -29,7 +29,7 @@ pub struct League {
     pub financials: LeagueFinancials,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct LeagueFinancials {
     /// Total prize pool distributed at season end by league position
     pub prize_pool: i64,
@@ -38,8 +38,9 @@ pub struct LeagueFinancials {
 }
 
 impl LeagueFinancials {
-    pub fn from_reputation_and_tier(reputation: u16, tier: u8) -> Self {
+    pub fn from_reputation_and_tier(reputation: u16, tier: u8, country_reputation: u16) -> Self {
         let rep_factor = (reputation as f64 / 10000.0).clamp(0.0, 1.0);
+        let country_factor = (country_reputation as f64 / 10000.0).clamp(0.0, 1.0);
 
         let tier_factor = match tier {
             1 => 1.0,
@@ -50,7 +51,11 @@ impl LeagueFinancials {
         let base_prize = 200_000_000.0;
         let base_tv = 500_000_000.0;
 
-        let scale = rep_factor * rep_factor * rep_factor * tier_factor;
+        // Country market factor: square of country reputation
+        // England (9500) → 0.90, Malta (3000) → 0.09, Chad (1000) → 0.01
+        let country_market = country_factor * country_factor;
+
+        let scale = rep_factor * rep_factor * rep_factor * tier_factor * country_market;
 
         LeagueFinancials {
             prize_pool: (base_prize * scale) as i64,
@@ -69,7 +74,7 @@ impl League {
         settings: LeagueSettings,
         friendly: bool,
     ) -> Self {
-        let financials = LeagueFinancials::from_reputation_and_tier(reputation, settings.tier);
+        let financials = LeagueFinancials::default();
 
         League {
             id,

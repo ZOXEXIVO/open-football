@@ -8,7 +8,7 @@ use core::context::NaiveTime;
 use core::continent::Continent;
 use core::competitions::GlobalCompetitions;
 use core::league::LeagueCollection;
-use core::league::{DayMonthPeriod, League, LeagueGroup, LeagueSettings};
+use core::league::{DayMonthPeriod, League, LeagueFinancials, LeagueGroup, LeagueSettings};
 use core::shared::Location;
 use core::utils::IntegerUtils;
 use core::ClubStatus;
@@ -137,7 +137,7 @@ impl DatabaseGenerator {
                     &mut staff_generator,
                 );
 
-                let mut leagues_vec = DatabaseGenerator::generate_leagues(country.id, data);
+                let mut leagues_vec = DatabaseGenerator::generate_leagues(country.id, country.reputation, data);
                 DatabaseGenerator::create_subteams_leagues(country.id, &mut clubs, &mut leagues_vec, data);
                 let leagues = LeagueCollection::new(leagues_vec);
 
@@ -170,12 +170,15 @@ impl DatabaseGenerator {
             }).collect()
     }
 
-    fn generate_leagues(country_id: u32, data: &DatabaseEntity) -> Vec<League> {
+    fn generate_leagues(country_id: u32, country_reputation: u16, data: &DatabaseEntity) -> Vec<League> {
         data
             .leagues
             .iter()
             .filter(|l| l.country_id == country_id)
             .map(|league| {
+                let financials = LeagueFinancials::from_reputation_and_tier(
+                    league.reputation, league.tier, country_reputation,
+                );
                 let settings = LeagueSettings {
                     season_starting_half: DayMonthPeriod {
                         from_day: league.settings.season_starting_half.from_day,
@@ -199,7 +202,9 @@ impl DatabaseGenerator {
                     }),
                 };
 
-                League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings, false)
+                let mut l = League::new(league.id, league.name.clone(), league.slug.clone(), league.country_id, league.reputation, settings, false);
+                l.financials = financials;
+                l
             })
             .collect()
     }

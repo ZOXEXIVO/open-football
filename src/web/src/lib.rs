@@ -76,8 +76,6 @@ impl FootballSimulatorServer {
         if let Err(e) = axum::serve(listener, app).await {
             error!("Server error: {}", e);
             error!("Server stopped unexpectedly, but not crashing the process");
-            // Don't panic here - just log and let the process stay alive
-            // This way Docker won't restart unless the process actually exits
         }
     }
 }

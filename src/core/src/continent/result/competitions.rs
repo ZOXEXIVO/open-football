@@ -97,6 +97,12 @@ impl ContinentResult {
 
     /// Champions League: top clubs from each country.
     /// Top 4 countries get 4 spots, next 2 get 2 spots, rest get 1.
+    /// Check if a country's top league actually played matches (not just an empty table).
+    /// Countries with disabled leagues have clubs but no league activity.
+    fn league_has_played(league: &crate::league::League) -> bool {
+        league.table.rows.iter().any(|r| r.played > 0)
+    }
+
     fn collect_cl_qualified_clubs(countries: &[&Country]) -> Vec<u32> {
         let mut qualified = Vec::new();
 
@@ -108,6 +114,10 @@ impl ContinentResult {
                 Some(l) => l,
                 None => continue,
             };
+
+            if !Self::league_has_played(league) {
+                continue;
+            }
 
             let spots: usize = if rank < 4 { 4 } else if rank < 6 { 2 } else { 1 };
 
@@ -143,6 +153,10 @@ impl ContinentResult {
                 Some(l) => l,
                 None => continue,
             };
+
+            if !Self::league_has_played(league) {
+                continue;
+            }
 
             // Determine which table positions to take (after CL spots)
             let (skip, take) = if rank < 4 {
@@ -187,6 +201,10 @@ impl ContinentResult {
                 Some(l) => l,
                 None => continue,
             };
+
+            if !Self::league_has_played(league) {
+                continue;
+            }
 
             // Determine which table positions to take (after CL + EL spots)
             let (skip, take) = if rank < 4 {

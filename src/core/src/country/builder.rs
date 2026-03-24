@@ -140,7 +140,10 @@ impl CountryBuilder {
             generator_data,
             national_team,
             transfer_market: self.transfer_market.unwrap_or_else(TransferMarket::new),
-            economic_factors: self.economic_factors.unwrap_or_else(CountryEconomicFactors::new),
+            economic_factors: self.economic_factors.unwrap_or_else(|| {
+                let rep = self.reputation.unwrap_or(500);
+                CountryEconomicFactors::from_reputation(rep)
+            }),
             international_competitions: self.international_competitions.unwrap_or_default(),
             media_coverage: self.media_coverage.unwrap_or_else(MediaCoverage::new),
             regulations: self.regulations.unwrap_or_else(CountryRegulations::new),

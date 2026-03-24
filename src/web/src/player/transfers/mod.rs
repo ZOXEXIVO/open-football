@@ -287,51 +287,51 @@ pub async fn player_transfers_action(
         })
         .collect();
 
-    // Get completed transfers for this player (all seasons)
-    let completed: Vec<PlayerCompletedTransferDto> = country
-        .map(|c| {
-            let mut transfers: Vec<_> = c.transfer_market
-                .transfer_history
-                .iter()
-                .filter(|t| t.player_id == player.id)
-                .map(|t| {
-                    let from_slug = simulator_data
-                        .club(t.from_club_id)
-                        .and_then(|c| c.teams.teams.first())
-                        .map(|team| team.slug.clone())
-                        .unwrap_or_default();
-                    let to_slug = simulator_data
-                        .club(t.to_club_id)
-                        .and_then(|c| c.teams.teams.first())
-                        .map(|team| team.slug.clone())
-                        .unwrap_or_default();
+    // Get completed transfers for this player (all seasons, across all countries)
+    let completed: Vec<PlayerCompletedTransferDto> = {
+        let mut transfers: Vec<_> = simulator_data
+            .continents
+            .iter()
+            .flat_map(|cont| &cont.countries)
+            .flat_map(|c| &c.transfer_market.transfer_history)
+            .filter(|t| t.player_id == player.id)
+            .map(|t| {
+                let from_slug = simulator_data
+                    .club(t.from_club_id)
+                    .and_then(|c| c.teams.teams.first())
+                    .map(|team| team.slug.clone())
+                    .unwrap_or_default();
+                let to_slug = simulator_data
+                    .club(t.to_club_id)
+                    .and_then(|c| c.teams.teams.first())
+                    .map(|team| team.slug.clone())
+                    .unwrap_or_default();
 
-                    let transfer_type_key = match &t.transfer_type {
-                        core::transfers::TransferType::Permanent => "transfer_type_permanent",
-                        core::transfers::TransferType::Loan(_) => "transfer_type_loan",
-                        core::transfers::TransferType::Free => "transfer_type_free",
-                    };
+                let transfer_type_key = match &t.transfer_type {
+                    core::transfers::TransferType::Permanent => "transfer_type_permanent",
+                    core::transfers::TransferType::Loan(_) => "transfer_type_loan",
+                    core::transfers::TransferType::Free => "transfer_type_free",
+                };
 
-                    (t.transfer_date, PlayerCompletedTransferDto {
-                        from_club_name: t.from_team_name.clone(),
-                        from_club_slug: from_slug,
-                        to_club_name: t.to_team_name.clone(),
-                        to_club_slug: to_slug,
-                        fee: if t.fee.amount > 0.0 {
-                            FormattingUtils::format_money(t.fee.amount)
-                        } else {
-                            "Free".to_string()
-                        },
-                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
-                        transfer_type_key: transfer_type_key.to_string(),
-                        reason: t.reason.clone(),
-                    })
+                (t.transfer_date, PlayerCompletedTransferDto {
+                    from_club_name: t.from_team_name.clone(),
+                    from_club_slug: from_slug,
+                    to_club_name: t.to_team_name.clone(),
+                    to_club_slug: to_slug,
+                    fee: if t.fee.amount > 0.0 {
+                        FormattingUtils::format_money(t.fee.amount)
+                    } else {
+                        "Free".to_string()
+                    },
+                    date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                    transfer_type_key: transfer_type_key.to_string(),
+                    reason: t.reason.clone(),
                 })
-                .collect();
-            transfers.sort_by(|a, b| b.0.cmp(&a.0));
-            transfers.into_iter().map(|(_, dto)| dto).collect()
-        })
-        .unwrap_or_default();
+            })
+            .collect();
+        transfers.sort_by(|a, b| b.0.cmp(&a.0));
+        transfers.into_iter().map(|(_, dto)| dto).collect()
+    };
 
     let title = format!(
         "{} {}",
