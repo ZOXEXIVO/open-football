@@ -574,9 +574,9 @@ mod tests {
         let history = &player.statistics_history.items;
         let desc = describe_history(history);
 
-        // 2025/26: Gzira 0 apps for 9 days (< 3% of season) — collapsed
+        // 2025/26: Gzira 0 apps for 9 days — kept as first career record
         let gzira_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "gzira");
-        assert!(gzira_2025.is_none(), "Gzira 2025/26 (0 apps, 9 days) should be collapsed.\n{desc}");
+        assert!(gzira_2025.is_some(), "First career record at Gzira should be kept even with 0 apps.\n{desc}");
 
         // 2025/26: Birkirkara 21 apps (loan)
         let birk_2025 = history.iter().find(|e| e.season.start_year == 2025 && e.team_slug == "birkirkara");
@@ -606,8 +606,8 @@ mod tests {
         let mars_phantom = history.iter().find(|e| e.season.start_year == 2027 && e.team_slug == "marsaxlokk");
         assert!(mars_phantom.is_none(), "Phantom Marsaxlokk in 2027/28.\n{desc}");
 
-        // 4 entries: Birkirkara + (Gzira + Marsaxlokk) + Gzira  (first Gzira collapsed)
-        assert_eq!(history.len(), 4, "Expected 4 entries, got {}.\n{desc}", history.len());
+        // 5 entries: Gzira(initial) + Birkirkara + (Gzira + Marsaxlokk) + Gzira
+        assert_eq!(history.len(), 5, "Expected 5 entries, got {}.\n{desc}", history.len());
     }
 
     // ---------------------------------------------------------------
@@ -703,13 +703,13 @@ mod tests {
         assert_eq!(mosta_entry.unwrap().statistics.played, 18, "Mosta apps wrong.\n{desc}");
         assert!(mosta_entry.unwrap().is_loan, "Mosta should be loan.\n{desc}");
 
-        // Gzira 0 apps for 5 days (< 3% of season) — should be COLLAPSED (dropped)
+        // Gzira 0 apps for 5 days — kept as the player's first career record
         let gzira_brief = history.iter().find(|e| {
             e.season.start_year == 2025 && e.team_slug == "gzira"
                 && e.statistics.played == 0 && e.transfer_fee.is_none()
         });
-        assert!(gzira_brief.is_none(),
-            "Brief 0-app return to Gzira before season end should be collapsed.\n{desc}");
+        assert!(gzira_brief.is_some(),
+            "First career record at Gzira should be kept even with 0 apps.\n{desc}");
     }
 
     // ---------------------------------------------------------------

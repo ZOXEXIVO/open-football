@@ -92,21 +92,28 @@ impl PlayerStatisticsHistory {
                 entry.transfer_fee = fee;
             }
         } else {
-            let seq = self.next_seq();
-            self.current.push(CurrentSeasonEntry {
-                team_name: team.name.clone(),
-                team_slug: team.slug.clone(),
-                team_reputation: team.reputation,
-                league_name: team.league_name.clone(),
-                league_slug: team.league_slug.clone(),
-                is_loan,
-                transfer_fee: fee,
-                statistics: stats,
-                joined_date: date,
-                departed_date: None,
-                seq_id: seq,
-            });
+            self.push_new_entry(team, stats, is_loan, fee, date);
         }
+    }
+
+    /// Always create a new entry — never merge with an existing one.
+    /// Used for destination clubs on transfers/loans so each stint is a
+    /// separate record and the initial entry is never overridden.
+    fn push_new_entry(&mut self, team: &TeamInfo, stats: PlayerStatistics, is_loan: bool, fee: Option<f64>, date: NaiveDate) {
+        let seq = self.next_seq();
+        self.current.push(CurrentSeasonEntry {
+            team_name: team.name.clone(),
+            team_slug: team.slug.clone(),
+            team_reputation: team.reputation,
+            league_name: team.league_name.clone(),
+            league_slug: team.league_slug.clone(),
+            is_loan,
+            transfer_fee: fee,
+            statistics: stats,
+            joined_date: date,
+            departed_date: None,
+            seq_id: seq,
+        });
     }
 
     /// Freeze entries from previous seasons into `items` before a manual action.
@@ -128,12 +135,16 @@ impl PlayerStatisticsHistory {
             }
         });
 
+        let is_first_season = self.items.is_empty();
+        let first_seq = stale.iter().map(|e| e.seq_id).min();
+
         for entry in stale {
             let entry_season = Season::from_date(entry.joined_date);
             let season_end = entry_season.end_date();
 
             let games = entry.statistics.total_games();
             let has_fee = entry.transfer_fee.is_some();
+            let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
 
             let end_date = entry.departed_date.unwrap_or(season_end);
@@ -142,7 +153,7 @@ impl PlayerStatisticsHistory {
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
             let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
 
-            if !stale_loan_seed && !trivial_stint {
+            if is_initial_record || (!stale_loan_seed && !trivial_stint) {
                 let mut stats = entry.statistics;
                 stats.played += stats.played_subs;
                 stats.played_subs = 0;
@@ -171,13 +182,13 @@ impl PlayerStatisticsHistory {
     pub fn record_transfer(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, fee: f64, date: NaiveDate) {
         self.upsert_current(from, old_stats, false, None, date);
         self.mark_departed(&from.slug, false, date);
-        self.upsert_current(to, PlayerStatistics::default(), false, Some(fee), date);
+        self.push_new_entry(to, PlayerStatistics::default(), false, Some(fee), date);
     }
 
     pub fn record_loan(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, to: &TeamInfo, loan_fee: f64, date: NaiveDate) {
         self.upsert_current(from, old_stats, false, None, date);
         self.mark_departed(&from.slug, false, date);
-        self.upsert_current(to, PlayerStatistics::default(), true, Some(loan_fee), date);
+        self.push_new_entry(to, PlayerStatistics::default(), true, Some(loan_fee), date);
     }
 
     pub fn record_loan_return(&mut self, remaining_stats: PlayerStatistics, borrowing: &TeamInfo, date: NaiveDate) {
@@ -221,7 +232,7 @@ impl PlayerStatisticsHistory {
         self.flush_stale_entries(date);
         self.upsert_current(from, old_stats, is_loan, None, date);
         self.mark_departed(&from.slug, is_loan, date);
-        self.upsert_current(to, PlayerStatistics::default(), false, fee, date);
+        self.push_new_entry(to, PlayerStatistics::default(), false, fee, date);
     }
 
     pub fn record_departure_loan(&mut self, old_stats: PlayerStatistics, from: &TeamInfo, _parent: &TeamInfo, to: &TeamInfo, _is_loan: bool, date: NaiveDate) {
@@ -230,7 +241,7 @@ impl PlayerStatisticsHistory {
         self.mark_departed(&from.slug, false, date);
         // Use Some(0.0) for fee so the loan entry survives stale_loan_seed filter
         // even with 0 games (consistent with record_loan which always sets Some(fee))
-        self.upsert_current(to, PlayerStatistics::default(), true, Some(0.0), date);
+        self.push_new_entry(to, PlayerStatistics::default(), true, Some(0.0), date);
     }
 
     // ── Season end: drain current → frozen items, then seed new season ──
@@ -318,6 +329,11 @@ impl PlayerStatisticsHistory {
         let season_end = season.end_date();
         let entries = std::mem::take(&mut self.current);
 
+        // The very first career record (no prior history) is always kept,
+        // even with 0 games — it's the player's starting club.
+        let is_first_season = self.items.is_empty();
+        let first_seq = entries.iter().map(|e| e.seq_id).min();
+
         for entry in entries {
             let games = entry.statistics.total_games();
             let end_date = entry.departed_date.unwrap_or(season_end);
@@ -329,14 +345,16 @@ impl PlayerStatisticsHistory {
             // - Loan entries with 0 games and no fee are stale seeds (phantom entries)
             // - Any entry with 0 games and no fee that covers < 15% of the season is noise
             //   (e.g. returned from loan near season end, 0 apps at parent club)
-            // Always keep: entries with games, entries with transfer fees, or
-            // entries where the player was at the club for a meaningful portion of the season
+            // Always keep: entries with games, entries with transfer fees,
+            // entries where the player was at the club for a meaningful portion of the season,
+            // or the player's first-ever career record (initial club).
             //
             let has_fee = entry.transfer_fee.is_some();
+            let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
             let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
 
-            let keep = !stale_loan_seed && !trivial_stint;
+            let keep = is_initial_record || (!stale_loan_seed && !trivial_stint);
 
             if keep {
                 let mut stats = entry.statistics;

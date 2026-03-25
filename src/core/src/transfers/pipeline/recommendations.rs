@@ -43,6 +43,7 @@ impl PipelineProcessor {
             // Observable performance
             average_rating: f32,
             appearances: u16,
+            is_transfer_protected: bool,
         }
 
         let mut all_snapshots: Vec<PlayerSnapshot> = Vec::new();
@@ -101,6 +102,7 @@ impl PipelineProcessor {
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
                         average_rating: player.statistics.average_rating,
                         appearances: player.statistics.total_games(),
+                        is_transfer_protected: player.is_transfer_protected(date),
                     });
                 }
             }
@@ -167,6 +169,7 @@ impl PipelineProcessor {
                     .iter()
                     .filter(|p| {
                         p.club_id != club.id && !club.is_rival(p.club_id)
+                            && !p.is_transfer_protected
                             && p.ability >= avg_ability.saturating_sub(10)
                             && p.ability <= avg_ability + (judging / 2)
                             && !already_recommended.contains(&p.id)
@@ -284,6 +287,7 @@ impl PipelineProcessor {
                         .iter()
                         .filter(|p| {
                             p.club_id != club.id && !club.is_rival(p.club_id)
+                                && !p.is_transfer_protected
                                 && p.contract_months_remaining <= 6
                                 && p.ability >= avg_ability.saturating_sub(5)
                                 && !already_recommended.contains(&p.id)
@@ -355,6 +359,7 @@ impl PipelineProcessor {
                         .iter()
                         .filter(|p| {
                             p.club_id != club.id && !club.is_rival(p.club_id)
+                                && !p.is_transfer_protected
                                 && p.is_loan_listed
                                 && p.ability >= avg_ability.saturating_sub(8)
                                 && !already_recommended.contains(&p.id)
@@ -412,6 +417,7 @@ impl PipelineProcessor {
                             .iter()
                             .filter(|p| {
                                 p.club_id != club.id && !club.is_rival(p.club_id)
+                                    && !p.is_transfer_protected
                                     && p.contract_months_remaining <= 6
                                     && p.ability >= avg_ability.saturating_sub(10)
                                     && !already_recommended.contains(&p.id)
@@ -466,6 +472,7 @@ impl PipelineProcessor {
                             .iter()
                             .filter(|p| {
                                 p.club_id != club.id && !club.is_rival(p.club_id)
+                                    && !p.is_transfer_protected
                                     && p.age <= 23
                                     && p.estimated_potential > p.ability + 5
                                     && p.ability >= avg_ability.saturating_sub(5)

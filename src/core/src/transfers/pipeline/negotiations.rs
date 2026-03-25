@@ -126,10 +126,11 @@ impl PipelineProcessor {
                 }
 
                 // Skip players on loan contracts — they belong to another club
-                let is_on_loan = Self::find_player_in_country(country, player_id)
-                    .map(|p| p.is_on_loan())
-                    .unwrap_or(false);
-                if is_on_loan {
+                // Skip recently signed players — their club has a plan for them
+                let (is_on_loan, is_protected) = Self::find_player_in_country(country, player_id)
+                    .map(|p| (p.is_on_loan(), p.is_transfer_protected(date)))
+                    .unwrap_or((false, false));
+                if is_on_loan || is_protected {
                     continue;
                 }
 
@@ -719,6 +720,7 @@ impl PipelineProcessor {
             let sell_country = match data.country(sell_country_id) { Some(c) => c, None => continue };
             let player = match Self::find_player_in_country(sell_country, cand.player_id) { Some(p) => p, None => continue };
             if player.is_on_loan() { continue; }
+            if player.is_transfer_protected(date) { continue; }
 
             let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) { Some(c) => c, None => continue };
             let asking_price = Self::calculate_asking_price(player, sell_club, date, sell_price_level);

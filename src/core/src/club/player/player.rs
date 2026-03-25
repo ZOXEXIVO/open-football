@@ -64,6 +64,31 @@ impl Player {
         PlayerBuilder::new()
     }
 
+    /// Is this player protected from being targeted by other clubs?
+    /// A player is protected if they were recently signed (< 120 days) or
+    /// their club has an active signing plan that hasn't been evaluated yet.
+    /// This prevents unrealistic transfer chains where a player bounces
+    /// between multiple clubs in the same season.
+    pub fn is_transfer_protected(&self, date: NaiveDate) -> bool {
+        // Recently transferred — settling-in period
+        if let Some(transfer_date) = self.last_transfer_date {
+            let days_since = (date - transfer_date).num_days();
+            if days_since < 120 {
+                return true;
+            }
+        }
+
+        // Club has a signing plan — don't poach until the plan concludes
+        if let Some(ref plan) = self.plan {
+            let total_apps = self.statistics.played + self.statistics.played_subs;
+            if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date) {
+                return true;
+            }
+        }
+
+        false
+    }
+
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerResult {
         let now = ctx.simulation.date;
 

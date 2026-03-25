@@ -83,6 +83,26 @@ impl CountryResult {
         neg_data: &NegotiationData,
         date: NaiveDate,
     ) {
+        // Selling club refuses to negotiate for recently signed players —
+        // they bought this player with a plan and won't sell immediately.
+        // Check domestic players only (foreign players aren't in this country).
+        if neg_data.selling_country_id.is_none() {
+            if let Some(player) = find_player_in_country(country, neg_data.player_id) {
+                if player.is_transfer_protected(date) {
+                    if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                        negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
+                    }
+                    Self::reopen_listing_for_player(country, neg_data.player_id);
+                    PipelineProcessor::on_negotiation_resolved(
+                        country,
+                        neg_data.buying_club_id,
+                        neg_data.player_id,
+                        false,
+                    );
+                    return;
+                }
+            }
+        }
 
         let mut chance: f32 = if neg_data.is_listed {
             75.0
