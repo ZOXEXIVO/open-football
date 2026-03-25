@@ -186,6 +186,8 @@ impl CountryResult {
             return false;
         }
 
+        // Player-initiated departures override the plan — if a player wants
+        // out or has been explicitly marked NotNeeded, respect that.
         if let Some(ref contract) = player.contract {
             if matches!(contract.squad_status, PlayerSquadStatus::NotNeeded) {
                 return true;
@@ -203,33 +205,58 @@ impl CountryResult {
             return true;
         }
 
-        // Well below squad average — club would accept offers
-        if analysis.quality_level > 15 &&
-            (player.player_attributes.current_ability as i16) < (analysis.quality_level as i16 - 15) {
+        // Club signing plan: the club bought this player with intent.
+        // Don't list them until they've had a fair chance (enough time + games).
+        if let Some(ref plan) = player.plan {
+            let total_apps = player.statistics.played + player.statistics.played_subs;
+            if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date) {
+                return false;
+            }
+        }
+
+        let age = player.age(date);
+        let ca = player.player_attributes.current_ability as i16;
+        let avg = analysis.quality_level as i16;
+
+        // Young players with good development potential should be kept or loaned,
+        // not sold — even if their current ability is below squad average.
+        let is_promising_youth = age <= 23
+            && player.player_attributes.potential_ability > player.player_attributes.current_ability + 10;
+
+        // Well below squad average — club would accept offers.
+        // But only for non-promising players: a 19yo prospect with CA 55 at a
+        // club with avg 75 shouldn't be sold, that's why they were signed.
+        if analysis.quality_level > 15 && ca < avg - 15 && !is_promising_youth {
+            // Still check position group depth: if the group is thin, keep the player
+            if !Self::position_group_has_depth(club, player, date) {
+                return false;
+            }
             return true;
         }
 
-        // Surplus position and below average
+        // Surplus position and below average — but only if the surplus is real:
+        // having 8 midfielders when you play 4 is surplus,
+        // having 5 midfielders when you play 4 is depth.
         let player_group = player.position().position_group();
         for surplus_pos in &analysis.surplus_positions {
             if surplus_pos.position_group() == player_group {
-                if (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 {
+                if ca < avg && !is_promising_youth {
                     return true;
                 }
             }
         }
 
-        let age = player.age(date);
-
         // Aging players past their prime — clubs willing to sell
-        if age >= 32 && (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 + 5 {
+        if age >= 32 && ca < avg + 5 {
             return true;
         }
 
-        // Below-average players in large squads — natural transfer candidates
+        // Below-average players in large squads — natural transfer candidates.
+        // But require a bigger gap and skip promising youth.
         let squad_size = club.teams.teams.first().map(|t| t.players.players.len()).unwrap_or(0);
-        if squad_size > 23
-            && (player.player_attributes.current_ability as i16) < analysis.quality_level as i16 - 5
+        if squad_size > 25
+            && ca < avg - 10
+            && !is_promising_youth
         {
             return true;
         }
@@ -243,6 +270,35 @@ impl CountryResult {
         }
 
         false
+    }
+
+    /// Returns true if the player's position group already has enough players,
+    /// i.e. selling one wouldn't leave a gap.
+    fn position_group_has_depth(
+        club: &Club,
+        player: &crate::Player,
+        date: NaiveDate,
+    ) -> bool {
+        let team = match club.teams.teams.first() {
+            Some(t) => t,
+            None => return false,
+        };
+
+        let group = player.position().position_group();
+        let group_count = team.players.players.iter()
+            .filter(|p| p.position().position_group() == group)
+            .count();
+
+        // Minimum depth per group: losing one player shouldn't leave a gap
+        let min_to_keep = match group {
+            PlayerFieldPositionGroup::Goalkeeper => 2,
+            PlayerFieldPositionGroup::Defender => 4,
+            PlayerFieldPositionGroup::Midfielder => 4,
+            PlayerFieldPositionGroup::Forward => 2,
+        };
+
+        // Only has "depth" (safe to sell) if above minimum after selling
+        group_count > min_to_keep
     }
 
     fn calculate_asking_price(

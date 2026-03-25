@@ -61,6 +61,7 @@ pub use player::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, PlayerGenerator, PlayerUtils,
+    PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
     InjuryType, InjurySeverity,
     CONDITION_MAX_VALUE,

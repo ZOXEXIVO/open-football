@@ -42,7 +42,10 @@ impl Player {
         self.statistics_history.record_season_end(
             season, stats, team, is_loan, self.last_transfer_date,
         );
-        self.last_transfer_date = None;
+        // Preserve last_transfer_date across seasons — clearing it destroyed
+        // the settling-in protection that prevents clubs from immediately
+        // dumping recently-signed players.  The date is already archived in
+        // statistics_history, so downstream reads are unaffected.
     }
 
     /// Record a cancel-loan from the web UI.
@@ -977,7 +980,7 @@ mod tests {
 
         // -- Season 2028/29: player still at Floriana, 18 games --
         player.statistics = make_stats(18, 3);
-        // Malta processes season end
+        // Malta processes season enda
         player.on_season_end(Season::new(2028), &floriana, make_date(2029, 8, 1));
 
         // Loan return after season end

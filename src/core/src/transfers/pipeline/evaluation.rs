@@ -10,7 +10,7 @@ use crate::transfers::pipeline::{
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
 use crate::{
     Club, ClubPhilosophy, Country, MatchTacticType, Person, Player,
-    PlayerFieldPositionGroup, PlayerPositionType, ReputationLevel,
+    PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, ReputationLevel,
     TacticsSelector, TACTICS_POSITIONS,
 };
 
@@ -280,10 +280,34 @@ impl PipelineProcessor {
             .filter(|(_, player, _)| player.is_none())
             .collect();
 
+        // Quality issues: a formation slot's best player is well below squad level.
+        // But only flag positions where the group genuinely lacks quality starters —
+        // a weak 4th-choice defender is normal, not a reason to buy another one.
         let quality_issues: Vec<_> = position_coverage
             .iter()
-            .filter(|(_, player, quality)| {
-                player.is_some() && (*quality as i16) < avg_ability as i16 - 15
+            .filter(|(pos, player, quality)| {
+                if player.is_none() || (*quality as i16) >= avg_ability as i16 - 15 {
+                    return false;
+                }
+
+                let group = pos.position_group();
+
+                // How many formation slots need this position group?
+                let formation_need = formation_positions
+                    .iter()
+                    .filter(|p| p.position_group() == group)
+                    .count();
+
+                // How many squad players in this group are already good enough?
+                let good_players = squad
+                    .iter()
+                    .filter(|p| p.primary_position.position_group() == group)
+                    .filter(|p| (p.current_ability as i16) >= avg_ability as i16 - 15)
+                    .count();
+
+                // If we have enough good players to fill all formation slots,
+                // the flagged player is just a backup — no upgrade needed.
+                good_players < formation_need
             })
             .collect();
 
@@ -353,7 +377,20 @@ impl PipelineProcessor {
         }
 
         // Quality issues - IMPORTANT: player is significantly below squad level
+        // Deduplicate within the same position group — buying two CBs when one
+        // is enough causes the second to sit on 0 apps and get dumped at a loss.
+        let mut quality_groups_handled: Vec<PlayerFieldPositionGroup> = Vec::new();
         for (pos, _, _) in &quality_issues {
+            let group = pos.position_group();
+            if quality_groups_handled.contains(&group) {
+                continue;
+            }
+            // Don't duplicate a FormationGap request for the same group
+            if requests.iter().any(|r| r.position.position_group() == group) {
+                continue;
+            }
+            quality_groups_handled.push(group);
+
             let alloc = budget_per_need.min(available_budget - budget_used);
             if alloc <= 0.0 {
                 break;
@@ -653,6 +690,18 @@ impl PipelineProcessor {
             if let Some(transfer_date) = player.last_transfer_date {
                 let days_since = (date - transfer_date).num_days();
                 if days_since < 120 {
+                    continue;
+                }
+            }
+
+            // Club has a signing plan for this player — don't loan them out
+            // until they've been properly evaluated (enough time + appearances).
+            // Development plans are the exception: loaning IS the plan.
+            if let Some(ref plan) = player.plan {
+                let total_apps = player_info.appearances;
+                if !plan.is_evaluated(date, total_apps) && !plan.is_expired(date)
+                    && plan.role != PlayerPlanRole::Development
+                {
                     continue;
                 }
             }

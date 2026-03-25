@@ -52,6 +52,11 @@ pub struct Player {
     /// Set when a player transfers/loans to a new club. Used by season snapshot
     /// to detect recently transferred players and avoid phantom history entries.
     pub last_transfer_date: Option<NaiveDate>,
+
+    /// The club's strategic intent for this signing.
+    /// Set when a player is permanently transferred. Protects the player from
+    /// being sold before the club has given them a fair evaluation.
+    pub plan: Option<crate::club::player::plan::PlayerPlan>,
 }
 
 impl Player {

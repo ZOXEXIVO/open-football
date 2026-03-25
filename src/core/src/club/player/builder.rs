@@ -177,6 +177,7 @@ impl PlayerBuilder {
             decision_history: self.decision_history.unwrap_or_else(PlayerDecisionHistory::new),
             languages: self.languages.unwrap_or_default(),
             last_transfer_date: None,
+            plan: None,
         })
     }
 }

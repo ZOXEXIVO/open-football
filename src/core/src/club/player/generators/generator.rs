@@ -658,6 +658,7 @@ impl PlayerGenerator {
             decision_history: PlayerDecisionHistory::new(),
             languages: Vec::new(), // Academy youth — languages set at graduation
             last_transfer_date: None,
+            plan: None,
         }
     }
 

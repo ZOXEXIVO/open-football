@@ -2,7 +2,7 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 use super::types::can_club_accept_player;
 use crate::{
-    Country, Person, Player, PlayerClubContract, PlayerStatusType, TeamInfo,
+    Country, Person, Player, PlayerClubContract, PlayerPlan, PlayerStatusType, TeamInfo,
 };
 use crate::simulator::SimulatorData;
 
@@ -145,6 +145,7 @@ pub(crate) fn execute_transfer_within_country(
 
         clear_transfer_statuses(&mut player);
         assign_new_contract(&mut player, fee, date, false);
+        assign_signing_plan(&mut player, fee, date);
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.spend_from_transfer_budget(fee);
@@ -416,6 +417,7 @@ fn execute_transfer_across_countries(
 
     clear_transfer_statuses(&mut player);
     assign_new_contract(&mut player, fee, date, false);
+    assign_signing_plan(&mut player, fee, date);
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
         buying_club.finance.spend_from_transfer_budget(fee);
@@ -556,6 +558,15 @@ fn assign_new_contract(player: &mut Player, fee: f64, date: NaiveDate, _is_loan:
     let salary = (fee * 0.05).max(500.0) as u32;
     player.contract = Some(PlayerClubContract::new(salary, expiry));
     player.contract_loan = None;
+}
+
+/// Assign a signing plan to a permanently transferred player.
+/// The plan captures the club's intent: the player gets a fair evaluation
+/// window (time + minimum appearances) before they can be listed for sale.
+/// Loans don't get plans — they're temporary by nature.
+fn assign_signing_plan(player: &mut Player, fee: f64, date: NaiveDate) {
+    let age = player.age(date);
+    player.plan = Some(PlayerPlan::from_signing(age, fee, date));
 }
 
 fn compute_loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) -> NaiveDate {

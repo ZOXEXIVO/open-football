@@ -21,6 +21,7 @@ pub mod transfer;
 pub mod utils;
 pub mod builder;
 pub mod language;
+pub mod plan;
 mod display;
 
 pub use attributes::*;
@@ -43,3 +44,4 @@ pub use status::*;
 pub use training::*;
 pub use utils::*;
 pub use language::*;
+pub use plan::*;

@@ -142,13 +142,11 @@ fn determine_status_factor(player: &Player) -> f64 {
         factor *= 0.75;
     }
 
-    if statuses.contains(&PlayerStatusType::Lst) {
-        factor *= 0.85;
-    }
-
-    if statuses.contains(&PlayerStatusType::Req) {
-        factor *= 0.8;
-    }
+    // Lst and Req discounts are intentionally NOT applied here.
+    // They represent *market leverage* (buyer knows the player is available),
+    // not a change in the player's intrinsic worth.
+    // The transfer-specific discount is applied in PlayerValuationCalculator
+    // (window.rs) where it belongs.
 
     if statuses.contains(&PlayerStatusType::Loa) {
         factor *= 0.9;

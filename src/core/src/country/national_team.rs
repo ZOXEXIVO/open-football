@@ -1030,6 +1030,7 @@ impl NationalTeam {
             decision_history: PlayerDecisionHistory::new(),
             languages: Vec::new(),
             last_transfer_date: None,
+            plan: None,
         }
     }
 
