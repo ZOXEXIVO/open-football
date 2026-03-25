@@ -261,8 +261,41 @@ impl PlayerStatisticsHistory {
                     existing.statistics.merge_from(&remaining);
                 }
             }
-            // Clear stale seeded entries and re-seed for next season
-            self.current.clear();
+            // Before clearing, freeze any current entries that carry meaningful
+            // data (transfer fees or games) but don't yet exist in frozen items.
+            // Without this, a cross-country season-end can silently drop entries
+            // created by mid-season transfers (e.g. transfer fee lost).
+            let entries = std::mem::take(&mut self.current);
+            for entry in entries {
+                let dominated_by_frozen = self.items.iter().any(|i| {
+                    i.season.start_year == season.start_year
+                        && i.team_slug == entry.team_slug
+                        && i.is_loan == entry.is_loan
+                });
+                if dominated_by_frozen {
+                    continue;
+                }
+                let games = entry.statistics.total_games();
+                let has_fee = entry.transfer_fee.is_some();
+                if games > 0 || has_fee {
+                    let mut stats = entry.statistics;
+                    stats.played += stats.played_subs;
+                    stats.played_subs = 0;
+                    self.items.push(PlayerStatisticsHistoryItem {
+                        season: season.clone(),
+                        team_name: entry.team_name,
+                        team_slug: entry.team_slug,
+                        team_reputation: entry.team_reputation,
+                        league_name: entry.league_name,
+                        league_slug: entry.league_slug,
+                        is_loan: entry.is_loan,
+                        transfer_fee: entry.transfer_fee,
+                        statistics: stats,
+                        seq_id: entry.seq_id,
+                    });
+                }
+            }
+            // Re-seed for next season
             let new_season_start = Season::new(season.start_year + 1).start_date();
             self.upsert_current(team, PlayerStatistics::default(), is_loan, None, new_season_start);
             return;

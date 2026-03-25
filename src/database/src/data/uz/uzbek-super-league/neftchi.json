@@ -11,7 +11,7 @@
     {
       "id": 483003,
       "name": "Neftchi",
-      "slug": "neftchi",
+      "slug": "neftchi-fergana",
       "team_type": "Main",
       "reputation": {
         "home": 4000,
@@ -22,7 +22,7 @@
     {
       "id": 89600011,
       "name": "Neftchi",
-      "slug": "neftchi-u20",
+      "slug": "neftchi-fergana-u20",
       "team_type": "U20",
       "reputation": {
         "home": 1200,
@@ -33,7 +33,7 @@
     {
       "id": 89600012,
       "name": "Neftchi",
-      "slug": "neftchi-u18",
+      "slug": "neftchi-fergana-u18",
       "team_type": "U18",
       "reputation": {
         "home": 800,

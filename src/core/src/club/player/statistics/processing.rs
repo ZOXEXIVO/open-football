@@ -1349,4 +1349,150 @@ mod tests {
         assert!(floriana_2029.is_none(),
             "Phantom Floriana 2029/30 should be dropped (0 apps, arrived late).\n{desc}");
     }
+
+    // ---------------------------------------------------------------
+    // Cross-country loan + later transfer: fee must survive
+    // Reproduces: Dynamo Kyiv → Deportivo Tachira (loan), return,
+    // then Dynamo → Kryvbas (permanent with fee).
+    // The transfer fee must appear in career statistics.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn lifecycle_cross_country_loan_then_transfer_fee_preserved() {
+        let mut player = make_player();
+
+        let dynamo = TeamInfo {
+            name: "Dynamo Kyiv".to_string(),
+            slug: "dynamo-kyiv".to_string(),
+            reputation: 400,
+            league_name: "Ukrainian Premier League".to_string(),
+            league_slug: "ukrainian-premier-league".to_string(),
+        };
+        let deportivo = TeamInfo {
+            name: "Deportivo Tachira".to_string(),
+            slug: "deportivo-tachira".to_string(),
+            reputation: 200,
+            league_name: "Primera Division".to_string(),
+            league_slug: "venezuelan-primera".to_string(),
+        };
+        let kryvbas = TeamInfo {
+            name: "Kryvbas".to_string(),
+            slug: "kryvbas".to_string(),
+            reputation: 250,
+            league_name: "Ukrainian Premier League".to_string(),
+            league_slug: "ukrainian-premier-league".to_string(),
+        };
+
+        // -- Season 2025/26: player at Dynamo --
+        player.statistics_history.seed_initial_team(&dynamo, make_date(2025, 8, 1));
+        player.statistics = make_stats(10, 2);
+        player.on_season_end(Season::new(2025), &dynamo, make_date(2026, 8, 1));
+
+        // -- Season 2026/27: plays 1 game at Dynamo, then loaned to Deportivo --
+        player.statistics = make_stats(1, 0);
+        player.on_loan(&dynamo, &deportivo, 52_000.0, make_date(2026, 8, 6));
+
+        // Player plays 0 games at Deportivo
+        player.statistics = make_stats(0, 0);
+
+        // Venezuela snapshot (new season in e.g. Feb 2027) — player still at Deportivo
+        // ended_season = 2025/26 (Season::from_date(Feb 2027) = 2026/27 → ended = 2025/26)
+        // Wait, this should be for 2026/27 if called later. Let's simulate both scenarios.
+        // First: normal snapshot for 2026/27
+        player.on_season_end(Season::new(2026), &deportivo, make_date(2027, 2, 1));
+
+        // Loan return (May 2027)
+        player.on_loan_return(&deportivo, make_date(2027, 5, 31));
+        player.contract_loan = None;
+
+        // -- Season 2027/28: player back at Dynamo --
+        // Player plays 0 games at Dynamo, then transfers to Kryvbas
+        player.statistics = make_stats(0, 0);
+        player.on_transfer(&dynamo, &kryvbas, 610_000.0, make_date(2028, 6, 21));
+
+        // Player plays 20 games at Kryvbas
+        player.statistics = make_stats(20, 1);
+        player.on_season_end(Season::new(2027), &kryvbas, make_date(2028, 8, 1));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // 2027/28 Kryvbas: must have the 610K fee
+        let kryvbas_2027 = history.iter()
+            .find(|e| e.season.start_year == 2027 && e.team_slug == "kryvbas");
+        assert!(kryvbas_2027.is_some(),
+            "Missing Kryvbas 2027/28 entry.\n{desc}");
+        assert_eq!(kryvbas_2027.unwrap().transfer_fee, Some(610_000.0),
+            "Kryvbas 2027/28 transfer fee must be 610K.\n{desc}");
+        assert_eq!(kryvbas_2027.unwrap().statistics.played, 20,
+            "Kryvbas 2027/28 apps.\n{desc}");
+
+        // 2026/27 Deportivo: should show as loan
+        let deportivo_2026 = history.iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "deportivo-tachira");
+        assert!(deportivo_2026.is_some(),
+            "Missing Deportivo 2026/27 entry.\n{desc}");
+        assert!(deportivo_2026.unwrap().is_loan,
+            "Deportivo should be loan.\n{desc}");
+
+        // 2026/27 Dynamo: should have 1 app
+        let dynamo_2026 = history.iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "dynamo-kyiv");
+        assert!(dynamo_2026.is_some(),
+            "Missing Dynamo 2026/27 entry.\n{desc}");
+        assert_eq!(dynamo_2026.unwrap().statistics.played, 1,
+            "Dynamo 2026/27 apps.\n{desc}");
+    }
+
+    // ---------------------------------------------------------------
+    // Duplicate season guard with mid-season transfer: fee must survive
+    // Simulates the guard firing when the season was already frozen,
+    // but current has a transfer entry with a fee.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn duplicate_season_guard_preserves_transfer_fee() {
+        let mut player = make_player();
+
+        let roma = make_team("Roma", "roma");
+        let juve = make_team("Juventus", "juventus");
+
+        // -- Season 2025/26: at Roma --
+        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1));
+        player.statistics = make_stats(20, 5);
+        player.on_season_end(Season::new(2025), &roma, make_date(2026, 8, 1));
+
+        // -- Season 2026/27: transfer to Juve with fee --
+        player.statistics = make_stats(3, 1);
+        player.on_transfer(&roma, &juve, 8_000_000.0, make_date(2027, 1, 15));
+        player.statistics = make_stats(10, 2);
+
+        // First snapshot (Serie A): freezes 2026/27
+        player.on_season_end(Season::new(2026), &juve, make_date(2027, 8, 20));
+
+        // Transfer to another club AFTER first snapshot but before second
+        let napoli = make_team("Napoli", "napoli");
+        player.statistics = make_stats(0, 0);
+        player.on_transfer(&juve, &napoli, 12_000_000.0, make_date(2027, 8, 22));
+
+        // Second snapshot (Serie B): triggers duplicate guard
+        player.statistics = make_stats(0, 0);
+        player.on_season_end(Season::new(2026), &napoli, make_date(2027, 8, 26));
+
+        let history = &player.statistics_history.items;
+        let desc = describe_history(history);
+
+        // Juve 2026/27: should have the 8M fee (frozen in first snapshot)
+        let juve_2026 = history.iter()
+            .find(|e| e.season.start_year == 2026 && e.team_slug == "juventus");
+        assert!(juve_2026.is_some(), "Missing Juve 2026/27.\n{desc}");
+        assert_eq!(juve_2026.unwrap().transfer_fee, Some(8_000_000.0),
+            "Juve 2026/27 fee wrong.\n{desc}");
+
+        // Napoli: should have the 12M fee (was in current when guard fired)
+        let napoli_entry = history.iter()
+            .find(|e| e.team_slug == "napoli" && e.transfer_fee == Some(12_000_000.0));
+        assert!(napoli_entry.is_some(),
+            "Napoli entry with 12M fee must survive the duplicate season guard.\n{desc}");
+    }
 }

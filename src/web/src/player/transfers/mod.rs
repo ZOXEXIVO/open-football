@@ -330,6 +330,8 @@ pub async fn player_transfers_action(
             })
             .collect();
         transfers.sort_by(|a, b| b.0.cmp(&a.0));
+        // Deduplicate cross-country transfers (stored in both countries' histories)
+        transfers.dedup_by(|a, b| a.0 == b.0 && a.1.from_club_name == b.1.from_club_name && a.1.to_club_name == b.1.to_club_name);
         transfers.into_iter().map(|(_, dto)| dto).collect()
     };
 

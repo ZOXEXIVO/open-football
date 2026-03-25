@@ -132,9 +132,16 @@ pub(crate) fn execute_transfer_within_country(
             return false;
         }
 
-        if let (Some(from), Some(to)) = (from_info, to_info) {
-            player.on_transfer(&from, &to, fee, date);
-        }
+        // Always record history — use fallback TeamInfo if club info couldn't be resolved
+        let from = from_info.unwrap_or_else(|| TeamInfo {
+            name: String::new(), slug: String::new(), reputation: 0,
+            league_name: String::new(), league_slug: String::new(),
+        });
+        let to = to_info.unwrap_or_else(|| TeamInfo {
+            name: String::new(), slug: String::new(), reputation: 0,
+            league_name: String::new(), league_slug: String::new(),
+        });
+        player.on_transfer(&from, &to, fee, date);
 
         clear_transfer_statuses(&mut player);
         assign_new_contract(&mut player, fee, date, false);
@@ -249,9 +256,16 @@ fn execute_loan_within_country(
             return false;
         }
 
-        if let (Some(from), Some(to)) = (&from_info, to_info) {
-            player.on_loan(from, &to, loan_fee, date);
-        }
+        // Always record history — use fallback TeamInfo if club info couldn't be resolved
+        let from = from_info.unwrap_or_else(|| TeamInfo {
+            name: String::new(), slug: String::new(), reputation: 0,
+            league_name: String::new(), league_slug: String::new(),
+        });
+        let to = to_info.unwrap_or_else(|| TeamInfo {
+            name: String::new(), slug: String::new(), reputation: 0,
+            league_name: String::new(), league_slug: String::new(),
+        });
+        player.on_loan(&from, &to, loan_fee, date);
 
         clear_transfer_statuses(&mut player);
 
@@ -394,9 +408,11 @@ fn execute_transfer_across_countries(
         return false;
     }
 
-    if let Some(to) = to_info {
-        player.on_transfer(&from_info, &to, fee, date);
-    }
+    let to = to_info.unwrap_or_else(|| TeamInfo {
+        name: String::new(), slug: String::new(), reputation: 0,
+        league_name: String::new(), league_slug: String::new(),
+    });
+    player.on_transfer(&from_info, &to, fee, date);
 
     clear_transfer_statuses(&mut player);
     assign_new_contract(&mut player, fee, date, false);
@@ -468,9 +484,11 @@ fn execute_loan_across_countries(
         return false;
     }
 
-    if let Some(to) = to_info {
-        player.on_loan(&from_info, &to, loan_fee, date);
-    }
+    let to = to_info.unwrap_or_else(|| TeamInfo {
+        name: String::new(), slug: String::new(), reputation: 0,
+        league_name: String::new(), league_slug: String::new(),
+    });
+    player.on_loan(&from_info, &to, loan_fee, date);
 
     clear_transfer_statuses(&mut player);
 
