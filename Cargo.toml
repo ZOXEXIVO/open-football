@@ -1,8 +1,16 @@
-[package]
-name = "open_football"
-version = "0.7.0"
+[workspace]
+members = ["src/core", "src/database", "src/web"]
+
+[workspace.package]
+version = "0.7.1"
 authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
 edition = "2024"
+
+[package]
+name = "open_football"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
 core = { path = "src/core" }

@@ -1,8 +1,8 @@
 [package]
 name = "core"
-version = "0.7.0"
-authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
 chrono = "0.4.44"

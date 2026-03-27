@@ -1,7 +1,8 @@
 [package]
 name = "database"
-version = "0.7.0"
-edition = "2024"
+version.workspace = true
+authors.workspace = true
+edition.workspace = true
 
 [dependencies]
 core = { path = "../core" }
