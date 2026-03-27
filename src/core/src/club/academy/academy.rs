@@ -78,9 +78,9 @@ impl ClubAcademy {
         }
     }
 
-    /// Graduate the best academy players aged 14+ for promotion to U18 team.
+    /// Graduate the best academy players aged 14+ for promotion to the lowest youth team.
     /// Returns up to `count` players sorted by ability (best first).
-    pub fn graduate_to_u18(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
+    pub fn graduate_to_youth(&mut self, date: NaiveDate, count: usize) -> Vec<Player> {
         if count == 0 {
             return Vec::new();
         }

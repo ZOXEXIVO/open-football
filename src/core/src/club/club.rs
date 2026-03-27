@@ -227,15 +227,16 @@ impl Club {
     fn process_academy_graduations(&mut self, date: NaiveDate) -> Vec<CompletedTransfer> {
         let mut transfers = Vec::new();
 
-        // Find U18 team index
-        let u18_idx = self.teams.teams.iter().position(|t| t.team_type == TeamType::U18);
+        // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
+        let youth_idx = TeamType::YOUTH_PROGRESSION.iter()
+            .find_map(|tt| self.teams.teams.iter().position(|t| t.team_type == *tt));
 
         // Graduate best academy players BEFORE releasing aged-out ones,
         // so 16+ year olds get a chance to graduate instead of being deleted
-        if let Some(idx) = u18_idx {
-            let u18_count = self.teams.teams[idx].players.players.len();
+        if let Some(idx) = youth_idx {
+            let youth_count = self.teams.teams[idx].players.players.len();
             let target = 20usize;
-            let space = target.saturating_sub(u18_count);
+            let space = target.saturating_sub(youth_count);
             let to_graduate = space.max(5).min(10);
 
             // Main team name for contract registration
@@ -244,10 +245,11 @@ impl Club {
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| self.name.clone());
 
-            let graduated = self.academy.graduate_to_u18(date, to_graduate);
+            let youth_team_type = self.teams.teams[idx].team_type;
+            let graduated = self.academy.graduate_to_youth(date, to_graduate);
             if !graduated.is_empty() {
-                debug!("academy {}: {} players graduated (contract: {}, assigned: U18, was {})",
-                    self.name, graduated.len(), main_team_name, u18_count);
+                debug!("academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",
+                    self.name, graduated.len(), main_team_name, youth_team_type, youth_count);
                 for player in graduated {
                     transfers.push(CompletedTransfer::new(
                         player.id,
@@ -261,7 +263,6 @@ impl Club {
                         CurrencyValue::new(0.0, Currency::Usd),
                         TransferType::Free,
                     ).with_reason("Academy graduation — youth contract signed".to_string()));
-                    // Player physically stays in U18 team
                     self.teams.teams[idx].players.add(player);
                 }
             }
@@ -282,7 +283,8 @@ impl Club {
         transfers
     }
 
-    /// Move players who exceed their youth team's max age to the main team.
+    /// Move players who exceed their youth team's max age to the next youth team,
+    /// or to the main team if no eligible youth team exists.
     fn enforce_youth_team_age_limits(&mut self, date: NaiveDate) {
         let main_idx = match self.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
             Some(idx) => idx,
@@ -306,22 +308,61 @@ impl Club {
         }
 
         for (team_idx, player_id) in overage {
+            let player_age = self.teams.teams[team_idx].players.players
+                .iter()
+                .find(|p| p.id == player_id)
+                .map(|p| p.age(date))
+                .unwrap_or(99);
+
+            let current_team_type = self.teams.teams[team_idx].team_type;
+
+            // Find the next youth team in progression that can accept this player
+            let next_youth_idx = self.find_next_youth_team(current_team_type, player_age);
+
+            let target_idx = next_youth_idx.unwrap_or(main_idx);
+
             if let Some(mut player) = self.teams.teams[team_idx].players.take_player(&player_id) {
-                // Give full contract if on youth contract
-                if player.contract.as_ref().map(|c| c.contract_type == crate::ContractType::Youth).unwrap_or(false) {
-                    let expiration = NaiveDate::from_ymd_opt(
-                        date.year() + 3, date.month(), date.day().min(28),
-                    ).unwrap_or(date);
-                    let club_rep = self.teams.teams[main_idx].reputation.world;
-                    let salary = graduation_salary(player.player_attributes.current_ability, club_rep);
-                    player.contract = Some(PlayerClubContract::new(salary, expiration));
+                // Give full contract only when promoting to main team
+                if target_idx == main_idx {
+                    if player.contract.as_ref().map(|c| c.contract_type == crate::ContractType::Youth).unwrap_or(false) {
+                        let expiration = NaiveDate::from_ymd_opt(
+                            date.year() + 3, date.month(), date.day().min(28),
+                        ).unwrap_or(date);
+                        let club_rep = self.teams.teams[main_idx].reputation.world;
+                        let salary = graduation_salary(player.player_attributes.current_ability, club_rep);
+                        player.contract = Some(PlayerClubContract::new(salary, expiration));
+                    }
                 }
 
-                debug!("overage promotion: {} (age {}) from {} -> main team",
-                    player.full_name, player.age(date), self.teams.teams[team_idx].name);
-                self.teams.teams[main_idx].players.add(player);
+                debug!("overage promotion: {} (age {}) from {} -> {}",
+                    player.full_name, player.age(date),
+                    self.teams.teams[team_idx].name, self.teams.teams[target_idx].name);
+                self.teams.teams[target_idx].players.add(player);
             }
         }
+    }
+
+    /// Find the next youth team in progression (U18→U19→U20→U21→U23)
+    /// that exists in this club and can accept a player of the given age.
+    fn find_next_youth_team(&self, current_type: TeamType, player_age: u8) -> Option<usize> {
+        let progression = TeamType::YOUTH_PROGRESSION;
+
+        // Find current position in progression
+        let current_pos = progression.iter().position(|t| *t == current_type)?;
+
+        // Look through subsequent youth team types
+        for next_type in &progression[current_pos + 1..] {
+            if let Some(max_age) = next_type.max_age() {
+                if player_age <= max_age {
+                    // Check if this club has this team type
+                    if let Some(idx) = self.teams.teams.iter().position(|t| t.team_type == *next_type) {
+                        return Some(idx);
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// Move players without a contract (loan returnees) from main team to reserve.

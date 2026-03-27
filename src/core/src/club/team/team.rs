@@ -119,7 +119,7 @@ impl Team {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TeamType {
     Main = 0,
     B = 1,
@@ -150,12 +150,18 @@ impl TeamType {
         match self {
             TeamType::U18 => Some(18),
             TeamType::U19 => Some(19),
-            TeamType::U20 => Some(20),
-            TeamType::U21 => Some(21),
-            TeamType::U23 => Some(23),
-            TeamType::B | TeamType::Reserve | TeamType::Main => None,
+            _ => None,
         }
     }
+
+    /// Youth team progression order: U18 → U19 → U20 → U21 → U23
+    pub const YOUTH_PROGRESSION: &'static [TeamType] = &[
+        TeamType::U18,
+        TeamType::U19,
+        TeamType::U20,
+        TeamType::U21,
+        TeamType::U23,
+    ];
 }
 
 impl fmt::Display for TeamType {

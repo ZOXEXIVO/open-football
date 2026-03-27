@@ -582,12 +582,19 @@ impl CountryResult {
                     }
                 }
 
-                // Move sub-teams to the friendly league of the new main league
+                // Move sub-teams to the matching youth league of the new main league
                 if let Some(new_league_id) = new_main_league_id {
-                    let friendly_league_id = new_league_id + 200000;
                     for team in &mut club.teams.teams {
                         if team.team_type != crate::TeamType::Main {
-                            team.league_id = Some(friendly_league_id);
+                            let type_offset = match team.team_type {
+                                crate::TeamType::U18 => 100000,
+                                crate::TeamType::U19 => 110000,
+                                crate::TeamType::U20 => 120000,
+                                crate::TeamType::U21 => 130000,
+                                crate::TeamType::U23 => 140000,
+                                _ => 200000, // B/Reserve teams use generic friendly league
+                            };
+                            team.league_id = Some(new_league_id + type_offset);
                         }
                     }
                 }

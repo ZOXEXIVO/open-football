@@ -117,18 +117,18 @@ fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
             w[SK_POSITIONING] = 1.8; w[SK_CONCENTRATION] = 1.6; w[SK_AGILITY] = 1.7;
             w[SK_ANTICIPATION] = 1.5; w[SK_COMPOSURE] = 1.5; w[SK_JUMPING] = 1.5;
             w[SK_BRAVERY] = 1.4; w[SK_DECISIONS] = 1.3; w[SK_STRENGTH] = 1.1;
-            // Modern GK
-            w[SK_FIRST_TOUCH] = 1.0; w[SK_PASSING] = 1.0; w[SK_TECHNIQUE] = 0.9;
+            // Modern GK — ball-playing ability
+            w[SK_FIRST_TOUCH] = 1.1; w[SK_PASSING] = 1.1; w[SK_TECHNIQUE] = 1.0;
             w[SK_NATURAL_FITNESS] = 1.0; w[SK_PACE] = 0.8; w[SK_STAMINA] = 0.8;
             w[SK_LEADERSHIP] = 1.0; w[SK_BALANCE] = 1.0;
             w[SK_DETERMINATION] = 1.0; w[SK_TEAMWORK] = 1.0;
             w[SK_PENALTY_TAKING] = 0.4;
-            // Irrelevant outfield
-            w[SK_FINISHING] = 0.1; w[SK_LONG_SHOTS] = 0.1; w[SK_CROSSING] = 0.1;
-            w[SK_CORNERS] = 0.1; w[SK_FREE_KICKS] = 0.2; w[SK_HEADING] = 0.2;
-            w[SK_OFF_THE_BALL] = 0.2; w[SK_DRIBBLING] = 0.3; w[SK_LONG_THROWS] = 0.4;
-            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_WORK_RATE] = 0.4;
-            w[SK_FLAIR] = 0.3; w[SK_ACCELERATION] = 0.6;
+            // Secondary outfield — professional level for all skills
+            w[SK_FINISHING] = 0.5; w[SK_LONG_SHOTS] = 0.5; w[SK_CROSSING] = 0.5;
+            w[SK_CORNERS] = 0.5; w[SK_FREE_KICKS] = 0.55; w[SK_HEADING] = 0.55;
+            w[SK_OFF_THE_BALL] = 0.5; w[SK_DRIBBLING] = 0.55; w[SK_LONG_THROWS] = 0.6;
+            w[SK_TACKLING] = 0.55; w[SK_MARKING] = 0.55; w[SK_WORK_RATE] = 0.6;
+            w[SK_FLAIR] = 0.5; w[SK_ACCELERATION] = 0.7;
         }
         PositionType::Defender => {
             w[SK_TACKLING] = 1.6; w[SK_MARKING] = 1.6; w[SK_POSITIONING] = 1.5;
@@ -619,27 +619,27 @@ impl PlayerGenerator {
 
         // 7. PA-based floors
         let key_floor = (pa_final * 0.40).clamp(1.0, 9.0);
-        // Universal minimum: no skill should be 1 for any professional player.
-        // Even a bad GK can pass at 3. Even a striker has basic tackling at 2-3.
-        // PA 20 (pa_final ~2.8) → floor 2, PA 70 (pa_final ~7.6) → floor 3, PA 150 → floor 4
-        let universal_floor = (1.0 + pa_final * 0.3).clamp(2.0, 5.0);
+        // Universal minimum: no professional footballer should have any skill at 1-3.
+        // PA 20 (pa_final ~2.8) → floor 4, PA 70 → floor 4, PA 150 → floor 5
+        let universal_floor = (2.0 + pa_final * 0.2).clamp(4.0, 6.0);
         // Physical floor: footballers are professional athletes — even low-PA players
         // should have reasonable physical attributes, not 2-3 like untrained people.
-        // PA 15 → 5, PA 50 → 5, PA 100 → 6.7, PA 150 → 8
+        // PA 15 → 6, PA 50 → 6, PA 100 → 6.7, PA 150 → 8
         let physical_floor_base = (3.0 + pa_final * 0.35).clamp(6.0, 9.0);
         // Technical floor: all professional footballers train technical skills daily.
         // Position-trained skills (weight >= 0.8) get the full trained floor.
         // Other technical skills get a lower but still decent "footballer floor".
         // Mental skills use universal floor only — they develop with age/experience.
         let trained_floor = (pa_final * 0.35 + 3.0).clamp(6.0, 9.0);
-        let footballer_tech_floor = (pa_final * 0.25 + 2.0).clamp(4.0, 7.0);
+        // PA 50 → floor ~5, PA 100 → floor ~6, PA 150 → floor ~7, PA 180 → floor ~8
+        let footballer_tech_floor = (pa_final * 0.30 + 2.0).clamp(4.0, 9.0);
         for i in 0..SKILL_COUNT {
             if pos_w[i] >= 1.2 {
                 skills[i] = skills[i].max(key_floor);
             }
             if skill_group(i) == 2 {
                 // Physical: per-skill jitter so not every physical lands at the same value
-                let jitter = (random_normal() * 2.5).clamp(-3.0, 3.0);
+                let jitter = (random_normal() * 2.0).clamp(-2.0, 2.0);
                 let floor = (physical_floor_base + jitter).max(4.0);
                 skills[i] = skills[i].max(floor);
             } else if skill_group(i) == 0 && pos_w[i] >= 0.8 {
@@ -649,8 +649,8 @@ impl PlayerGenerator {
                 skills[i] = skills[i].max(floor);
             } else if skill_group(i) == 0 {
                 // All other technical skills — footballers can still pass, shoot, etc.
-                let jitter = (random_normal() * 1.5).clamp(-2.0, 2.0);
-                let floor = (footballer_tech_floor + jitter).max(3.0);
+                let jitter = (random_normal() * 1.0).clamp(-1.0, 1.0);
+                let floor = (footballer_tech_floor + jitter).max(4.0);
                 skills[i] = skills[i].max(floor);
             } else {
                 skills[i] = skills[i].max(universal_floor);
@@ -755,45 +755,40 @@ impl PlayerGenerator {
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
         // Three-tier PA distribution:
         //   Normal:   majority of squad — ability matches club level
-        //   Standout: ~6-10% — notably better than club level (every club has 1-2)
-        //   Gem:      ~1-3% — exceptional talent well above club level
+        //   Standout: ~8-12% — notably better (every club has 2-4)
+        //   Gem:      ~2-5% — exceptional talent well above club level
         //
-        // Target distribution for a top league (rep 0.90):
-        //   ~80% of players: PA 90-130 (2-3 stars) — squad depth
-        //   ~10% of players: PA 130-155 (3-4 stars) — standouts
-        //   ~5% of players:  PA 155-180 (4-5 stars) — gems/stars
-        //   <1% of players:  PA 180+    (5 stars)   — world class
-        //
-        // Floriana (rep 0.265): normal ~35, standout ~60-85, gem ~80-120
-        // Premier League (rep 0.90): normal ~105, standout ~135-160, gem ~160-185
+        // Target distribution examples:
+        //   Inter (rep ~0.84): normal ~127, standout ~151, gem 147-183
+        //   PL top (rep ~0.95): normal ~149, standout ~171, gem 156-191
+        //   Mid European (rep ~0.50): normal ~70, standout ~103, gem 120-158
+        //   Lower league (rep ~0.20): normal ~35, standout ~73, gem 96-135
 
         let roll = rand::random::<f32>();
 
         // Gem: rare exceptional talent
         let gem_chance = (0.01 + rep_factor * rep_factor * 0.04).min(0.05);
         // Standout: every club has a few above-average players
-        let standout_chance = gem_chance + 0.06 + rep_factor * 0.04;
+        let standout_chance = gem_chance + 0.08 + rep_factor * 0.04;
 
         if roll < gem_chance {
             // Gem: PA well above club range
-            let gem_min = (70.0 + rep_factor * 60.0) as i32;
-            let gem_max = (100.0 + rep_factor * 85.0).min(185.0) as i32;
+            let gem_min = (80.0 + rep_factor * 80.0) as i32;
+            let gem_max = (120.0 + rep_factor * 75.0).min(195.0) as i32;
             IntegerUtils::random(gem_min, gem_max).min(200) as u8
         } else if roll < standout_chance {
             // Standout: clearly best player at the club, above the normal tier
-            let standout_base = 50.0 + rep_factor * rep_factor * 100.0;
+            let standout_base = 60.0 + rep_factor * 50.0 + rep_factor * rep_factor * 70.0;
             let noise = random_normal() * 10.0;
             let pa = standout_base + noise;
-            pa.clamp(30.0, 170.0) as u8
+            pa.clamp(30.0, 185.0) as u8
         } else {
-            // Normal: bulk of squad — most players should be 2-3 stars
-            // Uses cubic curve to keep low/mid-rep clubs grounded while allowing
-            // top-rep clubs to reach ~3 star average
-            let base = 20.0 + rep_factor * rep_factor * 100.0;
+            // Normal: bulk of squad — scales steeply for top clubs
+            let base = 20.0 + rep_factor * 60.0 + rep_factor * rep_factor * 80.0;
             let youth_bonus = if age <= 21 { 5.0 } else if age <= 25 { 2.0 } else { 0.0 };
             let noise = random_normal() * (6.0 + rep_factor * 8.0);
             let pa = base + youth_bonus + noise;
-            pa.clamp(20.0, 160.0) as u8
+            pa.clamp(20.0, 170.0) as u8
         }
     }
 

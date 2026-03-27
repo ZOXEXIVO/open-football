@@ -36,8 +36,11 @@ impl PlayerSkills {
     /// Position-weighted ability calculation — skills that matter for the position count more.
     pub fn calculate_ability_for_position(&self, position: PlayerPositionType) -> u8 {
         let group = position.position_group();
+        if group == PlayerFieldPositionGroup::Goalkeeper {
+            return self.calculate_gk_ability();
+        }
         let (tech_w, mental_w, phys_w) = match group {
-            PlayerFieldPositionGroup::Goalkeeper => (0.15, 0.35, 0.50),
+            PlayerFieldPositionGroup::Goalkeeper => unreachable!(),
             PlayerFieldPositionGroup::Defender => (0.25, 0.40, 0.35),
             PlayerFieldPositionGroup::Midfielder => (0.40, 0.35, 0.25),
             PlayerFieldPositionGroup::Forward => (0.45, 0.25, 0.30),
@@ -45,6 +48,32 @@ impl PlayerSkills {
         let weighted = self.technical.average() * tech_w
             + self.mental.average() * mental_w
             + self.physical.average() * phys_w;
+        Self::skill_to_ability(weighted)
+    }
+
+    /// GK ability uses key GK skills instead of raw group averages.
+    /// Irrelevant skills (corners, crossing, finishing) don't affect GK ability.
+    fn calculate_gk_ability(&self) -> u8 {
+        // Key mental: positioning, concentration, anticipation, composure, decisions
+        let key_mental = (self.mental.positioning
+            + self.mental.concentration
+            + self.mental.anticipation
+            + self.mental.composure
+            + self.mental.decisions) / 5.0;
+
+        // Key physical: agility, jumping, strength, acceleration
+        let key_physical = (self.physical.agility
+            + self.physical.jumping
+            + self.physical.strength
+            + self.physical.acceleration) / 4.0;
+
+        // Key technical: first touch, passing, technique (modern GK distribution)
+        let key_technical = (self.technical.first_touch
+            + self.technical.passing
+            + self.technical.technique) / 3.0;
+
+        // GK ability: mental-dominant (key decisions/positioning matter most)
+        let weighted = key_technical * 0.25 + key_mental * 0.45 + key_physical * 0.30;
         Self::skill_to_ability(weighted)
     }
 

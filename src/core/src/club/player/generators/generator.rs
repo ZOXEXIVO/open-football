@@ -112,15 +112,18 @@ fn position_weights(position: &PositionType) -> [f32; SKILL_COUNT] {
             w[SK_POSITIONING] = 1.8; w[SK_CONCENTRATION] = 1.6; w[SK_AGILITY] = 1.7;
             w[SK_ANTICIPATION] = 1.5; w[SK_COMPOSURE] = 1.5; w[SK_JUMPING] = 1.5;
             w[SK_BRAVERY] = 1.4; w[SK_DECISIONS] = 1.3; w[SK_STRENGTH] = 1.1;
-            // Modern GK
-            w[SK_FIRST_TOUCH] = 1.0; w[SK_PASSING] = 1.0; w[SK_TECHNIQUE] = 0.9;
+            // Modern GK — ball-playing ability
+            w[SK_FIRST_TOUCH] = 1.1; w[SK_PASSING] = 1.1; w[SK_TECHNIQUE] = 1.0;
             w[SK_NATURAL_FITNESS] = 1.0; w[SK_PACE] = 0.8; w[SK_STAMINA] = 0.8;
-            // Irrelevant outfield
-            w[SK_FINISHING] = 0.1; w[SK_LONG_SHOTS] = 0.1; w[SK_CROSSING] = 0.1;
-            w[SK_CORNERS] = 0.1; w[SK_FREE_KICKS] = 0.2; w[SK_HEADING] = 0.2;
-            w[SK_OFF_THE_BALL] = 0.2; w[SK_DRIBBLING] = 0.3; w[SK_LONG_THROWS] = 0.4;
-            w[SK_TACKLING] = 0.2; w[SK_MARKING] = 0.2; w[SK_WORK_RATE] = 0.4;
-            w[SK_FLAIR] = 0.3; w[SK_ACCELERATION] = 0.6;
+            w[SK_LEADERSHIP] = 1.0; w[SK_BALANCE] = 1.0;
+            w[SK_DETERMINATION] = 1.0; w[SK_TEAMWORK] = 1.0;
+            w[SK_PENALTY_TAKING] = 0.4;
+            // Secondary outfield — professional level for all skills
+            w[SK_FINISHING] = 0.5; w[SK_LONG_SHOTS] = 0.5; w[SK_CROSSING] = 0.5;
+            w[SK_CORNERS] = 0.5; w[SK_FREE_KICKS] = 0.55; w[SK_HEADING] = 0.55;
+            w[SK_OFF_THE_BALL] = 0.5; w[SK_DRIBBLING] = 0.55; w[SK_LONG_THROWS] = 0.6;
+            w[SK_TACKLING] = 0.55; w[SK_MARKING] = 0.55; w[SK_WORK_RATE] = 0.6;
+            w[SK_FLAIR] = 0.5; w[SK_ACCELERATION] = 0.7;
         }
         PositionType::Defender => {
             w[SK_TACKLING] = 1.6; w[SK_MARKING] = 1.6; w[SK_POSITIONING] = 1.5;
@@ -170,24 +173,22 @@ fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionTyp
         PositionType::Goalkeeper => {
             if roll < 0.35 {
                 // Shot Stopper: agility, reflexes, concentration
-                weights[SK_AGILITY] += 1.0; weights[SK_ANTICIPATION] += 0.8;
-                weights[SK_CONCENTRATION] += 0.8; weights[SK_POSITIONING] += 0.5;
-                weights[SK_PASSING] -= 0.5; weights[SK_FIRST_TOUCH] -= 0.5;
-                weights[SK_PACE] -= 0.5;
+                weights[SK_AGILITY] += 0.5; weights[SK_ANTICIPATION] += 0.4;
+                weights[SK_CONCENTRATION] += 0.4; weights[SK_POSITIONING] += 0.3;
+                weights[SK_PASSING] -= 0.3; weights[SK_FIRST_TOUCH] -= 0.3;
             } else if roll < 0.60 {
                 // Sweeper Keeper: distribution, pace, bravery
-                weights[SK_PACE] += 1.2; weights[SK_PASSING] += 1.0;
-                weights[SK_FIRST_TOUCH] += 0.8; weights[SK_BRAVERY] += 0.8;
-                weights[SK_POSITIONING] -= 0.5; weights[SK_CONCENTRATION] -= 0.3;
+                weights[SK_PACE] += 0.5; weights[SK_PASSING] += 0.5;
+                weights[SK_FIRST_TOUCH] += 0.4; weights[SK_BRAVERY] += 0.3;
+                weights[SK_POSITIONING] -= 0.2; weights[SK_CONCENTRATION] -= 0.2;
             } else if roll < 0.85 {
                 // Commanding: aerial, leadership, strength
-                weights[SK_JUMPING] += 1.0; weights[SK_STRENGTH] += 1.0;
-                weights[SK_LEADERSHIP] += 0.8; weights[SK_BRAVERY] += 0.8;
-                weights[SK_PACE] -= 0.5; weights[SK_AGILITY] -= 0.3;
-                weights[SK_PASSING] -= 0.3;
+                weights[SK_JUMPING] += 0.5; weights[SK_STRENGTH] += 0.5;
+                weights[SK_LEADERSHIP] += 0.4; weights[SK_BRAVERY] += 0.4;
+                weights[SK_AGILITY] -= 0.2; weights[SK_PASSING] -= 0.2;
             } else {
                 // Traditional: balanced, slight concentration edge
-                weights[SK_POSITIONING] += 0.4; weights[SK_CONCENTRATION] += 0.4;
+                weights[SK_POSITIONING] += 0.3; weights[SK_CONCENTRATION] += 0.3;
             }
         }
         PositionType::Defender => {
@@ -514,6 +515,9 @@ impl PlayerGenerator {
         let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
         let rep_factor = (base_rep_factor * youth_boost).clamp(0.05, 0.65);
 
+        // Raw CA = peak potential before age reduction (same formula as generate_skills)
+        let raw_ca = 10.0 + rep_factor * 200.0;
+
         let pos_type = position_type_from(position);
         let skills = Self::generate_skills(&pos_type, age, rep_factor);
 
@@ -527,7 +531,7 @@ impl PlayerGenerator {
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Poor academy (0.05): PA cap ~80,  headroom ~10-20 above CA
+        // Poor academy (0.05): PA cap ~80,  headroom ~10-20 above raw_ca
         // Average (0.35):      PA cap ~120, headroom ~15-35
         // Good (0.55):         PA cap ~145, headroom ~20-45
         // Excellent (0.75):    PA cap ~170, headroom ~25-55
@@ -540,16 +544,20 @@ impl PlayerGenerator {
             academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(150, 170));
         }
 
+        // Use raw_ca (peak potential) as PA base, not age-reduced current_ability.
+        // A 14-year-old at Inter has low CA (age factor 0.50) but should have high PA.
+        let pa_base = raw_ca as i32;
+
         let potential_ability = if is_gem {
             // Gems: academy quality sets the ceiling, rep_factor fine-tunes
-            let gem_min = (current_ability as i32 + 20).min(academy_pa_cap);
+            let gem_min = (pa_base + 10).min(academy_pa_cap);
             let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.30)) as i32;
             IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Normal players: academy quality determines both headroom and cap
+            // Normal players: PA = raw_ca + headroom, capped by academy quality
             let base_headroom = 10.0 + academy_quality * 55.0; // 10.8..65
-            let headroom = (base_headroom * (0.6 + rep_factor * 0.8)) as i32; // rep_factor scales it
-            let raw_pa = current_ability as i32 + IntegerUtils::random(5, headroom.max(6));
+            let headroom = (base_headroom * (0.6 + rep_factor * 0.8)) as i32;
+            let raw_pa = pa_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.min(academy_pa_cap).min(200) as u8
         };
 
@@ -763,9 +771,10 @@ impl PlayerGenerator {
         let mut weights = position_weights(position);
         apply_role_archetype(&mut weights, position);
 
-        // Clamp weights to [0.4, 2.2] — no weight can starve a skill to nothing
+        // Clamp weights to [0.15, 2.5] — irrelevant skills get minimal budget,
+        // key skills get maximum. Floor system prevents any skill dropping below 4.
         for w in weights.iter_mut() {
-            *w = w.clamp(0.4, 2.2);
+            *w = w.clamp(0.15, 2.5);
         }
 
         // Step 4: Normalize weights into proportional shares
@@ -808,12 +817,14 @@ impl PlayerGenerator {
         apply_talent_spikes(&mut skills, avg_skill);
 
         // Step 12: Final clamp with minimum floor and age cap
-        let min_floor = (3.0 + rep_factor * 3.0).clamp(3.0, 5.0);
+        // Higher rep = better all-round skills (top club players train everything)
+        // rep 0.10 → floor 4.4, rep 0.35 → floor 5.4, rep 0.65 → floor 6.6
+        let min_floor = (4.0 + rep_factor * 4.0).clamp(4.0, 8.0);
         let physical_floor_base = (4.0 + rep_factor * 4.0).clamp(6.0, 8.0);
         let cap = age_skill_cap(age);
         for i in 0..distributable_count {
             if i >= 28 {
-                let jitter = (random_normal() * 2.5).clamp(-3.0, 3.0);
+                let jitter = (random_normal() * 2.0).clamp(-2.0, 2.0);
                 let floor = (physical_floor_base + jitter).max(4.0);
                 skills[i] = skills[i].clamp(floor, cap);
             } else {
