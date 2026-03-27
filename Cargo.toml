@@ -2,7 +2,7 @@
 members = ["src/core", "src/database", "src/web"]
 
 [workspace.package]
-version = "0.7.1"
+version = "0.7.3"
 authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
 edition = "2024"
 
@@ -24,10 +24,3 @@ hostname = "0.4.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.6"
-
-[profile.release]
-opt-level = 3          # Highest optimization for speed (default in release, but explicit is fine).
-lto = "fat"            # Enables full link-time optimization for better inlining and dead code elimination across crates.
-codegen-units = 1      # Reduces parallelism in codegen to allow more aggressive optimizations (increases compile time).
-panic = "abort"        # Aborts on panic instead of unwinding, reducing overhead and binary size.
-strip = "symbols"      # Strips debug symbols and unused code for a leaner binary.
