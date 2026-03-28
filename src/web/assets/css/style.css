@@ -3435,10 +3435,34 @@ a:link, a:visited, a:hover, a:active {
    ============================================ */
 
 .fm-stats-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
     color: #7a8c98;
     font-size: 13px;
     padding: 8px 12px;
     margin-bottom: 10px;
+}
+
+.fm-holiday-btn {
+    padding: 5px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    color: #c8d6e0;
+    background: linear-gradient(180deg, #2a3a46 0%, #223038 100%);
+    border: 1px solid #3a4f5c;
+    border-radius: 3px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.fm-holiday-btn:hover {
+    background: linear-gradient(180deg, #344a58 0%, #2a3a46 100%);
+    border-color: #4a6272;
+    color: #e0eaf0;
 }
 
 .fm-country-grid {
@@ -5146,8 +5170,11 @@ a:link, a:visited, a:hover, a:active {
         gap: 6px 24px;
     }
 
-    /* Wide tables: horizontal scroll via wrapper-less approach */
+    /* Wide tables: horizontal scroll via wrapper-less approach.
+       display:grid ensures .fm-panel-head stretches to the widest child (the table)
+       so the gradient background covers the full scrollable width. */
     .fm-panel {
+        display: grid;
         overflow-x: auto;
         -webkit-overflow-scrolling: touch;
         scrollbar-width: none;
@@ -5160,7 +5187,7 @@ a:link, a:visited, a:hover, a:active {
 
     .fm-stats,
     .fm-squad {
-        width: 100%;
+        width: max-content;
         min-width: 600px;
     }
 
@@ -5309,19 +5336,25 @@ a:link, a:visited, a:hover, a:active {
         font-size: 12px;
     }
 
-    /* History table: hide less critical columns, compact stats */
+    /* History table: compact columns on mobile — show flag-only nat, truncated league */
     .fm-history-table {
         min-width: 530px;
     }
 
-    .fm-history-table td.sq-league,
-    .fm-history-table thead th.sq-league {
-        display: none;
+    .fm-history-table td.sq-nat a {
+        font-size: 0;
     }
 
-    .fm-history-table td.sq-nat,
-    .fm-history-table thead th.sq-nat {
-        display: none;
+    .fm-history-table td.sq-nat .flag {
+        font-size: 16px;
+        margin-right: 0;
+    }
+
+    .fm-history-table td.sq-league {
+        max-width: 80px;
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
     }
 
     .fm-history-table thead th,

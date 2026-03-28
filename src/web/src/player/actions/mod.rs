@@ -407,6 +407,7 @@ pub async fn loan_action(
 pub struct ClubListItem {
     pub id: u32,
     pub name: String,
+    pub country: String,
 }
 
 #[derive(Deserialize)]
@@ -436,6 +437,7 @@ pub async fn list_clubs_action(
                         clubs.push(ClubListItem {
                             id: club.id,
                             name: club.name.clone(),
+                            country: country.name.clone(),
                         });
                     }
                 }

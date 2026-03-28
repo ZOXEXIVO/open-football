@@ -189,13 +189,13 @@
         }
     }
 
-    // Click Process → show spinner → single request → handle result
-    async function startProcess(event) {
+    // Core process runner — shared by Process button click and holiday
+    async function runProcess(days) {
         if (_requestInFlight) return;
         const btn = document.getElementById('process-btn');
         if (!btn || btn.classList.contains('fm-processing')) return;
         _requestInFlight = true;
-        const url = event.shiftKey ? '/api/game/process?days=370' : '/api/game/process';
+        const url = days ? '/api/game/process?days=' + days : '/api/game/process';
         btn.classList.add('fm-processing');
         try {
             const res = await fetch(url, {method: 'POST'});
@@ -212,6 +212,14 @@
         btn.classList.remove('fm-processing');
         await refreshContent();
     }
+
+    // Click Process → show spinner → single request → handle result
+    async function startProcess() {
+        await runProcess(null);
+    }
+
+    // Called from holiday dialog
+    window.startHoliday = function(days) { runProcess(days); };
 
     // Flow 2: Page load → check if already processing → poll 1s until done
     async function pollProcessing() {
@@ -236,8 +244,8 @@
         .catch(function () {
         });
 </script>
-<script src="/js/fm-dialog.js?v=1"></script>
-<script src="/js/badge-deck.js?v=1"></script>
+<script src="/js/fm-dialog.js?v=2"></script>
+<script src="/js/badge-deck.js?v=2"></script>
 <div id="page-scripts">{% block scripts_layout %}{% endblock %}{% block scripts %}{% endblock %}</div>
 
 <!-- Google tag (gtag.js) -->

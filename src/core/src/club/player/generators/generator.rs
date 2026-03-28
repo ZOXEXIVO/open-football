@@ -289,42 +289,41 @@ fn apply_role_archetype(weights: &mut [f32; SKILL_COUNT], position: &PositionTyp
     }
 }
 
-/// Age factor applied to the TOTAL CA budget (not per-skill).
-/// Youth players have lower CA that grows with development.
-/// This is the only age adjustment — no per-skill age curves.
-fn age_ca_factor(age: u32) -> f32 {
-    match age {
-        0..=12 => 0.35,
-        13 => 0.42,
-        14 => 0.50,
-        15 => 0.58,
-        16 => 0.65,
-        17 => 0.72,
-        18 => 0.80,
-        19 => 0.86,
-        20 => 0.92,
-        21 => 0.96,
-        22..=29 => 1.0,
-        30..=31 => 0.97,
-        32..=33 => 0.93,
-        34..=35 => 0.87,
-        _ => 0.80,
+/// Which broad group a skill index belongs to: 0=technical, 1=mental, 2=physical
+fn skill_group(idx: usize) -> usize {
+    if idx < 14 {
+        0
+    } else if idx < 28 {
+        1
+    } else {
+        2
     }
 }
 
-/// Convert CA points allocated to a single skill into a 1-20 skill value.
-/// Non-linear: high skills are exponentially more expensive.
-///   ca_share ~0.5 → skill ~3
-///   ca_share ~1.0 → skill ~5
-///   ca_share ~2.0 → skill ~8
-///   ca_share ~3.0 → skill ~10
-///   ca_share ~4.5 → skill ~14
-///   ca_share ~5.5 → skill ~17
-///   ca_share ~6.0 → skill ~18
-fn ca_to_skill(ca_share: f32) -> f32 {
-    // ca_share = total_ca * (weight / sum_weights), typically in [0.5, 12] range.
-    // Tuned so uniform-weight CA 110 → ~10, CA 60 → ~6, CA 200 → ~16.
-    (ca_share.max(0.0).powf(0.7) * 4.2).clamp(1.0, 20.0)
+/// Subtle per-skill peak timing modifier within a group.
+/// Range: 0.92 to 1.05 (fine-tuning, not a major multiplier).
+fn age_curve(skill_idx: usize, age: u32) -> f32 {
+    let (peak_start, peak_end) = match skill_idx {
+        SK_ACCELERATION | SK_PACE | SK_AGILITY | SK_JUMPING | SK_BALANCE | SK_NATURAL_FITNESS => {
+            (18u32, 24u32)
+        }
+        SK_DECISIONS | SK_POSITIONING | SK_VISION | SK_LEADERSHIP | SK_COMPOSURE | SK_PASSING => {
+            (26, 34)
+        }
+        _ => (22, 28),
+    };
+
+    let age_f = age as f32;
+    if age < peak_start {
+        let ramp_start = peak_start.saturating_sub(6) as f32;
+        let t = ((age_f - ramp_start) / (peak_start as f32 - ramp_start)).clamp(0.0, 1.0);
+        0.92 + (1.0 - 0.92) * t
+    } else if age <= peak_end {
+        1.03
+    } else {
+        let t = ((age_f - peak_end as f32) / (40.0 - peak_end as f32)).clamp(0.0, 1.0);
+        1.03 + (0.92 - 1.03) * t
+    }
 }
 
 /// Age-based maximum skill cap.
@@ -515,14 +514,10 @@ impl PlayerGenerator {
         let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
         let rep_factor = (base_rep_factor * youth_boost).clamp(0.05, 0.65);
 
-        // Raw CA = peak potential before age reduction (same formula as generate_skills)
+        // Raw CA = peak potential before age reduction
         let raw_ca = 10.0 + rep_factor * 200.0;
 
-        let pos_type = position_type_from(position);
-        let skills = Self::generate_skills(&pos_type, age, rep_factor);
-
-        let current_ability = skills.calculate_ability_for_position(position);
-
+        // Calculate PA first — skills are PA-anchored for proper position differentiation
         // Youth Recruitment affects gem chance
         // Poor recruitment (0.05) → 3% gem, Average (0.35) → 8%, Exceptional (0.95) → 25%
         let gem_chance = 0.02 + recruitment_quality * 0.24;
@@ -560,6 +555,11 @@ impl PlayerGenerator {
             let raw_pa = pa_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.min(academy_pa_cap).min(200) as u8
         };
+
+        let pos_type = position_type_from(position);
+        let skills = Self::generate_skills(&pos_type, age, rep_factor, potential_ability);
+
+        let current_ability = skills.calculate_ability_for_position(position);
 
         // Higher PA → higher chance of secondary position
         let positions = Self::generate_positions(position, potential_ability);
@@ -741,94 +741,145 @@ impl PlayerGenerator {
         }
     }
 
-    /// CA-budget skill generation (FM-like model).
+    /// PA-anchored skill generation (same model as database generator).
     ///
-    /// Instead of generating each skill independently from a mean (which collapses
-    /// to identical values at low levels), this distributes a limited CA budget
-    /// across skills using position weights as proportional shares.
+    /// PA maps to a "fully developed" skill level. Position weights create
+    /// differentiation via ADDITIVE spread so even low-PA youth have clear
+    /// strengths/weaknesses (a young GK has high positioning, low finishing).
     ///
     /// Pipeline:
-    ///   1. Generate raw CA from rep_factor
-    ///   2. Apply age factor to CA (single reduction, not per-skill)
-    ///   3. Get position weights + role archetype
-    ///   4. Normalize weights into proportional shares
-    ///   5. Distribute CA budget: each skill gets ca_share = total_ca * (weight / sum)
-    ///   6. Convert ca_share → skill value via non-linear curve (high skills cost more)
-    ///   7. Apply per-skill noise (small, ±1.5 max)
-    ///   8. Apply affinities and talent spikes
-    ///   9. Clamp to [1, 20] with minimum floor
-    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32) -> PlayerSkills {
-        // Step 1: Raw CA from reputation
-        //   rep 0.05 (academy level 1) → CA ~20
-        //   rep 0.25 (mid)             → CA ~65
-        //   rep 0.50 (max academy)     → CA ~110
-        let raw_ca = 10.0 + rep_factor * 200.0;
+    ///   1. PA → pa_final (1-20 scale target)
+    ///   2. Per-group age ratios (tech/mental/physical develop at different rates)
+    ///   3. Additive position spread from group mean
+    ///   4. Per-skill noise and age curve
+    ///   5. Cohesion, floors, affinities, talent spikes
+    ///   6. Clamp to [1, age_cap]
+    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8) -> PlayerSkills {
+        let pa = potential_ability as f32;
+        // PA → target skill level at peak (PA 1→1, PA 100→10.5, PA 200→20)
+        let pa_final = (pa - 1.0) / 199.0 * 19.0 + 1.0;
 
-        // Step 2: Age reduces the effective CA (youth haven't developed yet)
-        let ca = raw_ca * age_ca_factor(age);
+        // Age-dependent development ratio per skill group
+        let tech_age_ratio = match age {
+            0..=17 =>  0.75,
+            18..=19 => 0.82,
+            20..=22 => 0.90,
+            23..=26 => 0.95,
+            27..=29 => 1.0,
+            30..=32 => 0.97,
+            _ =>       0.93,
+        };
+        let mental_age_ratio = match age {
+            0..=17 =>  0.55,
+            18..=19 => 0.62,
+            20..=22 => 0.72,
+            23..=26 => 0.85,
+            27..=29 => 0.95,
+            30..=32 => 1.0,
+            _ =>       1.0,
+        };
+        let physical_age_ratio = match age {
+            0..=17 =>  0.70,
+            18..=19 => 0.78,
+            20..=22 => 0.88,
+            23..=26 => 0.95,
+            27..=29 => 1.0,
+            30..=32 => 0.93,
+            _ =>       0.82,
+        };
 
-        // Step 3: Position weights + role archetype for variety
-        let mut weights = position_weights(position);
-        apply_role_archetype(&mut weights, position);
+        // Group means: pure PA-driven
+        let tech_mean   = pa_final * tech_age_ratio;
+        let mental_mean = pa_final * mental_age_ratio;
+        let phys_mean   = pa_final * physical_age_ratio;
 
-        // Clamp weights to [0.15, 2.5] — irrelevant skills get minimal budget,
-        // key skills get maximum. Floor system prevents any skill dropping below 4.
-        for w in weights.iter_mut() {
-            *w = w.clamp(0.15, 2.5);
-        }
+        // Position spread: how much key/weak skills deviate from group mean.
+        // Ensures differentiation at ALL ability levels including youth:
+        //   PA 50 (pa_final ~5.7): spread ~2.8 → key ~8, weak ~3
+        //   PA 100 (pa_final ~10.5): spread ~5.2 → key ~14, weak ~5
+        let spread = (pa_final * 0.5).max(2.5);
 
-        // Step 4: Normalize weights into proportional shares
-        // Exclude SK_MATCH_READINESS from distribution (it's not a real skill)
-        let distributable_count = SKILL_COUNT - 1; // 36 real skills
-        let total_weight: f32 = weights[..distributable_count].iter().sum();
+        let mut pos_w = position_weights(position);
+        apply_role_archetype(&mut pos_w, position);
 
-        // Step 5: Distribute CA budget proportionally
+        // Noise per group — youth have more technical noise (raw talent variation)
+        let base_noise = 1.5 + rep_factor * 1.0;
+        let tech_noise = if age <= 18 { base_noise + 2.0 } else { base_noise + 0.5 };
+        let mental_noise = base_noise * 0.5;
+        let phys_noise = base_noise * 1.5;
+
         let mut skills = [0.0f32; SKILL_COUNT];
 
-        for i in 0..distributable_count {
-            let share = weights[i] / total_weight;
-            let ca_for_skill = ca * share;
+        for i in 0..SKILL_COUNT {
+            let (group_mean, noise) = match skill_group(i) {
+                0 => (tech_mean, tech_noise),
+                1 => (mental_mean, mental_noise),
+                _ => (phys_mean, phys_noise),
+            };
 
-            // Step 6: Non-linear conversion — high skills are exponentially expensive
-            skills[i] = ca_to_skill(ca_for_skill);
+            // Additive position spread: key skills (w>1) get bonus, weak (w<1) get penalty
+            let pos_mean = group_mean + (pos_w[i] - 1.0) * spread;
+            let base = pos_mean + random_normal() * noise;
+            let raw = base * age_curve(i, age);
+            skills[i] = raw.clamp(1.0, 20.0);
         }
 
-        // Match readiness starts at a reasonable default
+        // Mental cohesion: pull toward group mean (mentality is unified)
+        let m_avg: f32 = skills[14..28].iter().sum::<f32>() / 14.0;
+        for i in 14..28 {
+            skills[i] = skills[i] * 0.70 + m_avg * 0.30;
+        }
+
+        // Physical cohesion: light pull toward group mean
+        let p_count = (SKILL_COUNT - 28) as f32;
+        let p_avg: f32 = skills[28..SKILL_COUNT].iter().sum::<f32>() / p_count;
+        for i in 28..SKILL_COUNT {
+            skills[i] = skills[i] * 0.85 + p_avg * 0.15;
+        }
+
+        // Match readiness default
         skills[SK_MATCH_READINESS] = 10.0 + rand::random::<f32>() * 5.0;
 
-        // Step 7: Per-player group bias — tilts tech/mental/physical balance
-        // Makes two same-position players feel different ("technical but weak" vs "athletic but clumsy")
+        // Per-player group bias for variety
         Self::apply_group_bias(&mut skills);
 
-        // Step 8: Per-skill noise (applied AFTER base + group bias)
-        for skill in skills[..distributable_count].iter_mut() {
-            *skill = (*skill + random_normal() * 1.2).clamp(1.0, 20.0);
-        }
+        // Personal strengths & weaknesses
+        Self::apply_strengths_weaknesses(&mut skills, &pos_w);
 
-        // Step 9: Personal strengths & weaknesses — gives every player a recognizable identity
-        // "this guy is fast but dumb", "pure finisher", "technical but physically weak"
-        Self::apply_strengths_weaknesses(&mut skills, &weights);
-
-        // Step 10: Affinities (correlated skill boosts)
+        // Affinities (correlated skill boosts)
         apply_affinities(&mut skills);
 
-        // Step 11: Talent spikes for extra individuality
+        // Talent spikes for extra individuality
+        let distributable_count = SKILL_COUNT - 1;
         let avg_skill = skills[..distributable_count].iter().sum::<f32>() / distributable_count as f32;
         apply_talent_spikes(&mut skills, avg_skill);
 
-        // Step 12: Final clamp with minimum floor and age cap
-        // Higher rep = better all-round skills (top club players train everything)
-        // rep 0.10 → floor 4.4, rep 0.35 → floor 5.4, rep 0.65 → floor 6.6
-        let min_floor = (4.0 + rep_factor * 4.0).clamp(4.0, 8.0);
-        let physical_floor_base = (4.0 + rep_factor * 4.0).clamp(6.0, 8.0);
+        // PA-based floors
+        let key_floor = (pa_final * 0.40).clamp(1.0, 9.0);
+        let universal_floor = (2.0 + pa_final * 0.2).clamp(4.0, 6.0);
+        let physical_floor_base = (3.0 + pa_final * 0.35).clamp(6.0, 9.0);
+        let trained_floor = (pa_final * 0.35 + 3.0).clamp(6.0, 9.0);
+        let footballer_tech_floor = (pa_final * 0.30 + 2.0).clamp(4.0, 9.0);
         let cap = age_skill_cap(age);
+
         for i in 0..distributable_count {
-            if i >= 28 {
+            if pos_w[i] >= 1.2 {
+                skills[i] = skills[i].max(key_floor);
+            }
+            if skill_group(i) == 2 {
                 let jitter = (random_normal() * 2.0).clamp(-2.0, 2.0);
                 let floor = (physical_floor_base + jitter).max(4.0);
                 skills[i] = skills[i].clamp(floor, cap);
+            } else if skill_group(i) == 0 && pos_w[i] >= 0.8 {
+                let jitter = (random_normal() * 1.5).clamp(-2.0, 2.0);
+                let floor = (trained_floor + jitter).max(4.0);
+                skills[i] = skills[i].clamp(floor, cap);
+            } else if skill_group(i) == 0 {
+                let jitter = (random_normal() * 1.0).clamp(-1.0, 1.0);
+                let floor = (footballer_tech_floor + jitter).max(4.0);
+                skills[i] = skills[i].clamp(floor, cap);
             } else {
-                skills[i] = skills[i].clamp(min_floor, cap);
+                skills[i] = skills[i].clamp(universal_floor, cap);
             }
         }
 

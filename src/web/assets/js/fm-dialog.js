@@ -155,8 +155,12 @@
                     fetch(url).then(function (r) { return r.json(); }).then(function (items) {
                         if (!items.length) { list.innerHTML = ''; list.style.display = 'none'; return; }
                         list.innerHTML = items.slice(0, 20).map(function (item) {
-                            return '<div class="fm-ac-item" data-value="' + escapeHtml(String(item.id)) + '">'
-                                + escapeHtml(item.name) + '</div>';
+                            var label = item.country
+                                ? item.name + ' (' + item.country + ')'
+                                : item.name;
+                            return '<div class="fm-ac-item" data-value="' + escapeHtml(String(item.id)) + '"'
+                                + ' data-name="' + escapeHtml(item.name) + '">'
+                                + escapeHtml(label) + '</div>';
                         }).join('');
                         list.style.display = 'block';
                     });
@@ -167,7 +171,7 @@
                 var item = e.target.closest('.fm-ac-item');
                 if (!item) return;
                 hidden.value = item.dataset.value;
-                input.value = item.textContent;
+                input.value = item.textContent; // shows "Name (Country)"
                 list.innerHTML = '';
                 list.style.display = 'none';
             });

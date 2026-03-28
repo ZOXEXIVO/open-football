@@ -4,7 +4,37 @@
 
 {% block content %}
 <div class="fm-page">
-    <div class="fm-stats-bar">Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</div>
+    <div class="fm-stats-bar">
+        <span>Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</span>
+        <button class="fm-holiday-btn" onclick="openHolidayDialog()">Go on holiday</button>
+    </div>
+    <script>
+    function openHolidayDialog() {
+        OpenFootballDialog.open({
+            title: 'Go on Holiday',
+            fields: [
+                {
+                    name: 'duration',
+                    label: 'Duration',
+                    type: 'select',
+                    options: [
+                        { value: '30', text: '1 month' },
+                        { value: '90', text: '3 months' },
+                        { value: '180', text: '6 months' },
+                        { value: '365', text: '1 year' },
+                        { value: '730', text: '2 years' },
+                        { value: '1095', text: '3 years' },
+                    ]
+                }
+            ],
+            confirmText: 'Go',
+            cancelText: 'Cancel',
+            onConfirm: function(data) {
+                window.startHoliday(data.duration || '30');
+            }
+        });
+    }
+    </script>
     {% for continent in continents %}
     <section class="fm-panel {% if !loop.first %}mt-3{% endif %}">
         <div class="fm-panel-head">
