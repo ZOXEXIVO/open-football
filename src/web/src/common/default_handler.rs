@@ -10,7 +10,7 @@ use std::sync::LazyLock;
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
 
 /// Machine hostname, resolved once at startup.
-pub static HOSTNAME: LazyLock<String> = LazyLock::new(|| {
+pub static COMPUTER_NAME: LazyLock<String> = LazyLock::new(|| {
     hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
         .unwrap_or_else(|_| "unknown".to_string())

@@ -18,7 +18,7 @@ pub struct PlayerDecisionsRequest {
 #[template(path = "player/decisions/index.html")]
 pub struct PlayerDecisionsTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -106,7 +106,7 @@ pub async fn player_decisions_action(
 
     Ok(PlayerDecisionsTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),

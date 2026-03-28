@@ -18,7 +18,7 @@ pub struct CountryScheduleRequest {
 #[template(path = "countries/schedule/index.html")]
 pub struct CountryScheduleTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -145,7 +145,7 @@ pub async fn country_schedule_action(
 
     Ok(CountryScheduleTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title: country.name.clone(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

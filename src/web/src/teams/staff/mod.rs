@@ -19,7 +19,7 @@ pub struct TeamStaffRequest {
 #[template(path = "teams/staff/index.html")]
 pub struct TeamStaffTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -218,7 +218,7 @@ pub async fn team_staff_action(
 
     Ok(TeamStaffTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         i18n,
         lang: route_params.lang.clone(),
         title,

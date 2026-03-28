@@ -5,8 +5,8 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::{Country, PlayerPositionType};
 use core::utils::DateUtils;
+use core::{Country, PlayerPositionType};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -19,7 +19,7 @@ pub struct CountrySquadRequest {
 #[template(path = "countries/squad/index.html")]
 pub struct CountrySquadTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -145,7 +145,7 @@ pub async fn country_squad_action(
 
     Ok(CountrySquadTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title: country.name.clone(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

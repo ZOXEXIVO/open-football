@@ -5,6 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
+use core::utils::FormattingUtils;
 use core::Person;
 use core::Player;
 use core::PlayerPositionType;
@@ -12,7 +13,6 @@ use core::PlayerSquadStatus;
 use core::PlayerStatusType;
 use core::SimulatorData;
 use core::Team;
-use core::utils::FormattingUtils;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -25,7 +25,7 @@ pub struct PlayerGetRequest {
 #[template(path = "player/get/index.html")]
 pub struct PlayerGetTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -300,7 +300,7 @@ pub async fn player_get_action(
 
         return Ok(PlayerGetTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+            computer_name: &crate::common::default_handler::COMPUTER_NAME,
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
@@ -374,7 +374,7 @@ pub async fn player_get_action(
 
         return Ok(PlayerGetTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+            computer_name: &crate::common::default_handler::COMPUTER_NAME,
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
@@ -602,7 +602,7 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
         PlayerSquadStatus::NotNeeded => "squad_not_needed",
         PlayerSquadStatus::NotYetSet | PlayerSquadStatus::Invalid | PlayerSquadStatus::SquadStatusCount => "",
     }
-    .to_string()
+        .to_string()
 }
 
 fn get_loan_status(player: &Player, _team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {

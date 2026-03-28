@@ -256,7 +256,10 @@
     gtag('config', 'G-2WTTN499YZ');
 
     gtag('event', 'opened', {
-        hostname: '{{ hostname }}'
+        computer_name: '{{ computer_name }}',
+        env: (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+            ? 'local'
+            : 'online'
     });
 </script>
 </body>

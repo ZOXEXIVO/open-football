@@ -5,8 +5,8 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::SimulatorData;
 use core::utils::FormattingUtils;
+use core::SimulatorData;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -19,7 +19,7 @@ pub struct TeamFinancesGetRequest {
 #[template(path = "teams/finances/index.html")]
 pub struct TeamFinancesTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -213,7 +213,7 @@ pub async fn team_finances_get_action(
 
     Ok(TeamFinancesTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         i18n,
         lang: route_params.lang.clone(),
         title,

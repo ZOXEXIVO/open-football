@@ -19,7 +19,7 @@ pub struct MatchGetRequest {
 #[template(path = "match/get/index.html")]
 pub struct MatchGetTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -310,7 +310,7 @@ pub async fn match_get_action(
 
     Ok(MatchGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
@@ -392,22 +392,30 @@ pub async fn match_get_action(
         match_time_ms: result_details.match_time_ms,
         goals_json: serde_json::to_string(&goals_json).unwrap_or_else(|_| "[]".to_string()),
         players_json: serde_json::to_string(&players_json).unwrap_or_else(|_| "[]".to_string()),
-        home_color_background: if home_club_id > 0 { simulator_data
-            .club(home_club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_else(|| "#00307d".to_string()) } else { "#00307d".to_string() },
-        home_color_foreground: if home_club_id > 0 { simulator_data
-            .club(home_club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_else(|| "#ffffff".to_string()) } else { "#ffffff".to_string() },
-        away_color_background: if away_club_id > 0 { simulator_data
-            .club(away_club_id)
-            .map(|c| c.colors.background.clone())
-            .unwrap_or_else(|| "#b33f00".to_string()) } else { "#b33f00".to_string() },
-        away_color_foreground: if away_club_id > 0 { simulator_data
-            .club(away_club_id)
-            .map(|c| c.colors.foreground.clone())
-            .unwrap_or_else(|| "#ffffff".to_string()) } else { "#ffffff".to_string() },
+        home_color_background: if home_club_id > 0 {
+            simulator_data
+                .club(home_club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_else(|| "#00307d".to_string())
+        } else { "#00307d".to_string() },
+        home_color_foreground: if home_club_id > 0 {
+            simulator_data
+                .club(home_club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_else(|| "#ffffff".to_string())
+        } else { "#ffffff".to_string() },
+        away_color_background: if away_club_id > 0 {
+            simulator_data
+                .club(away_club_id)
+                .map(|c| c.colors.background.clone())
+                .unwrap_or_else(|| "#b33f00".to_string())
+        } else { "#b33f00".to_string() },
+        away_color_foreground: if away_club_id > 0 {
+            simulator_data
+                .club(away_club_id)
+                .map(|c| c.colors.foreground.clone())
+                .unwrap_or_else(|| "#ffffff".to_string())
+        } else { "#ffffff".to_string() },
         player_of_the_match_id: motm_id.unwrap_or(0),
         player_of_the_match_name: motm_name,
         match_recordings_enabled: core::is_match_recordings_mode() && league.is_some_and(|l| !l.friendly),

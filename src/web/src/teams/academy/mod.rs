@@ -5,8 +5,8 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::PlayerPositionType;
 use core::utils::DateUtils;
+use core::PlayerPositionType;
 use core::SimulatorData;
 use serde::Deserialize;
 
@@ -21,7 +21,7 @@ pub struct TeamAcademyRequest {
 #[allow(dead_code)]
 pub struct TeamAcademyTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -151,7 +151,7 @@ pub async fn team_academy_action(
 
     Ok(TeamAcademyTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         i18n,
         lang: route_params.lang.clone(),
         title,

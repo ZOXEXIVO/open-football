@@ -5,7 +5,7 @@ use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
-use core::utils::{FormattingUtils};
+use core::utils::FormattingUtils;
 use core::{CoachingStyle, SimulatorData, Staff, StaffEventType, StaffLicenseType, StaffPosition};
 use serde::Deserialize;
 
@@ -19,7 +19,7 @@ pub struct StaffPersonalRequest {
 #[template(path = "staff/personal/index.html")]
 pub struct StaffPersonalTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -135,7 +135,7 @@ pub async fn staff_personal_action(
 
     Ok(StaffPersonalTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title,
         sub_title_prefix: i18n.t(&role_key).to_string(),
         sub_title_suffix: if team.team_type == core::TeamType::Main {
@@ -277,7 +277,7 @@ fn get_staff_info(staff: &Staff, i18n: &crate::I18n) -> StaffInfoDto {
         CoachingStyle::Transformational => i18n.t("style_transformational"),
         CoachingStyle::Tactical => i18n.t("style_tactical"),
     }
-    .to_string();
+        .to_string();
 
     let license = match staff.license {
         StaffLicenseType::ContinentalPro => i18n.t("license_continental_pro"),
@@ -288,7 +288,7 @@ fn get_staff_info(staff: &Staff, i18n: &crate::I18n) -> StaffInfoDto {
         StaffLicenseType::NationalB => i18n.t("license_national_b"),
         StaffLicenseType::NationalC => i18n.t("license_national_c"),
     }
-    .to_string();
+        .to_string();
 
     let fatigue = staff.fatigue.round().clamp(0.0, 100.0) as u8;
     let job_satisfaction = staff.job_satisfaction.round().clamp(0.0, 100.0) as u8;

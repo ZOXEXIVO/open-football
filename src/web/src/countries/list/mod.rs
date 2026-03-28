@@ -16,7 +16,7 @@ pub struct CountryListRequest {
 #[template(path = "countries/list/index.html")]
 pub struct CountryListTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -95,7 +95,7 @@ pub async fn country_list_action(
 
     Ok(CountryListTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title: format!("OpenFootball v{}", env!("CARGO_PKG_VERSION")),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

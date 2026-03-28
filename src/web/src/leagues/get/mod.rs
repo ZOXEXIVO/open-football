@@ -7,8 +7,8 @@ use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use chrono::Duration;
 use core::league::ScheduleTour;
-use core::r#match::GoalDetail;
 use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::GoalDetail;
 use itertools::*;
 use serde::Deserialize;
 
@@ -22,7 +22,7 @@ pub struct LeagueGetRequest {
 #[template(path = "leagues/get/index.html")]
 pub struct LeagueGetTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -365,7 +365,7 @@ pub async fn league_get_action(
 
     Ok(LeagueGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title: league_title,
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

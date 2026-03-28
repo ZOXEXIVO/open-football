@@ -2,7 +2,7 @@
 members = ["src/core", "src/database", "src/web"]
 
 [workspace.package]
-version = "0.7.3"
+version = "0.7.5"
 authors = ["ZOXEXIVO <zoxexivo@gmail.com>"]
 edition = "2024"
 

@@ -25,7 +25,7 @@ pub struct SeasonQuery {
 #[template(path = "leagues/transfers/index.html")]
 pub struct LeagueTransfersTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub title: String,
     pub sub_title_prefix: String,
     pub sub_title_suffix: String,
@@ -159,8 +159,8 @@ pub async fn league_transfers_action(
             t.season_year == selected_season
                 && t.from_club_id != 0
                 && (league_team_ids.contains(&t.from_team_id)
-                    || league_club_ids.contains(&t.from_club_id)
-                    || league_club_ids.contains(&t.to_club_id))
+                || league_club_ids.contains(&t.from_club_id)
+                || league_club_ids.contains(&t.to_club_id))
         })
         .map(|t| {
             let from_team_slug = get_first_team_slug(simulator_data, country, t.from_club_id);
@@ -225,7 +225,7 @@ pub async fn league_transfers_action(
 
     Ok(LeagueTransfersTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         title: format!("{} - Transfers", league_title),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

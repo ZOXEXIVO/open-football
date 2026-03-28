@@ -203,9 +203,26 @@ impl PipelineProcessor {
                 ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
             );
 
-            // Small clubs scan for ANY decent player they can loan cheaply
+            // Natural squad depth check — a club wouldn't pursue more loans
+            // for a position group that's already well-covered
+            let has_room_for = |group: PlayerFieldPositionGroup| -> bool {
+                let roster_count = team
+                    .players
+                    .players
+                    .iter()
+                    .filter(|p| p.position().position_group() == group)
+                    .count();
+                let max_depth = match group {
+                    PlayerFieldPositionGroup::Goalkeeper => 3,
+                    PlayerFieldPositionGroup::Defender => 7,
+                    PlayerFieldPositionGroup::Midfielder => 7,
+                    PlayerFieldPositionGroup::Forward => 5,
+                };
+                roster_count < max_depth
+            };
+
+            // Small clubs scan for available loan players to strengthen their squad
             if is_small_club && scans_this_club < max_scans {
-                // Look for players above squad average — a loan upgrade opportunity
                 let mut opps: Vec<&LoanListing> = loan_listings
                     .iter()
                     .filter(|l| {
@@ -217,8 +234,8 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
-                            // Don't pile on positions we already targeted
                             && !scanned_position_groups.contains(&l.position_group)
+                            && has_room_for(l.position_group)
                     })
                     .collect();
                 opps.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -249,8 +266,8 @@ impl PipelineProcessor {
                                 .transfer_market
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
-                            // Don't pile on positions we already targeted
                             && !scanned_position_groups.contains(&l.position_group)
+                            && has_room_for(l.position_group)
                     })
                     .max_by_key(|l| l.ability)
                 {

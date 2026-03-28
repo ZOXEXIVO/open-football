@@ -6,12 +6,12 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
+use core::utils::{DateUtils, FormattingUtils};
 use core::Player;
 use core::PlayerPositionType;
 use core::PlayerStatusType;
-use std::sync::Arc;
-use core::utils::{DateUtils, FormattingUtils};
 use serde::Deserialize;
+use std::sync::Arc;
 
 pub fn watchlist_routes() -> axum::Router<GameAppData> {
     routes::routes()
@@ -52,7 +52,7 @@ pub struct WatchlistPageRequest {
 #[template(path = "watchlist/index.html")]
 pub struct WatchlistPageTemplate {
     pub css_version: &'static str,
-    pub hostname: &'static str,
+    pub computer_name: &'static str,
     pub i18n: crate::I18n,
     pub lang: String,
     pub title: String,
@@ -179,7 +179,7 @@ pub async fn watchlist_page_action(
 
     Ok(WatchlistPageTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
-        hostname: &crate::common::default_handler::HOSTNAME,
+        computer_name: &crate::common::default_handler::COMPUTER_NAME,
         i18n,
         lang: route_params.lang.clone(),
         title: "Watch List".to_string(),
