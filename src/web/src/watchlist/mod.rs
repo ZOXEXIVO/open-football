@@ -7,6 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use core::Player;
+use core::PlayerPositionType;
 use core::PlayerStatusType;
 use std::sync::Arc;
 use core::utils::{DateUtils, FormattingUtils};
@@ -21,6 +22,7 @@ pub struct WatchlistPlayerDto {
     pub last_name: String,
     pub first_name: String,
     pub position: String,
+    pub position_sort: PlayerPositionType,
     pub country_code: String,
     pub country_name: String,
     pub country_slug: String,
@@ -80,7 +82,7 @@ pub async fn watchlist_page_action(
     let now = simulator_data.date.date();
     let current_path = format!("/{}/watchlist", &route_params.lang);
 
-    let players: Vec<WatchlistPlayerDto> = simulator_data
+    let mut players: Vec<WatchlistPlayerDto> = simulator_data
         .watchlist
         .iter()
         .filter_map(|&player_id| {
@@ -100,6 +102,7 @@ pub async fn watchlist_page_action(
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,
+                    position_sort: player.position(),
                     country_code,
                     country_name,
                     country_slug,
@@ -140,6 +143,7 @@ pub async fn watchlist_page_action(
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,
+                    position_sort: player.position(),
                     country_code,
                     country_name,
                     country_slug,
@@ -164,6 +168,12 @@ pub async fn watchlist_page_action(
             }
         })
         .collect();
+
+    players.sort_by(|a, b| {
+        a.position_sort
+            .partial_cmp(&b.position_sort)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     let menu_sections = views::watchlist_menu(&i18n, &route_params.lang, &current_path);
 
