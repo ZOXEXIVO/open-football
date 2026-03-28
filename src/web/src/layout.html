@@ -253,8 +253,10 @@
     }
 
     gtag('js', new Date());
-    gtag('config', 'G-2WTTN499YZ', {
-        'computer_name': '{{ hostname }}'
+    gtag('config', 'G-2WTTN499YZ');
+
+    gtag('event', 'opened', {
+        hostname: '{{ hostname }}'
     });
 </script>
 </body>
