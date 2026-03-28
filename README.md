@@ -1,16 +1,49 @@
-
 # Open Football
 
+OpenFootball is an ambitious attempt to recreate the depth and realism of the Football Manager simulation engine—without
+any manual control.
 
-Attempt to implement Football Manager (Sigames) simulation engine without manual control.
+#### This is not a traditional game.
 
-The project is NOT a game, it's a football simulation without the possibility of control.
+OpenFootball is a pure football simulation platform, where matches, careers, and outcomes unfold entirely on their own,
+driven by data and logic rather than player input.
 
-The goal is to get as close as possible to a real soccer simulation and based on this data:
+### What’s the goal?
 
-- Predict match results
-- Predict the success of future player transfers
+To build a highly realistic football simulation capable of:
 
+📊 Predicting match results with data-driven accuracy
+
+🔄 Evaluating and forecasting player transfers and their long-term success
+
+### How it works
+
+OpenFootball is delivered as a single, self-contained binary application.
+
+No setup, no dependencies—just run it and simulate entire football ecosystems, from individual matches to long-term
+dynamics across leagues and clubs.
+
+---
+
+## Database & Future Roadmap
+
+OpenFootball is powered by a structured internal database located at /src/database/data/*.*, built using clean and
+flexible JSON formats. This database already includes a realistic hierarchy of countries and clubs, along with closely
+modeled reputation levels and financial data to ensure an authentic football ecosystem.
+
+At the moment, players are generated dynamically using a randomized system, as a fully detailed real-world player
+database (including individual skills and attributes) is not yet integrated.
+
+What’s coming next:
+
+⚽ Real Player Database Integration
+
+Incorporating real player data sourced from Transfermarkt, including detailed attributes and performance metrics.
+
+🔄 Dynamic Shared Database
+
+A centralized, continuously updated database that will automatically sync and download the latest data each time the app
+starts.
 
 ---
 **[Live Demo](https://open-football.org)**
@@ -23,10 +56,9 @@ You can run it locally, just download release and run single binary that contain
 Be carefully, it can consume all you CPU cores.
 Experiment with running it on 256 CPU cores
 
-(Don't worry, it can run on all consumers CPUs) 
+(Don't worry, it can run on all consumers CPUs)
 
 ![alt text](.docs/images/cores.png "256 CPU Core utilization")
-
 
 [Player page example (click on any player)](https://open-football.org/en/teams/napoli)
 ![alt text](.docs/images/player.jpg "Player page")
@@ -54,25 +86,25 @@ Experiment with running it on 256 CPU cores
 
 #### Project structure
 
-/src/core - Core Rust app logic (including match)
-
+/src/core - Core app logic (including match)
 /src/database - Simulation data source logic
+/src/web - HTTP server for running API with self contained Askama-templates
 
 /.dev/graphics - Dev utils for instant match development (src/core/src/match)
+/.dev/match - Dev utils for must result fast checking and processing duration
 
 Match dev looks like (cross-platform)
 
 ![alt text](.docs/images/match_dev.png "Match dev tools")
 
-/src/web - HTTP server for running API for Angular UI
 
-/ui - Angular app that you can see in **[Live Demo](https://open-football.org)**
 
 ---
 
 #### How to run?
 
-1) Local run
+1) Download Windows/Linux binary and test it
+2) Local run
 
 ```console
 // run backend
@@ -80,17 +112,6 @@ cargo run
 ...
 open chrome at http://localhost:18000
 ```
-
-2) Run in Docker
-
-```console
-cd open-football
-docker build -f .\build\Football.Dockerfile -t open-football .
-docker run -d -p 18000:18000 --name open-football open-football
-
-open chrome at http://localhost:18000
-```
-
 
 ### License
 
