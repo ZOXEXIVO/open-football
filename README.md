@@ -3,6 +3,10 @@
 OpenFootball is an ambitious attempt to recreate the depth and realism of the Football Manager simulation engine—without
 any manual control.
 
+### **[LIVE DEMO](https://open-football.org)**
+
+![alt text](.docs/images/logo.jpg "OpenFootball Logo")
+
 #### This is not a traditional game.
 
 OpenFootball is a pure football simulation platform, where matches, careers, and outcomes unfold entirely on their own,
@@ -45,20 +49,7 @@ Incorporating real player data sourced from Transfermarkt, including detailed at
 A centralized, continuously updated database that will automatically sync and download the latest data each time the app
 starts.
 
----
-**[Live Demo](https://open-football.org)**
-
-![alt text](.docs/images/logo.jpg "OpenFootball Logo")
-
----
-You can run it locally, just download release and run single binary that contains fully simulation
-
-Be carefully, it can consume all you CPU cores.
-Experiment with running it on 256 CPU cores
-
-(Don't worry, it can run on all consumers CPUs)
-
-![alt text](.docs/images/cores.png "256 CPU Core utilization")
+--- 
 
 [Player page example (click on any player)](https://open-football.org/en/teams/napoli)
 ![alt text](.docs/images/player.jpg "Player page")
@@ -83,6 +74,17 @@ Experiment with running it on 256 CPU cores
 ![alt text](.docs/images/match.jpg "Match page")
 
 ![alt text](.docs/images/match.avif "Match page")
+
+--- 
+
+You can run it locally, just download release and run single binary that contains fully simulation
+
+Be carefully, it can consume all you CPU cores.
+Experiment with running it on 256 CPU cores
+
+(Don't worry, it can run on all consumers CPUs)
+
+![alt text](.docs/images/cores.png "256 CPU Core utilization")
 
 #### Project structure
 
