@@ -96,7 +96,7 @@ pub async fn country_list_action(
     Ok(CountryListTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         hostname: &crate::common::default_handler::HOSTNAME,
-        title: format!("OpenFootball v.{}", env!("CARGO_PKG_VERSION")),
+        title: format!("OpenFootball v{}", env!("CARGO_PKG_VERSION")),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),
         sub_title: i18n.t("select_country_sub").to_string(),

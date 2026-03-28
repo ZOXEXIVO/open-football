@@ -751,7 +751,7 @@ impl Club {
     }
 }
 
-/// FM-style graduation salary: ability sets the tier, club reputation scales it.
+/// Graduation salary: ability sets the tier, club reputation scales it.
 /// A youth graduate at Man City earns 50x what the same ability player earns in Chad.
 fn graduation_salary(current_ability: u8, club_reputation: u16) -> u32 {
     let base = match current_ability {

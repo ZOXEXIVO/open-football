@@ -329,9 +329,9 @@ fn ca_to_skill(ca_share: f32) -> f32 {
 
 /// Age-based maximum skill cap.
 /// Young players cannot reach elite skill levels regardless of talent — they
-/// need years of training and match experience. Mirrors Football Manager behavior.
+/// need years of training and match experience.
 fn age_skill_cap(age: u32) -> f32 {
-    // In real FM, even wonderkids rarely exceed 16-17 at age 20.
+    // Even wonderkids rarely exceed 16-17 at age 20.
     // Only fully mature players (25+) can reach 20 in any attribute.
     match age {
         0..=14 => 12.0,
@@ -487,7 +487,7 @@ impl PlayerGenerator {
         )
     }
 
-    /// Generate a youth player with FM-style facility modifiers:
+    /// Generate a youth player with facility modifiers:
     /// - youth_facility_quality: affects starting CA (skill quality of intake)
     /// - academy_quality: affects PA ceiling (potential of intake)
     /// - recruitment_quality: affects gem chance (finding exceptional talent)
@@ -509,7 +509,7 @@ impl PlayerGenerator {
         // Academy level → reputation factor (level 1-10 maps to 0.05-0.50)
         let base_rep_factor = (level as f32 / 20.0).clamp(0.05, 0.50);
 
-        // FM-style: Youth Facilities boost the effective rep_factor for skill generation
+        // Youth Facilities boost the effective rep_factor for skill generation
         // Poor youth facilities (0.05) → -20% CA, Best (1.0) → +30% CA
         // This means Man City's youth intake starts with better skills than Accrington's
         let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
@@ -523,7 +523,7 @@ impl PlayerGenerator {
 
         let current_ability = skills.calculate_ability_for_position(position);
 
-        // FM-style: Youth Recruitment affects gem chance
+        // Youth Recruitment affects gem chance
         // Poor recruitment (0.05) → 3% gem, Average (0.35) → 8%, Exceptional (0.95) → 25%
         let gem_chance = 0.02 + recruitment_quality * 0.24;
 

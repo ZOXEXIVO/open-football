@@ -1,4 +1,4 @@
-/// Maximum condition value (Football Manager style)
+/// Maximum condition value
 pub const MAX_CONDITION: i16 = 10000;
 
 /// Absolute minimum condition during a match (30% — FM-like floor)

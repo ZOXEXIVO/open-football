@@ -83,7 +83,7 @@ impl Player {
     }
 
     /// Injured players lose condition, fitness, and match readiness daily.
-    /// Higher natural_fitness slows the decay (like FM's Natural Fitness attribute).
+    /// Higher natural_fitness slows the decay.
     /// Condition floors at 30% — even injured players maintain baseline condition.
     fn process_injury_condition_decay(&mut self, natural_fitness: f32) {
         let nf_factor = 1.0 - (natural_fitness / 20.0) * 0.7; // 0.3..1.0

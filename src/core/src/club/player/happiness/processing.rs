@@ -49,21 +49,21 @@ impl Player {
         // Recalculate overall morale
         self.happiness.recalculate_morale();
 
-        // Salary unhappy: player wants contract renegotiation (with 90-day cooldown)
-        // After 2 failed requests (180+ days unhappy), player accepts situation
+        // Salary unhappy: player wants contract renegotiation (with 1-year cooldown)
+        // After 2 years of unresolved unhappiness, player accepts situation
         // and salary frustration dampens — prevents permanent unhappiness loops
         if salary_factor <= -5.0 {
             let days_since_first_request = self.happiness.last_salary_negotiation
                 .map(|d| (now - d).num_days())
                 .unwrap_or(0);
 
-            if days_since_first_request > 180 {
+            if days_since_first_request > 730 {
                 // Player gives up on salary demands — dampen frustration
                 self.happiness.factors.salary_satisfaction =
                     (self.happiness.factors.salary_satisfaction * 0.5).clamp(-5.0, 0.0);
             } else {
                 let cooldown_passed = self.happiness.last_salary_negotiation
-                    .map(|d| (now - d).num_days() >= 90)
+                    .map(|d| (now - d).num_days() >= 365)
                     .unwrap_or(true);
 
                 if cooldown_passed {

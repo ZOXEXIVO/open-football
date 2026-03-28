@@ -27,7 +27,7 @@ pub enum PlayerSquadStatus {
 }
 
 impl PlayerSquadStatus {
-    /// FM-style squad status based on player CA rank within the team.
+    /// Squad status based on player CA rank within the team.
     /// `team_cas` should be sorted descending (best first).
     pub fn calculate(player_ca: u8, player_age: u8, team_cas: &[u8]) -> Self {
         let squad_size = team_cas.len();
@@ -49,7 +49,7 @@ impl PlayerSquadStatus {
         let rank = team_cas.iter().filter(|&&ca| ca > player_ca).count();
         let percentile = rank as f32 / squad_size as f32;
 
-        // FM-style thresholds:
+        // Thresholds:
         // Top ~15% = Key Player (typically 3-4 players in a 25-man squad)
         // Next ~25% = First Team Regular
         // Next ~20% = Squad Rotation

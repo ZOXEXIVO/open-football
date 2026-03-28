@@ -56,7 +56,7 @@ impl Player {
 
         // Salary unhappy for a long time with no resolution → wants to leave
         if let Some(first_request) = self.happiness.last_salary_negotiation {
-            if (now - first_request).num_days() > 120 && self.happiness.factors.salary_satisfaction <= -5.0 {
+            if (now - first_request).num_days() > 540 && self.happiness.factors.salary_satisfaction <= -5.0 {
                 wants_transfer = true;
             }
         }

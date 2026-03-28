@@ -147,7 +147,7 @@ impl PlayerTraining {
             }
         }
 
-        // ===== FACILITY QUALITY EFFECTS (FM-style) =====
+        // ===== FACILITY QUALITY EFFECTS =====
         // Training facilities directly multiply all skill gains.
         // Poor (0.05) → 0.55x gains, Average (0.35) → 0.85x, Good (0.55) → 1.0x,
         // Excellent (0.75) → 1.15x, Best (1.0) → 1.30x

@@ -1,4 +1,5 @@
 use chrono::NaiveDate;
+use crate::utils::IntegerUtils;
 use log::{debug, info};
 use super::types::{TransferActivitySummary, can_club_accept_player};
 use crate::country::result::CountryResult;
@@ -10,7 +11,15 @@ use crate::transfers::staff_resolver::StaffResolver;
 
 impl CountryResult {
     /// Handle expiring contracts and free agent signings.
-    /// Releases players with expired contracts and matches soon-to-expire players to clubs.
+    ///
+    /// Signing probability depends on player quality:
+    ///   - Elite players (ability 140+): ~25% daily chance → signed within days
+    ///   - Good players (100-140):       ~5-10% daily → signed within weeks
+    ///   - Average players (60-100):     ~1-3% daily  → may take months
+    ///   - Low quality (<60):            ~0.2-0.5%    → can sit 1-2 seasons
+    ///
+    /// This creates realistic free agent markets where low-quality players
+    /// linger while stars get snapped up immediately.
     pub(crate) fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
         struct FreeAgentCandidate {
             player_id: u32,
@@ -24,38 +33,36 @@ impl CountryResult {
             days_to_expiry: i64,
         }
 
-        // Pass 1: Find players with expiring contracts (< 180 days)
-        // and release players whose contracts have already expired
+        // Pass 1: Find players with expiring contracts (< 90 days) or already expired
         let mut candidates: Vec<FreeAgentCandidate> = Vec::new();
         let mut expired_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
             for team in &club.teams.teams {
                 for player in &team.players.players {
-                    let contract = match &player.contract {
-                        Some(c) => c,
-                        None => continue,
+                    // Also consider players with no contract (already released)
+                    let days_left = match &player.contract {
+                        Some(c) => {
+                            // Skip loan players
+                            if player.is_on_loan() {
+                                continue;
+                            }
+                            (c.expiration - date).num_days()
+                        }
+                        None => 0, // already a free agent
                     };
 
-                    // Skip loan players
-                    if player.is_on_loan() {
-                        continue;
-                    }
-
-                    let days_left = (contract.expiration - date).num_days();
-
                     // Contract already expired — release player
-                    if days_left <= 0 {
+                    if days_left <= 0 && player.contract.is_some() {
                         expired_player_ids.push(player.id);
-                        continue;
+                        // Still add as candidate (will be available after release below)
                     }
 
-                    // Contract expiring within 3 months — free agent signings only when very close to expiry
+                    // Available for free agent signing: expired, no contract, or expiring within 90 days
                     if days_left <= 90 {
-                        // Skip if already listed or in negotiation
+                        // Skip if already in negotiation
                         let statuses = player.statuses.get();
-                        if statuses.contains(&PlayerStatusType::Lst)
-                            || statuses.contains(&PlayerStatusType::Trn)
+                        if statuses.contains(&PlayerStatusType::Trn)
                             || statuses.contains(&PlayerStatusType::Bid)
                         {
                             continue;
@@ -95,7 +102,7 @@ impl CountryResult {
             return;
         }
 
-        // Pass 2: Match candidates to clubs with needs
+        // Pass 2: Match candidates to clubs with needs, using probability-based signing
         struct FreeAgentSigning {
             player_id: u32,
             player_name: String,
@@ -106,7 +113,7 @@ impl CountryResult {
         }
 
         let mut signings: Vec<FreeAgentSigning> = Vec::new();
-        let max_signings_per_day = 3;
+        let max_signings_per_day = 2;
 
         for club in &country.clubs {
             if signings.len() >= max_signings_per_day {
@@ -126,7 +133,7 @@ impl CountryResult {
             if !plan.initialized {
                 continue;
             }
-            
+
             // Check unfulfilled transfer requests
             let unfulfilled: Vec<&TransferRequest> = plan
                 .transfer_requests
@@ -149,12 +156,54 @@ impl CountryResult {
                         c.club_id != club.id
                             && c.position_group == request.position.position_group()
                             && c.ability >= request.min_ability.saturating_sub(5)
-                            && c.age <= 33
-                            && c.days_to_expiry <= 90
                             && !signings.iter().any(|s| s.player_id == c.player_id)
                     })
                     .max_by_key(|c| c.ability as u16 + c.potential as u16)
                 {
+                    // Probability-based signing: better players get signed faster
+                    // Daily chance based on ability and age:
+                    //   ability 160+ → 25% daily (elite, signed in days)
+                    //   ability 130  → 10% daily (signed in ~2 weeks)
+                    //   ability 100  → 3% daily  (signed in ~1 month)
+                    //   ability 70   → 0.8% daily (signed in ~4 months)
+                    //   ability 40   → 0.2% daily (may take 1-2 seasons)
+                    let ability_f = best.ability as f32;
+                    let base_chance = if ability_f >= 160.0 {
+                        25.0
+                    } else if ability_f >= 130.0 {
+                        5.0 + (ability_f - 130.0) / 30.0 * 20.0
+                    } else if ability_f >= 100.0 {
+                        1.5 + (ability_f - 100.0) / 30.0 * 3.5
+                    } else if ability_f >= 60.0 {
+                        0.3 + (ability_f - 60.0) / 40.0 * 1.2
+                    } else {
+                        0.1 + (ability_f / 60.0) * 0.2
+                    };
+
+                    // Age penalty: older players are harder to place
+                    let age_factor = match best.age {
+                        0..=29 => 1.0,
+                        30..=31 => 0.8,
+                        32..=33 => 0.5,
+                        34..=35 => 0.3,
+                        _ => 0.15,
+                    };
+
+                    // Young players with high potential get a boost
+                    let potential_boost = if best.age < 24 && best.potential > best.ability + 20 {
+                        1.5
+                    } else {
+                        1.0
+                    };
+
+                    let daily_chance = (base_chance * age_factor * potential_boost).clamp(0.1, 30.0);
+
+                    // Roll the dice
+                    let roll = IntegerUtils::random(1, 1000) as f32 / 10.0; // 0.1 to 100.0
+                    if roll > daily_chance {
+                        continue; // Not today — player stays on the market
+                    }
+
                     let reason = PipelineProcessor::transfer_need_reason_text(&request.reason).to_string();
 
                     signings.push(FreeAgentSigning {
@@ -171,13 +220,11 @@ impl CountryResult {
 
         // Pass 3: Execute signings as free transfers with negotiation records
         for signing in &signings {
-            // Resolve negotiator staff from buying club
             let negotiator_staff_id = country.clubs.iter()
                 .find(|c| c.id == signing.to_club_id)
                 .and_then(|c| c.teams.teams.first())
                 .and_then(|t| StaffResolver::resolve(&t.staffs).negotiator.map(|s| s.id));
 
-            // Create a negotiation record (immediately accepted) to track staff involvement
             let neg_id = country.transfer_market.next_negotiation_id;
             country.transfer_market.next_negotiation_id += 1;
 
@@ -190,7 +237,7 @@ impl CountryResult {
             let mut negotiation = TransferNegotiation::new(
                 neg_id,
                 signing.player_id,
-                0, // no listing index
+                0,
                 signing.from_club_id,
                 signing.to_club_id,
                 offer,
@@ -213,7 +260,6 @@ impl CountryResult {
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
-            // Create transfer history record with reason
             country.transfer_market.transfer_history.push(
                 crate::transfers::CompletedTransfer::new(
                     signing.player_id,
@@ -234,7 +280,7 @@ impl CountryResult {
                 signing.player_id,
                 signing.from_club_id,
                 signing.to_club_id,
-                0.0, // Free transfer
+                0.0,
                 date,
             );
             PipelineProcessor::clear_player_interest(country, signing.player_id);

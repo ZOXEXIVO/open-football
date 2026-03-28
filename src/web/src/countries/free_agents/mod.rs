@@ -39,10 +39,12 @@ pub struct FreeAgentPlayerDto {
     pub id: u32,
     pub first_name: String,
     pub last_name: String,
+    pub club_name: String,
     pub position: String,
     pub age: u8,
     pub current_ability: u8,
     pub potential_ability: u8,
+    pub contract_days_left: i64,
 }
 
 pub async fn country_free_agents_action(
@@ -94,22 +96,43 @@ pub async fn country_free_agents_action(
 
     let now = simulator_data.date.date();
 
-    // Collect free agents: players in this country's clubs who have no contract
+    // Collect free agents: players with no contract OR contracts expiring within 180 days
+    // This shows both
+    // out-of-contract players and those available on a pre-contract/free transfer
     let mut players: Vec<FreeAgentPlayerDto> = country
         .clubs
         .iter()
         .flat_map(|club| {
-            club.teams.teams.iter().flat_map(|team| {
+            let club_name = club.name.clone();
+            club.teams.teams.iter().flat_map(move |team| {
+                let club_name = club_name.clone();
                 team.players
                     .players
                     .iter()
-                    .filter(|p| p.contract.is_none())
-                    .map(|player| {
+                    .filter_map(move |player| {
+                        // Skip loan players
+                        if player.is_on_loan() {
+                            return None;
+                        }
+
+                        let days_left = match &player.contract {
+                            None => 0, // no contract — true free agent
+                            Some(c) => {
+                                let days = (c.expiration - now).num_days();
+                                if days <= 180 {
+                                    days // contract expiring soon
+                                } else {
+                                    return None; // still under contract
+                                }
+                            }
+                        };
+
                         let position = player.positions.display_positions_compact();
-                        FreeAgentPlayerDto {
+                        Some(FreeAgentPlayerDto {
                             id: player.id,
                             first_name: player.full_name.display_first_name().to_string(),
                             last_name: player.full_name.display_last_name().to_string(),
+                            club_name: club_name.clone(),
                             position,
                             age: DateUtils::age(player.birth_date, now),
                             current_ability: get_ability_stars(
@@ -118,14 +141,18 @@ pub async fn country_free_agents_action(
                             potential_ability: get_ability_stars(
                                 player.player_attributes.potential_ability,
                             ),
-                        }
+                            contract_days_left: days_left,
+                        })
                     })
             })
         })
         .collect();
 
-    // Sort by ability descending
-    players.sort_by(|a, b| b.current_ability.cmp(&a.current_ability));
+    // Sort: true free agents first (days_left=0), then by expiry, then by ability
+    players.sort_by(|a, b| {
+        a.contract_days_left.cmp(&b.contract_days_left)
+            .then(b.current_ability.cmp(&a.current_ability))
+    });
 
     let current_path = format!(
         "/{}/countries/{}/free-agents",

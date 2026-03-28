@@ -1,4 +1,4 @@
-/// Football Manager-style facility quality levels for clubs.
+/// Facility quality levels for clubs.
 /// These affect training quality, youth development, and player generation.
 
 #[derive(Debug, Clone, PartialEq)]
@@ -19,7 +19,7 @@ pub enum FacilityLevel {
 }
 
 impl FacilityLevel {
-    /// Parse from FM-style string (e.g. "Superb", "Below Average")
+    /// Parse from string (e.g. "Superb", "Below Average")
     pub fn from_str(s: &str) -> Self {
         match s.to_lowercase().trim() {
             "best" => FacilityLevel::Best,
@@ -39,7 +39,7 @@ impl FacilityLevel {
         }
     }
 
-    /// Numeric value 1-20 (FM-style scale)
+    /// Numeric value 1-20
     pub fn to_rating(&self) -> u8 {
         match self {
             FacilityLevel::Best => 20,

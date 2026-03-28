@@ -53,7 +53,7 @@ impl PlayerStatistics {
         Self::format_rating(self.average_rating)
     }
 
-    /// Merge another stat set into this one (FM-style: combine stints at same club in one season).
+    /// Merge another stat set into this one (combine stints at same club in one season).
     /// Weighted-averages the rating, sums everything else.
     pub fn merge_from(&mut self, other: &PlayerStatistics) {
         let self_games = self.total_games() as f32;

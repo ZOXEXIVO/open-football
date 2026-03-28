@@ -1,4 +1,4 @@
-//! Player skill development system modeled after Football Manager (SI Games).
+//! Player skill development system.
 //!
 //! Key principles:
 //! 1. **Position-aware** — skills relevant to the player's position develop faster
@@ -242,11 +242,11 @@ fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
     w
 }
 
-// ── FM-style age curve ──────────────────────────────────────────────────
+// ── Age curve ───────────────────────────────────────────────────────────
 //
 // Returns a *base development rate* per week.  Positive = growth, negative = decline.
 //
-// FM curve shape:
+// Curve shape:
 //   Physical:  rapid growth 16-22 → plateau 23-27 → noticeable decline 28-30 → steep 31+
 //   Technical: rapid growth 16-20 → moderate 21-26 → plateau 27-29 → slow decline 30+
 //   Mental:    steady growth 16-32 → very slow decline 33+
@@ -438,7 +438,7 @@ fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
 // ═══════════════════════════════════════════════════════════════════════
 
 impl Player {
-    /// FM-style weekly development tick.
+    /// Weekly development tick.
     ///
     /// Key difference from naive approach: each skill has its OWN ceiling and
     /// growth rate based on position weights. A striker's finishing develops fast

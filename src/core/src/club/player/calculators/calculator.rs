@@ -53,7 +53,7 @@ fn round_market_value(value: f64) -> f64 {
 
 /// Base value from current_ability using a steep exponential curve.
 ///
-/// FM-style value tiers (approximate, before other factors):
+/// Value tiers (approximate, before other factors):
 ///   ability 20  → ~10K
 ///   ability 40  → ~75K
 ///   ability 60  → ~350K
@@ -249,9 +249,9 @@ fn determine_reputation_factor(player: &Player) -> f64 {
     }
 }
 
-/// FM-style league and club reputation factor.
+/// League and club reputation factor.
 ///
-/// In Football Manager, a player's market value is heavily influenced by the
+/// A player's market value is heavily influenced by the
 /// league and club they play in. The same player is worth far more at a Serie A
 /// club than at a Maltese Premier League club.
 ///

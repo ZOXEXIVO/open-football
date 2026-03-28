@@ -434,7 +434,7 @@ impl PlayerGenerator {
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
-        // FM-style salary: exponential curve based on reputation and ability.
+        // Salary: exponential curve based on reputation and ability.
         // Salaries in USD/year (annual). Massive gaps between tiers:
         //   rep_factor ~0.05 (amateur)     →    1K -    3K
         //   rep_factor ~0.15 (Chad/Malta)  →    3K -   12K
@@ -478,8 +478,9 @@ impl PlayerGenerator {
         } else {
             base_salary.max(500)
         };
+        let contract_years = Self::generate_contract_years(age, player_attributes.current_ability, player_attributes.current_reputation);
         let expiration =
-            NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(1, 5), 3, 14).unwrap();
+            NaiveDate::from_ymd_opt(now.year() + contract_years, 3, 14).unwrap();
 
         let contract = if is_youth {
             PlayerClubContract::new_youth(salary, expiration)
@@ -736,6 +737,43 @@ impl PlayerGenerator {
     }
 
     // ── Person attributes ───────────────────────────────────────────────
+
+    /// Smart initial contract duration based on age, ability, and reputation.
+    /// Mirrors real football: young prospects get longer deals, aging players get shorter ones.
+    fn generate_contract_years(age: u32, ability: u8, reputation: i16) -> i32 {
+        let mut years: f32 = 3.0;
+
+        // Age factor: young players get longer contracts, old players shorter
+        match age {
+            0..=19 => { years += 1.5; }   // youth: clubs lock in prospects
+            20..=23 => { years += 1.0; }   // emerging: still investing
+            24..=29 => { }                  // peak: standard deals
+            30..=31 => { years -= 0.5; }   // early decline risk
+            32..=33 => { years -= 1.0; }   // short deals
+            _ => { years -= 1.5; }          // 34+: 1-2 year deals
+        }
+
+        // High-ability players get longer deals (club wants to lock them in)
+        if ability > 150 {
+            years += 1.0;
+        } else if ability > 120 {
+            years += 0.5;
+        } else if ability < 60 {
+            years -= 0.5; // low ability: club hedges with shorter deal
+        }
+
+        // High-reputation players get longer deals
+        if reputation > 7000 {
+            years += 1.0;
+        } else if reputation > 4000 {
+            years += 0.5;
+        }
+
+        // Add slight randomness (±0.5 year) to avoid all contracts expiring at once
+        years += IntegerUtils::random(-1, 1) as f32 * 0.5;
+
+        (years.round() as i32).clamp(1, 5)
+    }
 
     fn generate_person_attributes() -> PersonAttributes {
         PersonAttributes {

@@ -141,7 +141,7 @@ impl ClubAcademy {
             .map(|c| c.name)
             .unwrap_or("Unknown Club");
 
-        // FM-style: Youth Recruitment affects intake quantity
+        // Youth Recruitment affects intake quantity
         let recruitment_quality = ctx.club_recruitment_quality();
         let players_to_produce = self.calculate_annual_intake(recruitment_quality);
 
@@ -157,7 +157,7 @@ impl ClubAcademy {
             None => return ProduceYouthPlayersResult::new(Vec::new()),
         };
 
-        // FM-style: Youth Facilities affect intake CA, Academy affects PA,
+        // Youth Facilities affect intake CA, Academy affects PA,
         // Recruitment affects gem chance
         let youth_facility_quality = ctx.club_facilities_youth();
         let academy_quality = ctx.club_academy_quality();
@@ -207,7 +207,7 @@ impl ClubAcademy {
             _ => (5, 7),
         };
 
-        // FM-style: Better recruitment network finds more prospects
+        // Better recruitment network finds more prospects
         // Poor recruitment (0.05) → -2 players, Average (0.35) → +0,
         // Exceptional (0.95) → +3 players
         let recruitment_bonus = ((recruitment_quality - 0.35) * 6.0).round() as i32;

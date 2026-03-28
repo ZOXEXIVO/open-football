@@ -968,7 +968,7 @@ a:link, a:visited, a:hover, a:active {
     content: "i";
 }
 
-/* Morale direction arrows (FM-style) */
+/* Morale direction arrows */
 .fm-morale {
     display: inline-block;
     font-size: 11px;

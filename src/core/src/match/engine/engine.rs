@@ -545,7 +545,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .map(|p| p.id)
     }
 
-    /// Calculate a Football Manager-style match rating (1.0 - 10.0, base 6.0)
+    /// Calculate a match rating (1.0 - 10.0, base 6.0)
     fn calculate_match_rating(
         goals: u16,
         assists: u16,

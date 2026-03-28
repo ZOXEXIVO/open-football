@@ -63,7 +63,7 @@ impl Team {
         result
     }
 
-    /// FM-style: assign squad status based on CA rank within the team.
+    /// Assign squad status based on CA rank within the team.
     fn update_squad_statuses(&mut self, date: chrono::NaiveDate) {
         // Collect sorted CAs (descending)
         let mut team_cas: Vec<u8> = self.players.players.iter()

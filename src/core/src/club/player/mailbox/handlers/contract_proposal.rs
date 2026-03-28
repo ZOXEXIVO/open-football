@@ -1,5 +1,6 @@
 use crate::handlers::AcceptContractHandler;
-use crate::{HappinessEventType, PersonBehaviourState, Player, PlayerContractProposal, PlayerResult};
+use crate::{HappinessEventType, PersonBehaviourState, Player, PlayerContractProposal, PlayerResult, PlayerStatusType};
+use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
 pub struct ProcessContractHandler;
@@ -11,6 +12,14 @@ impl ProcessContractHandler {
         now: NaiveDate,
         result: &mut PlayerResult,
     ) {
+        // Player evaluates contract length — ambitious/reputable players reject too-short deals
+        let min_acceptable_years = Self::player_minimum_years(player, now);
+        if proposal.years < min_acceptable_years {
+            // Contract too short — player/agent rejects regardless of salary
+            result.contract.contract_rejected = true;
+            return;
+        }
+
         match &player.contract {
             Some(player_contract) => {
                 if proposal.salary > player_contract.salary {
@@ -18,6 +27,8 @@ impl ProcessContractHandler {
                     AcceptContractHandler::process(player, proposal, now);
                     player.happiness.add_event(HappinessEventType::WageIncrease, 5.0);
                     player.happiness.factors.salary_satisfaction = 0.0;
+                    // Reset negotiation timer so cooldown restarts from this raise
+                    player.happiness.last_salary_negotiation = Some(now);
                 } else if proposal.salary >= player_contract.salary {
                     // Same salary — accept if player is loyal/happy enough or staff is persuasive
                     let loyalty = player.attributes.loyalty;
@@ -51,7 +62,6 @@ impl ProcessContractHandler {
                 // No contract — staff negotiation skill determines outcome
                 match player.behaviour.state {
                     PersonBehaviourState::Poor => {
-                        // Poor behavior: only accept with exceptional negotiator
                         if proposal.negotiation_skill >= 16 {
                             AcceptContractHandler::process(player, proposal, now);
                         } else {
@@ -59,11 +69,9 @@ impl ProcessContractHandler {
                         }
                     }
                     PersonBehaviourState::Normal => {
-                        // Normal behavior: accept with decent negotiator
                         if proposal.negotiation_skill >= 8 {
                             AcceptContractHandler::process(player, proposal, now);
                         } else {
-                            // Still reject rather than limbo — gives club a clear signal
                             result.contract.contract_rejected = true;
                         }
                     }
@@ -73,5 +81,62 @@ impl ProcessContractHandler {
                 }
             },
         }
+    }
+
+    /// Player/agent has a minimum acceptable contract length.
+    /// High-reputation players with interest from other clubs won't accept short deals.
+    /// Loyal or older players are more flexible.
+    fn player_minimum_years(player: &Player, now: NaiveDate) -> u8 {
+        let age = DateUtils::age(player.birth_date, now);
+        let reputation = player.player_attributes.current_reputation;
+        let ambition = player.attributes.ambition;
+        let loyalty = player.attributes.loyalty;
+
+        let mut min_years: f32 = 1.0;
+
+        // High reputation → demands longer commitment
+        if reputation > 7000 {
+            min_years += 2.0;
+        } else if reputation > 4000 {
+            min_years += 1.0;
+        } else if reputation > 2000 {
+            min_years += 0.5;
+        }
+
+        // Ambitious players demand longer deals
+        if ambition > 15.0 {
+            min_years += 1.0;
+        } else if ambition > 10.0 {
+            min_years += 0.5;
+        }
+
+        // Loyal players accept shorter deals (trust the club)
+        if loyalty > 15.0 {
+            min_years -= 1.5;
+        } else if loyalty > 10.0 {
+            min_years -= 0.5;
+        }
+
+        // Other club interest → player has leverage, demands more
+        let has_interest = player.statuses.get().iter().any(|s| {
+            matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+        });
+        if has_interest {
+            min_years += 1.0;
+        }
+
+        // Older players accept shorter deals (fewer options)
+        if age >= 33 {
+            min_years -= 1.0;
+        } else if age >= 30 {
+            min_years -= 0.5;
+        }
+
+        // Young players with potential want security
+        if age < 24 {
+            min_years += 0.5;
+        }
+
+        (min_years.round() as u8).clamp(1, 4)
     }
 }

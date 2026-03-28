@@ -325,7 +325,7 @@ impl NationalTeam {
 
     /// Collect eligible national team candidates from clubs.
     /// Filters out players from very low divisions and those below minimum ability.
-    /// Like real FM: national coaches primarily select from top divisions.
+    /// National coaches primarily select from top divisions.
     /// Maximum candidate pool size returned to the squad selection stage.
     /// The coach scouts broadly but narrows down to a shortlist.
     const MAX_CANDIDATE_POOL: usize = 60;
@@ -629,7 +629,7 @@ impl NationalTeam {
 
     /// Score a candidate player for national team selection.
     ///
-    /// Like real FM national team AI:
+    /// National team AI selection logic:
     /// - Ability is the primary factor (you must be good enough)
     /// - Playing at a high level (top division) is strongly favored
     /// - World reputation matters (coaches watch famous players)

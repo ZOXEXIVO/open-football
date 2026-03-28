@@ -3,9 +3,10 @@ use crate::club::{BoardResult, ClubFinanceResult};
 use crate::simulator::SimulatorData;
 use crate::transfers::CompletedTransfer;
 use crate::{
-    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult, SimulationResult,
-    StaffStatus, TeamResult,
+    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult, PlayerStatusType,
+    SimulationResult, StaffStatus, TeamResult,
 };
+use crate::utils::DateUtils;
 
 pub struct ClubResult {
     pub club_id: u32,
@@ -101,6 +102,7 @@ impl ClubResult {
 
             let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
             let ability = player.player_attributes.current_ability;
+            let age = DateUtils::age(player.birth_date, data.date.date());
             let base_salary = ability_based_salary(ability);
 
             // Staff judging_ability affects how accurate the salary offer is
@@ -148,20 +150,24 @@ impl ClubResult {
                 }
                 let final_salary = capped_salary.max(current_salary);
 
+                let years = negotiate_contract_years(player, age, negotiation_skill);
+
                 player.mailbox.push(PlayerMessage {
                     message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
                         salary: final_salary,
-                        years: 3,
+                        years,
                         negotiation_skill,
                     }),
                 });
                 return;
             }
 
+            let years = negotiate_contract_years(player, age, negotiation_skill);
+
             player.mailbox.push(PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
                     salary: offered_salary,
-                    years: 3,
+                    years,
                     negotiation_skill,
                 }),
             })
@@ -178,6 +184,123 @@ impl ClubResult {
                 131..=150 => 350_000,
                 _ => 500_000,
             }
+        }
+
+        /// Contract duration negotiation.
+        ///
+        /// Player wants: long contract (job security, commitment signal)
+        /// Club wants: shorter contract (flexibility if player declines)
+        ///
+        /// Factors:
+        /// - Age: clubs offer shorter deals to older players; young stars get longer
+        /// - Ability/reputation: high-profile players demand and get longer deals
+        /// - Loyalty: loyal players accept shorter deals (trust the club)
+        /// - Ambition: ambitious players push for longer deals (higher commitment)
+        /// - Other club interest (Wnt/Enq/Bid statuses): gives player leverage for longer deals
+        /// - Staff negotiation skill: better negotiator → result closer to club's preference
+        fn negotiate_contract_years(
+            player: &crate::Player,
+            age: u8,
+            negotiation_skill: u8,
+        ) -> u8 {
+            let ability = player.player_attributes.current_ability;
+            let reputation = player.player_attributes.current_reputation;
+            let loyalty = player.attributes.loyalty;
+            let ambition = player.attributes.ambition;
+
+            // --- Player desired years (what the agent demands) ---
+            let mut player_years: f32 = 3.0;
+
+            // High reputation players demand longer contracts (security)
+            if reputation > 7000 {
+                player_years += 2.0;
+            } else if reputation > 4000 {
+                player_years += 1.0;
+            }
+
+            // High ability players want commitment
+            if ability > 150 {
+                player_years += 1.0;
+            } else if ability > 120 {
+                player_years += 0.5;
+            }
+
+            // Young players with high potential want long-term deals
+            if age < 24 && player.player_attributes.potential_ability > ability + 20 {
+                player_years += 1.0;
+            }
+
+            // Ambitious players push for longer contracts
+            // ambition is 0-20
+            if ambition > 15.0 {
+                player_years += 1.0;
+            } else if ambition > 10.0 {
+                player_years += 0.5;
+            }
+
+            // Low loyalty = wants flexibility to move, shorter preferred
+            if loyalty < 5.0 {
+                player_years -= 1.0;
+            } else if loyalty < 10.0 {
+                player_years -= 0.5;
+            }
+
+            // Other club interest gives player leverage → pushes for longer commitment
+            let has_interest = player.statuses.get().iter().any(|s| {
+                matches!(s, PlayerStatusType::Wnt | PlayerStatusType::Enq | PlayerStatusType::Bid)
+            });
+            if has_interest {
+                player_years += 1.0;
+            }
+
+            // Older players know they can't demand as much
+            if age >= 34 {
+                player_years -= 2.0;
+            } else if age >= 32 {
+                player_years -= 1.0;
+            } else if age >= 30 {
+                player_years -= 0.5;
+            }
+
+            // --- Club desired years (what the club wants to offer) ---
+            let mut club_years: f32 = 3.0;
+
+            // Club wants shorter deals for older players (decline risk)
+            if age >= 34 {
+                club_years = 1.0;
+            } else if age >= 32 {
+                club_years = 1.5;
+            } else if age >= 30 {
+                club_years = 2.0;
+            }
+
+            // Club wants to lock in young prospects (protect investment)
+            if age < 22 && ability > 80 {
+                club_years += 2.0;
+            } else if age < 24 {
+                club_years += 1.0;
+            }
+
+            // Club wants to lock in star players
+            if ability > 150 {
+                club_years += 1.5;
+            } else if ability > 120 {
+                club_years += 1.0;
+            }
+
+            // Low ability/rotation players: club wants short deals
+            if ability < 70 {
+                club_years -= 1.0;
+            }
+
+            // --- Negotiation: compromise between player and club ---
+            // Staff negotiation skill (0-20) determines how much the club gets its way
+            // 0 skill → 50/50 split, 20 skill → 80% club's preference
+            let staff_weight = 0.5 + (negotiation_skill as f32 / 20.0) * 0.3; // 0.5 to 0.8
+            let negotiated = club_years * staff_weight + player_years * (1.0 - staff_weight);
+
+            // Clamp to realistic range: 1-5 years
+            (negotiated.round() as u8).clamp(1, 5)
         }
     }
 }
