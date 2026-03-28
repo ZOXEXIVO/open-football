@@ -47,13 +47,13 @@
     }
 
     if (isLoan) {
-        items.push('<button onclick="playerCancelLoan(' + playerId + ')">Cancel Loan</button>');
+        items.push('<button onclick="playerCancelLoan(' + playerId + ')">{{ i18n.t("cancel_loan") }}</button>');
     }
 
     if (!isLoan) {
         if (items.length > 0) items.push('<div class="fm-dd-sep"></div>');
-        items.push('<button onclick="playerTransfer(' + playerId + ')">Transfer</button>');
-        items.push('<button onclick="playerLoan(' + playerId + ')">Loan</button>');
+        items.push('<button onclick="playerTransfer(' + playerId + ')">{{ i18n.t("transfer") }}</button>');
+        items.push('<button onclick="playerLoan(' + playerId + ')">{{ i18n.t("loan") }}</button>');
     }
 
     menu.innerHTML = items.join('');
@@ -67,9 +67,10 @@
     window.playerCancelLoan = function(pid) {
         dd.classList.remove('fm-dd-open');
         OpenFootballDialog.confirm({
-            title: 'Cancel Loan',
-            message: 'Cancel this player\'s loan and return to parent club?',
-            confirmText: 'Cancel Loan',
+            title: '{{ i18n.t("cancel_loan") }}',
+            message: '{{ i18n.t("cancel_loan_confirm") }}',
+            confirmText: '{{ i18n.t("cancel_loan") }}',
+            cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function() {
                 fetch('/api/players/' + pid + '/cancel-loan', { method: 'POST' })
                     .then(function() { refreshContent(); });
@@ -80,15 +81,16 @@
     window.playerTransfer = function(pid) {
         dd.classList.remove('fm-dd-open');
         OpenFootballDialog.open({
-            title: 'Transfer Player',
+            title: '{{ i18n.t("transfer_player") }}',
             fields: [
                 {
-                    name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
-                    placeholder: 'Search club...', url: '/api/clubs?exclude=' + clubId
+                    name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
+                    placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
                 },
-                { name: 'fee', label: 'Transfer Fee ($)', type: 'number', placeholder: '0', value: '0' }
+                { name: 'fee', label: '{{ i18n.t("transfer_fee") }}', type: 'number', placeholder: '0', value: '0' }
             ],
-            confirmText: 'Transfer',
+            confirmText: '{{ i18n.t("transfer") }}',
+            cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function(data) {
                 if (!data.to_club_id) return;
                 fetch('/api/players/' + pid + '/transfer', {
@@ -103,24 +105,25 @@
     window.playerLoan = function(pid) {
         dd.classList.remove('fm-dd-open');
         OpenFootballDialog.open({
-            title: 'Loan Player',
+            title: '{{ i18n.t("loan_player") }}',
             fields: [
                 {
-                    name: 'to_club_id', label: 'Destination Club', type: 'autocomplete',
-                    placeholder: 'Search club...', url: '/api/clubs?exclude=' + clubId
+                    name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
+                    placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
                 },
                 {
-                    name: 'seasons', label: 'Duration', type: 'select',
+                    name: 'seasons', label: '{{ i18n.t("duration") }}', type: 'select',
                     options: [
-                        { value: '1', text: '1 Season' },
-                        { value: '2', text: '2 Seasons' },
-                        { value: '3', text: '3 Seasons' },
-                        { value: '4', text: '4 Seasons' },
-                        { value: '5', text: '5 Seasons' }
+                        { value: '1', text: '1 {{ i18n.t("season") }}' },
+                        { value: '2', text: '2 {{ i18n.t("season") }}' },
+                        { value: '3', text: '3 {{ i18n.t("season") }}' },
+                        { value: '4', text: '4 {{ i18n.t("season") }}' },
+                        { value: '5', text: '5 {{ i18n.t("season") }}' }
                     ]
                 }
             ],
-            confirmText: 'Loan',
+            confirmText: '{{ i18n.t("loan") }}',
+            cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function(data) {
                 if (!data.to_club_id) return;
                 fetch('/api/players/' + pid + '/loan', {

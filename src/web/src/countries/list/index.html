@@ -6,29 +6,29 @@
 <div class="fm-page">
     <div class="fm-stats-bar">
         <span>Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</span>
-        <button class="fm-holiday-btn" onclick="openHolidayDialog()">Go on holiday</button>
+        <button class="fm-holiday-btn" onclick="openHolidayDialog()">{{ i18n.t("go_on_holiday") }}</button>
     </div>
     <script>
     function openHolidayDialog() {
         OpenFootballDialog.open({
-            title: 'Go on Holiday',
+            title: '{{ i18n.t("go_on_holiday_title") }}',
             fields: [
                 {
                     name: 'duration',
-                    label: 'Duration',
+                    label: '{{ i18n.t("duration") }}',
                     type: 'select',
                     options: [
-                        { value: '30', text: '1 month' },
-                        { value: '90', text: '3 months' },
-                        { value: '180', text: '6 months' },
-                        { value: '365', text: '1 year' },
-                        { value: '730', text: '2 years' },
-                        { value: '1095', text: '3 years' },
+                        { value: '30', text: '{{ i18n.t("1_month") }}' },
+                        { value: '90', text: '{{ i18n.t("3_months") }}' },
+                        { value: '180', text: '{{ i18n.t("6_months") }}' },
+                        { value: '365', text: '{{ i18n.t("1_year") }}' },
+                        { value: '730', text: '{{ i18n.t("2_years") }}' },
+                        { value: '1095', text: '{{ i18n.t("3_years") }}' },
                     ]
                 }
             ],
-            confirmText: 'Go',
-            cancelText: 'Cancel',
+            confirmText: '{{ i18n.t("go") }}',
+            cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function(data) {
                 window.startHoliday(data.duration || '30');
             }
