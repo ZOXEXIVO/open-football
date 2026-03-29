@@ -52,18 +52,26 @@ impl Space {
     }
 
     pub fn update(&mut self, field: &MatchField) {
-        self.len = 0;
-        self.push(SphereCollider {
-            center: field.ball.position,
-            radius: 0.11,
-            player_id: None,
-        });
-        for player in &field.players {
+        // Update positions in-place — structure (len, radii, player_ids) doesn't change
+        if self.len > 0 {
+            self.colliders[0].center = field.ball.position;
+            for (i, player) in field.players.iter().enumerate() {
+                self.colliders[i + 1].center = player.position;
+            }
+        } else {
+            // First call or after reset — full rebuild
             self.push(SphereCollider {
-                center: player.position,
-                radius: 0.5,
-                player_id: Some(player.id),
+                center: field.ball.position,
+                radius: 0.11,
+                player_id: None,
             });
+            for player in &field.players {
+                self.push(SphereCollider {
+                    center: player.position,
+                    radius: 0.5,
+                    player_id: Some(player.id),
+                });
+            }
         }
     }
 

@@ -89,9 +89,9 @@ pub async fn player_decisions_action(
         .iter()
         .map(|d| PlayerDecisionItem {
             date: d.date.format("%d.%m.%Y").to_string(),
-            movement: d.movement.clone(),
-            decision: d.decision.clone(),
-            decided_by: d.decided_by.clone(),
+            movement: i18n.t(&d.movement).to_string(),
+            decision: i18n.t(&d.decision).to_string(),
+            decided_by: i18n.t(&d.decided_by).to_string(),
         })
         .collect();
 

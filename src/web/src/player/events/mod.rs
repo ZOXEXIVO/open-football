@@ -224,6 +224,7 @@ fn build_events(player: &core::Player, i18n: &crate::I18n) -> Vec<PlayerEventDto
         .happiness
         .recent_events
         .iter()
+        .filter(|e| e.event_type != HappinessEventType::GoodTraining)
         .take(100)
         .map(|e| {
             let key = event_type_to_i18n_key(&e.event_type);

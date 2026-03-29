@@ -102,19 +102,30 @@ impl PlayerFieldData {
 
 impl PlayerFieldData {
     pub fn update(&mut self, field: &MatchField) {
-        self.len = 0;
-        self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+        let new_count = field.players.len() + field.substitutes.len();
 
-        for p in field.players.iter().chain(field.substitutes.iter()) {
-            let idx = self.len;
-            self.items[idx] = PlayerFieldMetadata {
-                player_id: p.id,
-                side: p.side.unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
-                position: p.position,
-                velocity: p.velocity,
-            };
-            self.insert_slot(p.id, idx as u8);
-            self.len += 1;
+        // Full rebuild only when player count changes (substitution)
+        if new_count != self.len {
+            self.len = 0;
+            self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+
+            for p in field.players.iter().chain(field.substitutes.iter()) {
+                let idx = self.len;
+                self.items[idx] = PlayerFieldMetadata {
+                    player_id: p.id,
+                    side: p.side.unwrap_or_else(|| panic!("unknown player side, player_id = {}", p.id)),
+                    position: p.position,
+                    velocity: p.velocity,
+                };
+                self.insert_slot(p.id, idx as u8);
+                self.len += 1;
+            }
+        } else {
+            // Fast path: only update positions and velocities in-place
+            for (i, p) in field.players.iter().chain(field.substitutes.iter()).enumerate() {
+                self.items[i].position = p.position;
+                self.items[i].velocity = p.velocity;
+            }
         }
     }
 }

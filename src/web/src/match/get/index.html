@@ -579,7 +579,7 @@
         totalChunks = metadata.chunk_count || 0;
         chunkDurationMs = metadata.chunk_duration_ms || 300000;
 
-        const chunkRes = await fetch(`/api/match/${leagueSlug}/${matchId}/chunk/0`);
+        const chunkRes = await fetch(`/api/match/${matchId}/chunk/0`);
         const firstChunk = await chunkRes.json();
         mergeData(firstChunk, 0);
         loadedChunks.add(0);
@@ -597,7 +597,7 @@
         const container = document.getElementById('pixi-container');
         container.appendChild(app.canvas);
 
-        const bgTexture = await PIXI.Assets.load('/images/match/field.svg');
+        const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
         background = new PIXI.Sprite(bgTexture);
         background.width = maxWidth;
         background.height = maxHeight;

@@ -1,7 +1,7 @@
-use crate::r#match::events::EventCollection;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
+use crate::r#match::events::Event;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
@@ -12,23 +12,23 @@ pub struct GoalkeeperShootingState {}
 
 impl StateProcessingHandler for GoalkeeperShootingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Check if the goalkeeper has the ball
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
             ));
         }
 
-        // Shoot the ball towards the opponent's goal
-        let mut events = EventCollection::new();
-
-        events.add_player_event(PlayerEvent::Shoot(ShootingEventContext::new()
+        let event = Event::PlayerEvent(PlayerEvent::Shoot(ShootingEventContext::new()
             .with_player_id(ctx.player.id)
             .with_target(ctx.player().shooting_direction())
             .with_reason("GK_SHOOTING")
             .build(ctx)));
 
-        Some(StateChangeResult::with_events(events))
+        // Transition to Standing immediately after shooting to prevent repeated shots
+        Some(StateChangeResult::with_goalkeeper_state_and_event(
+            GoalkeeperState::Standing,
+            event,
+        ))
     }
 
     fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {

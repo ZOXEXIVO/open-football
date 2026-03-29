@@ -102,19 +102,16 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     }
 
     pub fn nearby_to_opponent_goal(&'b self) -> Option<MatchPlayerLite> {
-        let mut teammates: Vec<MatchPlayerLite> = self.nearby(300.0).collect();
+        let want_min_x = self.ctx.player.side == Some(PlayerSide::Right);
 
-        if teammates.is_empty() {
-            return None;
-        }
-
-        teammates.sort_by(|a, b| a.position.x.partial_cmp(&b.position.x).unwrap());
-
-        if self.ctx.player.side == Some(PlayerSide::Right) {
-            Some(teammates[0])
-        } else {
-            Some(teammates[teammates.len() - 1])
-        }
+        self.nearby(300.0)
+            .reduce(|best, candidate| {
+                if want_min_x {
+                    if candidate.position.x < best.position.x { candidate } else { best }
+                } else {
+                    if candidate.position.x > best.position.x { candidate } else { best }
+                }
+            })
     }
 
     pub fn nearby_ids(&self, max_distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {

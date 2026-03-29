@@ -6,9 +6,59 @@
 <div class="fm-page">
     <div class="fm-stats-bar">
         <span>Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</span>
-        <button class="fm-holiday-btn" onclick="openHolidayDialog()">{{ i18n.t("go_on_holiday") }}</button>
+        <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
+            <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
+            <div class="fm-holiday-spinner"><div class="spinner"></div></div>
+        </button>
     </div>
     <script>
+    var _holidayTexts = {
+        go: '{{ i18n.t("go_on_holiday") }}',
+        ret: '{{ i18n.t("return_from_holiday") }}'
+    };
+
+    function updateHolidayBtn() {
+        var btn = document.getElementById('holiday-btn');
+        var processBtn = document.getElementById('process-btn');
+        if (!btn || !processBtn) return;
+        var label = btn.querySelector('.fm-holiday-label');
+        var processing = processBtn.classList.contains('fm-processing');
+        if (processing) {
+            label.textContent = _holidayTexts.ret;
+            btn.classList.add('fm-holiday-active');
+            btn.classList.remove('fm-holiday-cancelling');
+        } else {
+            label.textContent = _holidayTexts.go;
+            btn.classList.remove('fm-holiday-active');
+            btn.classList.remove('fm-holiday-cancelling');
+        }
+    }
+
+    // Watch for processing state changes
+    var _holidayObserver = new MutationObserver(updateHolidayBtn);
+    (function() {
+        var processBtn = document.getElementById('process-btn');
+        if (processBtn) {
+            _holidayObserver.observe(processBtn, { attributes: true, attributeFilter: ['class'] });
+            updateHolidayBtn();
+        }
+    })();
+
+    function handleHolidayClick() {
+        var processBtn = document.getElementById('process-btn');
+        if (processBtn && processBtn.classList.contains('fm-processing')) {
+            cancelHoliday();
+        } else {
+            openHolidayDialog();
+        }
+    }
+
+    async function cancelHoliday() {
+        var btn = document.getElementById('holiday-btn');
+        if (btn) btn.classList.add('fm-holiday-cancelling');
+        await fetch('/api/game/cancel', { method: 'POST' });
+    }
+
     function openHolidayDialog() {
         OpenFootballDialog.open({
             title: '{{ i18n.t("go_on_holiday_title") }}',
@@ -24,6 +74,11 @@
                         { value: '365', text: '{{ i18n.t("1_year") }}' },
                         { value: '730', text: '{{ i18n.t("2_years") }}' },
                         { value: '1095', text: '{{ i18n.t("3_years") }}' },
+                        { value: '1825', text: '{{ i18n.t("5_years") }}' },
+                        { value: '3650', text: '{{ i18n.t("10_years") }}' },
+                        { value: '5475', text: '{{ i18n.t("15_years") }}' },
+                        { value: '7300', text: '{{ i18n.t("20_years") }}' },
+                        { value: '9125', text: '{{ i18n.t("25_years") }}' },
                     ]
                 }
             ],

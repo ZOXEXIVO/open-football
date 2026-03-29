@@ -224,7 +224,7 @@ pub async fn player_transfers_action(
             .map(|s| status_type_to_i18n_key(s).to_string())
             .collect(),
         reason: player.decision_history.items.last()
-            .map(|d| d.decision.clone())
+            .map(|d| i18n.t(&d.decision).to_string())
             .unwrap_or_default(),
     };
 
@@ -325,7 +325,7 @@ pub async fn player_transfers_action(
                     },
                     date: t.transfer_date.format("%d.%m.%Y").to_string(),
                     transfer_type_key: transfer_type_key.to_string(),
-                    reason: t.reason.clone(),
+                    reason: i18n.t(&t.reason).to_string(),
                 })
             })
             .collect();

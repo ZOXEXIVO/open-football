@@ -37,6 +37,21 @@
         if (!dd.contains(e.target)) dd.classList.remove('fm-dd-open');
     });
 
+    // Disable edit menu during game processing
+    function updateEditDisabled() {
+        var processBtn = document.getElementById('process-btn');
+        var toggle = dd.querySelector('.fm-tabbar-dropdown-toggle');
+        if (!processBtn || !toggle) return;
+        var processing = processBtn.classList.contains('fm-processing');
+        toggle.disabled = processing;
+        if (processing) dd.classList.remove('fm-dd-open');
+    }
+    var processBtn = document.getElementById('process-btn');
+    if (processBtn) {
+        new MutationObserver(updateEditDisabled).observe(processBtn, { attributes: true, attributeFilter: ['class'] });
+        updateEditDisabled();
+    }
+
     // Build menu from data attributes
     var isInjured = dd.dataset.isInjured === 'true';
     var isLoan = dd.dataset.isLoan === 'true';
