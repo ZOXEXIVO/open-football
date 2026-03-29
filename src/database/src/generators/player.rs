@@ -2,7 +2,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
 use core::{
-    Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
+    Goalkeeping, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
     PlayerSkills, Technical,
 };
@@ -366,6 +366,7 @@ fn skills_from_array(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
             strength: arr[SK_STRENGTH],
             match_readiness: arr[SK_MATCH_READINESS],
         },
+        goalkeeping: Default::default(),
     }
 }
 
@@ -666,7 +667,138 @@ impl PlayerGenerator {
             *v = v.clamp(1.0, 20.0);
         }
 
-        skills_from_array(&skills)
+        let mut result = skills_from_array(&skills);
+
+        // 10. Generate goalkeeper-specific skills from the same PA/age budget
+        if matches!(position, PositionType::Goalkeeper) {
+            result.goalkeeping = Self::generate_gk_skills(pa_final, age, &pos_w);
+        }
+
+        result
+    }
+
+    /// Generate Goalkeeping-specific skills from the PA budget.
+    /// Based on real FM attribute importance:
+    ///   Core (shot-stopping): Handling, Reflexes, One-on-Ones — highest weight
+    ///   Command: Command of Area, Aerial Reach, Communication, Punching
+    ///   Distribution: Kicking, Throwing, First Touch, Passing
+    ///   Specialist: Rushing Out, Eccentricity
+    fn generate_gk_skills(pa_final: f32, age: u32, _pos_w: &[f32; SKILL_COUNT]) -> core::Goalkeeping {
+        // GK skills develop like mental — peak in late 20s/early 30s (experience matters)
+        let gk_age_ratio = match age {
+            0..=17 =>  0.60,
+            18..=19 => 0.70,
+            20..=22 => 0.80,
+            23..=26 => 0.90,
+            27..=29 => 0.97,
+            30..=34 => 1.0,
+            _ =>       0.95,
+        };
+
+        let gk_mean = pa_final * gk_age_ratio;
+        let spread = (pa_final * 0.45).max(2.0);
+        let noise = 1.5;
+
+        // GK role archetype — creates variety between keepers
+        let roll = rand::random::<f32>();
+        // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
+        let (archetype_name, mut w) = if roll < 0.35 {
+            // Shot Stopper — elite reflexes, handling, positioning
+            ("shot_stopper", [
+                0.9,  // aerial_reach
+                0.9,  // command_of_area
+                0.8,  // communication
+                0.4,  // eccentricity
+                0.6,  // first_touch
+                1.6,  // handling
+                0.7,  // kicking
+                1.3,  // one_on_ones
+                0.6,  // passing
+                1.1,  // punching
+                1.7,  // reflexes
+                0.8,  // rushing_out
+                0.7,  // throwing
+            ])
+        } else if roll < 0.60 {
+            // Sweeper Keeper — distribution, rushing out, brave
+            ("sweeper_keeper", [
+                0.8,  // aerial_reach
+                1.0,  // command_of_area
+                1.0,  // communication
+                1.2,  // eccentricity
+                1.5,  // first_touch
+                1.1,  // handling
+                1.3,  // kicking
+                1.2,  // one_on_ones
+                1.4,  // passing
+                0.7,  // punching
+                1.1,  // reflexes
+                1.5,  // rushing_out
+                1.2,  // throwing
+            ])
+        } else if roll < 0.82 {
+            // Commanding — aerial dominance, communication, set-piece defense
+            ("commanding", [
+                1.6,  // aerial_reach
+                1.5,  // command_of_area
+                1.4,  // communication
+                0.5,  // eccentricity
+                0.7,  // first_touch
+                1.2,  // handling
+                0.9,  // kicking
+                1.0,  // one_on_ones
+                0.7,  // passing
+                1.3,  // punching
+                1.1,  // reflexes
+                0.9,  // rushing_out
+                0.8,  // throwing
+            ])
+        } else {
+            // All-Rounder — balanced
+            ("all_rounder", [
+                1.0, 1.0, 1.0, 0.7,
+                1.0, 1.2, 1.0, 1.1,
+                0.9, 0.9, 1.2, 1.0, 0.9,
+            ])
+        };
+
+        // Generate each GK skill
+        let mut gk_skills = [0.0f32; 13];
+        for i in 0..13 {
+            let pos_mean = gk_mean + (w[i] - 1.0) * spread;
+            let raw = pos_mean + random_normal() * noise;
+            gk_skills[i] = raw.clamp(1.0, 20.0);
+        }
+
+        // GK skill floor: core skills should be at least proportional to PA
+        let core_floor = (pa_final * 0.45).clamp(3.0, 10.0);
+        let general_floor = (pa_final * 0.25).clamp(2.0, 7.0);
+
+        // Core skills (indices: 5=handling, 10=reflexes, 7=one_on_ones)
+        gk_skills[5] = gk_skills[5].max(core_floor);  // handling
+        gk_skills[10] = gk_skills[10].max(core_floor); // reflexes
+        gk_skills[7] = gk_skills[7].max(core_floor);   // one_on_ones
+
+        // All other skills get general floor
+        for i in 0..13 {
+            gk_skills[i] = gk_skills[i].max(general_floor).clamp(1.0, 20.0);
+        }
+
+        core::Goalkeeping {
+            aerial_reach:    gk_skills[0],
+            command_of_area: gk_skills[1],
+            communication:   gk_skills[2],
+            eccentricity:    gk_skills[3],
+            first_touch:     gk_skills[4],
+            handling:        gk_skills[5],
+            kicking:         gk_skills[6],
+            one_on_ones:     gk_skills[7],
+            passing:         gk_skills[8],
+            punching:        gk_skills[9],
+            reflexes:        gk_skills[10],
+            rushing_out:     gk_skills[11],
+            throwing:        gk_skills[12],
+        }
     }
 
     // ── Position generation ─────────────────────────────────────────────

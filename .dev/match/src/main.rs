@@ -6,7 +6,18 @@ use core::r#match::FootballEngine;
 use core::r#match::MatchSquad;
 use core::staff_contract_mod::NaiveDate;
 use core::{PeopleNameGeneratorData, PlayerGenerator};
+use axum::response::IntoResponse;
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rayon::prelude::*;
+use serde::Serialize;
+use std::io::Write;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+const MATCH_ID: &str = "dev-match-001";
+const LEAGUE_SLUG: &str = "dev";
+const CHUNK_DURATION_MS: u64 = 300_000;
 
 const POSITIONS_442: [PlayerPositionType; 11] = [
     PlayerPositionType::Goalkeeper,
@@ -22,16 +33,35 @@ const POSITIONS_442: [PlayerPositionType; 11] = [
     PlayerPositionType::ForwardRight,
 ];
 
-struct MatchSetup {
-    name: &'static str,
-    home_name: &'static str,
-    home_level: u8,
-    home_tactic: MatchTacticType,
-    home_positions: &'static [PlayerPositionType; 11],
-    away_name: &'static str,
-    away_level: u8,
-    away_tactic: MatchTacticType,
-    away_positions: &'static [PlayerPositionType; 11],
+const LAST_NAMES: &[&str] = &[
+    "Silva", "Martinez", "Müller", "Rossi", "Dupont",
+    "Smith", "Johnson", "Garcia", "Fernandez", "Novak",
+    "Petrov", "Andersson", "Tanaka", "Kim", "Santos",
+    "Costa", "Richter", "Bernard", "Moretti", "Kowalski",
+    "Ivanov", "Schmidt",
+];
+
+#[derive(Serialize)]
+struct PlayerJson {
+    id: u32,
+    shirt_number: u8,
+    last_name: String,
+    position: String,
+    is_home: bool,
+}
+
+#[derive(Serialize)]
+struct GoalJson {
+    player_id: u32,
+    time: u64,
+    is_auto_goal: bool,
+}
+
+#[derive(Serialize)]
+struct MetadataJson {
+    chunk_count: usize,
+    chunk_duration_ms: u64,
+    total_duration_ms: u64,
 }
 
 fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
@@ -42,7 +72,7 @@ fn generate_player(id: u32, position: PlayerPositionType, level: u8) -> Player {
     };
     let mut player = PlayerGenerator::generate(
         1,
-        NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+        NaiveDate::from_ymd_opt(2000, 1, 1).unwrap(),
         position,
         level,
         &empty_names,
@@ -55,286 +85,210 @@ fn make_squad(
     team_id: u32,
     team_name: &str,
     level: u8,
-    tactic_type: MatchTacticType,
     positions: &[PlayerPositionType; 11],
-) -> MatchSquad {
+    name_offset: usize,
+) -> (MatchSquad, Vec<PlayerJson>) {
     let base_id = team_id * 100;
+    let mut players_json = Vec::new();
+
     let main_squad: Vec<MatchPlayer> = positions
         .iter()
         .enumerate()
         .map(|(i, &pos)| {
             let player = generate_player(base_id + i as u32, pos, level);
-            MatchPlayer::from_player(team_id, &player, pos, false)
+            let mp = MatchPlayer::from_player(team_id, &player, pos, false);
+            players_json.push(PlayerJson {
+                id: mp.id,
+                shirt_number: (i + 1) as u8,
+                last_name: LAST_NAMES[(name_offset + i) % LAST_NAMES.len()].to_string(),
+                position: pos.get_short_name().to_string(),
+                is_home: team_id == 1,
+            });
+            mp
         })
         .collect();
 
-    MatchSquad {
+    let squad = MatchSquad {
         team_id,
         team_name: team_name.to_string(),
-        tactics: Tactics::new(tactic_type),
+        tactics: Tactics::new(MatchTacticType::T442),
         main_squad,
         substitutes: Vec::new(),
         captain_id: None,
         vice_captain_id: None,
         penalty_taker_id: None,
         free_kick_taker_id: None,
-    }
+    };
+
+    (squad, players_json)
 }
 
-struct MatchResult {
-    name: String,
-    home_name: &'static str,
-    away_name: &'static str,
-    home_goals: u8,
-    away_goals: u8,
-    elapsed_ms: u128,
-}
-
-fn play_match(setup: &MatchSetup, match_recordings: bool) -> MatchResult {
-    let home = make_squad(1, setup.home_name, setup.home_level, setup.home_tactic, setup.home_positions);
-    let away = make_squad(2, setup.away_name, setup.away_level, setup.away_tactic, setup.away_positions);
-
-    let start = std::time::Instant::now();
-    let result = FootballEngine::<840, 545>::play(home, away, match_recordings, true);
-    let elapsed = start.elapsed();
-
-    let score = result.score.as_ref().unwrap();
-
-    MatchResult {
-        name: setup.name.to_string(),
-        home_name: setup.home_name,
-        away_name: setup.away_name,
-        home_goals: score.home_team.get(),
-        away_goals: score.away_team.get(),
-        elapsed_ms: elapsed.as_millis(),
-    }
-}
-
-fn get_process_memory_mb() -> f64 {
-    #[cfg(target_os = "windows")]
-    {
-        use std::mem::MaybeUninit;
-
-        #[repr(C)]
-        #[allow(non_snake_case)]
-        struct PROCESS_MEMORY_COUNTERS {
-            cb: u32,
-            PageFaultCount: u32,
-            PeakWorkingSetSize: usize,
-            WorkingSetSize: usize,
-            QuotaPeakPagedPoolUsage: usize,
-            QuotaPagedPoolUsage: usize,
-            QuotaPeakNonPagedPoolUsage: usize,
-            QuotaNonPagedPoolUsage: usize,
-            PagefileUsage: usize,
-            PeakPagefileUsage: usize,
-        }
-
-        unsafe extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn K32GetProcessMemoryInfo(
-                process: *mut std::ffi::c_void,
-                ppsmemCounters: *mut PROCESS_MEMORY_COUNTERS,
-                cb: u32,
-            ) -> i32;
-        }
-
-        unsafe {
-            let mut pmc = MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed().assume_init();
-            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-            let process = GetCurrentProcess();
-            if K32GetProcessMemoryInfo(process, &mut pmc, pmc.cb) != 0 {
-                pmc.WorkingSetSize as f64 / (1024.0 * 1024.0)
-            } else {
-                0.0
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        0.0
-    }
-}
-
-fn get_peak_memory_mb() -> f64 {
-    #[cfg(target_os = "windows")]
-    {
-        use std::mem::MaybeUninit;
-
-        #[repr(C)]
-        #[allow(non_snake_case)]
-        struct PROCESS_MEMORY_COUNTERS {
-            cb: u32,
-            PageFaultCount: u32,
-            PeakWorkingSetSize: usize,
-            WorkingSetSize: usize,
-            QuotaPeakPagedPoolUsage: usize,
-            QuotaPagedPoolUsage: usize,
-            QuotaPeakNonPagedPoolUsage: usize,
-            QuotaNonPagedPoolUsage: usize,
-            PagefileUsage: usize,
-            PeakPagefileUsage: usize,
-        }
-
-        unsafe extern "system" {
-            fn GetCurrentProcess() -> *mut std::ffi::c_void;
-            fn K32GetProcessMemoryInfo(
-                process: *mut std::ffi::c_void,
-                ppsmemCounters: *mut PROCESS_MEMORY_COUNTERS,
-                cb: u32,
-            ) -> i32;
-        }
-
-        unsafe {
-            let mut pmc = MaybeUninit::<PROCESS_MEMORY_COUNTERS>::zeroed().assume_init();
-            pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
-            let process = GetCurrentProcess();
-            if K32GetProcessMemoryInfo(process, &mut pmc, pmc.cb) != 0 {
-                pmc.PeakWorkingSetSize as f64 / (1024.0 * 1024.0)
-            } else {
-                0.0
-            }
-        }
-    }
-
-    #[cfg(not(target_os = "windows"))]
-    {
-        0.0
-    }
-}
-
-fn print_struct_sizes() {
-    use core::r#match::ball::Ball;
-    use core::r#match::result::ResultMatchPositionData;
-    use core::r#match::engine::field::MatchField;
-    use core::r#match::engine::context::MatchContext;
-    use core::r#match::engine::result::MatchResultRaw;
-    use core::r#match::PlayerDistanceClosure;
-    use core::r#match::engine::player::positions::closure::PlayerDistanceItem;
-    use core::r#match::engine::raycast::space::{Space, SphereCollider};
-    use core::r#match::engine::player::context::GameTickContext;
-    use core::r#match::result::ResultPositionDataItem;
-    use core::club::player::skills::PlayerSkills;
-    use core::club::player::attributes::PlayerAttributes;
-    use core::club::person::PersonAttributes;
-
-    println!("=== STRUCT SIZES (stack only) ===");
-    println!("  MatchPlayer:              {} bytes", std::mem::size_of::<MatchPlayer>());
-    println!("  PlayerSkills:             {} bytes", std::mem::size_of::<PlayerSkills>());
-    println!("  PlayerAttributes:         {} bytes", std::mem::size_of::<PlayerAttributes>());
-    println!("  PersonAttributes:         {} bytes", std::mem::size_of::<PersonAttributes>());
-    println!("  Ball:                     {} bytes", std::mem::size_of::<Ball>());
-    println!("  MatchField:               {} bytes", std::mem::size_of::<MatchField>());
-    println!("  MatchContext:             {} bytes", std::mem::size_of::<MatchContext>());
-    println!("  MatchResultRaw:           {} bytes", std::mem::size_of::<MatchResultRaw>());
-    println!("  ResultMatchPositionData:  {} bytes", std::mem::size_of::<ResultMatchPositionData>());
-    println!("  ResultPositionDataItem:   {} bytes", std::mem::size_of::<ResultPositionDataItem>());
-    println!("  PlayerDistanceClosure:    {} bytes", std::mem::size_of::<PlayerDistanceClosure>());
-    println!("  PlayerDistanceItem:       {} bytes", std::mem::size_of::<PlayerDistanceItem>());
-    println!("  SphereCollider:           {} bytes", std::mem::size_of::<SphereCollider>());
-    println!("  Space:                    {} bytes", std::mem::size_of::<Space>());
-    println!("  GameTickContext:          {} bytes", std::mem::size_of::<GameTickContext>());
-    println!();
-
-    // Calculate per-match position data estimate
-    // 45 min * 60 sec * 1000ms / 10ms tick = 270,000 ticks per half, 540,000 total
-    let ticks_per_match: u64 = 540_000;
-    let item_size = std::mem::size_of::<ResultPositionDataItem>() as u64;
-    let players = 22u64;
-
-    let position_data_per_match_mb = (ticks_per_match * (players + 1) * item_size) as f64 / (1024.0 * 1024.0);
-    println!("=== POSITION DATA ESTIMATE (match_recordings=true) ===");
-    println!("  Ticks per match:          {}", ticks_per_match);
-    println!("  ResultPositionDataItem:   {} bytes", item_size);
-    println!("  Entities tracked:         {} (22 players + ball)", players + 1);
-    println!("  Max position data/match:  {:.1} MB", position_data_per_match_mb);
-    println!("  x10 parallel matches:     {:.1} MB", position_data_per_match_mb * 10.0);
-    println!("  x50 parallel matches:     {:.1} GB", position_data_per_match_mb * 50.0 / 1024.0);
-    println!("  x100 parallel matches:    {:.1} GB", position_data_per_match_mb * 100.0 / 1024.0);
-    println!("  x200 parallel matches:    {:.1} GB", position_data_per_match_mb * 200.0 / 1024.0);
-    println!();
-
-    // Distance closure per recalculation
-    let n = 22usize;
-    let dist_items = n * (n - 1);
-    let dist_item_size = std::mem::size_of::<PlayerDistanceItem>();
-    println!("=== DISTANCE CLOSURE ===");
-    println!("  Items per closure:        {} ({}x{})", dist_items, n, n-1);
-    println!("  Closure size:             {} bytes", dist_items * dist_item_size);
-    println!();
-
-    // Space per tick (clones all MatchPlayers)
-    let collider_size = std::mem::size_of::<SphereCollider>();
-    let match_player_size = std::mem::size_of::<MatchPlayer>();
-    println!("=== SPACE (per tick allocation) ===");
-    println!("  SphereCollider size:      {} bytes (contains Option<MatchPlayer>)", collider_size);
-    println!("  23 colliders/tick:        {} bytes (stack only, + heap for MatchPlayer Vecs)", 23 * collider_size);
-    println!("  MatchPlayer stack size:   {} bytes", match_player_size);
-    println!("  22 MatchPlayer clones:    {} bytes (stack only)", 22 * match_player_size);
-    println!();
+fn save_gzip_json(path: &PathBuf, data: &[u8]) {
+    let file = std::fs::File::create(path)
+        .unwrap_or_else(|e| panic!("failed to create {}: {}", path.display(), e));
+    let mut encoder = GzEncoder::new(file, Compression::best());
+    encoder.write_all(data).expect("failed to write gzip data");
+    encoder.finish().expect("failed to finish gzip");
 }
 
 fn main() {
-    print_struct_sizes();
+    // Enable event+state tracking for dev viewer
+    core::set_match_events_mode(true);
 
-    let num_matches: usize = std::env::args()
-        .nth(1)
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(10);
+    let (home_squad, mut players_json) = make_squad(1, "Home FC", 14, &POSITIONS_442, 0);
+    let (away_squad, away_players) = make_squad(2, "Away United", 14, &POSITIONS_442, 11);
+    players_json.extend(away_players);
 
-    let match_recordings: bool = std::env::args()
-        .nth(2)
-        .map(|s| s == "true" || s == "1")
-        .unwrap_or(false);
+    println!("Play match...");
+    let start = std::time::Instant::now();
 
-    println!("=== MEMORY TEST: {} parallel matches, recordings={} ===", num_matches, match_recordings);
-    println!();
+    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, true, false);
 
-    // Generate match setups
-    let setups: Vec<MatchSetup> = (0..num_matches).map(|_| {
-        MatchSetup {
-            name: "442 vs 442",
-            home_name: "Home",
-            home_level: 12,
-            home_tactic: MatchTacticType::T442,
-            home_positions: &POSITIONS_442,
-            away_name: "Away",
-            away_level: 12,
-            away_tactic: MatchTacticType::T442,
-            away_positions: &POSITIONS_442,
-        }
-    }).collect();
+    let elapsed = start.elapsed();
 
-    let mem_before = get_process_memory_mb();
-    println!("Memory before:  {:.1} MB", mem_before);
+    let score = result.score.as_ref().unwrap();
+    let home_goals = score.home_team.get();
+    let away_goals = score.away_team.get();
 
-    let total_start = std::time::Instant::now();
+    println!("Completed: {}:{}, {}ms", home_goals, away_goals, elapsed.as_millis());
 
-    let results: Vec<MatchResult> = setups.par_iter().map(|setup| play_match(setup, match_recordings)).collect();
+    // Collect goal events
+    let goals_json: Vec<GoalJson> = score.detail().iter()
+        .filter(|g| g.stat_type == core::r#match::player::statistics::MatchStatisticType::Goal)
+        .map(|g| GoalJson {
+            player_id: g.player_id,
+            time: g.time,
+            is_auto_goal: g.is_auto_goal,
+        })
+        .collect();
 
-    let total_elapsed = total_start.elapsed();
-    let mem_after = get_process_memory_mb();
-    let mem_peak = get_peak_memory_mb();
+    // Split into chunks
+    let out_dir = PathBuf::from("match_results").join(LEAGUE_SLUG);
+    std::fs::create_dir_all(&out_dir).expect("failed to create output dir");
 
-    println!();
-    println!("{:<40} {}", "SCENARIO", "RESULT");
-    println!("{}", "-".repeat(80));
+    let chunks = result.position_data.split_into_chunks(CHUNK_DURATION_MS);
+    let chunk_count = chunks.len();
 
-    for r in &results {
-        println!(
-            "{:<40} {} {} - {} {}  ({} ms)",
-            r.name, r.home_name, r.home_goals, r.away_goals, r.away_name, r.elapsed_ms,
-        );
+    // Save chunks in parallel with progress
+    let done = AtomicUsize::new(0);
+    let total_raw = AtomicUsize::new(0);
+    let total_gz = AtomicUsize::new(0);
+
+    print!("Save results: 0%");
+
+    chunks.par_iter().enumerate().for_each(|(idx, chunk)| {
+        let chunk_data = serde_json::to_vec(chunk).expect("failed to serialize chunk");
+        let raw_size = chunk_data.len();
+        let chunk_path = out_dir.join(format!("{}_chunk_{}.json.gz", MATCH_ID, idx));
+        save_gzip_json(&chunk_path, &chunk_data);
+        let gz_size = std::fs::metadata(&chunk_path).map(|m| m.len() as usize).unwrap_or(0);
+
+        total_raw.fetch_add(raw_size, Ordering::Relaxed);
+        total_gz.fetch_add(gz_size, Ordering::Relaxed);
+        let completed = done.fetch_add(1, Ordering::Relaxed) + 1;
+        let pct = completed * 100 / chunk_count;
+        print!("\rSave results: {}%", pct);
+    });
+
+    let raw = total_raw.load(Ordering::Relaxed) as f64;
+    let gz = total_gz.load(Ordering::Relaxed) as f64;
+    let ratio = if gz > 0.0 { raw / gz } else { 0.0 };
+    println!("\rCompleted: compression ratio {:.1}x ({:.0} MB -> {:.0} MB)",
+        ratio, raw / 1_048_576.0, gz / 1_048_576.0);
+
+    // Save metadata
+    let metadata = MetadataJson {
+        chunk_count,
+        chunk_duration_ms: CHUNK_DURATION_MS,
+        total_duration_ms: result.position_data.max_timestamp(),
+    };
+    let metadata_path = out_dir.join(format!("{}_metadata.json", MATCH_ID));
+    std::fs::write(&metadata_path, serde_json::to_string_pretty(&metadata).unwrap())
+        .expect("failed to write metadata");
+
+    // Generate page data
+    let page_data = format!(
+        "const MATCH_ID=\"{}\";const MATCH_TIME_MS={};const GOALS_DATA={};const PLAYERS_DATA={};const HOME_BG=\"#00307d\";const HOME_FG=\"#ffffff\";const AWAY_BG=\"#b33f00\";const AWAY_FG=\"#ffffff\";const HOME_GOALS={};const AWAY_GOALS={};",
+        MATCH_ID,
+        result.match_time_ms,
+        serde_json::to_string(&goals_json).unwrap(),
+        serde_json::to_string(&players_json).unwrap(),
+        home_goals,
+        away_goals,
+    );
+    std::fs::write(out_dir.join("page_data.js"), &page_data).expect("failed to write page data");
+
+    println!("\nStarting viewer at http://localhost:18001");
+
+    #[cfg(target_os = "windows")]
+    { let _ = std::process::Command::new("cmd").args(["/C", "start", "http://localhost:18001"]).spawn(); }
+    #[cfg(target_os = "macos")]
+    { let _ = std::process::Command::new("open").arg("http://localhost:18001").spawn(); }
+    #[cfg(target_os = "linux")]
+    { let _ = std::process::Command::new("xdg-open").arg("http://localhost:18001").spawn(); }
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(serve());
+}
+
+async fn serve() {
+    use axum::routing::get;
+
+    let app = axum::Router::new()
+        .route("/", get(page_handler))
+        .route("/api/match/{match_id}/metadata", get(metadata_handler))
+        .route("/api/match/{match_id}/chunk/{chunk_num}", get(chunk_handler))
+        .route("/static/images/match/field.svg", get(field_svg_handler))
+        .route("/js/pixi.min.js", get(pixi_handler))
+        .route("/match_data.js", get(data_handler));
+
+    let listener = tokio::net::TcpListener::bind("0.0.0.0:18001").await.unwrap();
+    axum::serve(listener, app).await.unwrap();
+}
+
+async fn page_handler() -> axum::response::Html<String> {
+    axum::response::Html(include_str!("viewer.html").to_string())
+}
+
+async fn data_handler() -> impl axum::response::IntoResponse {
+    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join("page_data.js");
+    let data = tokio::fs::read_to_string(&path).await.unwrap_or_default();
+    ([(axum::http::header::CONTENT_TYPE, "application/javascript")], data)
+}
+
+async fn metadata_handler(
+    axum::extract::Path(match_id): axum::extract::Path<String>,
+) -> impl axum::response::IntoResponse {
+    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join(format!("{}_metadata.json", match_id));
+    match tokio::fs::read_to_string(&path).await {
+        Ok(data) => (axum::http::StatusCode::OK, [(axum::http::header::CONTENT_TYPE, "application/json")], data).into_response(),
+        Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
     }
+}
 
-    println!("{}", "-".repeat(80));
-    println!("Total: {} ms (parallel, {} matches)", total_elapsed.as_millis(), num_matches);
-    println!();
-    println!("=== MEMORY SUMMARY ===");
-    println!("  Before matches:   {:.1} MB", mem_before);
-    println!("  After matches:    {:.1} MB", mem_after);
-    println!("  Peak memory:      {:.1} MB", mem_peak);
-    println!("  Delta:            {:.1} MB", mem_after - mem_before);
-    println!("  Per match (avg):  {:.1} MB", (mem_after - mem_before) / num_matches as f64);
+async fn chunk_handler(
+    axum::extract::Path((match_id, chunk_num)): axum::extract::Path<(String, usize)>,
+) -> impl axum::response::IntoResponse {
+    let path = PathBuf::from("match_results").join(LEAGUE_SLUG).join(format!("{}_chunk_{}.json.gz", match_id, chunk_num));
+    match tokio::fs::read(&path).await {
+        Ok(data) => (
+            axum::http::StatusCode::OK,
+            [
+                (axum::http::header::CONTENT_TYPE, "application/gzip"),
+                (axum::http::header::CONTENT_ENCODING, "gzip"),
+            ],
+            data,
+        ).into_response(),
+        Err(_) => (axum::http::StatusCode::NOT_FOUND, "not found").into_response(),
+    }
+}
+
+async fn field_svg_handler() -> impl axum::response::IntoResponse {
+    let svg = include_str!("../../../src/web/assets/static/images/match/field.svg");
+    ([(axum::http::header::CONTENT_TYPE, "image/svg+xml")], svg)
+}
+
+async fn pixi_handler() -> impl axum::response::IntoResponse {
+    let js = include_bytes!("../../../src/web/assets/js/pixi.min.js");
+    ([(axum::http::header::CONTENT_TYPE, "application/javascript")], js.as_slice())
 }

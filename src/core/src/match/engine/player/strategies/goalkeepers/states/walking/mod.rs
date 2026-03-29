@@ -145,8 +145,8 @@ impl GoalkeeperWalkingState {
     fn assess_threat_level(&self, ctx: &StateProcessingContext) -> f32 {
         let mut threat = 0.0;
 
-        // Use concentration to assess multiple threats
-        let concentration_factor = ctx.player.skills.mental.concentration / 20.0;
+        // Use reflexes to assess multiple threats
+        let concentration_factor = ctx.player.skills.goalkeeping.reflexes / 20.0;
 
         // Check for opponents with ball
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
@@ -180,8 +180,8 @@ impl GoalkeeperWalkingState {
 
         // Key skills for coming out decisions
         let decision_skill = goalkeeper_skills.mental.decisions / 20.0;
-        let rushing_out = goalkeeper_skills.technical.long_throws / 20.0; // Goalkeeper-specific skill
-        let command_of_area = goalkeeper_skills.mental.vision / 20.0; // Goalkeeper-specific
+        let rushing_out = goalkeeper_skills.goalkeeping.rushing_out / 20.0;
+        let command_of_area = goalkeeper_skills.goalkeeping.command_of_area / 20.0;
         let anticipation = goalkeeper_skills.mental.anticipation / 20.0;
 
         // Combined skill factor for coming out

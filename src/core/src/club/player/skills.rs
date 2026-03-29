@@ -5,6 +5,7 @@ pub struct PlayerSkills {
     pub technical: Technical,
     pub mental: Mental,
     pub physical: Physical,
+    pub goalkeeping: Goalkeeping,
 }
 
 /// Goalkeeper activity intensity for speed calculation.
@@ -300,6 +301,58 @@ impl Physical {
     }
 
     pub fn rest(&mut self) {}
+}
+
+#[derive(Debug, Copy, Clone, Default)]
+pub struct Goalkeeping {
+    pub aerial_reach: f32,
+    pub command_of_area: f32,
+    pub communication: f32,
+    pub eccentricity: f32,
+    pub first_touch: f32,
+    pub handling: f32,
+    pub kicking: f32,
+    pub one_on_ones: f32,
+    pub passing: f32,
+    pub punching: f32,
+    pub reflexes: f32,
+    pub rushing_out: f32,
+    pub throwing: f32,
+}
+
+impl Goalkeeping {
+    pub fn average(&self) -> f32 {
+        (self.aerial_reach
+            + self.command_of_area
+            + self.communication
+            + self.eccentricity
+            + self.first_touch
+            + self.handling
+            + self.kicking
+            + self.one_on_ones
+            + self.passing
+            + self.punching
+            + self.reflexes
+            + self.rushing_out
+            + self.throwing)
+            / 13.0
+    }
+
+    pub fn raise_floor(&mut self, min: f32) {
+        self.aerial_reach = self.aerial_reach.max(min);
+        self.command_of_area = self.command_of_area.max(min);
+        self.communication = self.communication.max(min);
+        self.eccentricity = self.eccentricity.max(min);
+        self.first_touch = self.first_touch.max(min);
+        self.handling = self.handling.max(min);
+        self.kicking = self.kicking.max(min);
+        self.one_on_ones = self.one_on_ones.max(min);
+        self.passing = self.passing.max(min);
+        self.punching = self.punching.max(min);
+        self.reflexes = self.reflexes.max(min);
+        self.rushing_out = self.rushing_out.max(min);
+        self.throwing = self.throwing.max(min);
+    }
 }
 
 #[cfg(test)]

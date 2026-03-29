@@ -77,20 +77,42 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
 }
 
 impl GoalkeeperJumpingState {
-    /// Check if the goalkeeper can reach and catch the ball
+    /// Check if the goalkeeper can reach and catch the ball — skill-based probability
     fn can_catch_ball(&self, ctx: &StateProcessingContext) -> bool {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let keeper_pos = ctx.player.position;
         let distance = (ball_pos - keeper_pos).magnitude();
 
-        // Calculate reach based on goalkeeper height and jumping ability
-        let max_reach = JUMP_HEIGHT * (ctx.player.skills.physical.jumping as f32 / 20.0);
+        let jumping = ctx.player.skills.physical.jumping / 20.0;
+        let agility = ctx.player.skills.physical.agility / 20.0;
+        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
 
-        // Check if ball is within reach considering vertical position
+        // Reach based on jumping + agility
+        let max_reach = JUMP_HEIGHT * (jumping * 0.6 + agility * 0.4);
         let vertical_reach = (ball_pos.z - keeper_pos.z).abs() <= max_reach;
-        let horizontal_reach = distance <= MAX_DIVING_DISTANCE;
+        let horizontal_reach = distance <= MAX_DIVING_DISTANCE + agility * 4.0;
 
-        vertical_reach && horizontal_reach
+        if !vertical_reach || !horizontal_reach {
+            return false;
+        }
+
+        // Skill-based catch probability
+        let skill_blend = handling * 0.35 + reflexes * 0.30 + agility * 0.20 + jumping * 0.15;
+
+        // Distance penalty — further stretch = harder catch
+        let stretch_ratio = distance / (MAX_DIVING_DISTANCE + agility * 4.0);
+        let distance_penalty = stretch_ratio * 0.25;
+
+        // Ball speed penalty — fast shots are harder to hold
+        let ball_speed = ctx.tick_context.positions.ball.velocity.norm();
+        let speed_penalty = (ball_speed / 5.0).min(0.3) * (1.0 - reflexes * 0.5);
+
+        // Elite: 0.20 + 0.95*0.75 = 0.91, mediocre: 0.20 + 0.47*0.75 = 0.55
+        let catch_probability = (0.20 + skill_blend * 0.75 - distance_penalty - speed_penalty)
+            .clamp(0.10, 0.95);
+
+        rand::random::<f32>() < catch_probability
     }
 
     /// Calculate the base jump vector towards the ball

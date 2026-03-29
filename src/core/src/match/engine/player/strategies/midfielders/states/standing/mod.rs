@@ -13,14 +13,15 @@ pub struct MidfielderStandingState {}
 impl StateProcessingHandler for MidfielderStandingState {
     fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
-            // Decide whether to hold possession or distribute the ball
-            return if self.should_hold_possession(ctx) {
+            // Go directly to Passing state — it has the best pass evaluation logic
+            // Only hold possession if under no pressure and no teammates nearby
+            return if self.has_passing_options(ctx) {
                 Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::HoldingPossession,
+                    MidfielderState::Passing,
                 ))
             } else {
                 Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Distributing,
+                    MidfielderState::HoldingPossession,
                 ))
             };
         }
@@ -127,12 +128,6 @@ impl StateProcessingHandler for MidfielderStandingState {
 }
 
 impl MidfielderStandingState {
-    /// Checks if the midfielder should hold possession based on game context.
-    fn should_hold_possession(&self, ctx: &StateProcessingContext) -> bool {
-        // For simplicity, let's assume the midfielder holds possession if there are no immediate passing options
-        !self.has_passing_options(ctx)
-    }
-
     /// Determines if the midfielder has passing options.
     fn has_passing_options(&self, ctx: &StateProcessingContext) -> bool {
         const PASSING_DISTANCE_THRESHOLD: f32 = 30.0;

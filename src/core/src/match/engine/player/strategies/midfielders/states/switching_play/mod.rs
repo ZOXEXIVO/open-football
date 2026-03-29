@@ -21,7 +21,6 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
 
         // Check if there's a good opportunity to switch play
         if let Some((teammate_id, _)) = self.find_switch_play_target(ctx) {
-            // If a suitable target position is found, switch play
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Passing,
                 Event::PlayerEvent(PlayerEvent::PassTo(
@@ -34,7 +33,13 @@ impl StateProcessingHandler for MidfielderSwitchingPlayState {
             ));
         }
 
-        // If no suitable opportunity to switch play, continue with the current state
+        // No switch target found — bail to Passing to find any option
+        if ctx.in_state_time > 10 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
+        }
+
         None
     }
 

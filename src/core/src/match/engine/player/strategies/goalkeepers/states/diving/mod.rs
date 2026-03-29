@@ -79,7 +79,7 @@ impl GoalkeeperDivingState {
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
 
         // Predict ball position based on reflexes (better GK = better prediction)
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
         let prediction_time = 0.3 + (reflexes * 0.3 + anticipation * 0.2); // 0.3-0.8 seconds ahead
         let future_ball_position = ball_position + ball_velocity * prediction_time;
@@ -99,7 +99,7 @@ impl GoalkeeperDivingState {
 
     fn calculate_dive_speed(&self, ctx: &StateProcessingContext) -> f32 {
         let urgency = self.calculate_urgency(ctx);
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         // Explosive dive speed — reflexes and agility are primary drivers
         let base_speed = (ctx.player.skills.physical.acceleration + ctx.player.skills.physical.agility) * 0.5;
@@ -122,37 +122,41 @@ impl GoalkeeperDivingState {
     }
 
     fn is_ball_caught(&self, ctx: &StateProcessingContext) -> bool {
-        // Goalkeeper can only catch balls that are flying TOWARDS them or very close
         let ball_distance = ctx.ball().distance();
+        // Must be flying toward the GK or very close
         if ball_distance > 5.0 && !ctx.ball().is_towards_player_with_angle(0.6) {
             return false;
         }
 
         let ball_speed = ctx.tick_context.positions.ball.velocity.magnitude();
 
-        // Catch distance based on GK reach (diving extends range significantly)
-        let handling = ctx.player.skills.technical.first_touch / 20.0;
+        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
-        // Elite GK: 7 + 7 + 3.5 + 2.5 = 20, mediocre: 7 + 3.2 + 1.6 + 1.1 = 12.9
-        let catch_distance = 7.0 + agility * 7.0 + handling * 3.5 + reflexes * 2.5;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
+        let positioning = ctx.player.skills.mental.anticipation / 20.0;
+
+        // Catch distance: elite ~18, mediocre ~11
+        let catch_distance = 6.0 + agility * 6.0 + handling * 3.0 + reflexes * 3.0;
 
         if ball_distance > catch_distance {
             return false;
         }
 
-        // Catch probability with strong skill differentiation
-        // Elite GKs make saves that mediocre keepers cannot
-        let skill_blend = handling * 0.4 + reflexes * 0.3 + agility * 0.3;
-        // Speed penalty — elite reflexes mitigate fast shot difficulty
-        let effective_speed_penalty = (ball_speed / 6.0).min(0.35) * (1.0 - reflexes * 0.55);
-        // Elite: 0.15 + 1.0*0.82 = 0.97, mediocre: 0.15 + 0.47*0.82 = 0.54
-        let base_catch = 0.15 + skill_blend * 0.82;
-        let catch_probability = base_catch * (1.0 - effective_speed_penalty);
+        // Catch probability — strong skill differentiation
+        let skill_blend = handling * 0.35 + reflexes * 0.30 + agility * 0.20 + positioning * 0.15;
 
-        // Elite GK vs fast shot: ~0.97 * 0.84 = 0.82
-        // Mediocre GK vs fast shot: ~0.54 * 0.72 = 0.39
-        rand::random::<f32>() < catch_probability.clamp(0.12, 0.97)
+        // Stretch penalty: further from center = harder
+        let stretch_penalty = (ball_distance / catch_distance) * 0.20;
+
+        // Shot speed penalty: fast shots are harder — reflexes mitigate
+        let speed_penalty = (ball_speed / 5.0).min(0.35) * (1.0 - reflexes * 0.5);
+
+        // Elite vs fast shot: (0.15 + 0.95*0.80) - 0.10 - 0.07 = 0.74
+        // Mediocre vs fast shot: (0.15 + 0.47*0.80) - 0.10 - 0.17 = 0.26
+        let catch_probability = (0.15 + skill_blend * 0.80 - stretch_penalty - speed_penalty)
+            .clamp(0.05, 0.95);
+
+        rand::random::<f32>() < catch_probability
     }
 
     fn is_ball_nearby(&self, ctx: &StateProcessingContext) -> bool {

@@ -50,7 +50,7 @@ impl StateProcessingHandler for GoalkeeperClearingState {
 impl GoalkeeperClearingState {
     /// Execute a clearance - boot the ball away from danger
     fn execute_clearance(&self, ctx: &StateProcessingContext) -> Option<Event> {
-        let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
+        let kicking_power = ctx.player.skills.goalkeeping.kicking / 20.0;
 
         // Calculate clearance target - aim for sideline or upfield
         let field_width = ctx.context.field_size.width as f32;

@@ -112,15 +112,13 @@ impl StateProcessingHandler for MidfielderRunningState {
                 ));
             }
 
-            // Distance shooting - long range with excellent long shot skills, rare
+            // Distance shooting - long range with good long shot skills
             if can_shoot
-                && coach.shooting_reluctance() <= 0.0
                 && goal_dist <= MAX_SHOOTING_DISTANCE
-                && long_shots > 0.7
-                && finishing > 0.55
+                && long_shots > 0.55
+                && finishing > 0.45
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
-                && !ctx.players().opponents().exists(10.0)
             {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::DistanceShooting,
@@ -166,13 +164,16 @@ impl StateProcessingHandler for MidfielderRunningState {
                     })
                     .count();
 
-                // Skilled dribblers take on opponents; others only dribble into open space
-                let should_dribble = if dribbling_skill > 0.7 && pace > 0.6 {
+                // Dribbling is for beating opponents — NOT for running into empty space.
+                // Open space = keep running (faster). Only dribble when opponents to beat.
+                let should_dribble = if opponents_ahead == 0 {
+                    false // No one ahead — just run, don't dribble
+                } else if dribbling_skill > 0.7 && pace > 0.6 {
                     opponents_ahead <= 2 // Skilled: take on 1-2 opponents
                 } else if dribbling_skill > 0.5 {
-                    opponents_ahead <= 1 // Decent: take on 1 opponent
+                    opponents_ahead == 1 // Decent: take on 1 opponent
                 } else {
-                    opponents_ahead == 0 // Poor: only open space
+                    false // Poor dribbler: never dribble into opponents
                 };
 
                 // Don't dribble in own defensive third — too risky
@@ -387,17 +388,19 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Notification system: if ball system notified us to take the ball, act immediately
-            // But still check we're the best option to prevent swarming
-            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
+            // Loose ball nearby — chase it if we're the closest teammate
+            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
+                && ctx.team().is_best_player_to_chase_ball()
+            {
                 return Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::TakeBall,
                 ));
             }
 
-            if ctx.ball().distance() < 30.0 && !ctx.ball().is_owned() {
+            // Also respond to ball system notifications
+            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Intercepting,
+                    MidfielderState::TakeBall,
                 ));
             }
 
@@ -511,7 +514,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         path_offset: 5.0,
                     }
                         .calculate(ctx.player)
-                        .velocity + ctx.player().separation_velocity(),
+                        .velocity,
                 );
             }
         }
@@ -565,6 +568,10 @@ impl StateProcessingHandler for MidfielderRunningState {
                     start_pos.y.clamp(30.0, field_height - 30.0),
                     0.0,
                 );
+                let dist = (spread_target - ctx.player.position).magnitude();
+                if dist < 8.0 {
+                    return Some(Vector3::zeros());
+                }
                 return Some(
                     SteeringBehavior::Arrive { target: spread_target, slowing_distance: 20.0 }
                         .calculate(ctx.player).velocity,
@@ -577,59 +584,31 @@ impl StateProcessingHandler for MidfielderRunningState {
                 None => 0.0,
             };
 
-            // Moderate ball proximity — don't rush toward the ball
-            let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.35);
+            // Quantize ball position to 20-unit grid to prevent wobble
+            let qball_x = (ball_pos.x / 20.0).round() * 20.0;
+            let qball_y = (ball_pos.y / 20.0).round() * 20.0;
 
-            let center_y = field_height / 2.0;
-            let is_wide = (start_pos.y - center_y).abs() > field_height * 0.2;
+            // Formation-based positioning: stay near start_pos, shift slightly toward ball.
+            // Each player keeps their unique formation position — no slot convergence.
+            let ball_pull = 0.15; // How much the ball pulls the player (low = keep formation)
 
-            // === UNIQUE PLAYER SLOT: count teammates with lower ID (no alloc, no sort) ===
-            let my_id = ctx.player.id;
-            let mut slot_index = 0u32;
-            let mut total_mids = 1u32; // count self
-            for t in ctx.players().teammates().all() {
-                if t.tactical_positions.is_midfielder() {
-                    total_mids += 1;
-                    if t.id < my_id {
-                        slot_index += 1;
-                    }
-                }
-            }
+            // X: mostly start_pos, pulled slightly toward ball + forward offset
+            let forward_offset = attacking_direction * 40.0;
+            let target_x = start_pos.x * (1.0 - ball_pull)
+                + (qball_x + forward_offset) * ball_pull;
 
-            // Spread midfielders across 10%-90% of field height for full width usage
-            let slot_y = field_height * 0.10
-                + (field_height * 0.80) * (slot_index as f32 + 0.5) / total_mids as f32;
-
-            // X: push ahead of ball to offer passing options, stagger by slot
-            let depth_stagger = attacking_direction * (20.0 + (slot_index as f32) * 15.0);
-            let support_x = ball_pos.x + attacking_direction * 50.0 + depth_stagger;
-            let width_stagger = if is_wide { attacking_direction * 20.0 } else { 0.0 };
-            let target_x = start_pos.x + (support_x - start_pos.x) * proximity + width_stagger;
-
-            // Y: blend between assigned slot, start position, and ball — slot dominant for width
-            let slot_weight = if is_wide { 0.65 } else { 0.55 };
-            let ball_weight = proximity * 0.2;
-            let start_weight = (1.0 - slot_weight - ball_weight).max(0.10);
-            let target_y = slot_y * slot_weight
-                + ball_pos.y * ball_weight
-                + start_pos.y * start_weight;
-
-            // Organic drift for natural movement — slow-changing to prevent twitching
-            // Quantize time to 100-tick intervals so drift doesn't change every tick
-            let quantized_time = (ctx.context.total_match_time / 100) as f32;
-            let player_seed = my_id as f32 * 2.39;
-            let drift_x = (player_seed + quantized_time * 0.5).sin() * 10.0;
-            let drift_y = (player_seed * 1.37 + quantized_time * 0.4).cos() * 8.0;
+            // Y: mostly start_pos, pulled slightly toward ball Y
+            let target_y = start_pos.y * (1.0 - ball_pull)
+                + qball_y * ball_pull;
 
             let target = Vector3::new(
-                (target_x + drift_x).clamp(30.0, field_width - 30.0),
-                (target_y + drift_y).clamp(30.0, field_height - 30.0),
+                target_x.clamp(30.0, field_width - 30.0),
+                target_y.clamp(30.0, field_height - 30.0),
                 0.0,
             );
 
             let dist_to_target = (target - ctx.player.position).magnitude();
 
-            // If already close to target, stand still to prevent twitching
             if dist_to_target < 8.0 {
                 return Some(Vector3::zeros());
             }
@@ -641,13 +620,7 @@ impl StateProcessingHandler for MidfielderRunningState {
             .calculate(ctx.player)
             .velocity;
 
-            // Only apply separation when far from target to prevent oscillation
-            if dist_to_target > 15.0 {
-                let sep_damping = ((dist_to_target - 15.0) / 40.0).min(0.5);
-                Some(arrive_velocity + ctx.player().separation_velocity() * sep_damping)
-            } else {
-                Some(arrive_velocity)
-            }
+            Some(arrive_velocity)
         }
     }
 
@@ -686,7 +659,7 @@ impl MidfielderRunningState {
             slowing_distance: 20.0,
         }
             .calculate(ctx.player)
-            .velocity + ctx.player().separation_velocity()
+            .velocity
     }
 
 
@@ -1004,7 +977,6 @@ impl MidfielderRunningState {
         }
         .calculate(ctx.player)
         .velocity * 0.6 // Slower overall speed in retention mode
-            + ctx.player().separation_velocity()
     }
 
     /// COUNTER-ATTACK: Detect if a counter-attack opportunity exists.

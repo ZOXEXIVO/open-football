@@ -68,11 +68,11 @@ impl<'a> SteeringBehavior<'a> {
                 let to_target = *target - player.position;
                 let distance = to_target.norm();
 
-                // Stop if very close to target
-                const ARRIVAL_DEADZONE: f32 = 1.0; // Increased from 0.5 for better stability
+                // Stop if very close to target — larger deadzone prevents oscillation
+                const ARRIVAL_DEADZONE: f32 = 3.0;
                 if distance < ARRIVAL_DEADZONE {
-                    // Apply strong braking to prevent oscillation
-                    let braking_force = -player.velocity * 0.6; // Increased from 0.3 for better stopping
+                    // Apply strong braking — kill velocity quickly to prevent overshoot
+                    let braking_force = -player.velocity * 0.8;
                     let new_velocity = player.velocity + braking_force;
                     return SteeringOutput {
                         velocity: new_velocity,
@@ -92,9 +92,10 @@ impl<'a> SteeringBehavior<'a> {
                     player.player_attributes.condition,
                 );
                 let desired_speed = if distance < safe_slowing_distance {
-                    // Quadratic deceleration with minimum speed floor to prevent crawling
+                    // Quadratic deceleration — no minimum speed floor so player
+                    // can smoothly decelerate to zero without overshooting
                     let ratio = (distance / safe_slowing_distance).clamp(0.0, 1.0);
-                    (max_speed * ratio * ratio).max(max_speed * 0.15)
+                    max_speed * ratio * ratio
                 } else {
                     max_speed
                 };

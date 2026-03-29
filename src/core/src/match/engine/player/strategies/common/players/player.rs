@@ -365,38 +365,29 @@ impl<'p> PlayerOperationsImpl<'p> {
         let player_position = self.ctx.player.position;
         let goal_position = self.opponent_goal_position();
         let direction_to_goal = (goal_position - player_position).normalize();
-
         let distance_to_goal = self.goal_distance();
 
-        // Original ray cast — direct line to goal center
-        let ray_cast_result = self.ctx.tick_context.space.cast_ray(
-            player_position,
-            direction_to_goal,
-            distance_to_goal,
-            false,
-        );
+        // Only check outfield defenders — the goalkeeper is NOT a blocker.
+        // The GK is handled by save mechanics after the shot is taken.
+        // Skip the last 20% of distance to goal (GK zone).
+        let check_distance = distance_to_goal * 0.80;
+        let corridor_half_width = 5.0;
 
-        if ray_cast_result.is_some() {
-            return false; // Direct obstruction
-        }
-
-        // Corridor check: opponents close to the shooting lane block the shot
-        // Skip the last 15% of distance (goalkeeper area — GK is handled by save mechanics)
-        let check_distance = distance_to_goal * 0.85;
-        let corridor_half_width = 10.0; // wider corridor = harder to find clear shot
-
-        let has_corridor_blocker = self.ctx.players().opponents().all()
+        let has_blocker = self.ctx.players().opponents().all()
             .any(|opp| {
-                // Project opponent position onto the shooting line
+                // Skip goalkeepers entirely
+                if opp.tactical_positions.is_goalkeeper() {
+                    return false;
+                }
+
                 let to_opp = opp.position - player_position;
                 let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
 
-                // Only check opponents between player and 85% of the way to goal
+                // Only check opponents between player and 80% of the way to goal
                 if projection < 5.0 || projection > check_distance {
                     return false;
                 }
 
-                // Calculate perpendicular distance from opponent to shooting line
                 let closest_point = player_position + direction_to_goal * projection;
                 let perp_distance = ((opp.position.x - closest_point.x).powi(2)
                     + (opp.position.y - closest_point.y).powi(2))
@@ -405,7 +396,7 @@ impl<'p> PlayerOperationsImpl<'p> {
                 perp_distance < corridor_half_width
             });
 
-        !has_corridor_blocker
+        !has_blocker
     }
 
     pub fn separation_velocity(&self) -> Vector3<f32> {

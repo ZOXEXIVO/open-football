@@ -34,9 +34,9 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             }
         }
 
-        // Close to goal — shoot if clear shot and good angle
+        // Close to goal — just shoot
         let distance_to_goal = ctx.player().goal_distance();
-        if distance_to_goal < 40.0 && ctx.player().has_clear_shot() && ctx.player().shooting().has_good_angle() {
+        if distance_to_goal < 50.0 {
             return Some(StateChangeResult::with_midfielder_state_and_event(
                 MidfielderState::Shooting,
                 Event::PlayerEvent(PlayerEvent::Shoot(
@@ -96,24 +96,19 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
 
 impl MidfielderDistanceShootingState {
     fn is_favorable_shooting_opportunity(&self, ctx: &StateProcessingContext) -> bool {
-        // Evaluate the shooting opportunity based on various factors
         let distance_to_goal = ctx.player().goal_distance();
-        let angle_to_goal = ctx.player().goal_angle();
-        let has_clear_shot = self.has_clear_shot(ctx);
         let long_shots = ctx.player.skills.technical.long_shots / 20.0;
 
-        // Distance shooting for skilled players from reasonable distance
-        let distance_threshold = 80.0; // ~40m for long shots
-        let angle_threshold = std::f32::consts::PI / 5.0; // 36 degrees — need decent angle
+        // Use the proper clear-shot check that excludes the goalkeeper
+        let has_clear_shot = ctx.player().has_clear_shot();
 
-        // Check no heavy pressure (but 1 nearby opponent is OK)
+        let distance_threshold = 100.0; // ~50m for long shots
         let heavily_marked = ctx.tick_context.distances
             .opponents(ctx.player.id, 10.0).count() >= 2;
 
         distance_to_goal <= distance_threshold
-            && angle_to_goal <= angle_threshold
             && has_clear_shot
-            && long_shots > 0.65 // Only good long-shot players
+            && long_shots > 0.5
             && !heavily_marked
     }
 

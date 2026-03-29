@@ -983,6 +983,7 @@ impl NationalTeam {
                     strength: base_skill,
                     match_readiness: 15.0,
                 },
+                goalkeeping: Default::default(),
             },
             contract: None,
             contract_loan: None,

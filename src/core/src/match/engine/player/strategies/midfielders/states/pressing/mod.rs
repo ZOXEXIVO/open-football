@@ -38,6 +38,13 @@ impl StateProcessingHandler for MidfielderPressingState {
             ));
         }
 
+        // Opponent GK holds ball in hands — can't challenge, back off
+        if ctx.ball().is_held_by_opponent_goalkeeper() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         // Scale max press time by tactical intensity (60-120 tick range)
         let intensity = ctx.team().tactics().pressing_intensity();
         let max_press_time = (60.0 + 60.0 * intensity) as u64;

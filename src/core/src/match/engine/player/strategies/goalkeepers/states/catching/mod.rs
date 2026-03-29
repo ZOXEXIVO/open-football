@@ -63,7 +63,7 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();
         let agility = ctx.player.skills.physical.agility / 20.0;
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
 
         // GK sprints explosively to catch — reflexes + agility drive reaction speed
         let speed_boost = 1.7 + agility * 0.5 + reflexes * 0.5; // 1.7x - 2.7x
@@ -102,9 +102,9 @@ impl GoalkeeperCatchingState {
         let distance_to_ball = ctx.ball().distance();
 
         // Use goalkeeper-specific skills
-        let handling = ctx.player.skills.technical.first_touch;
-        let reflexes = ctx.player.skills.mental.concentration;
-        let positioning = ctx.player.skills.technical.technique;
+        let handling = ctx.player.skills.goalkeeping.handling;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes;
+        let positioning = ctx.player.skills.goalkeeping.command_of_area;
         let agility = ctx.player.skills.physical.agility;
 
         // Scale skills from 1-20 range to 0-1 range

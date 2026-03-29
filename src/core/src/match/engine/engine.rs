@@ -373,6 +373,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         context.record_goal_tick();
     }
 
+    /// Record positions every 30ms (every 3rd tick) instead of every 10ms.
+    /// The frontend interpolates between samples, so 30ms intervals are imperceptible.
+    /// This alone reduces position data by ~67%.
+    const POSITION_RECORD_INTERVAL_MS: u64 = 30;
+
     #[inline]
     pub fn write_match_positions(
         field: &mut MatchField,
@@ -383,9 +388,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
 
-        // player positions
+        // Subsample: only record every Nth tick
+        if timestamp % Self::POSITION_RECORD_INTERVAL_MS != 0 {
+            return;
+        }
+
+        // player positions and states
         field.players.iter().for_each(|player| {
             match_data.add_player_positions(player.id, timestamp, player.position);
+            // Record state changes (deduped internally — only stores when state differs)
+            match_data.add_player_state(player.id, timestamp, &player.state.to_string());
         });
 
         // write positions

@@ -27,7 +27,7 @@ impl StateProcessingHandler for MidfielderPassingState {
 
         // Brief scanning delay before executing pass (unless under pressure)
         let under_pressure = self.is_under_heavy_pressure(ctx);
-        let min_scan_time: u64 = if under_pressure { 3 } else { 8 };
+        let min_scan_time: u64 = if under_pressure { 2 } else { 5 };
 
         if ctx.in_state_time >= min_scan_time {
             if !ctx.ball().on_own_side() {
@@ -64,7 +64,7 @@ impl StateProcessingHandler for MidfielderPassingState {
 
         // If no good passing option after waiting, try something else
         // Under heavy pressure, bail out faster to dribble away
-        let bail_time = if self.is_under_heavy_pressure(ctx) { 15 } else { 30 };
+        let bail_time = if self.is_under_heavy_pressure(ctx) { 10 } else { 20 };
         if ctx.in_state_time > bail_time {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
             return if goal_dist < 120.0 {
@@ -119,9 +119,8 @@ impl StateProcessingHandler for MidfielderPassingState {
             }
         }
 
-        // Default: slow, controlled movement with ball - like scanning for options
-        // Use separation to avoid colliding with other players
-        Some(ctx.player().separation_velocity() * 0.5)
+        // Default: stationary while scanning for pass options
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

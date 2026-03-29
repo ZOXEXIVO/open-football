@@ -79,119 +79,78 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        let player_pos = ctx.player.position;
-        let goal_pos = ctx.player().opponent_goal_position();
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
+        let ball_pos = ctx.tick_context.positions.ball.position;
 
-        // PRIORITY 1: Coordinate with other forwards if needed
-        if self.should_coordinate_with_other_forwards(ctx) {
-            if let Some(coordinated_pos) = self.get_coordinated_forward_position(ctx) {
-                let base_velocity = SteeringBehavior::Arrive {
-                    target: coordinated_pos,
-                    slowing_distance: 20.0,
-                }
-                .calculate(ctx.player)
-                .velocity;
+        let attacking_direction = match ctx.player.side {
+            Some(crate::r#match::PlayerSide::Left) => 1.0,
+            Some(crate::r#match::PlayerSide::Right) => -1.0,
+            None => 1.0,
+        };
 
-                return Some(base_velocity + ctx.player().separation_velocity() * 1.2);
+        let goal_pos = ctx.player().opponent_goal_position();
+
+        // Forwards must always push TOWARD the opponent goal, never drop back.
+        // Target X: between the ball and the goal, biased heavily toward goal.
+        let forward_x = goal_pos.x * 0.6 + ball_pos.x * 0.4;
+        // Never behind the ball — always ahead
+        let (raw_min, raw_max) = if attacking_direction > 0.0 {
+            (ball_pos.x.max(field_width * 0.4), field_width - 30.0)
+        } else {
+            (30.0, ball_pos.x.min(field_width * 0.6))
+        };
+        // Safety: ensure min <= max when ball is near the edge
+        let min_x = raw_min.min(raw_max);
+        let target_x = forward_x.clamp(min_x, raw_max);
+
+        // Find the largest gap between defenders in the attacking zone
+        let mut opp_ys: Vec<f32> = ctx.players().opponents().all()
+            .filter(|opp| {
+                // Only consider opponents in the zone between ball and goal
+                let opp_x_ok = if attacking_direction > 0.0 {
+                    opp.position.x > ball_pos.x - 20.0
+                } else {
+                    opp.position.x < ball_pos.x + 20.0
+                };
+                opp_x_ok
+            })
+            .map(|opp| opp.position.y)
+            .collect();
+
+        // Add field boundaries as virtual defenders
+        opp_ys.push(0.0);
+        opp_ys.push(field_height);
+        opp_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+        // Find the widest gap
+        let mut best_gap_y = field_height / 2.0;
+        let mut best_gap_width = 0.0f32;
+        for i in 0..opp_ys.len() - 1 {
+            let gap = opp_ys[i + 1] - opp_ys[i];
+            if gap > best_gap_width {
+                best_gap_width = gap;
+                best_gap_y = (opp_ys[i] + opp_ys[i + 1]) / 2.0;
             }
         }
 
-        // PRIORITY 2: When teammate has ball, find open space on the field
-        if self.get_ball_holder(ctx).is_some() {
-            // Use intelligent zone-finding to locate best open space
-            let target_position = self.find_optimal_free_zone(ctx);
+        let target_y = best_gap_y.clamp(40.0, field_height - 40.0);
 
-            // Use Pursuit for aggressive movement toward open space
-            let base_velocity = SteeringBehavior::Pursuit {
-                target: target_position,
-                target_velocity: Vector3::zeros(),
+        let target = Vector3::new(target_x, target_y, 0.0);
+        let dist = (target - ctx.player.position).magnitude();
+
+        if dist < 8.0 {
+            return Some(Vector3::zeros());
+        }
+
+        Some(
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 20.0,
             }
             .calculate(ctx.player)
-            .velocity;
-
-            // Strong separation to avoid clustering near ball handler
-            return Some(base_velocity + ctx.player().separation_velocity() * 1.5);
-        }
-
-        // Fallback: use the existing complex logic when no teammate has ball
-        // Only do expensive scan every 15 ticks
-        let target_position = if ctx.in_state_time % 15 == 0 {
-            self.find_optimal_free_zone(ctx)
-        } else {
-            self.get_forward_search_center(ctx)
-        };
-        let avoidance_vector = self.calculate_dynamic_avoidance(ctx);
-        let movement_pattern = self.get_intelligent_movement_pattern(ctx);
-
-        match movement_pattern {
-            ForwardMovementPattern::DirectRun => {
-                let base_velocity = SteeringBehavior::Pursuit {
-                    target: target_position,
-                    target_velocity: Vector3::zeros(),
-                }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                Some(base_velocity + avoidance_vector * 1.2 + ctx.player().separation_velocity())
-            }
-            ForwardMovementPattern::DiagonalRun => {
-                let diagonal_target = self.calculate_diagonal_run_target(ctx, target_position);
-                let base_velocity = SteeringBehavior::Arrive {
-                    target: diagonal_target,
-                    slowing_distance: 15.0,
-                }
-                    .calculate(ctx.player)
-                    .velocity;
-
-                Some(base_velocity + avoidance_vector)
-            }
-            ForwardMovementPattern::ChannelRun => {
-                let channel_target = self.find_defensive_channel(ctx);
-                Some(
-                    SteeringBehavior::Pursuit {
-                        target: channel_target,
-                        target_velocity: Vector3::zeros(),
-                    }
-                        .calculate(ctx.player)
-                        .velocity + avoidance_vector * 0.8
-                )
-            }
-            ForwardMovementPattern::DriftWide => {
-                let wide_target = self.calculate_wide_position(ctx);
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: wide_target,
-                        slowing_distance: 20.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity + avoidance_vector * 0.6
-                )
-            }
-            ForwardMovementPattern::CheckToFeet => {
-                let check_target = self.calculate_check_position(ctx);
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: check_target,
-                        slowing_distance: 10.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity
-                )
-            }
-            ForwardMovementPattern::OppositeMovement => {
-                let opposite_target = self.calculate_opposite_movement(ctx);
-                Some(
-                    SteeringBehavior::Arrive {
-                        target: opposite_target,
-                        slowing_distance: 15.0,
-                    }
-                        .calculate(ctx.player)
-                        .velocity + avoidance_vector * 1.5
-                )
-            }
-        }
+            .velocity,
+        )
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

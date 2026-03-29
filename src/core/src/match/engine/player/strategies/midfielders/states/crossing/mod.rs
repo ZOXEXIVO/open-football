@@ -87,6 +87,29 @@ impl MidfielderCrossingState {
                 continue;
             }
 
+            // Check how many opponents are near the cross path (interception risk)
+            let pass_vector = teammate.position - ctx.player.position;
+            let pass_distance = pass_vector.magnitude();
+            let pass_direction = pass_vector.normalize();
+
+            let opponents_in_path = ctx.players().opponents().all()
+                .filter(|opponent| {
+                    let to_opponent = opponent.position - ctx.player.position;
+                    let projection = to_opponent.dot(&pass_direction);
+                    if projection <= 0.0 || projection >= pass_distance {
+                        return false;
+                    }
+                    let projected_point = ctx.player.position + pass_direction * projection;
+                    let perp_distance = (opponent.position - projected_point).magnitude();
+                    perp_distance < 6.0
+                })
+                .count();
+
+            // Skip crosses with 2+ opponents directly in the path
+            if opponents_in_path >= 2 {
+                continue;
+            }
+
             // Score: prefer players with good heading skill and proximity to goal center
             let heading_skill = if let Some(player) = ctx.context.players.by_id(teammate.id) {
                 player.skills.technical.heading
@@ -94,7 +117,20 @@ impl MidfielderCrossingState {
                 10.0
             };
 
-            let score = heading_skill + (150.0 - dist_to_goal) / 10.0;
+            // Penalize targets with tight marking
+            let close_opponents = ctx.tick_context.distances
+                .opponents(teammate.id, 8.0)
+                .count();
+            let marking_penalty = match close_opponents {
+                0 => 1.0,
+                1 => 0.6,
+                _ => 0.25,
+            };
+
+            // Reduce score if 1 opponent in cross path
+            let path_penalty = if opponents_in_path == 1 { 0.6 } else { 1.0 };
+
+            let score = (heading_skill + (150.0 - dist_to_goal) / 10.0) * marking_penalty * path_penalty;
 
             if let Some((_, best_score)) = &best_target {
                 if score > *best_score {

@@ -1,4 +1,5 @@
-﻿use nalgebra::Vector3;
+use nalgebra::Vector3;
+use serde::ser::{SerializeMap, SerializeSeq};
 use serde::Serialize;
 use std::collections::HashMap;
 
@@ -20,6 +21,15 @@ impl PassEventData {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct MatchEventData {
+    pub timestamp: u64,
+    pub category: String,
+    pub description: String,
+}
+
+/// Position data item — stored in memory as full-precision values,
+/// serialized as compact JSON arrays: [timestamp, x, y, z] or [timestamp, x, y]
+#[derive(Debug, Clone)]
 pub struct ResultPositionDataItem {
     pub timestamp: u64,
     pub position: Vector3<f32>,
@@ -34,29 +44,108 @@ impl ResultPositionDataItem {
     }
 }
 
-impl PartialEq<ResultPositionDataItem> for ResultPositionDataItem {
-    fn eq(&self, other: &Self) -> bool {
-        self.timestamp == other.timestamp && self.position == other.position
+/// Compact serialization: [timestamp, x, y] or [timestamp, x, y, z]
+/// Omits z when it's effectively zero (players on ground), saving ~5 bytes/entry in JSON.
+impl Serialize for ResultPositionDataItem {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        // Round to 1 decimal for compact JSON output
+        let x = (self.position.x * 10.0).round() / 10.0;
+        let y = (self.position.y * 10.0).round() / 10.0;
+        let z = (self.position.z * 10.0).round() / 10.0;
+
+        if z.abs() < 0.05 {
+            // 2D entry: [timestamp, x, y]
+            let mut seq = serializer.serialize_seq(Some(3))?;
+            seq.serialize_element(&self.timestamp)?;
+            seq.serialize_element(&x)?;
+            seq.serialize_element(&y)?;
+            seq.end()
+        } else {
+            // 3D entry: [timestamp, x, y, z]
+            let mut seq = serializer.serialize_seq(Some(4))?;
+            seq.serialize_element(&self.timestamp)?;
+            seq.serialize_element(&x)?;
+            seq.serialize_element(&y)?;
+            seq.serialize_element(&z)?;
+            seq.end()
+        }
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
-pub struct MatchEventData {
-    pub timestamp: u64,
-    pub category: String,
-    pub description: String,
+/// Tolerance-based squared distance threshold for deduplication.
+/// Positions within 0.3 game units are considered unchanged.
+/// 0.3 units on an 840-unit field = 0.036% — completely imperceptible.
+const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
+
+/// Quantize a coordinate to 0.1 precision.
+/// This improves dedup hit rate and produces shorter JSON floats.
+#[inline]
+fn quantize(v: f32) -> f32 {
+    (v * 10.0).round() / 10.0
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Player state change: recorded only when the state actually changes.
+/// Serializes as [timestamp, "StateName"] for compact JSON.
+#[derive(Debug, Clone)]
+pub struct PlayerStateEntry {
+    pub timestamp: u64,
+    pub state: String,
+}
+
+impl Serialize for PlayerStateEntry {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let mut seq = serializer.serialize_seq(Some(2))?;
+        seq.serialize_element(&self.timestamp)?;
+        seq.serialize_element(&self.state)?;
+        seq.end()
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ResultMatchPositionData {
     ball: Vec<ResultPositionDataItem>,
     players: HashMap<u32, Vec<ResultPositionDataItem>>,
     passes: Vec<PassEventData>,
     events: Vec<MatchEventData>,
-    #[serde(skip)]
+    /// Per-player state changes — only populated when track_events is true.
+    player_states: HashMap<u32, Vec<PlayerStateEntry>>,
     track_events: bool,
-    #[serde(skip)]
     track_positions: bool,
+}
+
+/// Compact top-level serialization.
+/// Uses same key names as before for frontend compatibility.
+impl Serialize for ResultMatchPositionData {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let has_states = self.track_events && !self.player_states.is_empty();
+        let field_count = 2
+            + if self.track_events { 2 } else { 0 }
+            + if has_states { 1 } else { 0 };
+        let mut map = serializer.serialize_map(Some(field_count))?;
+
+        map.serialize_entry("ball", &self.ball)?;
+        map.serialize_entry("players", &self.players)?;
+
+        if self.track_events {
+            map.serialize_entry("passes", &self.passes)?;
+            map.serialize_entry("events", &self.events)?;
+        }
+
+        if has_states {
+            map.serialize_entry("states", &self.player_states)?;
+        }
+
+        map.end()
+    }
 }
 
 impl ResultMatchPositionData {
@@ -66,6 +155,7 @@ impl ResultMatchPositionData {
             players: HashMap::with_capacity(44),
             passes: Vec::new(),
             events: Vec::new(),
+            player_states: HashMap::new(),
             track_events: false,
             track_positions: true,
         }
@@ -77,6 +167,7 @@ impl ResultMatchPositionData {
             players: HashMap::with_capacity(44),
             passes: Vec::new(),
             events: Vec::new(),
+            player_states: HashMap::with_capacity(44),
             track_events: true,
             track_positions: true,
         }
@@ -88,12 +179,11 @@ impl ResultMatchPositionData {
             players: HashMap::new(),
             passes: Vec::new(),
             events: Vec::new(),
+            player_states: HashMap::new(),
             track_events: false,
             track_positions: false,
         }
     }
-
-    pub fn compress(&mut self) {}
 
     /// Split the data into chunks based on time ranges
     /// Returns a vector of chunks, each containing data for a specific time window
@@ -115,6 +205,7 @@ impl ResultMatchPositionData {
                 players: HashMap::new(),
                 passes: Vec::new(),
                 events: Vec::new(),
+                player_states: HashMap::new(),
                 track_events: self.track_events,
                 track_positions: self.track_positions,
             };
@@ -137,7 +228,7 @@ impl ResultMatchPositionData {
                 }
             }
 
-            // Filter passes for this time window
+            // Filter passes and events for this time window
             if self.track_events {
                 chunk.passes = self.passes.iter()
                     .filter(|pass| pass.timestamp >= start_time && pass.timestamp < end_time)
@@ -148,6 +239,31 @@ impl ResultMatchPositionData {
                     .filter(|evt| evt.timestamp >= start_time && evt.timestamp < end_time)
                     .cloned()
                     .collect();
+
+                // Filter player states: include last state before chunk start + states in window
+                for (player_id, states) in &self.player_states {
+                    let mut chunk_states = Vec::new();
+
+                    // Find the most recent state before this chunk starts (carry-over)
+                    if let Some(last_before) = states.iter()
+                        .rev()
+                        .find(|s| s.timestamp < start_time)
+                    {
+                        chunk_states.push(PlayerStateEntry {
+                            timestamp: start_time,
+                            state: last_before.state.clone(),
+                        });
+                    }
+
+                    // Add states within this chunk's window
+                    for s in states.iter().filter(|s| s.timestamp >= start_time && s.timestamp < end_time) {
+                        chunk_states.push(s.clone());
+                    }
+
+                    if !chunk_states.is_empty() {
+                        chunk.player_states.insert(*player_id, chunk_states);
+                    }
+                }
             }
 
             chunks.push(chunk);
@@ -168,40 +284,64 @@ impl ResultMatchPositionData {
         self.track_positions
     }
 
+    /// Add player position with quantization and tolerance-based dedup.
+    /// Skips recording if the player hasn't moved more than 0.3 units since last entry.
     pub fn add_player_positions(&mut self, player_id: u32, timestamp: u64, position: Vector3<f32>) {
         if !self.track_positions {
             return;
         }
 
+        // Quantize to 0.1 precision — reduces float noise and produces shorter JSON
+        let position = Vector3::new(
+            quantize(position.x),
+            quantize(position.y),
+            quantize(position.z),
+        );
+
         if let Some(player_data) = self.players.get_mut(&player_id) {
-            let last_data = player_data.last().unwrap();
-            if last_data.position.x != position.x
-                || last_data.position.y != position.y
-                || last_data.position.z != position.z
-            {
-                let position_data = ResultPositionDataItem::new(timestamp, position);
-                player_data.push(position_data);
+            let last = player_data.last().unwrap();
+            let dx = position.x - last.position.x;
+            let dy = position.y - last.position.y;
+            let dz = position.z - last.position.z;
+
+            // Tolerance dedup: skip if moved less than 0.3 units
+            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ {
+                return;
             }
+
+            player_data.push(ResultPositionDataItem::new(timestamp, position));
         } else {
             self.players
                 .insert(player_id, vec![ResultPositionDataItem::new(timestamp, position)]);
         }
     }
 
+    /// Add ball position with quantization and tolerance-based dedup.
+    /// Previous implementation had a bug: PartialEq compared timestamps too,
+    /// so ball positions were NEVER deduplicated (timestamps always differ).
     pub fn add_ball_positions(&mut self, timestamp: u64, position: Vector3<f32>) {
         if !self.track_positions {
             return;
         }
 
-        let position = ResultPositionDataItem::new(timestamp, position);
+        let position = Vector3::new(
+            quantize(position.x),
+            quantize(position.y),
+            quantize(position.z),
+        );
 
-        if let Some(last_position) = self.ball.last() {
-            if last_position != &position {
-                self.ball.push(position);
+        if let Some(last) = self.ball.last() {
+            let dx = position.x - last.position.x;
+            let dy = position.y - last.position.y;
+            let dz = position.z - last.position.z;
+
+            // Tolerance dedup: skip if ball moved less than 0.3 units
+            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ {
+                return;
             }
-        } else {
-            self.ball.push(position);
         }
+
+        self.ball.push(ResultPositionDataItem::new(timestamp, position));
     }
 
     /// Get the maximum timestamp in the recorded data
@@ -287,6 +427,31 @@ impl ResultMatchPositionData {
     pub fn add_pass_event(&mut self, timestamp: u64, from_player_id: u32, to_player_id: u32) {
         if self.track_events {
             self.passes.push(PassEventData::new(timestamp, from_player_id, to_player_id));
+        }
+    }
+
+    /// Record a player state change. Only stores when the state name differs from the last entry.
+    pub fn add_player_state(&mut self, player_id: u32, timestamp: u64, state_name: &str) {
+        if !self.track_events {
+            return;
+        }
+
+        if let Some(entries) = self.player_states.get_mut(&player_id) {
+            // Dedup: skip if same state as last recorded
+            if let Some(last) = entries.last() {
+                if last.state == state_name {
+                    return;
+                }
+            }
+            entries.push(PlayerStateEntry {
+                timestamp,
+                state: state_name.to_string(),
+            });
+        } else {
+            self.player_states.insert(player_id, vec![PlayerStateEntry {
+                timestamp,
+                state: state_name.to_string(),
+            }]);
         }
     }
 

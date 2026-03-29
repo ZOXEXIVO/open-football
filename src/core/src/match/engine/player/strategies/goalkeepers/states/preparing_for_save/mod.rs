@@ -93,7 +93,7 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let goal_pos = ctx.ball().direction_to_own_goal();
 
         // Predict where ball will be shortly
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let prediction_time = 0.2 + reflexes * 0.4;
         let predicted_ball = ball_position + ball_velocity * prediction_time;
 
@@ -147,7 +147,7 @@ impl GoalkeeperPreparingForSaveState {
         }
 
         // Goalkeeper skills
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         let bravery = ctx.player.skills.mental.bravery / 20.0;
 
@@ -192,7 +192,7 @@ impl GoalkeeperPreparingForSaveState {
 
         // Goalkeeper skills
         // Use first_touch as proxy for handling, physical.jumping for aerial reach
-        let handling = ctx.player.skills.technical.first_touch / 20.0;
+        let handling = ctx.player.skills.goalkeeping.handling / 20.0;
 
         // Check if ball is high (would need to punch rather than catch)
         let ball_height = ball_position.z;

@@ -49,7 +49,7 @@ pub use player::{
     Player, PlayerCollection, PlayerBuilder,
     PlayerAttributes, PlayerContext,
     PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
-    PlayerSkills, Technical, Mental, Physical,
+    PlayerSkills, Technical, Mental, Physical, Goalkeeping,
     PlayerPositions, PlayerPosition, PlayerStatus, StatusData,
     PlayerStatistics, PlayerStatisticsHistory, PlayerStatisticsHistoryItem, TeamInfo,
     PlayerHappiness, PositiveHappiness, NegativeHappiness,

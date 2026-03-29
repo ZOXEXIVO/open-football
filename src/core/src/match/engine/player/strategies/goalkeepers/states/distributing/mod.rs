@@ -68,11 +68,11 @@ impl GoalkeeperDistributingState {
         // Get goalkeeper's skills to determine passing style
         let pass_skill = ctx.player.skills.technical.passing / 20.0;
         let vision_skill = ctx.player.skills.mental.vision / 20.0;
-        let kicking_skill = ctx.player.skills.technical.long_throws / 20.0;
+        let kicking_skill = ctx.player.skills.goalkeeping.kicking / 20.0;
         let decision_skill = ctx.player.skills.mental.decisions / 20.0;
         let composure_skill = ctx.player.skills.mental.composure / 20.0;
         let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
-        let technique_skill = ctx.player.skills.technical.technique / 20.0;
+        let technique_skill = ctx.player.skills.goalkeeping.throwing / 20.0;
 
         // Determine goalkeeper passing style based on skills
         let is_technical_keeper = pass_skill > 0.7 && vision_skill > 0.7; // Likes build-up play
@@ -90,9 +90,22 @@ impl GoalkeeperDistributingState {
 
             let distance = (teammate.position - ctx.player.position).norm();
 
-            // PREVENT PASSING TO PLAYERS TOO CLOSE TO GOALKEEPER (creates ping-pong)
+            // Skip players too close — GK should distribute long
             if distance < 50.0 {
-                continue; // Skip players too close to goalkeeper
+                continue;
+            }
+
+            // Skip teammates with opponents directly between GK and them (interception risk)
+            let pass_dir = (teammate.position - ctx.player.position).normalize();
+            let blocked = ctx.players().opponents().all().any(|opp| {
+                let to_opp = opp.position - ctx.player.position;
+                let proj = to_opp.dot(&pass_dir);
+                if proj < 10.0 || proj > distance { return false; }
+                let proj_pt = ctx.player.position + pass_dir * proj;
+                (opp.position - proj_pt).norm() < 8.0
+            });
+            if blocked {
+                continue;
             }
 
             // Skill-based distance preference with ultra-long pass support

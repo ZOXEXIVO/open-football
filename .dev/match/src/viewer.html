@@ -1,0 +1,330 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Dev Match Viewer</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.header { text-align: center; padding: 18px 0 10px; }
+.score { font-size: 28px; font-weight: 700; letter-spacing: 2px; }
+.score .sep { color: #3a4f5c; margin: 0 12px; }
+.team-home { color: #6ba3d6; }
+.team-away { color: #d6836b; }
+#match-container { display: flex; justify-content: center; padding: 0 20px; }
+#pixi-container canvas { border-radius: 6px; }
+.controls { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 8px 20px; }
+.controls button { background: #1c2830; border: 1px solid #3a4f5c; color: #c8d6e0; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 12px; }
+.controls button:hover { background: #2a3a46; }
+.controls button.active { background: #2a5a3a; border-color: #4a9d5b; }
+#time-slider { flex: 1; max-width: 600px; accent-color: #4a9d5b; }
+#time-display { font-size: 13px; font-variant-numeric: tabular-nums; min-width: 50px; text-align: center; }
+#speed-display { font-size: 11px; color: #7a8c98; }
+</style>
+</head>
+<body>
+<div class="header">
+    <div class="score">
+        <span class="team-home">Home FC</span>
+        <span id="home-score">0</span>
+        <span class="sep">-</span>
+        <span id="away-score">0</span>
+        <span class="team-away">Away United</span>
+    </div>
+    <div class="controls">
+        <button id="btn-play">Play</button>
+        <button id="btn-speed">1x</button>
+        <input type="range" id="time-slider" min="0" max="1000" value="0">
+        <span id="time-display">0'</span>
+    </div>
+</div>
+<div id="match-container">
+    <div id="pixi-container"></div>
+</div>
+
+<script src="/js/pixi.min.js"></script>
+<script src="/match_data.js"></script>
+<script>
+(function() {
+    const matchId = MATCH_ID;
+    const matchTimeMsTotal = MATCH_TIME_MS;
+    const playersData = PLAYERS_DATA;
+    const goalsData = GOALS_DATA;
+    const homeColorBg = HOME_BG;
+    const homeColorFg = HOME_FG;
+    const awayColorBg = AWAY_BG;
+    const awayColorFg = AWAY_FG;
+
+    document.getElementById('home-score').textContent = HOME_GOALS;
+    document.getElementById('away-score').textContent = AWAY_GOALS;
+
+    const canvasWidth = 1400;
+    const canvasHeight = 950;
+    // SVG field pitch area: x=62..1322, y=60..870 (1260x810)
+    const fieldLeft = 62;
+    const fieldTop = 60;
+    const fieldWidth = 1260;
+    const fieldHeight = 810;
+    const chunkDurationMs = 300000;
+
+    let app = null;
+    let background = null;
+    let gameContainer = null;
+    let playerSprites = {};
+    let playerMap = {};
+    let ballSprite = null;
+    let positionData = { ball: [], players: {}, states: {} };
+    let loadedChunks = new Set();
+    let loadingChunks = new Set();
+    let totalChunks = 0;
+
+    let playing = false;
+    let currentTime = 0;
+    let playbackSpeed = 1;
+    const speeds = [1, 2, 4, 8, 16];
+    let speedIdx = 0;
+    let lastFrameTime = 0;
+
+    function getChunkNumber(time) {
+        return Math.floor(time / chunkDurationMs);
+    }
+
+    async function loadChunk(chunkNum) {
+        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || loadingChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
+        loadingChunks.add(chunkNum);
+        try {
+            const res = await fetch('/api/match/' + matchId + '/chunk/' + chunkNum);
+            const data = await res.json();
+            mergeData(data, chunkNum);
+            loadedChunks.add(chunkNum);
+        } finally {
+            loadingChunks.delete(chunkNum);
+        }
+    }
+
+    // Compact format: positions = [timestamp, x, y, z?], states = [timestamp, "StateName"]
+    function mergeData(data) {
+        if (data.ball) {
+            for (let i = 0; i < data.ball.length; i++) positionData.ball.push(data.ball[i]);
+            positionData.ball.sort(function(a, b) { return a[0] - b[0]; });
+        }
+        if (data.players) {
+            for (const [id, positions] of Object.entries(data.players)) {
+                if (!positionData.players[id]) positionData.players[id] = [];
+                for (let i = 0; i < positions.length; i++) positionData.players[id].push(positions[i]);
+                positionData.players[id].sort(function(a, b) { return a[0] - b[0]; });
+            }
+        }
+        if (data.states) {
+            for (const [id, states] of Object.entries(data.states)) {
+                if (!positionData.states[id]) positionData.states[id] = [];
+                for (let i = 0; i < states.length; i++) positionData.states[id].push(states[i]);
+                positionData.states[id].sort(function(a, b) { return a[0] - b[0]; });
+            }
+        }
+    }
+
+    function findPosition(arr, time) {
+        if (!arr || arr.length === 0) return null;
+        // Use the closest recorded frame (before or after) to requested time
+        let lo = 0, hi = arr.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (arr[mid][0] <= time) lo = mid; else hi = mid - 1;
+        }
+        // If next frame is closer in time, prefer it (handles goal resets better)
+        if (lo + 1 < arr.length) {
+            const curDt = time - arr[lo][0];
+            const nextDt = arr[lo + 1][0] - time;
+            if (nextDt < curDt) { const e = arr[lo + 1]; return [e[1], e[2], e[3] || 0]; }
+        }
+        const e = arr[lo];
+        return [e[1], e[2], e[3] || 0];
+    }
+
+    function createPlayerGraphic(player) {
+        const container = new PIXI.Container();
+        const isGk = player.position === 'GK';
+        const isHome = player.is_home;
+        const bg = isGk ? '#e6c619' : (isHome ? homeColorBg : awayColorBg);
+        const fg = isGk ? '#000000' : (isHome ? homeColorFg : awayColorFg);
+
+        const circle = new PIXI.Graphics();
+        circle.circle(0, 0, 24).fill(bg).stroke({ width: 3, color: 0xffffff });
+        container.addChild(circle);
+
+        const numText = new PIXI.Text({ text: String(player.shirt_number), style: new PIXI.TextStyle({ fontSize: 20, fontWeight: 'bold', fill: fg, fontFamily: 'Arial' }) });
+        numText.anchor.set(0.5, 0.5);
+        container.addChild(numText);
+
+        const nameText = new PIXI.Text({ text: player.last_name, style: new PIXI.TextStyle({ fontSize: 18, fill: '#ffffff', fontFamily: 'Arial', dropShadow: { alpha: 0.6, distance: 1, color: '#000000' } }) });
+        nameText.anchor.set(0.5, 0);
+        nameText.y = 28;
+        container.addChild(nameText);
+
+        // State label — shown below the name
+        const stateText = new PIXI.Text({ text: '', style: new PIXI.TextStyle({ fontSize: 16, fill: '#ffff66', fontFamily: 'Arial' }) });
+        stateText.anchor.set(0.5, 0);
+        stateText.y = 50;
+        container.addChild(stateText);
+        container._stateText = stateText;
+
+        return container;
+    }
+
+    // Find current state for a player at given time (binary search on state entries)
+    function findState(stateArr, time) {
+        if (!stateArr || stateArr.length === 0) return '';
+        let lo = 0, hi = stateArr.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >> 1;
+            if (stateArr[mid][0] <= time) lo = mid; else hi = mid - 1;
+        }
+        // Strip "Forward: " / "Midfielder: " etc prefix for brevity
+        const full = stateArr[lo][1];
+        const colon = full.indexOf(': ');
+        return colon >= 0 ? full.substring(colon + 2) : full;
+    }
+
+    function engineToPixel(ex, ey) {
+        return [
+            fieldLeft + (ex / 840) * fieldWidth,
+            fieldTop + (ey / 545) * fieldHeight,
+        ];
+    }
+
+    function updatePositions(time) {
+        // Ball
+        const bp = findPosition(positionData.ball, time);
+        if (bp && ballSprite) {
+            const [px, py] = engineToPixel(bp[0], bp[1]);
+            ballSprite.x = px;
+            ballSprite.y = py;
+        }
+
+        // Players
+        for (const [id, sprite] of Object.entries(playerSprites)) {
+            const pp = findPosition(positionData.players[id], time);
+            if (pp) {
+                const [px, py] = engineToPixel(pp[0], pp[1]);
+                sprite.x = px;
+                sprite.y = py;
+                sprite.visible = true;
+                // Update state label
+                if (sprite._stateText) {
+                    sprite._stateText.text = findState(positionData.states[id], time);
+                }
+            }
+        }
+    }
+
+    function gameLoop() {
+        if (!playing) { requestAnimationFrame(gameLoop); return; }
+
+        const now = performance.now();
+        if (lastFrameTime === 0) lastFrameTime = now;
+        const dt = (now - lastFrameTime) * playbackSpeed;
+        lastFrameTime = now;
+
+        currentTime += dt;
+        if (currentTime >= matchTimeMsTotal) {
+            currentTime = matchTimeMsTotal;
+            playing = false;
+            document.getElementById('btn-play').textContent = 'Play';
+        }
+
+        // Preload chunks
+        const needed = getChunkNumber(currentTime);
+        loadChunk(needed);
+        loadChunk(needed + 1);
+
+        updatePositions(currentTime);
+
+        const slider = document.getElementById('time-slider');
+        slider.value = (currentTime / matchTimeMsTotal) * 1000;
+        document.getElementById('time-display').textContent = Math.floor(currentTime / matchTimeMsTotal * 90) + "'";
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    async function init() {
+        const metaRes = await fetch('/api/match/' + matchId + '/metadata');
+        const metadata = await metaRes.json();
+        totalChunks = metadata.chunk_count || 0;
+
+        // Load first chunk
+        const chunkRes = await fetch('/api/match/' + matchId + '/chunk/0');
+        const firstChunk = await chunkRes.json();
+        mergeData(firstChunk);
+        loadedChunks.add(0);
+
+        app = new PIXI.Application();
+        await app.init({ antialias: true, background: '#1a472a', width: canvasWidth, height: canvasHeight });
+
+        document.getElementById('pixi-container').appendChild(app.canvas);
+
+        const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
+        background = new PIXI.Sprite(bgTexture);
+        background.width = canvasWidth;
+        background.height = canvasHeight;
+        app.stage.addChild(background);
+
+        gameContainer = new PIXI.Container();
+        app.stage.addChild(gameContainer);
+
+        // Build player map
+        for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
+
+        // Create player sprites from chunk data
+        const chunkPlayers = Object.entries(firstChunk.players || {});
+        for (let i = 0; i < chunkPlayers.length; i++) {
+            const id = chunkPlayers[i][0];
+            const player = playerMap[id];
+            if (!player) continue;
+            const sprite = createPlayerGraphic(player);
+            gameContainer.addChild(sprite);
+            playerSprites[id] = sprite;
+        }
+
+        // Ball
+        const ballContainer = new PIXI.Container();
+        const ballCircle = new PIXI.Graphics();
+        ballCircle.circle(0, 0, 6).fill(0xffffff).stroke({ width: 2, color: 0x000000 });
+        ballContainer.addChild(ballCircle);
+        gameContainer.addChild(ballContainer);
+        ballSprite = ballContainer;
+
+        updatePositions(0);
+
+        // Controls
+        document.getElementById('btn-play').addEventListener('click', function() {
+            playing = !playing;
+            this.textContent = playing ? 'Pause' : 'Play';
+            if (playing) lastFrameTime = performance.now();
+            if (currentTime >= matchTimeMsTotal) currentTime = 0;
+        });
+
+        document.getElementById('btn-speed').addEventListener('click', function() {
+            speedIdx = (speedIdx + 1) % speeds.length;
+            playbackSpeed = speeds[speedIdx];
+            this.textContent = playbackSpeed + 'x';
+        });
+
+        const slider = document.getElementById('time-slider');
+        slider.addEventListener('input', function() {
+            currentTime = (this.value / 1000) * matchTimeMsTotal;
+            document.getElementById('time-display').textContent = Math.floor(currentTime / matchTimeMsTotal * 90) + "'";
+            const needed = getChunkNumber(currentTime);
+            loadChunk(needed);
+            updatePositions(currentTime);
+        });
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    init();
+})();
+</script>
+</body>
+</html>

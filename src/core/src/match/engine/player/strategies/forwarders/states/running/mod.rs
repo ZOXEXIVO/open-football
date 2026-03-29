@@ -63,53 +63,27 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0.5: In shooting range with clear shot — but respect team cooldown and coach
-            if can_shoot
-                && coach.shooting_reluctance() < 0.3
-                && ctx.player().shooting().in_shooting_range()
-                && ctx.player().has_clear_shot()
-                && distance_to_goal < CLOSE_RANGE_DISTANCE // Only auto-shoot from close range
-            {
+            // Priority 0.5: Clear shot within 120 units — ALWAYS shoot.
+            // Forwards are strikers — if they see the goal, they shoot.
+            // No skill gating. The GK save mechanics handle the rest.
+            if distance_to_goal <= 120.0 && ctx.player().has_clear_shot() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
-            // Priority 0.6: Unopposed approach — shoot from close range with decent finishing
-            if can_shoot
-                && distance_to_goal < CLOSE_RANGE_DISTANCE
-                && self.has_open_space_ahead(ctx)
-            {
-                let finishing = ctx.player.skills.technical.finishing / 20.0;
-                if finishing > 0.5 && ctx.player().shooting().has_good_angle() {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
-            }
-
-            // Priority 0.7: Long-range shooting — very skilled players only, rare
-            if can_shoot && coach.shooting_reluctance() <= 0.0 {
-                let long_shots = ctx.player.skills.technical.long_shots / 20.0;
-                let finishing = ctx.player.skills.technical.finishing / 20.0;
-
-                if distance_to_goal > CLOSE_RANGE_DISTANCE
-                    && distance_to_goal <= MAX_SHOOTING_DISTANCE
-                    && long_shots > 0.7
-                    && finishing > 0.55
-                    && ctx.player().has_clear_shot()
-                    && ctx.player().shooting().has_good_angle()
-                    && !ctx.players().opponents().exists(10.0)
-                {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
-                }
+            // Priority 0.6: Inside 100 units (~50m) — shoot regardless
+            if distance_to_goal < 100.0 {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Shooting,
+                ));
             }
 
             // Priority 0.8: Open path to goal — KEEP RUNNING, don't pass or dribble
-            // Only brave/skilled players carry the ball forward; others prefer passing
-            if distance_to_goal > POINT_BLANK_DISTANCE
+            // But only if still far from shooting range. Once in range, shooting
+            // checks above should have triggered. If they didn't (no clear shot),
+            // don't keep running into the GK — fall through to passing/dribbling.
+            if distance_to_goal > MAX_SHOOTING_DISTANCE
                 && distance_to_goal < 180.0
                 && self.has_open_space_ahead(ctx)
             {
@@ -249,7 +223,16 @@ impl StateProcessingHandler for ForwardRunningState {
         }
         // Handle cases when player doesn't have the ball
         else {
-            // Priority 0: Loose ball nearby — only chase if best positioned
+            // Priority 0: Loose ball — chase it if unowned and we're closest
+            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
+                && ctx.team().is_best_player_to_chase_ball()
+            {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::TakeBall,
+                ));
+            }
+
+            // Also respond to ball system notifications
             if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::TakeBall,
@@ -371,8 +354,7 @@ impl StateProcessingHandler for ForwardRunningState {
                     }
                         .calculate(ctx.player)
                         .velocity
-                        * fatigue_factor
-                        + ctx.player().separation_velocity(),
+                        * fatigue_factor,
                 );
             }
         }
@@ -411,14 +393,17 @@ impl StateProcessingHandler for ForwardRunningState {
                 None => 0.0,
             };
 
+            // Quantize ball position to 10-unit grid to prevent target wobble
+            let qball_x = (ball_pos.x / 10.0).round() * 10.0;
+            let qball_y = (ball_pos.y / 10.0).round() * 10.0;
+
             // Smooth ball proximity (no binary switches)
             let proximity = (1.0 - ball_distance / 400.0).clamp(0.05, 0.45);
 
             // === UNIQUE FORWARD SLOT: spread forwards vertically ===
-            // Count forwards and determine slot by ID ordering (no allocation)
             let my_id = ctx.player.id;
             let mut slot_index = 0u32;
-            let mut total_fwds = 1u32; // count self
+            let mut total_fwds = 1u32;
             for t in ctx.players().teammates().all() {
                 if t.tactical_positions.is_forward() {
                     total_fwds += 1;
@@ -436,16 +421,15 @@ impl StateProcessingHandler for ForwardRunningState {
 
             // Forwards stay HIGH — target pushes well ahead of ball toward opponent goal
             let depth_stagger = attacking_direction * (slot_index as f32 * 20.0);
-            let advanced_x = ball_pos.x + attacking_direction * 70.0 + depth_stagger;
-            // Clamp advanced_x toward opponent's half so forwards don't drop behind the ball
+            let advanced_x = qball_x + attacking_direction * 70.0 + depth_stagger;
             let min_forward_x = match ctx.player.side {
-                Some(PlayerSide::Left) => (field_width * 0.45).max(ball_pos.x).min(field_width),
+                Some(PlayerSide::Left) => (field_width * 0.45).max(qball_x).min(field_width),
                 Some(PlayerSide::Right) => 0.0_f32,
                 None => 0.0,
             };
             let max_forward_x = match ctx.player.side {
                 Some(PlayerSide::Left) => field_width,
-                Some(PlayerSide::Right) => (field_width * 0.55).min(ball_pos.x).max(0.0),
+                Some(PlayerSide::Right) => (field_width * 0.55).min(qball_x).max(0.0),
                 None => field_width,
             };
             let clamped_advanced_x = advanced_x.clamp(min_forward_x, max_forward_x);
@@ -458,41 +442,29 @@ impl StateProcessingHandler for ForwardRunningState {
             let ball_weight = proximity * (1.0 - slot_weight);
             let start_weight = (1.0 - slot_weight - ball_weight).max(0.0);
             let target_y = slot_y * slot_weight
-                + ball_pos.y * ball_weight
+                + qball_y * ball_weight
                 + start_pos.y * start_weight;
 
-            // Per-forward organic drift for unique movement (smaller — slot handles spread)
-            // Dampen drift in attacking third to prevent shaking near goal
-            let match_time = ctx.context.total_match_time as f32;
-            let seed = ctx.player.id as f32 * 2.39;
-            let in_attacking_third = ctx.player.position.x > field_width * 0.66
-                || ctx.player.position.x < field_width * 0.33;
-            let drift_scale = if in_attacking_third { 0.3 } else { 1.0 };
-            let drift_x = (seed + match_time * 0.005).sin() * 8.0 * drift_scale;
-            let drift_y = (seed * 1.37 + match_time * 0.004).cos() * 6.0 * drift_scale;
-
             let target = Vector3::new(
-                (target_x + drift_x).clamp(30.0, field_width - 30.0),
-                (target_y + drift_y).clamp(40.0, field_height - 40.0),
+                target_x.clamp(30.0, field_width - 30.0),
+                target_y.clamp(40.0, field_height - 40.0),
                 0.0,
             );
 
             let dist_to_target = (target - ctx.player.position).magnitude();
 
+            if dist_to_target < 8.0 {
+                return Some(Vector3::zeros());
+            }
+
             let arrive_velocity = SteeringBehavior::Arrive {
                 target,
-                slowing_distance: 12.0,
+                slowing_distance: 15.0,
             }
             .calculate(ctx.player)
             .velocity;
 
-            // Dampen separation near target to prevent oscillation
-            let sep_damping = (dist_to_target / 40.0).clamp(0.0, 1.0);
-            let separation = ctx.player().separation_velocity() * sep_damping;
-
-            Some(
-                arrive_velocity * fatigue_factor + separation,
-            )
+            Some(arrive_velocity * fatigue_factor)
         }
     }
 
@@ -889,7 +861,6 @@ impl ForwardRunningState {
             }
                 .calculate(ctx.player)
                 .velocity
-                + ctx.player().separation_velocity()
         } else {
             // Default to moving toward goal
             SteeringBehavior::Arrive {
@@ -898,7 +869,6 @@ impl ForwardRunningState {
             }
                 .calculate(ctx.player)
                 .velocity
-                + ctx.player().separation_velocity()
         }
     }
 

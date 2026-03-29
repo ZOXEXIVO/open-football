@@ -141,6 +141,24 @@
                 </div>
                 <div class="fm-skills-grid">
                     <div class="fm-skill-col">
+                        {% if player.skills.is_goalkeeper %}
+                        <h4>{{ i18n.t("goalkeeping") }}</h4>
+                        <table class="fm-skills">
+                            <tr><td>{{ i18n.t("gk_aerial_reach") }}</td><td class="td_{{ player.skills.goalkeeping.aerial_reach }}">{{ player.skills.goalkeeping.aerial_reach }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_command_of_area") }}</td><td class="td_{{ player.skills.goalkeeping.command_of_area }}">{{ player.skills.goalkeeping.command_of_area }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_communication") }}</td><td class="td_{{ player.skills.goalkeeping.communication }}">{{ player.skills.goalkeeping.communication }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_eccentricity") }}</td><td class="td_{{ player.skills.goalkeeping.eccentricity }}">{{ player.skills.goalkeeping.eccentricity }}</td></tr>
+                            <tr><td>{{ i18n.t("first_touch") }}</td><td class="td_{{ player.skills.goalkeeping.first_touch }}">{{ player.skills.goalkeeping.first_touch }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_handling") }}</td><td class="td_{{ player.skills.goalkeeping.handling }}">{{ player.skills.goalkeeping.handling }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_kicking") }}</td><td class="td_{{ player.skills.goalkeeping.kicking }}">{{ player.skills.goalkeeping.kicking }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_one_on_ones") }}</td><td class="td_{{ player.skills.goalkeeping.one_on_ones }}">{{ player.skills.goalkeeping.one_on_ones }}</td></tr>
+                            <tr><td>{{ i18n.t("passing") }}</td><td class="td_{{ player.skills.goalkeeping.passing }}">{{ player.skills.goalkeeping.passing }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_punching") }}</td><td class="td_{{ player.skills.goalkeeping.punching }}">{{ player.skills.goalkeeping.punching }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_reflexes") }}</td><td class="td_{{ player.skills.goalkeeping.reflexes }}">{{ player.skills.goalkeeping.reflexes }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_rushing_out") }}</td><td class="td_{{ player.skills.goalkeeping.rushing_out }}">{{ player.skills.goalkeeping.rushing_out }}</td></tr>
+                            <tr><td>{{ i18n.t("gk_throwing") }}</td><td class="td_{{ player.skills.goalkeeping.throwing }}">{{ player.skills.goalkeeping.throwing }}</td></tr>
+                        </table>
+                        {% else %}
                         <h4>{{ i18n.t("technical") }}</h4>
                         <table class="fm-skills">
                             <tr><td>{{ i18n.t("corners") }}</td><td class="td_{{ player.skills.technical.corners }}">{{ player.skills.technical.corners }}</td></tr>
@@ -157,6 +175,7 @@
                             <tr><td>{{ i18n.t("tackling") }}</td><td class="td_{{ player.skills.technical.tackling }}">{{ player.skills.technical.tackling }}</td></tr>
                             <tr><td>{{ i18n.t("technique") }}</td><td class="td_{{ player.skills.technical.technique }}">{{ player.skills.technical.technique }}</td></tr>
                         </table>
+                        {% endif %}
                     </div>
                     <div class="fm-skill-col">
                         <h4>{{ i18n.t("mental") }}</h4>

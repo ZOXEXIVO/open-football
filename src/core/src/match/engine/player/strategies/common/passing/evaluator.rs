@@ -558,14 +558,22 @@ impl PassEvaluator {
         let pass_distance = pass_vector.norm();
         let pass_direction = pass_vector.normalize();
 
+        // Minimum distance along the pass line before an opponent counts as a blocker.
+        // A pressing opponent near the passer cannot intercept a driven forward pass —
+        // the ball clears them before they can react. In real football this is ~10m (~20 units).
+        // Use 25% of pass distance as alternative for short passes.
+        let min_intercept_projection = 20.0_f32.min(pass_distance * 0.25);
+
         // Check for opponents who could intercept the pass
         let intercepting_opponents = ctx.players().opponents().all()
             .filter(|opponent| {
                 let to_opponent = opponent.position - passer.position;
                 let projection_distance = to_opponent.dot(&pass_direction);
 
-                // Only consider opponents between passer and receiver
-                if projection_distance <= 0.0 || projection_distance >= pass_distance {
+                // Ignore opponents behind passer, past receiver, or too close to passer
+                if projection_distance <= min_intercept_projection
+                    || projection_distance >= pass_distance
+                {
                     return false;
                 }
 
@@ -586,15 +594,15 @@ impl PassEvaluator {
             })
             .count();
 
-        // Convert count to risk factor
+        // Convert count to risk factor — aggressive penalties to prevent suicidal passes
         if intercepting_opponents == 0 {
             0.0  // No risk
         } else if intercepting_opponents == 1 {
-            0.3  // Moderate risk
+            0.55 // Significant risk — one opponent in the lane
         } else if intercepting_opponents == 2 {
-            0.6  // High risk
+            0.85 // Very high risk — two opponents blocking
         } else {
-            0.9  // Very high risk
+            0.97 // Near-certain interception
         }
     }
 
@@ -628,10 +636,10 @@ impl PassEvaluator {
         let is_under_pressure = ctx.player().pressure().is_under_immediate_pressure();
         let min_pass_distance = if is_under_pressure {
             // Under pressure, allow shorter passes but still avoid huddle passes
-            15.0
+            12.0
         } else {
-            // Not under pressure, enforce minimum distance to prevent group passing
-            40.0
+            // Not under pressure, still allow short-to-medium passes
+            20.0
         };
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
@@ -724,15 +732,15 @@ impl PassEvaluator {
                 }
             };
 
-            // Skill-based interception risk tolerance
+            // Skill-based interception risk tolerance — higher = more penalty applied
             let risk_tolerance = if is_direct {
-                0.3 // Willing to take risks
+                0.5 // Still somewhat aggressive but respects blockers
             } else if is_conservative {
-                0.8 // Avoid any risk
+                0.9 // Almost never pass through opponents
             } else if is_playmaker {
-                0.4 // Moderate risk for creative passes
+                0.6 // Moderate — will try creative passes but not suicidal
             } else {
-                0.5 // Standard risk avoidance
+                0.7 // Standard — significant penalty for blocked lanes
             };
 
             let interception_penalty = 1.0 - (interception_risk * risk_tolerance);
@@ -896,8 +904,25 @@ impl PassEvaluator {
                 }
             };
 
+            // Hard reject: never pass through 2+ opponents unless playmaker with high vision
+            let interception_blocked = if interception_risk >= 0.85 {
+                // 2+ opponents in the lane — almost always reject
+                if is_playmaker && vision_skill > 0.8 {
+                    false // Elite playmakers can attempt
+                } else {
+                    true
+                }
+            } else if interception_risk >= 0.55 {
+                // 1 opponent in the lane — reject for conservative, allow others with caution
+                is_conservative
+            } else {
+                false
+            };
+
             // Personality-based acceptance threshold - more aggressive to encourage penetration
-            let is_acceptable = if is_goalkeeper {
+            let is_acceptable = if interception_blocked {
+                false
+            } else if is_goalkeeper {
                 // Goalkeeper passes should be extremely rare
                 // Only accept under extreme pressure AND if highly safe AND not in attacking third
                 let player_field_position = (ctx.player.position.x * match ctx.player.side {
@@ -911,17 +936,14 @@ impl PassEvaluator {
                 evaluation.success_probability > 0.85 &&
                 in_defensive_third  // Only allow GK passes from defensive third
             } else if is_conservative {
-                // Reduced thresholds from 0.7/0.75 to allow more passes
-                evaluation.success_probability > 0.65 && evaluation.factors.receiver_positioning > 0.65
+                evaluation.success_probability > 0.60 && evaluation.factors.receiver_positioning > 0.55
             } else if is_direct {
-                // Reduced from 0.5/0.5 to encourage more penetrating passes
-                evaluation.success_probability > 0.45 && evaluation.factors.tactical_value > 0.4
+                evaluation.success_probability > 0.40 && evaluation.factors.tactical_value > 0.35
             } else if is_playmaker {
-                // More willing to attempt through balls
-                evaluation.success_probability > 0.50 || (evaluation.factors.tactical_value > 0.65 && pass_distance > 50.0)
+                evaluation.success_probability > 0.45 || (evaluation.factors.tactical_value > 0.60 && pass_distance > 50.0)
             } else {
-                // Standard - slightly more aggressive
-                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.6 && evaluation.success_probability > 0.48)
+                // Standard - more willing to pass
+                evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.5 && evaluation.success_probability > 0.42)
             };
 
             // Apply graduated recency penalty to discourage ping-pong passing

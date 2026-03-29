@@ -305,13 +305,21 @@ impl PlayerEventDispatcher {
         // Calculate overall quality for accuracy - affected by condition
         let overall_quality = skills.overall_quality();
 
-        // Calculate ideal target position
-        let ideal_target = event_model.pass_target;
+        // Calculate ideal target position — lead the pass toward receiver's movement
+        let receiver_pos = event_model.pass_target;
+        let receiver_velocity = field.get_player(event_model.to_player_id)
+            .map(|p| p.velocity)
+            .unwrap_or(Vector3::zeros());
 
-        // Use passer's position as starting point if ball is very close (within 5m)
-        // This handles cases where ball ownership just changed
-        let ball_position = field.ball.position;
-        let ideal_pass_vector = ideal_target - ball_position;
+        // Lead pass: target where the receiver will be, not where they are now
+        // Lead time scales with distance (further = more lead needed)
+        let pass_distance_est = (receiver_pos - passer_position).magnitude();
+        let lead_ticks = (pass_distance_est / 2.0).clamp(5.0, 30.0);
+        let ideal_target = receiver_pos + receiver_velocity * lead_ticks;
+
+        // Always use passer's position as pass origin — ball position may lag behind
+        let pass_origin = passer_position;
+        let ideal_pass_vector = ideal_target - pass_origin;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
         // Apply skill-based targeting error
@@ -371,7 +379,7 @@ impl PlayerEventDispatcher {
             }
         }
 
-        let actual_pass_vector = actual_target - ball_position;
+        let actual_pass_vector = actual_target - pass_origin;
         let actual_horizontal_distance = Self::calculate_horizontal_distance(&actual_pass_vector);
 
         // Calculate pass force with power variation
@@ -554,72 +562,41 @@ impl PlayerEventDispatcher {
             (pure_random * randomness_factor + skill_bias).clamp(0.0, 1.0)
         };
 
-        // Distance categories
-        let is_short = horizontal_distance <= 100.0;
-        let is_medium = horizontal_distance > 100.0 && horizontal_distance <= 200.0;
-        let is_long = horizontal_distance > 200.0 && horizontal_distance <= 300.0;
-        // Note: distances > 300.0 (very long) are handled in the else branches
+        // Distance categories — calibrated for 840-unit field (1 unit ≈ 0.5m)
+        let is_short = horizontal_distance <= 30.0;       // ~15m — quick one-touch
+        let is_medium = horizontal_distance > 30.0 && horizontal_distance <= 60.0;  // 15-30m
+        let is_long = horizontal_distance > 60.0 && horizontal_distance <= 120.0;   // 30-60m
+        // > 120 units = very long (60m+)
 
-        // MAIN LOGIC: If obstacles present, use lofted passes (crosses)
-        // If no obstacles, use ground passes
+        // Passes should be lofted based on BOTH obstacles AND distance.
+        // In real football, passes over 25m often leave the ground even without obstacles.
         if obstacles_in_lane == 0 {
-            // CLEAR LANE - Ground passes or low-driven passes
+            // CLEAR LANE — trajectory based on distance
             if is_short {
-                // Short passes - almost always ground
-                if skill_influenced_random < 0.95 {
-                    TrajectoryType::Ground
-                } else if skills.flair * skills.technique > 0.75 {
-                    TrajectoryType::Chip // Rare skillful chip
-                } else {
-                    TrajectoryType::Ground
-                }
+                // Short passes — ground
+                TrajectoryType::Ground
             } else if is_medium {
-                // Medium passes - mostly ground, some driven
-                if skill_influenced_random < 0.75 {
-                    TrajectoryType::Ground      // 75% ground
+                // Medium passes — mostly ground, some driven
+                if skill_influenced_random < 0.60 {
+                    TrajectoryType::Ground
                 } else {
-                    TrajectoryType::LowDriven   // 25% driven
+                    TrajectoryType::LowDriven
                 }
             } else if is_long {
-                // Long passes need arc to cover distance even in clear lanes
-                if skills.technique > 0.7 {
-                    // Good technique - can pick trajectory precisely
-                    if skill_influenced_random < 0.20 {
-                        TrajectoryType::LowDriven  // 20% driven (skillful option)
-                    } else if skill_influenced_random < 0.70 {
-                        TrajectoryType::MediumArc  // 50% medium arc
-                    } else {
-                        TrajectoryType::HighArc    // 30% high arc
-                    }
+                // Long passes — mix of driven and arced
+                if skill_influenced_random < 0.25 {
+                    TrajectoryType::LowDriven
+                } else if skill_influenced_random < 0.70 {
+                    TrajectoryType::MediumArc
                 } else {
-                    // Average technique - default to higher arcs for safety
-                    if skill_influenced_random < 0.10 {
-                        TrajectoryType::LowDriven  // 10% driven
-                    } else if skill_influenced_random < 0.55 {
-                        TrajectoryType::MediumArc  // 45% medium arc
-                    } else {
-                        TrajectoryType::HighArc    // 45% high arc
-                    }
+                    TrajectoryType::HighArc
                 }
             } else {
-                // Very long passes - almost always lofted
-                let long_pass_ability = skills.long_shots * skills.vision * skills.crossing;
-                if long_pass_ability > 0.7 {
-                    // Elite long passer - precise lofted balls
-                    if skill_influenced_random < 0.15 {
-                        TrajectoryType::LowDriven  // 15% driven (exceptional skill)
-                    } else if skill_influenced_random < 0.50 {
-                        TrajectoryType::MediumArc  // 35% medium arc
-                    } else {
-                        TrajectoryType::HighArc    // 50% high arc
-                    }
+                // Very long passes — always lofted
+                if skill_influenced_random < 0.40 {
+                    TrajectoryType::MediumArc
                 } else {
-                    // Average passer - high arcs to cover distance
-                    if skill_influenced_random < 0.30 {
-                        TrajectoryType::MediumArc  // 30% medium arc
-                    } else {
-                        TrajectoryType::HighArc    // 70% high arc
-                    }
+                    TrajectoryType::HighArc
                 }
             }
         } else {
@@ -825,25 +802,24 @@ impl PlayerEventDispatcher {
         // Combine vision and long_shots for long pass capability
         let long_pass_ability = (skills.vision * 0.6 + skills.long_shots * 0.4) * skills.condition_factor;
 
-        // Very strict limits - driven passes should dominate, not high arcs
         if horizontal_distance <= 20.0 {
-            // Short passes - almost no lift allowed (ground passes)
-            0.25 // Maximum 0.25 m/s vertical
+            // Short passes - mostly ground, slight lift allowed
+            0.5 + (long_pass_ability * 0.3)
         } else if horizontal_distance <= 45.0 {
-            // Medium passes - keep very low (mostly ground/driven)
-            0.6 + (long_pass_ability * 0.2) // 0.6 to 0.8 m/s
+            // Medium passes - driven or low lofted
+            1.2 + (long_pass_ability * 0.8)
         } else if horizontal_distance <= 80.0 {
-            // Long passes - still prefer low arcs
-            1.2 + (long_pass_ability * 0.8) // 1.2 to 2.0 m/s (much lower)
+            // Long passes - can be lofted over defenders
+            2.5 + (long_pass_ability * 1.5)
         } else if horizontal_distance <= 150.0 {
-            // Very long passes - moderate lift (reduced significantly)
-            2.5 + (long_pass_ability * 1.5) // 2.5 to 4.0 m/s (was 4.5-7.0)
+            // Very long passes - proper arcs
+            4.0 + (long_pass_ability * 2.0)
         } else if horizontal_distance <= 250.0 {
-            // Ultra-long diagonal switches - still prefer lower when possible
-            4.5 + (long_pass_ability * 2.5) // 4.5 to 7.0 m/s (was 7.0-10.0)
+            // Ultra-long diagonal switches
+            6.0 + (long_pass_ability * 3.0)
         } else {
             // Extreme distance - goalkeeper goal kicks, clearances
-            7.0 + (long_pass_ability * 3.5) // 7.0 to 10.5 m/s (was 10.0-14.0)
+            8.0 + (long_pass_ability * 4.0)
         }
     }
 
@@ -1197,7 +1173,9 @@ impl PlayerEventDispatcher {
         // Ball must stop when caught — prevent it from continuing into the goal
         field.ball.velocity = Vector3::zeros();
         field.ball.flags.in_flight_state = 0;
-        field.ball.claim_cooldown = 30;
+        // GK holds ball in hands — long protection so opponents can't challenge.
+        // Covers holding (25-60 ticks) + distribution time.
+        field.ball.claim_cooldown = 200;
         field.ball.pass_target_player_id = None;
     }
 

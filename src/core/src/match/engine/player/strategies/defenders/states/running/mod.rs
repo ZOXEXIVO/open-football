@@ -158,8 +158,16 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            // Notification system: if ball system notified us to take the ball
-            // Still check we're the best option to prevent swarming
+            // Loose ball nearby — chase it if we're the closest teammate
+            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
+                && ctx.team().is_best_player_to_chase_ball()
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::TakeBall,
+                ));
+            }
+
+            // Also respond to ball system notifications
             if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::TakeBall,

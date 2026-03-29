@@ -132,9 +132,9 @@ impl StateProcessingHandler for MidfielderGuardingState {
             // Continue guarding from distance
             None
         } else {
-            // No one to guard — track back or press
+            // No one to guard — go to Running (NOT Returning, which would loop back here)
             Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Returning,
+                MidfielderState::Running,
             ))
         }
     }

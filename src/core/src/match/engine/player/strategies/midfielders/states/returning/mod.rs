@@ -47,8 +47,9 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // Guard attackers when ball is on our side
-        if !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
+        // Guard attackers when ball is on our side — but only after returning for a while
+        // to prevent Returning↔Guarding flicker when no guard target exists
+        if ctx.in_state_time > 30 && !ctx.team().is_control_ball() && ctx.ball().on_own_side() {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Guarding,
             ));

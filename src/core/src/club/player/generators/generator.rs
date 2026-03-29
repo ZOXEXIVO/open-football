@@ -467,6 +467,62 @@ fn skills_from_array(arr: &[f32; SKILL_COUNT]) -> PlayerSkills {
             strength: arr[SK_STRENGTH],
             match_readiness: arr[SK_MATCH_READINESS],
         },
+        goalkeeping: Default::default(),
+    }
+}
+
+/// Generate GK-specific skills from the PA budget.
+/// Role archetypes: Shot Stopper, Sweeper Keeper, Commanding, All-Rounder
+fn generate_gk_skills(pa_final: f32, age: u32) -> crate::Goalkeeping {
+    use crate::Goalkeeping;
+
+    let gk_age_ratio = match age {
+        0..=17 =>  0.60,
+        18..=19 => 0.70,
+        20..=22 => 0.80,
+        23..=26 => 0.90,
+        27..=29 => 0.97,
+        30..=34 => 1.0,
+        _ =>       0.95,
+    };
+
+    let gk_mean = pa_final * gk_age_ratio;
+    let spread = (pa_final * 0.45).max(2.0);
+    let noise = 1.5;
+
+    let roll = rand::random::<f32>();
+    let w: [f32; 13] = if roll < 0.35 {
+        // Shot Stopper
+        [0.9, 0.9, 0.8, 0.4, 0.6, 1.6, 0.7, 1.3, 0.6, 1.1, 1.7, 0.8, 0.7]
+    } else if roll < 0.60 {
+        // Sweeper Keeper
+        [0.8, 1.0, 1.0, 1.2, 1.5, 1.1, 1.3, 1.2, 1.4, 0.7, 1.1, 1.5, 1.2]
+    } else if roll < 0.82 {
+        // Commanding
+        [1.6, 1.5, 1.4, 0.5, 0.7, 1.2, 0.9, 1.0, 0.7, 1.3, 1.1, 0.9, 0.8]
+    } else {
+        // All-Rounder
+        [1.0, 1.0, 1.0, 0.7, 1.0, 1.2, 1.0, 1.1, 0.9, 0.9, 1.2, 1.0, 0.9]
+    };
+
+    let mut gk = [0.0f32; 13];
+    for i in 0..13 {
+        let pos_mean = gk_mean + (w[i] - 1.0) * spread;
+        gk[i] = (pos_mean + random_normal() * noise).clamp(1.0, 20.0);
+    }
+
+    let core_floor = (pa_final * 0.45).clamp(3.0, 10.0);
+    let general_floor = (pa_final * 0.25).clamp(2.0, 7.0);
+    gk[5] = gk[5].max(core_floor);   // handling
+    gk[10] = gk[10].max(core_floor);  // reflexes
+    gk[7] = gk[7].max(core_floor);   // one_on_ones
+    for v in gk.iter_mut() { *v = v.max(general_floor).clamp(1.0, 20.0); }
+
+    Goalkeeping {
+        aerial_reach: gk[0], command_of_area: gk[1], communication: gk[2],
+        eccentricity: gk[3], first_touch: gk[4], handling: gk[5],
+        kicking: gk[6], one_on_ones: gk[7], passing: gk[8],
+        punching: gk[9], reflexes: gk[10], rushing_out: gk[11], throwing: gk[12],
     }
 }
 
@@ -883,7 +939,14 @@ impl PlayerGenerator {
             }
         }
 
-        skills_from_array(&skills)
+        let mut result = skills_from_array(&skills);
+
+        // Generate GK-specific skills for goalkeepers
+        if matches!(position, PositionType::Goalkeeper) {
+            result.goalkeeping = generate_gk_skills(pa_final, age);
+        }
+
+        result
     }
 
     /// Generate position profile. Primary position always 20.

@@ -139,8 +139,8 @@ impl GoalkeeperPassingState {
 
         // Goalkeeper skills
         let vision = ctx.player.skills.mental.vision / 20.0;
-        let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
-        let passing = ctx.player.skills.technical.passing / 20.0;
+        let kicking_power = ctx.player.skills.goalkeeping.kicking / 20.0;
+        let passing = ctx.player.skills.goalkeeping.passing / 20.0;
         let _decisions = ctx.player.skills.mental.decisions / 20.0;
 
         // Under heavy pressure - clear it!
@@ -280,9 +280,9 @@ impl GoalkeeperPassingState {
         best_target
     }
 
-    /// Find the best target for a throw (using long throw skill)
+    /// Find the best target for a throw
     fn find_throw_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
+        let kicking_power = ctx.player.skills.goalkeeping.throwing / 20.0;
         let max_throw_distance = 25.0 + (kicking_power * 25.0); // 25-50m range
 
         let mut best_target = None;
@@ -324,8 +324,8 @@ impl GoalkeeperPassingState {
     /// Execute a long kick downfield
     fn execute_long_kick(&self, ctx: &StateProcessingContext) -> Option<Event> {
         let _vision = ctx.player.skills.mental.vision / 20.0;
-        let kicking_power = ctx.player.skills.technical.long_throws / 20.0;
-        let _technique = ctx.player.skills.technical.technique / 20.0;
+        let kicking_power = ctx.player.skills.goalkeeping.kicking / 20.0;
+        let _technique = ctx.player.skills.goalkeeping.throwing / 20.0;
 
         // Reduced max distance for more realistic kicks
         let max_distance = ctx.context.field_size.width as f32 * 0.8; // Reduced from 1.5

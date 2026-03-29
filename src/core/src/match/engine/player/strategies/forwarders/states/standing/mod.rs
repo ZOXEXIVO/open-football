@@ -115,14 +115,9 @@ impl StateProcessingHandler for ForwardStandingState {
             }
         }
 
-        // Apply separation velocity to spread out from nearby players
-        // This prevents huddle formation even while standing
-        let separation = ctx.player().separation_velocity();
-        if separation.magnitude() > 1.0 {
-            return Some(separation * 0.4);
-        }
-
-        Some(Vector3::new(0.0, 0.0, 0.0))
+        // Standing = completely still. Separation is handled by transitioning
+        // to Running state, not by applying forces while stationary.
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

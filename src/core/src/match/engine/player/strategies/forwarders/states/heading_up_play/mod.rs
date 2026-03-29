@@ -37,11 +37,11 @@ impl StateProcessingHandler for ForwardHeadingUpPlayState {
         if let Some(nearest_opponent) = ctx.players().opponents().nearby(10.0).next() {
             let away_from_opponent = (ctx.player.position - nearest_opponent.position).normalize();
             // Slow, controlled movement to shield the ball (like a real forward holding up play)
-            return Some(away_from_opponent * 1.0 + ctx.player().separation_velocity() * 0.5);
+            return Some(away_from_opponent * 1.0);
         }
 
-        // If no immediate pressure, use slight separation to avoid collisions
-        Some(ctx.player().separation_velocity() * 0.3)
+        // Holding up play = stationary with ball
+        Some(Vector3::zeros())
     }
 
     fn process_conditions(&self, ctx: ConditionContext) {

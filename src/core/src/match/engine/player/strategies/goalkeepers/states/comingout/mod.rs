@@ -297,11 +297,11 @@ impl GoalkeeperComingOutState {
         let keeper_position = ctx.player.position;
 
         // Goalkeeper skills
-        let reflexes = ctx.player.skills.mental.concentration / 20.0;
+        let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
         let agility = ctx.player.skills.physical.agility / 20.0;
         let bravery = ctx.player.skills.mental.bravery / 20.0;
         let anticipation = ctx.player.skills.mental.anticipation / 20.0;
-        let positioning = ctx.player.skills.technical.first_touch / 20.0; // Use first_touch as positioning proxy
+        let positioning = ctx.player.skills.goalkeeping.command_of_area / 20.0;
 
         // Ball must be moving with reasonable speed to consider diving
         if ball_speed < 2.5 {

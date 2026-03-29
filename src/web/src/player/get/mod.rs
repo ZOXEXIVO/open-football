@@ -136,6 +136,8 @@ pub struct PlayerSkillsDto {
     pub technical: TechnicalDto,
     pub mental: MentalDto,
     pub physical: PhysicalDto,
+    pub goalkeeping: GoalkeepingDto,
+    pub is_goalkeeper: bool,
 }
 
 pub struct TechnicalDto {
@@ -178,6 +180,22 @@ pub struct PhysicalDto {
     pub pace: u8,
     pub stamina: u8,
     pub strength: u8,
+}
+
+pub struct GoalkeepingDto {
+    pub aerial_reach: u8,
+    pub command_of_area: u8,
+    pub communication: u8,
+    pub eccentricity: u8,
+    pub first_touch: u8,
+    pub handling: u8,
+    pub kicking: u8,
+    pub one_on_ones: u8,
+    pub passing: u8,
+    pub punching: u8,
+    pub reflexes: u8,
+    pub rushing_out: u8,
+    pub throwing: u8,
 }
 
 pub struct PlayerAttributesDto {
@@ -449,6 +467,22 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
             stamina: player.skills.physical.stamina.floor() as u8,
             strength: player.skills.physical.strength.floor() as u8,
         },
+        goalkeeping: GoalkeepingDto {
+            aerial_reach: player.skills.goalkeeping.aerial_reach.floor() as u8,
+            command_of_area: player.skills.goalkeeping.command_of_area.floor() as u8,
+            communication: player.skills.goalkeeping.communication.floor() as u8,
+            eccentricity: player.skills.goalkeeping.eccentricity.floor() as u8,
+            first_touch: player.skills.goalkeeping.first_touch.floor() as u8,
+            handling: player.skills.goalkeeping.handling.floor() as u8,
+            kicking: player.skills.goalkeeping.kicking.floor() as u8,
+            one_on_ones: player.skills.goalkeeping.one_on_ones.floor() as u8,
+            passing: player.skills.goalkeeping.passing.floor() as u8,
+            punching: player.skills.goalkeeping.punching.floor() as u8,
+            reflexes: player.skills.goalkeeping.reflexes.floor() as u8,
+            rushing_out: player.skills.goalkeeping.rushing_out.floor() as u8,
+            throwing: player.skills.goalkeeping.throwing.floor() as u8,
+        },
+        is_goalkeeper: player.position().is_goalkeeper(),
     }
 }
 

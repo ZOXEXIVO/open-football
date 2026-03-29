@@ -206,9 +206,8 @@ impl MatchCoach {
 
     /// Whether the team should allow a shot right now (team-level cooldown)
     pub fn can_shoot(&self, current_tick: u64) -> bool {
-        // Minimum 150 ticks (~1.5 seconds) between team shots
-        // Prevents rapid-fire shooting from different players
-        current_tick.saturating_sub(self.last_shot_tick) >= 150
+        // Minimum 50 ticks (~0.5 seconds) between team shots
+        current_tick.saturating_sub(self.last_shot_tick) >= 50
     }
 
     pub fn record_shot(&mut self, current_tick: u64) {

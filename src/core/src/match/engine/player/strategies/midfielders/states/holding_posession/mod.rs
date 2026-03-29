@@ -1,6 +1,6 @@
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 150.0; // Maximum distance to attempt a shot
@@ -26,29 +26,20 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
 
         // Check if the midfielder is being pressured by opponents
         if self.is_under_pressure(ctx) {
-            // If under pressure, decide whether to dribble or pass based on the situation
-            return if self.has_space_to_dribble(ctx) {
-                // If there is space to dribble, transition to the dribbling state
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Dribbling,
-                ))
-            } else {
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Passing
-                ))
-            };
-        }
-
-        if let Some(_) = ctx.players().teammates()
-            .nearby(300.0)
-            .filter(|teammate| self.is_teammate_open(ctx, teammate)).next() {
-            // If there is an open teammate, transition to the passing state
+            // Under pressure — pass immediately rather than dribble into trouble
             return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Passing
+                MidfielderState::Passing,
             ));
         }
 
-        // If none of the above conditions are met, continue holding possession
+        // Don't hold possession for long — transition to Passing quickly
+        // This ensures the PassEvaluator gets to run and find the best option
+        if ctx.in_state_time > 5 {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Passing,
+            ));
+        }
+
         None
     }
 
@@ -76,34 +67,6 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
 impl MidfielderHoldingPossessionState {
     pub fn is_under_pressure(&self, ctx: &StateProcessingContext) -> bool {
         ctx.player().pressure().is_under_immediate_pressure()
-    }
-
-    fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        // Check if a teammate is open to receive a pass
-        let is_in_passing_range = (teammate.position - ctx.player.position).magnitude() <= 30.0;
-        let has_clear_passing_lane = self.has_clear_passing_lane(ctx, teammate);
-
-        is_in_passing_range && has_clear_passing_lane
-    }
-
-    fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.players().opponents().exists(10.0)
-    }
-
-    fn has_clear_passing_lane(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {
-        // Check if there is a clear passing lane to a teammate without any obstructing opponents
-        let player_position = ctx.player.position;
-        let teammate_position = teammate.position;
-        let passing_direction = (teammate_position - player_position).normalize();
-
-        let ray_cast_result = ctx.tick_context.space.cast_ray(
-            player_position,
-            passing_direction,
-            (teammate_position - player_position).magnitude(),
-            false,
-        );
-
-        ray_cast_result.is_none() // No collisions with opponents
     }
 
     fn is_in_shooting_range(&self, ctx: &StateProcessingContext) -> bool {

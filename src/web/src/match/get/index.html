@@ -298,17 +298,19 @@
         }
     }
 
+    // Compact format: each entry is [timestamp, x, y] or [timestamp, x, y, z]
+    // Access: entry[0]=timestamp, entry[1]=x, entry[2]=y, entry[3]=z (optional)
     function mergeSorted(existing, incoming) {
         if (existing.length === 0) return incoming;
         // Chunks arrive in order, so incoming timestamps are usually all after existing
-        if (incoming.length > 0 && incoming[0].timestamp >= existing[existing.length - 1].timestamp) {
+        if (incoming.length > 0 && incoming[0][0] >= existing[existing.length - 1][0]) {
             return existing.concat(incoming);
         }
         // Fallback: full merge for out-of-order loads
         const merged = new Array(existing.length + incoming.length);
         let i = 0, j = 0, k = 0;
         while (i < existing.length && j < incoming.length) {
-            if (existing[i].timestamp <= incoming[j].timestamp) merged[k++] = existing[i++];
+            if (existing[i][0] <= incoming[j][0]) merged[k++] = existing[i++];
             else merged[k++] = incoming[j++];
         }
         while (i < existing.length) merged[k++] = existing[i++];
@@ -331,7 +333,7 @@
                     if (gameContainer && !playerGraphics[id] && positions.length > 0) {
                         const player = playerMap[Number(id)];
                         if (player) {
-                            const pos = translateToField(positions[0].position[0], positions[0].position[1]);
+                            const pos = translateToField(positions[0][1], positions[0][2]);
                             const gfx = createPlayerGraphic(pos.x, pos.y, player);
                             playerGraphics[id] = gfx;
                             playerIds.push(id);
@@ -353,15 +355,15 @@
         if (len === 0) return -1;
         // Try hint and nearby (temporal coherence - usually advances by 1-2)
         if (hint >= 0 && hint < len) {
-            if (arr[hint].timestamp <= time) {
+            if (arr[hint][0] <= time) {
                 // Scan forward from hint
                 let i = hint;
-                while (i + 1 < len && arr[i + 1].timestamp <= time) i++;
+                while (i + 1 < len && arr[i + 1][0] <= time) i++;
                 return i;
             } else {
                 // Scan backward a bit
                 let i = hint - 1;
-                while (i >= 0 && arr[i].timestamp > time) i--;
+                while (i >= 0 && arr[i][0] > time) i--;
                 return Math.max(i, 0);
             }
         }
@@ -369,27 +371,28 @@
         let lo = 0, hi = len - 1;
         while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
-            if (arr[mid].timestamp <= time) lo = mid;
+            if (arr[mid][0] <= time) lo = mid;
             else hi = mid - 1;
         }
         return lo;
     }
 
+    // Compact format: entry = [timestamp, x, y] or [timestamp, x, y, z]
     function interpolatePosition(arr, idx, time) {
         const a = arr[idx];
         if (idx + 1 < arr.length) {
             const b = arr[idx + 1];
-            const dt = b.timestamp - a.timestamp;
+            const dt = b[0] - a[0];
             if (dt > 0) {
-                const t = (time - a.timestamp) / dt;
+                const t = (time - a[0]) / dt;
                 return [
-                    a.position[0] + (b.position[0] - a.position[0]) * t,
-                    a.position[1] + (b.position[1] - a.position[1]) * t,
-                    (a.position[2] || 0) + ((b.position[2] || 0) - (a.position[2] || 0)) * t
+                    a[1] + (b[1] - a[1]) * t,
+                    a[2] + (b[2] - a[2]) * t,
+                    (a[3] || 0) + ((b[3] || 0) - (a[3] || 0)) * t
                 ];
             }
         }
-        return a.position;
+        return [a[1], a[2], a[3] || 0];
     }
 
     function updatePositions(time) {
@@ -415,8 +418,8 @@
             if (pi >= 0) {
                 // Hide player if current time is past their last position data
                 // (subbed off) or before their first (not yet on field)
-                const lastTs = positions[positions.length - 1].timestamp;
-                const firstTs = positions[0].timestamp;
+                const lastTs = positions[positions.length - 1][0];
+                const firstTs = positions[0][0];
                 if (time > lastTs + 1000 || time < firstTs - 1000) {
                     gfx.visible = false;
                     continue;
@@ -615,7 +618,7 @@
             const positions = chunkPlayers[i][1];
             const player = playerMap[Number(id)];
             if (player && positions.length > 0) {
-                const pos = translateToField(positions[0].position[0], positions[0].position[1]);
+                const pos = translateToField(positions[0][1], positions[0][2]);
                 const gfx = createPlayerGraphic(pos.x, pos.y, player);
                 playerGraphics[id] = gfx;
                 playerIds.push(id);
@@ -629,7 +632,7 @@
         ballCircle.circle(0, 0, 6).stroke({width: 2, color: 0x000000});
         ballContainer.addChild(ballCircle);
         if (firstChunk.ball && firstChunk.ball.length > 0) {
-            const bp = translateToField(firstChunk.ball[0].position[0], firstChunk.ball[0].position[1]);
+            const bp = translateToField(firstChunk.ball[0][1], firstChunk.ball[0][2]);
             ballContainer.position.x = bp.x;
             ballContainer.position.y = bp.y;
         }
