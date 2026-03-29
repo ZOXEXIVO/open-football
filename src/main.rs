@@ -52,6 +52,7 @@ async fn main() {
         database: Arc::new(database),
         data: Arc::new(RwLock::new(Some(Arc::new(game_data)))),
         process_lock: Arc::new(Mutex::new(())),
+        cancel_flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         i18n,
         ai_registry,
     };

@@ -8,6 +8,7 @@ pub struct GameTickContext {
     pub distances: Rc<PlayerDistanceClosure>,
     pub ball: BallMetadata,
     pub space: Space,
+    last_distance_tick: u32,
 }
 
 impl GameTickContext {
@@ -17,6 +18,7 @@ impl GameTickContext {
             positions: MatchObjectsPositions::from(field),
             distances: field.cached_distances.clone(),
             space: Space::from(field),
+            last_distance_tick: field.distance_tick,
         }
     }
 
@@ -24,7 +26,11 @@ impl GameTickContext {
     pub fn update(&mut self, field: &MatchField) {
         self.ball.update(field);
         self.positions.update(field);
-        self.distances = field.cached_distances.clone();
+        // Only clone Rc when distances were actually recalculated
+        if field.distance_tick != self.last_distance_tick {
+            self.distances = field.cached_distances.clone();
+            self.last_distance_tick = field.distance_tick;
+        }
         self.space.update(field);
     }
 }

@@ -33,6 +33,7 @@ use database::DatabaseEntity;
 use log::{error, info};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 use tokio::net::TcpListener;
 use tokio::sync::{Mutex, RwLock};
 use tower::ServiceBuilder;
@@ -84,6 +85,7 @@ pub struct GameAppData {
     pub database: Arc<DatabaseEntity>,
     pub data: Arc<RwLock<Option<Arc<SimulatorData>>>>,
     pub process_lock: Arc<Mutex<()>>,
+    pub cancel_flag: Arc<AtomicBool>,
     pub i18n: Arc<I18nManager>,
     pub ai_registry: Arc<AiProviderRegistry>,
 }
@@ -94,6 +96,7 @@ impl Clone for GameAppData {
             database: Arc::clone(&self.database),
             data: Arc::clone(&self.data),
             process_lock: Arc::clone(&self.process_lock),
+            cancel_flag: Arc::clone(&self.cancel_flag),
             i18n: Arc::clone(&self.i18n),
             ai_registry: Arc::clone(&self.ai_registry),
         }

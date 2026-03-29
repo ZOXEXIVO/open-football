@@ -316,8 +316,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         tick_ctx: &mut GameTickContext,
         events: &mut EventCollection,
     ) {
-        // Recalculate N² distance matrix every 8 ticks (amortize O(N²) cost)
-        field.update_distances(8);
+        // Recalculate N² distance matrix every 12 full ticks (~240ms match time)
+        field.update_distances(12);
 
         tick_ctx.update(field);
 

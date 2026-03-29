@@ -1,17 +1,27 @@
 mod collection;
 mod context;
+mod dynamics;
 mod league;
+mod matchday;
+mod milestones;
+mod processing;
+mod regulations;
 pub mod result;
 pub mod schedule;
 mod season;
+mod statistics;
 pub mod storages;
 pub mod table;
 
 pub use collection::*;
 pub use context::*;
+pub use dynamics::*;
 pub use league::*;
+pub use milestones::*;
+pub use regulations::*;
 pub use result::*;
 pub use schedule::*;
 pub use season::*;
+pub use statistics::*;
 pub use storages::*;
 pub use table::*;

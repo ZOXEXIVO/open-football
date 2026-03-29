@@ -78,12 +78,14 @@ impl PlayerDistanceClosure {
 
     pub fn update_from_players(&mut self, players: &[MatchPlayer]) {
         let n = players.len();
-        self.num_players = n;
 
-        // Reset hash table
-        self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
-        for (slot, p) in players.iter().enumerate() {
-            self.insert_slot(p.id, slot as u8);
+        // Only rebuild hash table when player count changes (substitution)
+        if n != self.num_players {
+            self.num_players = n;
+            self.id_slots = [(0, SLOT_EMPTY); SLOT_TABLE_SIZE];
+            for (slot, p) in players.iter().enumerate() {
+                self.insert_slot(p.id, slot as u8);
+            }
         }
 
         // Reset per-player counts
@@ -91,23 +93,27 @@ impl PlayerDistanceClosure {
             self.per_player_len[i] = 0;
         }
 
+        // Compute distances — only upper triangle, mirror to lower
         for i in 0..n {
             let outer = &players[i];
-            for j in 0..n {
-                if i == j {
-                    continue;
-                }
+            for j in (i + 1)..n {
                 let inner = &players[j];
                 let dx = outer.position.x - inner.position.x;
                 let dy = outer.position.y - inner.position.y;
                 let distance = (dx * dx + dy * dy).sqrt();
 
                 self.dist_matrix[i * MAX_PLAYERS + j] = distance;
+                self.dist_matrix[j * MAX_PLAYERS + i] = distance;
 
                 let same_team = outer.team_id == inner.team_id;
-                let count = self.per_player_len[i] as usize;
-                self.per_player_data[i * MAX_NEIGHBORS + count] = (inner.id, same_team, distance);
-                self.per_player_len[i] = (count + 1) as u8;
+
+                let count_i = self.per_player_len[i] as usize;
+                self.per_player_data[i * MAX_NEIGHBORS + count_i] = (inner.id, same_team, distance);
+                self.per_player_len[i] = (count_i + 1) as u8;
+
+                let count_j = self.per_player_len[j] as usize;
+                self.per_player_data[j * MAX_NEIGHBORS + count_j] = (outer.id, same_team, distance);
+                self.per_player_len[j] = (count_j + 1) as u8;
             }
         }
     }

@@ -500,9 +500,30 @@ impl Club {
             None => return,
         };
 
-        // Collect underutilized player decisions: (team_idx, player_id, loan_or_transfer)
-        let mut loan_players: Vec<(usize, u32)> = Vec::new();
-        let mut transfer_players: Vec<(usize, u32)> = Vec::new();
+        let rep_level = self.teams.teams[main_idx].reputation.level();
+
+        // Wealthy clubs are more patient with underutilized players
+        let (idle_threshold, games_threshold) = match rep_level {
+            ReputationLevel::Elite => (120u16, 5u16),
+            ReputationLevel::Continental => (90, 4),
+            ReputationLevel::National => (60, 3),
+            ReputationLevel::Regional => (45, 2),
+            _ => (30, 1),
+        };
+
+        // Wealthy clubs within squad targets don't need to aggressively list
+        let total_squad: usize = self.teams.teams.iter()
+            .map(|t| t.players.players.len()).sum();
+        let max_squad = self.board.season_targets
+            .as_ref()
+            .map(|t| t.max_squad_size as usize)
+            .unwrap_or(50);
+        let wealthy_within_limits = matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental)
+            && total_squad < max_squad;
+
+        // Collect underutilized player decisions
+        let mut loan_players: Vec<(usize, u32, String)> = Vec::new();
+        let mut transfer_players: Vec<(usize, u32, String)> = Vec::new();
 
         for (ti, team) in self.teams.teams.iter().enumerate() {
             if ti == main_idx {
@@ -529,11 +550,11 @@ impl Club {
                     continue;
                 }
 
-                // Underutilized: no matches in 60+ days AND fewer than 3 total games
                 let days_idle = player.player_attributes.days_since_last_match;
                 let total_games = player.statistics.total_games();
 
-                if days_idle < 60 || total_games >= 3 {
+                // Reputation-scaled underutilization threshold
+                if days_idle < idle_threshold || total_games >= games_threshold {
                     continue;
                 }
 
@@ -541,13 +562,25 @@ impl Club {
                 let ca = player.player_attributes.current_ability;
                 let pa = player.player_attributes.potential_ability;
 
-                // Decision: loan out young talent, transfer list older/low-ability players
+                // Wealthy clubs within squad limits: only list truly unwanted players
+                if wealthy_within_limits && ca >= 50 && age < 32 {
+                    continue;
+                }
+
+                // Decision: choose Lst vs Loa based on player profile and club context
                 if age <= 23 && pa > ca.saturating_add(5) {
-                    loan_players.push((ti, player.id));
-                } else if age >= 28 || ca < 60 {
-                    transfer_players.push((ti, player.id));
+                    loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
+                } else if age >= 30 || (ca < 60 && pa < 70) {
+                    let reason = if age >= 30 {
+                        "dec_reason_aging_surplus"
+                    } else {
+                        "dec_reason_low_ability_surplus"
+                    };
+                    transfer_players.push((ti, player.id, reason.to_string()));
+                } else if matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental) && age <= 29 {
+                    loan_players.push((ti, player.id, "dec_reason_underutilized_top_club".to_string()));
                 } else {
-                    loan_players.push((ti, player.id));
+                    transfer_players.push((ti, player.id, "dec_reason_underutilized".to_string()));
                 }
             }
         }
@@ -559,8 +592,8 @@ impl Club {
         &mut self,
         date: NaiveDate,
         main_idx: usize,
-        loan_players: &[(usize, u32)],
-        transfer_players: &[(usize, u32)],
+        loan_players: &[(usize, u32, String)],
+        transfer_players: &[(usize, u32, String)],
     ) {
         // Reputation-based loan fee multiplier
         let rep_multiplier = match self.teams.teams[main_idx].reputation.level() {
@@ -572,7 +605,9 @@ impl Club {
         };
 
         // Process loan recommendations
-        for &(team_idx, player_id) in loan_players {
+        for (team_idx, player_id, reason) in loan_players {
+            let team_idx = *team_idx;
+            let player_id = *player_id;
             let team_name = self.teams.teams[team_idx].name.clone();
 
             let loan_fee = if rep_multiplier > 0.0 {
@@ -595,9 +630,9 @@ impl Club {
             player.statuses.add(date, PlayerStatusType::Loa);
             player.decision_history.add(
                 date,
-                "Board loan-listed".to_string(),
-                "Underutilized in reserve squad".to_string(),
-                "Board".to_string(),
+                "dec_board_loan_listed".to_string(),
+                reason.clone(),
+                "dec_decided_board".to_string(),
             );
 
             debug!("Board loan-listed: {} (age {}, CA={}) from {}, loan fee: {}",
@@ -614,7 +649,9 @@ impl Club {
         }
 
         // Process transfer recommendations
-        for &(team_idx, player_id) in transfer_players {
+        for (team_idx, player_id, reason) in transfer_players {
+            let team_idx = *team_idx;
+            let player_id = *player_id;
             let team_name = self.teams.teams[team_idx].name.clone();
 
             let asking_price = {
@@ -637,9 +674,9 @@ impl Club {
             player.statuses.add(date, PlayerStatusType::Lst);
             player.decision_history.add(
                 date,
-                "Board transfer-listed".to_string(),
-                "Underutilized, surplus to requirements".to_string(),
-                "Board".to_string(),
+                "dec_board_transfer_listed".to_string(),
+                reason.clone(),
+                "dec_decided_board".to_string(),
             );
 
             debug!("Board transfer-listed: {} (age {}, CA={}) from {}, asking {}",

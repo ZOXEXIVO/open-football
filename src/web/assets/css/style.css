@@ -3440,11 +3440,14 @@ a:link, a:visited, a:hover, a:active {
     justify-content: space-between;
     color: #7a8c98;
     font-size: 13px;
-    padding: 8px 12px;
+    padding: 8px 0;
     margin-bottom: 10px;
 }
 
 .fm-holiday-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     padding: 5px 14px;
     font-size: 11px;
     font-weight: 600;
@@ -3463,6 +3466,38 @@ a:link, a:visited, a:hover, a:active {
     background: linear-gradient(180deg, #344a58 0%, #2a3a46 100%);
     border-color: #4a6272;
     color: #e0eaf0;
+}
+
+.fm-holiday-spinner {
+    display: none;
+    align-items: center;
+    justify-content: center;
+}
+
+.fm-holiday-spinner .spinner {
+    width: 14px;
+    height: 14px;
+    border-top-color: #e8c46a;
+}
+
+.fm-holiday-btn.fm-holiday-active {
+    color: #e8c46a;
+    background: linear-gradient(180deg, #3a3225 0%, #2e2820 100%);
+    border-color: #5c4a2e;
+}
+
+.fm-holiday-btn.fm-holiday-active:hover {
+    background: linear-gradient(180deg, #4a4030 0%, #3a3225 100%);
+    border-color: #6e5a3a;
+    color: #f0d080;
+}
+
+.fm-holiday-btn.fm-holiday-cancelling .fm-holiday-label {
+    display: none;
+}
+
+.fm-holiday-btn.fm-holiday-cancelling .fm-holiday-spinner {
+    display: flex;
 }
 
 .fm-country-grid {

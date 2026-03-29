@@ -12,7 +12,7 @@ impl BallFieldData {
     pub fn update_from(&mut self, ball: &Ball) {
         self.position = ball.position;
         self.velocity = ball.velocity;
-        self.landing_position = ball.calculate_landing_position();
+        self.landing_position = ball.cached_landing_position;
     }
 }
 
@@ -22,7 +22,7 @@ impl From<&Ball> for BallFieldData {
         BallFieldData {
             position: ball.position,
             velocity: ball.velocity,
-            landing_position: ball.calculate_landing_position(),
+            landing_position: ball.cached_landing_position,
         }
     }
 }

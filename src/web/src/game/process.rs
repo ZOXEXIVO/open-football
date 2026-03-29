@@ -9,6 +9,7 @@ use core::SimulationResult;
 use log::debug;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
@@ -31,6 +32,10 @@ pub async fn game_process_action(
 
     let data = Arc::clone(&state.data);
     let i18n = Arc::clone(&state.i18n);
+    let cancel_flag = Arc::clone(&state.cancel_flag);
+
+    // Reset cancel flag at start
+    cancel_flag.store(false, Ordering::SeqCst);
 
     // Clone data under read lock (cheap Arc clone), then release lock immediately
     let data_arc = {
@@ -49,6 +54,11 @@ pub async fn game_process_action(
         let mut simulator_data = Arc::unwrap_or_clone(data_arc);
 
         for _ in 0..days {
+            // Check cancellation before each day
+            if cancel_flag.load(Ordering::SeqCst) {
+                break;
+            }
+
             let result = handle.block_on(FootballSimulator::simulate(&mut simulator_data));
             if result.has_match_results() {
                 if core::is_match_recordings_mode() {
@@ -59,6 +69,7 @@ pub async fn game_process_action(
             }
         }
 
+        cancel_flag.store(false, Ordering::SeqCst);
         i18n.set_date(simulator_data.date);
 
         // Write the simulated data back
@@ -81,6 +92,13 @@ pub async fn game_processing_status_action(
 ) -> Json<ProcessingStatus> {
     let processing = state.process_lock.try_lock().is_err();
     Json(ProcessingStatus { processing })
+}
+
+pub async fn game_cancel_action(
+    State(state): State<GameAppData>,
+) -> StatusCode {
+    state.cancel_flag.store(true, Ordering::SeqCst);
+    StatusCode::OK
 }
 
 async fn write_match_results(result: SimulationResult) {

@@ -19,17 +19,18 @@ pub struct Ball {
     pub current_owner: Option<u32>,
     pub take_ball_notified_players: Vec<u32>,
     pub notification_cooldown: u32,
-    pub notification_timeout: u32,  // Ticks since players were notified
+    pub notification_timeout: u32,
     pub last_boundary_position: Option<Vector3<f32>>,
-    pub unowned_stopped_ticks: u32,  // How long ball has been stopped without owner
-    pub ownership_duration: u32,  // How many ticks current owner has had the ball
-    pub claim_cooldown: u32,  // Cooldown ticks before another player can claim the ball
-    pub pass_target_player_id: Option<u32>,  // Intended receiver of a pass
-    pub recent_passers: VecDeque<u32>,  // Ring buffer of recent passers (up to 5)
-    pub contested_claim_count: u32,  // Track rapid contested ownership changes
-    pub unowned_ticks: u32,  // How long ball has been unowned (unconditional counter)
-    pub goal_scored: bool,  // Flag set when goal detected, used to force reset after event dispatch
-    pub kickoff_team_side: Option<PlayerSide>,  // Side that should kick off after a goal
+    pub unowned_stopped_ticks: u32,
+    pub ownership_duration: u32,
+    pub claim_cooldown: u32,
+    pub pass_target_player_id: Option<u32>,
+    pub recent_passers: VecDeque<u32>,
+    pub contested_claim_count: u32,
+    pub unowned_ticks: u32,
+    pub goal_scored: bool,
+    pub kickoff_team_side: Option<PlayerSide>,
+    pub cached_landing_position: Vector3<f32>,
 }
 
 #[derive(Default, Clone)]
@@ -73,7 +74,14 @@ impl Ball {
             unowned_ticks: 0,
             goal_scored: false,
             kickoff_team_side: None,
+            cached_landing_position: Vector3::new(x, y, 0.0),
         }
+    }
+
+    /// Update cached landing position. Call after physics changes position/velocity.
+    #[inline]
+    pub fn update_landing_cache(&mut self) {
+        self.cached_landing_position = self.calculate_landing_position();
     }
 
     pub fn update(
@@ -107,6 +115,7 @@ impl Ball {
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
         self.check_boundary_collision(context);
+        self.update_landing_cache();
     }
 
     pub fn process_ownership(
@@ -134,9 +143,9 @@ impl Ball {
         // Check if pass target can claim the ball
         if let Some(target_id) = self.pass_target_player_id {
             if let Some(target_player) = players.iter().find(|p| p.id == target_id) {
-                // Use landing position for aerial balls, current position for ground balls
+                // Use cached landing position for aerial balls, current position for ground balls
                 let effective_ball_pos = if self.is_aerial() {
-                    self.calculate_landing_position()
+                    self.cached_landing_position
                 } else {
                     self.position
                 };
@@ -258,7 +267,7 @@ impl Ball {
             const MAX_CLAIM_VELOCITY: f32 = 5.0; // Ball must be slow enough to claim
 
             let target_position = if self.is_aerial() {
-                self.calculate_landing_position()
+                self.cached_landing_position
             } else {
                 self.position
             };
@@ -1310,6 +1319,7 @@ impl Ball {
         self.check_over_goal(context, players, events);
         self.check_wide_of_goal(context, players, events);
         self.check_boundary_collision(context);
+        self.update_landing_cache();
     }
 
     fn move_to_with_players(&mut self, players: &[MatchPlayer]) {
@@ -1376,6 +1386,7 @@ impl Ball {
         self.clear_pass_history();
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
+        self.cached_landing_position = self.position;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {
