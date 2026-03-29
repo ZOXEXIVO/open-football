@@ -11,9 +11,12 @@ pub const SUPPORTED_LANGUAGES: &[(&str, &str, &str)] = &[
     ("de", "de", "Deutsch"),
     ("pt", "pt", "Português"),
     ("ru", "ru", "Русский"),
+    ("zh", "cn", "繁體中文"),
+    ("tr", "tr", "Türkçe"),
+    ("ja", "jp", "日本語"),
 ];
 
-pub const SUPPORTED_LANG_CODES: &[&str] = &["en", "es", "fr", "de", "pt", "ru"];
+pub const SUPPORTED_LANG_CODES: &[&str] = &["en", "es", "fr", "de", "pt", "ru", "zh", "tr", "ja"];
 
 pub const DEFAULT_LANGUAGE: &str = "en";
 
