@@ -1,6 +1,6 @@
 {% extends "player/player_layout.html" %}
 
-{% block html_title %}{{ title }} - Contract | {{ i18n.t("site_name") }}{% endblock %}
+{% block html_title %}{{ title }} - {{ i18n.t("contract") }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block content %}
 <div class="fm-page">
@@ -9,49 +9,49 @@
         <div class="fm-personal-col">
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Contract Details</h3>
+                    <h3>{{ i18n.t("contract_details") }}</h3>
                 </div>
                 <div class="fm-personal-section">
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Club</span>
+                        <span class="fm-detail-label">{{ i18n.t("club") }}</span>
                         <span class="fm-detail-value"><a href="/{{ lang }}/teams/{{ ct.club_slug }}">{{ ct.club_name }}</a></span>
                     </div>
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Contract Type</span>
+                        <span class="fm-detail-label">{{ i18n.t("contract_type") }}</span>
                         <span class="fm-detail-value">{{ ct.contract_type }}</span>
                     </div>
                     {% if let Some(num) = ct.shirt_number %}
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Shirt Number</span>
+                        <span class="fm-detail-label">{{ i18n.t("shirt_number") }}</span>
                         <span class="fm-detail-value fm-contract-shirt">#{{ num }}</span>
                     </div>
                     {% endif %}
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Squad Status</span>
+                        <span class="fm-detail-label">{{ i18n.t("squad_status") }}</span>
                         <span class="fm-detail-value fm-contract-status">{{ ct.squad_status }}</span>
                     </div>
                 </div>
                 <div class="fm-personal-section">
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Wage</span>
+                        <span class="fm-detail-label">{{ i18n.t("wage") }}</span>
                         <span class="fm-detail-value fm-contract-wage">${{ ct.salary_annual }} {{ i18n.t("per_year") }}</span>
                     </div>
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Wage (Weekly)</span>
-                        <span class="fm-detail-value">${{ ct.salary }} p/w</span>
+                        <span class="fm-detail-label">{{ i18n.t("wage_weekly") }}</span>
+                        <span class="fm-detail-value">${{ ct.salary }} {{ i18n.t("per_week") }}</span>
                     </div>
                 </div>
                 <div class="fm-personal-section">
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Contract Started</span>
+                        <span class="fm-detail-label">{{ i18n.t("contract_started") }}</span>
                         <span class="fm-detail-value">{{ ct.started }}</span>
                     </div>
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Contract Expiry</span>
+                        <span class="fm-detail-label">{{ i18n.t("contract_expiry") }}</span>
                         <span class="fm-detail-value fm-contract-expiry">{{ ct.expiration }}</span>
                     </div>
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Remaining</span>
+                        <span class="fm-detail-label">{{ i18n.t("remaining") }}</span>
                         <span class="fm-detail-value">{{ ct.years_remaining }}</span>
                     </div>
                 </div>
@@ -70,28 +70,28 @@
             {% if let Some(loan) = loan_contract %}
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Loan Details</h3>
+                    <h3>{{ i18n.t("loan_details") }}</h3>
                     <span class="fm-contract-loan-badge">{{ loan.loan_type }}</span>
                 </div>
                 <div class="fm-personal-section">
                     {% if !loan.from_club_name.is_empty() %}
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Parent Club</span>
+                        <span class="fm-detail-label">{{ i18n.t("parent_club") }}</span>
                         <span class="fm-detail-value"><a href="/{{ lang }}/teams/{{ loan.from_club_slug }}">{{ loan.from_club_name }}</a></span>
                     </div>
                     {% endif %}
                     {% if !loan.to_club_name.is_empty() %}
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Loaned To</span>
+                        <span class="fm-detail-label">{{ i18n.t("loaned_to") }}</span>
                         <span class="fm-detail-value"><a href="/{{ lang }}/teams/{{ loan.to_club_slug }}">{{ loan.to_club_name }}</a></span>
                     </div>
                     {% endif %}
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Loan Wage</span>
+                        <span class="fm-detail-label">{{ i18n.t("loan_wage") }}</span>
                         <span class="fm-detail-value">${{ loan.salary }} {{ i18n.t("per_year") }}</span>
                     </div>
                     <div class="fm-personal-detail">
-                        <span class="fm-detail-label">Loan Expiry</span>
+                        <span class="fm-detail-label">{{ i18n.t("loan_expiry") }}</span>
                         <span class="fm-detail-value">{{ loan.expiration }}</span>
                     </div>
                 </div>
@@ -101,7 +101,7 @@
             {% if !bonuses.is_empty() %}
             <section class="fm-panel{% if loan_contract.is_some() %} mt-3{% endif %}">
                 <div class="fm-panel-head">
-                    <h3>Bonuses</h3>
+                    <h3>{{ i18n.t("bonuses") }}</h3>
                 </div>
                 <div class="fm-personal-section">
                     {% for bonus in bonuses %}
@@ -117,7 +117,7 @@
             {% if !clauses.is_empty() %}
             <section class="fm-panel{% if loan_contract.is_some() || !bonuses.is_empty() %} mt-3{% endif %}">
                 <div class="fm-panel-head">
-                    <h3>Clauses</h3>
+                    <h3>{{ i18n.t("clauses") }}</h3>
                 </div>
                 <div class="fm-personal-section">
                     {% for clause in clauses %}
@@ -133,10 +133,10 @@
             {% if loan_contract.is_none() && bonuses.is_empty() && clauses.is_empty() %}
             <section class="fm-panel">
                 <div class="fm-panel-head">
-                    <h3>Bonuses &amp; Clauses</h3>
+                    <h3>{{ i18n.t("bonuses_and_clauses") }}</h3>
                 </div>
                 <div class="fm-personal-section">
-                    <div class="fm-empty">No bonuses or clauses in this contract</div>
+                    <div class="fm-empty">{{ i18n.t("no_bonuses_or_clauses") }}</div>
                 </div>
             </section>
             {% endif %}
@@ -145,10 +145,10 @@
     {% else %}
     <section class="fm-panel">
         <div class="fm-panel-head">
-            <h3>Contract</h3>
+            <h3>{{ i18n.t("contract") }}</h3>
         </div>
         <div class="fm-personal-section">
-            <div class="fm-empty">No active contract</div>
+            <div class="fm-empty">{{ i18n.t("no_active_contract") }}</div>
         </div>
     </section>
     {% endif %}
