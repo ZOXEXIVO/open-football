@@ -42,7 +42,6 @@ pub struct PlayerHistoryTemplate {
 
 pub struct PlayerHistorySeasonItem {
     pub season: String,
-    pub start_year: u16,
     pub team_name: String,
     pub team_slug: String,
     pub is_loan: bool,
@@ -182,7 +181,6 @@ pub async fn player_history_action(
 
             PlayerHistorySeasonItem {
                 season: item.season.display,
-                start_year: item.season.start_year,
                 team_name: item.team_name,
                 team_slug: item.team_slug,
                 is_loan: item.is_loan,

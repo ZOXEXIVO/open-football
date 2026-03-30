@@ -10,7 +10,6 @@ use web::{FootballSimulatorServer, GameAppData, I18nManager, Settings};
 use web::ai::registry::{AiProviderRegistry, RegistryAiService};
 use std::sync::Arc;
 use tokio::sync::{Mutex, RwLock};
-use web::ai::providers::OllamaRequest;
 
 #[tokio::main]
 async fn main() {
@@ -36,8 +35,6 @@ async fn main() {
     core::ai::set_ai_service(Box::new(RegistryAiService {
         registry: Arc::clone(&ai_registry),
     }));
-
-    info!("AI registry initialized with default Local Ollama provider");
 
     let (database, estimated) = TimeEstimation::estimate(DatabaseLoader::load);
 

@@ -264,43 +264,6 @@ impl MidfielderCreatingSpaceState {
         self.apply_tactical_position_adjustment(ctx, best_position)
     }
 
-    /// Calculate congestion avoidance vector
-    fn calculate_congestion_avoidance(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        let mut avoidance = Vector3::zeros();
-        let player_pos = ctx.player.position;
-
-        let avoidance_radius = 30.0;
-        let mut total_weight = 0.0;
-
-        // Use nearby() instead of all() to avoid iterating every player
-        for opponent in ctx.players().opponents().nearby(avoidance_radius) {
-            let distance = (opponent.position - player_pos).magnitude();
-            if distance > 0.1 {
-                let direction = (player_pos - opponent.position).normalize();
-                let weight = 1.0 - (distance / avoidance_radius);
-                avoidance += direction * weight * 15.0;
-                total_weight += weight;
-            }
-        }
-
-        let teammate_radius = avoidance_radius * 0.7;
-        for teammate in ctx.players().teammates().nearby(teammate_radius) {
-            let distance = (teammate.position - player_pos).magnitude();
-            if distance > 0.1 {
-                let direction = (player_pos - teammate.position).normalize();
-                let weight = 1.0 - (distance / teammate_radius);
-                avoidance += direction * weight * 8.0;
-                total_weight += weight;
-            }
-        }
-
-        if total_weight > 0.0 {
-            avoidance / total_weight
-        } else {
-            avoidance
-        }
-    }
-
     /// Calculate dynamic congestion considering player movements
     #[allow(dead_code)]
     fn calculate_dynamic_congestion(&self, ctx: &StateProcessingContext, position: Vector3<f32>) -> f32 {

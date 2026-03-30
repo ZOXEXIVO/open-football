@@ -36,8 +36,6 @@ pub struct StaffGetTemplate {
 
 pub struct StaffViewModel {
     pub id: u32,
-    pub first_name: String,
-    pub last_name: String,
     pub role_key: String,
     pub age: u8,
     pub birth_date: String,
@@ -164,8 +162,6 @@ pub async fn staff_get_action(
 
     let staff_vm = StaffViewModel {
         id: staff.id,
-        first_name: staff.full_name.first_name.clone(),
-        last_name: staff.full_name.last_name.clone(),
         role_key: role_key.clone(),
         age: DateUtils::age(staff.birth_date, now),
         birth_date: staff.birth_date.format("%d.%m.%Y").to_string(),
@@ -207,7 +203,7 @@ pub async fn staff_get_action(
         },
     };
 
-    let league = team.league_id.and_then(|id| simulator_data.league(id));
+    let _league = team.league_id.and_then(|id| simulator_data.league(id));
 
     Ok(StaffGetTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,

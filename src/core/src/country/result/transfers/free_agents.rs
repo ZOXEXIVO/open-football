@@ -1,6 +1,6 @@
 use chrono::NaiveDate;
 use crate::utils::IntegerUtils;
-use log::{debug, info};
+use log::debug;
 use super::types::{TransferActivitySummary, can_club_accept_player};
 use crate::country::result::CountryResult;
 use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
@@ -21,6 +21,7 @@ impl CountryResult {
     /// This creates realistic free agent markets where low-quality players
     /// linger while stars get snapped up immediately.
     pub(crate) fn handle_free_agents(country: &mut Country, date: NaiveDate, summary: &mut TransferActivitySummary) {
+        #[allow(dead_code)]
         struct FreeAgentCandidate {
             player_id: u32,
             player_name: String,

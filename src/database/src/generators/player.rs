@@ -2,7 +2,7 @@ use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
 use core::{
-    Goalkeeping, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
+    Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
     PlayerSkills, Technical,
 };
@@ -702,7 +702,7 @@ impl PlayerGenerator {
         // GK role archetype — creates variety between keepers
         let roll = rand::random::<f32>();
         // Weights: 1.0 = average, >1.0 = boosted, <1.0 = reduced
-        let (archetype_name, mut w) = if roll < 0.35 {
+        let (_archetype_name, w) = if roll < 0.35 {
             // Shot Stopper — elite reflexes, handling, positioning
             ("shot_stopper", [
                 0.9,  // aerial_reach
@@ -925,40 +925,40 @@ impl PlayerGenerator {
     fn generate_potential_ability(rep_factor: f32, age: u32) -> u8 {
         // Three-tier PA distribution:
         //   Normal:   majority of squad — ability matches club level
-        //   Standout: ~8-12% — notably better (every club has 2-4)
-        //   Gem:      ~2-5% — exceptional talent well above club level
+        //   Standout: ~6-8% — notably better (every club has 1-3)
+        //   Gem:      ~1-2% — exceptional talent well above club level
         //
-        // Target distribution examples:
-        //   Inter (rep ~0.84): normal ~127, standout ~151, gem 147-183
-        //   PL top (rep ~0.95): normal ~149, standout ~171, gem 156-191
-        //   Mid European (rep ~0.50): normal ~70, standout ~103, gem 120-158
-        //   Lower league (rep ~0.20): normal ~35, standout ~73, gem 96-135
+        // Target per ~28-player squad:
+        //   PL top (rep ~0.95): ~0.5 gems (5★), ~2-3 standouts (4★), normals 3-4★
+        //   Juventus (rep ~0.89): ~0.4 gems, ~2 standouts (4★), normals mostly 4★
+        //   Mid European (0.50): rare gem, ~1 standout, normals 2-3★
+        //   Lower league (0.20): almost no gems, ~0.5 standout, normals 1-2★
 
         let roll = rand::random::<f32>();
 
-        // Gem: rare exceptional talent
-        let gem_chance = (0.01 + rep_factor * rep_factor * 0.04).min(0.05);
-        // Standout: every club has a few above-average players
-        let standout_chance = gem_chance + 0.08 + rep_factor * 0.04;
+        // Gem: very rare (1-2% at top clubs, <1% elsewhere)
+        let gem_chance = (0.005 + rep_factor * rep_factor * 0.015).min(0.02);
+        // Standout: every club has 1-3 above-average players
+        let standout_chance = gem_chance + 0.05 + rep_factor * 0.04;
 
         if roll < gem_chance {
             // Gem: PA well above club range
-            let gem_min = (80.0 + rep_factor * 80.0) as i32;
-            let gem_max = (120.0 + rep_factor * 75.0).min(195.0) as i32;
-            IntegerUtils::random(gem_min, gem_max).min(200) as u8
+            let gem_min = (100.0 + rep_factor * 65.0) as i32;
+            let gem_max = (130.0 + rep_factor * 60.0).min(190.0) as i32;
+            IntegerUtils::random(gem_min, gem_max).min(195) as u8
         } else if roll < standout_chance {
-            // Standout: clearly best player at the club, above the normal tier
-            let standout_base = 60.0 + rep_factor * 50.0 + rep_factor * rep_factor * 70.0;
-            let noise = random_normal() * 10.0;
+            // Standout: clearly best players at the club
+            let standout_base = 55.0 + rep_factor * 50.0 + rep_factor * rep_factor * 60.0;
+            let noise = random_normal() * 8.0;
             let pa = standout_base + noise;
-            pa.clamp(30.0, 185.0) as u8
+            pa.clamp(30.0, 175.0) as u8
         } else {
-            // Normal: bulk of squad — scales steeply for top clubs
-            let base = 20.0 + rep_factor * 60.0 + rep_factor * rep_factor * 80.0;
-            let youth_bonus = if age <= 21 { 5.0 } else if age <= 25 { 2.0 } else { 0.0 };
-            let noise = random_normal() * (6.0 + rep_factor * 8.0);
+            // Normal: bulk of squad — top clubs should have mostly 3-4★ players
+            let base = 20.0 + rep_factor * 55.0 + rep_factor * rep_factor * 75.0;
+            let youth_bonus = if age <= 21 { 4.0 } else if age <= 25 { 1.5 } else { 0.0 };
+            let noise = random_normal() * (5.0 + rep_factor * 8.0);
             let pa = base + youth_bonus + noise;
-            pa.clamp(20.0, 170.0) as u8
+            pa.clamp(20.0, 160.0) as u8
         }
     }
 

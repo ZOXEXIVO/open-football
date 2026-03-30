@@ -308,7 +308,7 @@ impl DatabaseGenerator {
         continent_id: u32,
         country_code: &str,
         country_reputation: u16,
-        all_country_ids: &[u32],
+        _all_country_ids: &[u32],
         data: &DatabaseEntity,
         player_generator: &mut PlayerGenerator,
         staff_generator: &mut StaffGenerator,

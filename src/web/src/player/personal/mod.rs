@@ -40,7 +40,6 @@ pub struct PlayerPersonalTemplate {
     pub personality: PersonalityDto,
     pub morale: MoraleDto,
     pub happiness_factors: Vec<HappinessFactorDto>,
-    pub recent_events: Vec<RecentEventDto>,
     pub concerns: Vec<String>,
     pub behaviour: String,
     pub manager_relationship: Option<ManagerRelationshipDto>,
@@ -80,12 +79,6 @@ pub struct HappinessFactorDto {
     pub name: String,
     pub value: i8,
     pub label: String,
-}
-
-pub struct RecentEventDto {
-    pub description: String,
-    pub is_positive: bool,
-    pub days_ago: u16,
 }
 
 pub struct ManagerRelationshipDto {
@@ -161,7 +154,6 @@ pub async fn player_personal_action(
     let personality = get_personality(player);
     let morale = get_morale(player, &i18n);
     let happiness_factors = get_happiness_factors(player, &i18n);
-    let recent_events = get_recent_events(player, &i18n);
     let concerns = get_concerns(player, &i18n);
     let behaviour = i18n.t(&format!("behaviour_{}", player.behaviour.as_str().to_lowercase())).to_string();
 
@@ -203,7 +195,6 @@ pub async fn player_personal_action(
         personality,
         morale,
         happiness_factors,
-        recent_events,
         concerns,
         behaviour,
         manager_relationship,
@@ -405,27 +396,6 @@ fn get_happiness_factors(player: &Player, i18n: &crate::I18n) -> Vec<HappinessFa
             }
         })
         .collect()
-}
-
-fn get_recent_events(player: &Player, i18n: &crate::I18n) -> Vec<RecentEventDto> {
-    let mut events: Vec<_> = player
-        .happiness
-        .recent_events
-        .iter()
-        .take(8)
-        .map(|e| {
-            let key = super::events::event_type_to_i18n_key(&e.event_type);
-            RecentEventDto {
-                description: i18n.t(key).to_string(),
-                is_positive: e.magnitude > 0.0,
-                days_ago: e.days_ago,
-            }
-        })
-        .collect();
-
-    events.sort_by(|a, b| a.days_ago.cmp(&b.days_ago));
-
-    events
 }
 
 fn get_concerns(player: &Player, i18n: &crate::I18n) -> Vec<String> {

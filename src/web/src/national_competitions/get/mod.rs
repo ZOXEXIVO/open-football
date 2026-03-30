@@ -35,7 +35,6 @@ pub struct NationalCompetitionsGetTemplate {
 pub struct CompetitionDto {
     pub name: String,
     pub phase: String,
-    pub cycle_year: u16,
     pub groups: Vec<GroupDto>,
     pub knockout: Vec<KnockoutDto>,
 }
@@ -170,7 +169,6 @@ pub async fn national_competitions_get_action(
             competitions.push(CompetitionDto {
                 name: format!("{} {}", comp.config.name, comp.cycle_year),
                 phase: phase_label(&comp.phase).to_string(),
-                cycle_year: comp.cycle_year,
                 groups,
                 knockout,
             });

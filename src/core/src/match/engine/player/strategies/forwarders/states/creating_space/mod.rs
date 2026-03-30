@@ -7,6 +7,7 @@ use crate::r#match::{
 
 // Movement patterns for forwards
 #[derive(Debug, Clone, Copy)]
+#[allow(dead_code)]
 enum ForwardMovementPattern {
     DirectRun,        // Direct run behind defense
     DiagonalRun,      // Diagonal run to create space and angles
@@ -22,7 +23,9 @@ const MAX_DISTANCE_FROM_BALL: f32 = 80.0;
 const MIN_DISTANCE_FROM_BALL: f32 = 30.0;
 const OPTIMAL_PASSING_DISTANCE_MIN: f32 = 20.0;
 const OPTIMAL_PASSING_DISTANCE_MAX: f32 = 70.0;
+#[allow(dead_code)]
 const SPACE_SCAN_RADIUS: f32 = 250.0;
+#[allow(dead_code)]
 const CONGESTION_THRESHOLD: f32 = 3.0;
 const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lanes
 
@@ -159,6 +162,7 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
     }
 }
 
+#[allow(dead_code)]
 impl ForwardCreatingSpaceState {
     /// Find optimal free zone for a forward
     /// Find optimal free zone for a forward - optimized to search gaps between opponents

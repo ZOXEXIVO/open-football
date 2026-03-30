@@ -4,13 +4,12 @@ use log::debug;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::market::{TransferListing, TransferListingType};
 use crate::transfers::pipeline::{
-    ClubTransferPlan, ShortlistCandidateStatus, TransferApproach,
+    ShortlistCandidateStatus, TransferApproach,
     TransferNeedPriority, TransferNeedReason, TransferRequest,
     TransferRequestStatus,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::staff_resolver::StaffResolver;
-use crate::transfers::window::PlayerValuationCalculator;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person,
     ReputationLevel,

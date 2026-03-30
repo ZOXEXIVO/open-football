@@ -9,7 +9,6 @@ use nalgebra::Vector3;
 // Shooting distance constants for midfielders — more conservative than forwards
 const MAX_SHOOTING_DISTANCE: f32 = 65.0; // Midfielders rarely shoot from beyond ~32m
 const STANDARD_SHOOTING_DISTANCE: f32 = 40.0; // Standard shooting range for midfielders
-const PRESSURE_CHECK_DISTANCE: f32 = 10.0; // Distance to check for opponent pressure before shooting
 const POINT_BLANK_DISTANCE: f32 = 20.0; // ~10m - must shoot, goalkeeper is right there
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 
@@ -761,53 +760,6 @@ impl MidfielderRunningState {
                 if !has_space {
                     return false;
                 }
-                ctx.player().has_clear_pass(teammate.id)
-            })
-    }
-
-    /// Check if there's a teammate in a dangerous attacking position
-    fn has_teammate_in_dangerous_position(&self, ctx: &StateProcessingContext) -> bool {
-        let goal_pos = ctx.player().opponent_goal_position();
-        let field_width = ctx.context.field_size.width as f32;
-        let attacking_third_dist = field_width * 0.4;
-
-        ctx.players()
-            .teammates()
-            .nearby(350.0)
-            .any(|teammate| {
-                // Prefer forwards and attacking midfielders
-                let is_attacker = teammate.tactical_positions.is_forward() ||
-                                 teammate.tactical_positions.is_midfielder();
-                if !is_attacker {
-                    return false;
-                }
-
-                // Check if in attacking third
-                let teammate_distance = (teammate.position - goal_pos).magnitude();
-                if teammate_distance >= attacking_third_dist {
-                    return false;
-                }
-
-                // Check if in free space (use pre-computed distances)
-                let in_free_space = ctx.tick_context.distances
-                    .opponents(teammate.id, 12.0)
-                    .count() < 2;
-
-                // Check if making a forward run
-                let making_run = if !in_free_space {
-                    let teammate_velocity = ctx.tick_context.positions.players.velocity(teammate.id);
-                    teammate_velocity.magnitude() > 1.5 && {
-                        let to_goal = goal_pos - teammate.position;
-                        teammate_velocity.normalize().dot(&to_goal.normalize()) > 0.5
-                    }
-                } else {
-                    false // don't need to check if already in free space
-                };
-
-                if !in_free_space && !making_run {
-                    return false;
-                }
-
                 ctx.player().has_clear_pass(teammate.id)
             })
     }

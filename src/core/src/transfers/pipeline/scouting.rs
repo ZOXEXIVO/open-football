@@ -2,7 +2,7 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, PlayerObservation, ScoutMatchAssignment, ScoutingAssignment,
+    DetailedScoutingReport, ScoutMatchAssignment, ScoutingAssignment,
     ScoutingRecommendation, TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
@@ -10,7 +10,7 @@ use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType,
+    ClubPhilosophy, Country, Person, PlayerStatusType,
     StaffEventType, TeamType,
 };
 

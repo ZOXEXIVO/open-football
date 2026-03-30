@@ -34,7 +34,7 @@ impl Player {
 
     /// Record season-end snapshot (called when new season starts).
     /// Saves stats to history and resets for new season.
-    pub fn on_season_end(&mut self, season: Season, team: &TeamInfo, date: NaiveDate) {
+    pub fn on_season_end(&mut self, season: Season, team: &TeamInfo, _date: NaiveDate) {
         let is_loan = self.is_on_loan();
         let stats = std::mem::take(&mut self.statistics);
         self.friendly_statistics = Default::default();

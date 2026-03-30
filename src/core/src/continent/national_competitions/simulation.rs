@@ -1,5 +1,5 @@
 use crate::continent::continent::Continent;
-use crate::r#match::{MatchResult, MatchResultRaw, Score};
+use crate::r#match::MatchResult;
 use chrono::NaiveDate;
 use log::info;
 

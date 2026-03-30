@@ -109,7 +109,7 @@ pub async fn team_get_action(
 
     let now = simulator_data.date.date();
 
-    let club_id = team.club_id;
+    let _club_id = team.club_id;
 
     let head_coach = team.staffs.head_coach();
     let staff_judging = head_coach.staff_attributes.knowledge.judging_player_potential;

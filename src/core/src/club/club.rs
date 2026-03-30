@@ -404,7 +404,7 @@ impl Club {
     /// defenders, ~6-8 midfielders, ~4-6 forwards. When academy graduations or
     /// failed transfers cause bloat (e.g. 13 GKs), the worst surplus players
     /// are released to free agents.
-    fn trim_positional_surplus(&mut self, date: NaiveDate) {
+    fn trim_positional_surplus(&mut self, _date: NaiveDate) {
         use crate::PlayerFieldPositionGroup;
 
         // Positional limits across ALL teams combined

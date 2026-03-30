@@ -7,12 +7,12 @@ use std::sync::OnceLock;
 pub struct SkinDist {
     pub white: u8,
     pub black: u8,
-    pub metis: u8,
+    pub _metis: u8,
 }
 
 impl Default for SkinDist {
     fn default() -> Self {
-        SkinDist { white: 50, black: 20, metis: 30 }
+        SkinDist { white: 50, black: 20, _metis: 30 }
     }
 }
 
@@ -39,7 +39,7 @@ fn load_skin_map() -> Vec<(String, SkinDist)> {
         let dist = c.skin_colors.map(|sc| SkinDist {
             white: sc.white,
             black: sc.black,
-            metis: sc.metis,
+            _metis: sc.metis,
         }).unwrap_or_default();
         (c.code, dist)
     }).collect()
@@ -543,8 +543,8 @@ pub fn generate_face_svg(player_id: u32, age: u8, skin_dist: SkinDist) -> String
             let clip_id = format!("ec{i}");
 
             // Almond-shaped eye path — pointed at inner/outer corners
-            let inner_x = ex - erx * side; // inner corner (near nose)
-            let outer_x = ex + erx * side; // outer corner
+            let _inner_x = ex - erx * side; // inner corner (near nose)
+            let _outer_x = ex + erx * side; // outer corner
             let el = ex - erx;
             let er = ex + erx;
 

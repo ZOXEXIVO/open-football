@@ -35,7 +35,6 @@ pub struct PlayerMatchesTemplate {
     pub club_id: u32,
     pub is_on_loan: bool,
     pub is_injured: bool,
-    pub league_slug: String,
     pub items: Vec<PlayerMatchItem>,
 }
 
@@ -228,7 +227,6 @@ pub async fn player_matches_action(
         club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
-        league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
     })
 }

@@ -1,4 +1,4 @@
-use crate::r#match::{MatchField, MatchPlayer, VectorExtensions};
+use crate::r#match::{MatchField, MatchPlayer};
 use std::cmp::Ordering;
 
 const MAX_DISTANCE: f32 = 999.0;

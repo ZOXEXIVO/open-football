@@ -6,7 +6,7 @@ pub(crate) mod scoring;
 #[cfg(test)]
 mod tests;
 
-use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
+use crate::club::{PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
 use crate::{Player, PlayerStatusType, Tactics};
 use chrono::NaiveDate;

@@ -49,14 +49,6 @@ pub struct PlayerTransfersTemplate {
 pub struct PlayerTransferStatusDto {
     pub value: String,
     pub asking_price: String,
-    pub is_transfer_listed: bool,
-    pub is_loan_listed: bool,
-    pub wants_free_transfer: bool,
-    pub has_requested_transfer: bool,
-    pub has_agreed_transfer: bool,
-    pub is_wanted: bool,
-    pub has_bid_accepted: bool,
-    pub has_enquiry: bool,
     pub status_keys: Vec<String>,
     pub reason: String,
 }
@@ -211,14 +203,6 @@ pub async fn player_transfers_action(
             .filter(|_| transfer_related.iter().any(|s| *s == PlayerStatusType::Lst))
             .map(|_| FormattingUtils::format_money(player.value(now, league_rep, club_rep) * 1.2))
             .unwrap_or_default(),
-        is_transfer_listed: transfer_related.contains(&PlayerStatusType::Lst),
-        is_loan_listed: transfer_related.contains(&PlayerStatusType::Loa),
-        wants_free_transfer: transfer_related.contains(&PlayerStatusType::Frt),
-        has_requested_transfer: transfer_related.contains(&PlayerStatusType::Req),
-        has_agreed_transfer: transfer_related.contains(&PlayerStatusType::Trn),
-        is_wanted: transfer_related.contains(&PlayerStatusType::Wnt),
-        has_bid_accepted: transfer_related.contains(&PlayerStatusType::Bid),
-        has_enquiry: transfer_related.contains(&PlayerStatusType::Enq),
         status_keys: transfer_related
             .iter()
             .map(|s| status_type_to_i18n_key(s).to_string())

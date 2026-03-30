@@ -14,6 +14,7 @@ use nalgebra::Vector3;
 // Real football: most goals scored from within 18m (~36 units)
 #[allow(dead_code)]
 const MAX_SHOOTING_DISTANCE: f32 = 90.0; // ~45m - absolute max for elite long shots
+#[allow(dead_code)]
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 const POINT_BLANK_DISTANCE: f32 = 24.0; // ~12m - must shoot, goalkeeper is right there
 #[allow(dead_code)]
@@ -1006,6 +1007,7 @@ impl ForwardRunningState {
 
     /// Check if a teammate has a MUCH better shot opportunity (vision/teamwork-aware)
     /// Used in try_fast() to distribute goals across team
+    #[allow(dead_code)]
     fn has_teammate_with_much_better_shot(
         &self,
         ctx: &StateProcessingContext,

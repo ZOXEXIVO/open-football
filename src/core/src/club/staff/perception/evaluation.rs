@@ -3,7 +3,6 @@ use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
 use super::bias::PlayerBias;
-use super::profile::CoachProfile;
 use super::state::CoachDecisionState;
 use super::utils::date_to_week;
 

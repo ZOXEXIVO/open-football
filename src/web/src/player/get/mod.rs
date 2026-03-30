@@ -48,11 +48,7 @@ pub struct PlayerGetTemplate {
 
 pub struct PlayerViewModel {
     pub id: u32,
-    pub first_name: String,
-    pub last_name: String,
-    pub position: String,
     pub contract: Option<PlayerContractDto>,
-    pub contract_loan: Option<PlayerContractDto>,
     pub birth_date: String,
     pub age: u8,
     pub team_slug: String,
@@ -255,12 +251,6 @@ pub async fn player_get_action(
             squad_status: format_squad_status(&c.squad_status),
         });
 
-        let contract_loan = player.contract_loan.as_ref().map(|c| PlayerContractDto {
-            salary: format_salary(c.salary),
-            expiration: c.expiration.format("%d.%m.%Y").to_string(),
-            squad_status: String::new(),
-        });
-
         let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
         let loan_status = get_loan_status(player, team, simulator_data);
 
@@ -276,11 +266,7 @@ pub async fn player_get_action(
 
         let player_vm = PlayerViewModel {
             id: player.id,
-            first_name: player.full_name.display_first_name().to_string(),
-            last_name: player.full_name.display_last_name().to_string(),
-            position: player.position().get_short_name().to_string(),
             contract,
-            contract_loan,
             birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
             team_slug: main_team_slug,
@@ -359,11 +345,7 @@ pub async fn player_get_action(
 
         let player_vm = PlayerViewModel {
             id: player.id,
-            first_name: player.full_name.display_first_name().to_string(),
-            last_name: player.full_name.display_last_name().to_string(),
-            position: player.position().get_short_name().to_string(),
             contract: None,
-            contract_loan: None,
             birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
             age: player.age(now),
             team_slug: String::new(),

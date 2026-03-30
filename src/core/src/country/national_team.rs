@@ -1,5 +1,4 @@
 use crate::country::PeopleNameGeneratorData;
-use crate::r#match::engine::FootballEngine;
 use crate::r#match::{MatchPlayer, MatchSquad};
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
@@ -1342,6 +1341,7 @@ impl NationalTeam {
         }
     }
 
+    #[allow(dead_code)]
     fn release_squad(&mut self, clubs: &mut [Club]) {
         let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
 

@@ -1,7 +1,6 @@
 use crate::continent::continent::Continent;
 use crate::country::national_team::{NationalTeamFixture, NationalTeamMatchResult};
 use crate::NationalCompetitionFixture;
-use crate::NationalCompetitionPhase;
 use chrono::NaiveDate;
 use std::collections::HashMap;
 

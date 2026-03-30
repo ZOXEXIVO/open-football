@@ -2,7 +2,6 @@ use crate::r#match::MatchResult;
 use crate::league::LeagueTable;
 use crate::Club;
 use chrono::NaiveDate;
-use log::debug;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

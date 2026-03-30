@@ -4,7 +4,6 @@ use crate::transfers::pipeline::{
     RecommendationSource, RecommendationType, ShortlistCandidate,
     ShortlistCandidateStatus, StaffRecommendation, TransferNeedPriority,
     TransferNeedReason, TransferRequest, TransferRequestStatus,
-    TransferShortlist,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::staff_resolver::StaffResolver;

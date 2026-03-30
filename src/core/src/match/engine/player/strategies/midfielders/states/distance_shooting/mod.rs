@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderC
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PlayerEvent, ShootingEventContext};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext,
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
@@ -131,36 +131,6 @@ impl MidfielderDistanceShootingState {
         let under_pressure = self.is_under_pressure(ctx);
 
         has_space && !under_pressure
-    }
-
-    // Additional helper functions
-
-    fn get_opponent_goal_position(&self, ctx: &StateProcessingContext) -> Vector3<f32> {
-        // Get the position of the opponent's goal based on the player's side
-        let field_width = ctx.context.field_size.width as f32;
-        let field_length = ctx.context.field_size.width as f32;
-
-        if ctx.player.side == Some(PlayerSide::Left) {
-            Vector3::new(field_width, field_length / 2.0, 0.0)
-        } else {
-            Vector3::new(0.0, field_length / 2.0, 0.0)
-        }
-    }
-
-    fn has_clear_shot(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if the player has a clear shot to the goal without any obstructing opponents
-        let player_position = ctx.player.position;
-        let goal_position = self.get_opponent_goal_position(ctx);
-        let shot_direction = (goal_position - player_position).normalize();
-
-        let ray_cast_result = ctx.tick_context.space.cast_ray(
-            player_position,
-            shot_direction,
-            ctx.player().goal_distance(),
-            false,
-        );
-
-        ray_cast_result.is_none() // No collisions with opponents
     }
 
     fn is_teammate_open(&self, ctx: &StateProcessingContext, teammate: &MatchPlayerLite) -> bool {

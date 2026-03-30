@@ -117,7 +117,7 @@ impl MatchCoach {
     ) {
         self.last_update_tick = current_tick;
 
-        let time_remaining = 1.0 - match_progress;
+        let _time_remaining = 1.0 - match_progress;
         let is_late_game = match_progress > 0.75;
         let is_very_late = match_progress > 0.88;
         let is_first_half_end = match_progress > 0.45 && match_progress < 0.55;

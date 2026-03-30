@@ -59,7 +59,6 @@ pub struct KnockoutTieDto {
     pub leg1_score: Option<(u8, u8)>,
     pub leg2_score: Option<(u8, u8)>,
     pub winner_name: Option<String>,
-    pub stage: String,
 }
 
 fn stage_label(stage: &CompetitionStage) -> &'static str {
@@ -145,7 +144,6 @@ pub async fn champions_league_get_action(
                 leg1_score: tie.leg1_score,
                 leg2_score: tie.leg2_score,
                 winner_name,
-                stage: stage_label(&cl.current_stage).to_string(),
             });
         }
     }

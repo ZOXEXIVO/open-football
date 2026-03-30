@@ -34,7 +34,6 @@ pub struct TeamScheduleTemplate {
     pub active_tab: &'static str,
     pub show_finances_tab: bool,
     pub show_academy_tab: bool,
-    pub league_slug: String,
     pub items: Vec<TeamScheduleItem>,
 }
 
@@ -181,7 +180,6 @@ pub async fn team_schedule_get_action(
         active_tab: "schedule",
         show_finances_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::B,
         show_academy_tab: team.team_type == core::TeamType::Main || team.team_type == core::TeamType::U18,
-        league_slug: league.map(|l| l.slug.clone()).unwrap_or_default(),
         items,
     })
 }

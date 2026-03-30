@@ -1,7 +1,6 @@
 use crate::club::PlayerPositionType;
 use crate::r#match::player::MatchPlayer;
 use crate::{Player, Staff, Tactics};
-use log::debug;
 
 use super::helpers;
 

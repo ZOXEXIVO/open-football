@@ -214,7 +214,7 @@ impl PipelineProcessor {
 
         // Age preferences: DevelopAndSell targets young players,
         // SignToCompete targets prime-age proven performers
-        let (preferred_age_min, preferred_age_max, youth_age_max) = match philosophy {
+        let (_preferred_age_min, _preferred_age_max, youth_age_max) = match philosophy {
             ClubPhilosophy::DevelopAndSell => (17u8, 26, 21),
             ClubPhilosophy::SignToCompete => (23, 32, 19),
             ClubPhilosophy::LoanFocused => (19, 28, 22),
