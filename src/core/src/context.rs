@@ -160,6 +160,11 @@ impl SimulationContext {
     }
 
     #[inline]
+    pub fn is_quarter_beginning(&self) -> bool {
+        self.day == 1u8 && self.date.month() % 3 == 0 && self.hour == 0
+    }
+
+    #[inline]
     pub fn is_year_beginning(&self) -> bool {
         self.day == 1u8 && self.date.month() == 1 && self.hour == 0
     }

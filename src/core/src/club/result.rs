@@ -42,7 +42,12 @@ impl ClubResult {
 
     pub fn process(self, data: &mut SimulatorData, _result: &mut SimulationResult) {
         self.finance.process(data);
+        self.process_teams(data);
+        self.board.process(data);
+        self.academy.process(data);
+    }
 
+    fn process_teams(&self, data: &mut SimulatorData) {
         for team_result in &self.teams {
             for player_result in &team_result.players.players {
                 if player_result.has_contract_actions() {
@@ -52,9 +57,6 @@ impl ClubResult {
 
             team_result.process(data);
         }
-
-        self.board.process(data);
-        self.academy.process(data);
     }
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
@@ -103,7 +105,7 @@ impl ClubResult {
                 })
                 .unwrap_or((5, 5, 0, 0));
 
-            // Step 2: Look up the player (may have been released since the result was generated)
+            // Step 2: Read player info (immutable)
             let player = match data.player(result.player_id) {
                 Some(p) => p,
                 None => return,
@@ -155,7 +157,7 @@ impl ClubResult {
             // Wage budget enforcement: don't offer salary that would bust the budget
             // The new salary replaces the current one, so check the net increase
             let salary_increase = offered_salary.saturating_sub(current_salary);
-            if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
+            let final_salary = if wage_budget > 0 && current_wage_bill + salary_increase > wage_budget {
                 // Over budget: cap the offer to what the budget allows
                 let remaining = wage_budget.saturating_sub(current_wage_bill);
                 let capped_salary = current_salary + remaining;
@@ -164,29 +166,21 @@ impl ClubResult {
                     Self::handle_unresolved_salary(result.player_id, data, club_id);
                     return;
                 }
-                let final_salary = capped_salary.max(current_salary);
-
-                let years = negotiate_contract_years(player, age, negotiation_skill);
-
-                player.mailbox.push(PlayerMessage {
-                    message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
-                        salary: final_salary,
-                        years,
-                        negotiation_skill,
-                    }),
-                });
-                return;
-            }
+                capped_salary.max(current_salary)
+            } else {
+                offered_salary
+            };
 
             let years = negotiate_contract_years(player, age, negotiation_skill);
 
-            player.mailbox.push(PlayerMessage {
+            // Step 3: Deliver proposal via mutable club access
+            Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
-                    salary: offered_salary,
+                    salary: final_salary,
                     years,
                     negotiation_skill,
                 }),
-            })
+            });
         }
 
         /// Ability-based salary that reflects realistic player market value
@@ -399,6 +393,20 @@ impl ClubResult {
                     }
                 }
                 break;
+            }
+        }
+    }
+
+    fn deliver_message(data: &mut SimulatorData, club_id: u32, player_id: u32, message: PlayerMessage) {
+        let club = match data.club_mut(club_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        for team in &mut club.teams.teams {
+            if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                player.mailbox.push(message);
+                return;
             }
         }
     }

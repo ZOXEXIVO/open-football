@@ -454,6 +454,27 @@ impl PlayerStatisticsHistory {
             b.season.start_year.cmp(&a.season.start_year)
                 .then(b.seq_id.cmp(&a.seq_id))
         });
+
+        // Only the most recent entry (max seq_id) shows subs separately as "played (subs)".
+        // All previous entries sum played + played_subs into played.
+        if let Some(max_seq) = result.iter().map(|i| i.seq_id).max() {
+            for item in &mut result {
+                if item.seq_id != max_seq && item.statistics.played_subs > 0 {
+                    item.statistics.played += item.statistics.played_subs;
+                    item.statistics.played_subs = 0;
+                }
+            }
+        }
+
         result
+    }
+
+    /// Compute career totals from view items.
+    pub fn career_totals(items: &[PlayerStatisticsHistoryItem]) -> PlayerStatistics {
+        let mut totals = PlayerStatistics::default();
+        for item in items {
+            totals.merge_from(&item.statistics);
+        }
+        totals
     }
 }

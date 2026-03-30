@@ -3212,6 +3212,12 @@ a:link, a:visited, a:hover, a:active {
     max-width: 52px;
 }
 
+.fm-history-table .fm-totals-row td {
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    font-weight: 600;
+    color: #c0ccd6;
+}
+
 /* --- Player Decisions Table --- */
 
 .fm-decisions-table .dec-when {

@@ -15,6 +15,21 @@ impl DateUtils {
         (age_duration.num_days() / 365) as u8
     }
 
+    #[inline]
+    pub fn is_quarter_start(date: NaiveDate) -> bool {
+        date.day() == 1 && date.month() % 3 == 0
+    }
+
+    #[inline]
+    pub fn is_year_start(date: NaiveDate) -> bool {
+        date.month() == 1 && date.day() == 1
+    }
+
+    #[inline]
+    pub fn is_year_end(date: NaiveDate) -> bool {
+        date.month() == 12 && date.day() == 31
+    }
+
     pub fn next_saturday(date: NaiveDate) -> NaiveDate {
         let mut current_date = date;
 

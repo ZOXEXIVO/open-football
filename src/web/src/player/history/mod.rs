@@ -35,6 +35,7 @@ pub struct PlayerHistoryTemplate {
     pub player_id: u32,
     pub club_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
+    pub totals: PlayerHistoryStats,
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
     pub is_injured: bool,
@@ -153,6 +154,7 @@ pub async fn player_history_action(
         None
     };
     let view = player.statistics_history.view_items(live_stats);
+    let career_totals = core::PlayerStatisticsHistory::career_totals(&view);
 
     let mut location_cache: std::collections::HashMap<String, TeamLocationInfo> = std::collections::HashMap::new();
 
@@ -208,6 +210,17 @@ pub async fn player_history_action(
         })
         .collect();
 
+    let totals = PlayerHistoryStats {
+        played: career_totals.played,
+        played_subs: career_totals.played_subs,
+        goals: career_totals.goals,
+        assists: career_totals.assists,
+        player_of_the_match: career_totals.player_of_the_match,
+        average_rating: core::PlayerStatistics::format_rating(career_totals.average_rating),
+        conceded: career_totals.conceded,
+        clean_sheets: career_totals.clean_sheets,
+    };
+
     if is_retired {
         Ok(PlayerHistoryTemplate {
             css_version: crate::common::default_handler::CSS_VERSION,
@@ -227,6 +240,7 @@ pub async fn player_history_action(
             player_id: route_params.player_id,
             club_id: 0,
             items,
+            totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: false,
             is_injured: false,
@@ -257,6 +271,7 @@ pub async fn player_history_action(
             player_id: route_params.player_id,
             club_id: team.club_id,
             items,
+            totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: player.is_on_loan(),
             is_injured: player.player_attributes.is_injured,

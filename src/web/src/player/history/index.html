@@ -48,6 +48,23 @@
                     <td class="sq-stat">{{ item.stats.average_rating }}</td>
                 </tr>
                 {% endfor %}
+                <tr class="fm-totals-row">
+                    <td></td>
+                    <td class="sq-club"></td>
+                    <td class="sq-nat"></td>
+                    <td class="sq-league"></td>
+                    <td class="sq-fee"></td>
+                    <td class="sq-stat">{{ totals.played + totals.played_subs }}</td>
+                    {% if is_goalkeeper %}
+                    <td class="sq-stat">{{ totals.conceded }}</td>
+                    <td class="sq-stat">{{ totals.clean_sheets }}</td>
+                    {% else %}
+                    <td class="sq-stat">{{ totals.goals }}</td>
+                    <td class="sq-stat">{{ totals.assists }}</td>
+                    {% endif %}
+                    <td class="sq-stat">{{ totals.player_of_the_match }}</td>
+                    <td class="sq-stat">{{ totals.average_rating }}</td>
+                </tr>
             </tbody>
         </table>
     </section>

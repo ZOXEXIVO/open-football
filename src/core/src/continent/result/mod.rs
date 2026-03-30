@@ -9,6 +9,7 @@ pub use types::*;
 
 use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
+use crate::utils::DateUtils;
 use crate::SimulationResult;
 use chrono::Datelike;
 
@@ -63,17 +64,17 @@ impl ContinentResult {
         }
 
         // Phase 4: Continental Economic Updates (quarterly)
-        if current_date.month() % 3 == 0 && current_date.day() == 1 {
+        if DateUtils::is_quarter_start(current_date) {
             self.update_economic_zone(data, &self.countries);
         }
 
         // Phase 5: Continental Regulatory Updates (yearly)
-        if current_date.month() == 1 && current_date.day() == 1 {
+        if DateUtils::is_year_start(current_date) {
             self.update_continental_regulations(data, current_date);
         }
 
         // Phase 6: Continental Awards & Recognition (yearly)
-        if current_date.month() == 12 && current_date.day() == 31 {
+        if DateUtils::is_year_end(current_date) {
             self.process_continental_awards(data, &self.countries);
         }
 

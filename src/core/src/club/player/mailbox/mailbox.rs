@@ -2,7 +2,6 @@ use crate::handlers::ProcessContractHandler;
 use crate::{Player, PlayerMailboxResult, PlayerResult};
 use chrono::NaiveDate;
 use std::collections::VecDeque;
-use std::sync::Mutex;
 
 #[derive(Debug, Clone)]
 pub struct PlayerMessage {
@@ -23,24 +22,15 @@ pub struct PlayerContractProposal {
     pub negotiation_skill: u8,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct PlayerMailbox {
-    messages: Mutex<VecDeque<PlayerMessage>>,
-}
-
-impl Clone for PlayerMailbox {
-    fn clone(&self) -> Self {
-        let messages = self.messages.lock().unwrap();
-        PlayerMailbox {
-            messages: Mutex::new(messages.clone()),
-        }
-    }
+    messages: VecDeque<PlayerMessage>,
 }
 
 impl PlayerMailbox {
     pub fn new() -> Self {
         PlayerMailbox {
-            messages: Mutex::new(VecDeque::new()),
+            messages: VecDeque::new(),
         }
     }
 
@@ -51,7 +41,8 @@ impl PlayerMailbox {
     ) -> PlayerMailboxResult {
         let result = PlayerMailboxResult::new();
 
-        for message in player.mailbox.get() {
+        let messages: Vec<PlayerMessage> = player.mailbox.messages.drain(..).collect();
+        for message in messages {
             match message.message_type {
                 PlayerMessageType::Greeting => {}
                 PlayerMessageType::ContractProposal(proposal) => {
@@ -63,13 +54,7 @@ impl PlayerMailbox {
         result
     }
 
-    pub fn push(&self, message: PlayerMessage) {
-        let mut messages = self.messages.lock().unwrap();
-        messages.push_back(message);
-    }
-
-    pub fn get(&self) -> Vec<PlayerMessage> {
-        let mut messages = self.messages.lock().unwrap();
-        messages.drain(..).collect()
+    pub fn push(&mut self, message: PlayerMessage) {
+        self.messages.push_back(message);
     }
 }
