@@ -1055,7 +1055,7 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         let field_width = context.field_size.width as f32;
-        let goal_half_width = crate::r#match::engine::engine::GOAL_WIDTH;
+        let goal_half_width = crate::r#match::engine::goal::GOAL_WIDTH;
 
         // Check left endline
         let crossed_side = if self.position.x <= 0.0 {

@@ -59,7 +59,7 @@ impl MatchContext {
             logging_enabled: false,
             total_match_time: 0,
             substitutions: Vec::new(),
-            max_substitutions_per_team: if is_friendly { usize::MAX } else { 3 },
+            max_substitutions_per_team: if is_friendly { usize::MAX } else { 5 },
             last_goal_tick: 0,
             substituted_out_stats: Vec::new(),
             coach_home: MatchCoach::new(),

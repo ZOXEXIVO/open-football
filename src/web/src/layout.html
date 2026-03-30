@@ -5,10 +5,10 @@
     <title>{% block html_title %}{{ title }} | {{ i18n.t("site_name") }}{% endblock %}</title>
     <link rel="icon" type="image/svg+xml" href="/static/images/favicon.svg">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <link href="/css/bootstrap.min.css" rel="stylesheet">
-    <link href="/css/flags.css" rel="stylesheet">
-    <link href="/css/font.min.css" rel="stylesheet">
-    <link href="/css/styles.min.css?v={{ css_version }}" rel="stylesheet">
+    <link href="/static/css/bootstrap.min.css" rel="stylesheet">
+    <link href="/static/css/flags.css" rel="stylesheet">
+    <link href="/static/css/font.min.css" rel="stylesheet">
+    <link href="/static/css/styles.min.css?v={{ css_version }}" rel="stylesheet">
 </head>
 <body>
 <div id="page-content">
@@ -114,7 +114,7 @@
         </div>
     </div>
 </div>
-<script src="/js/bootstrap.bundle.min.js"></script>
+<script src="/static/js/bootstrap.bundle.min.js"></script>
 <script>
     document.addEventListener('click', function (e) {
         const toggle = e.target.closest('.fm-sidebar-lang-toggle');
@@ -244,8 +244,8 @@
         .catch(function () {
         });
 </script>
-<script src="/js/fm-dialog.js?v=2"></script>
-<script src="/js/badge-deck.js?v=2"></script>
+<script src="/static/js/fm-dialog.js?v=2"></script>
+<script src="/static/js/badge-deck.js?v=2"></script>
 <div id="page-scripts">{% block scripts_layout %}{% endblock %}{% block scripts %}{% endblock %}</div>
 
 <!-- Google tag (gtag.js) -->

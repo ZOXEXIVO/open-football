@@ -674,5 +674,8 @@
     "lang_level_good": "Хороший",
     "lang_level_basic": "Базовый",
     "lang_level_beginner": "Начинающий",
-    "lang_level_none": "Нет"
+    "lang_level_none": "Нет",
+    "stats_countries": "стран",
+    "stats_clubs": "клубов",
+    "stats_players": "игроков"
 }

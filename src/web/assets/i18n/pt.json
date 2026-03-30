@@ -588,5 +588,8 @@
     "dec_reason_aging_surplus": "Jogador veterano, excedente no elenco",
     "dec_reason_low_ability_surplus": "Nível baixo, excedente no elenco",
     "dec_reason_underutilized_top_club": "Subutilizado em grande clube, empréstimo para jogar",
-    "dec_reason_underutilized": "Subutilizado, excedente no elenco"
+    "dec_reason_underutilized": "Subutilizado, excedente no elenco",
+    "stats_countries": "países",
+    "stats_clubs": "clubes",
+    "stats_players": "jogadores"
 }

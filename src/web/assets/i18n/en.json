@@ -724,5 +724,8 @@
   "unit_yr": "yr",
   "unit_mo": "mo",
   "unit_days": "days",
-  "expired": "Expired"
+  "expired": "Expired",
+  "stats_countries": "countries",
+  "stats_clubs": "clubs",
+  "stats_players": "players"
 }

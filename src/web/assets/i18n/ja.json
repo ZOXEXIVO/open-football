@@ -724,5 +724,8 @@
   "unit_yr": "年",
   "unit_mo": "月",
   "unit_days": "日",
-  "expired": "期限切れ"
+  "expired": "期限切れ",
+  "stats_countries": "か国",
+  "stats_clubs": "クラブ",
+  "stats_players": "選手"
 }

@@ -144,10 +144,11 @@ impl PlayerBehaviourResult {
                     sim_date,
                 );
 
-                // Generate teammate relationship events visible in player history
-                if relationship_result.relationship_change > 0.3 {
+                // Generate teammate relationship events visible in player history.
+                // Use a higher threshold to prevent event spam from routine friction.
+                if relationship_result.relationship_change > 0.5 {
                     player_to_modify.happiness.add_event(HappinessEventType::TeammateBonding, 1.0);
-                } else if relationship_result.relationship_change < -0.3 {
+                } else if relationship_result.relationship_change < -0.5 {
                     player_to_modify.happiness.add_event(HappinessEventType::ConflictWithTeammate, -1.5);
                 }
             }

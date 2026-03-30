@@ -1,14 +1,19 @@
-use crate::r#match::ball::events::GoalSide;
 use crate::r#match::engine::events::dispatcher::EventCollection;
+use crate::r#match::engine::goal::handle_goal_reset;
+use crate::r#match::engine::rating::calculate_match_rating;
+use crate::r#match::engine::substitutions::process_substitutions;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
 use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
-use nalgebra::Vector3;
 use rand::RngExt;
 use std::collections::HashMap;
+
+// ───────────────────────────────────────────────────────────────────────────────
+// FootballEngine — match orchestration
+// ───────────────────────────────────────────────────────────────────────────────
 
 pub struct FootballEngine<const W: usize, const H: usize> {}
 
@@ -56,6 +61,14 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         }
 
+        Self::build_result(field, context, match_position_data)
+    }
+
+    fn build_result(
+        field: MatchField,
+        mut context: MatchContext,
+        match_position_data: ResultMatchPositionData,
+    ) -> MatchResultRaw {
         let mut result = MatchResultRaw::with_match_time(context.total_match_time);
 
         context.fill_details();
@@ -63,22 +76,18 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result.score = Some(context.score.clone());
 
         // Assign squads based on team IDs, not field positions
-        // left_team_players and right_team_players in result represent home and away teams
         let left_side_squad = field.left_side_players.expect("left team players");
         let right_side_squad = field.right_side_players.expect("right team players");
 
-        // Check which field side has the home team using FieldSquad's team_id
         if left_side_squad.team_id == field.home_team_id {
-            // Home team is on the left side
             result.left_team_players = left_side_squad;
             result.right_team_players = right_side_squad;
         } else {
-            // Home team is on the right side (after swap)
             result.left_team_players = right_side_squad;
             result.right_team_players = left_side_squad;
         }
 
-        // Mark substitutes used in FieldSquads and copy substitution records to result
+        // Copy substitution records to result
         for sub_record in &context.substitutions {
             if sub_record.team_id == result.left_team_players.team_id {
                 result.left_team_players.mark_substitute_used(sub_record.player_in_id);
@@ -112,7 +121,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            let match_rating = Self::calculate_match_rating(
+            let match_rating = calculate_match_rating(
                 goals,
                 assists,
                 player.statistics.passes_attempted,
@@ -139,8 +148,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         // Include stats from substituted-out players
         for (player_id, mut stats) in context.substituted_out_stats.drain(..) {
-            // Look up the player's team to calculate match rating
-            // Use the substitution records to find team_id
             let team_id = context.substitutions.iter()
                 .find(|s| s.player_out_id == player_id)
                 .map(|s| s.team_id);
@@ -151,9 +158,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            // Calculate match rating for subbed-out player
-            // Use Midfielder as default position group (no longer on field to check)
-            stats.match_rating = Self::calculate_match_rating(
+            stats.match_rating = calculate_match_rating(
                 stats.goals,
                 stats.assists,
                 stats.passes_attempted,
@@ -163,7 +168,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 stats.tackles,
                 player_team_goals,
                 opponent_goals,
-                crate::PlayerFieldPositionGroup::Midfielder,
+                PlayerFieldPositionGroup::Midfielder,
             );
 
             result.player_stats.insert(player_id, stats);
@@ -172,6 +177,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result
     }
 
+    // ───────────────────────────────────────────────────────────────────────
+    // Match state loop
+    // ───────────────────────────────────────────────────────────────────────
+
     fn play_inner(
         field: &mut MatchField,
         context: &mut MatchContext,
@@ -179,11 +188,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) -> PlayMatchStateResult {
         let result = PlayMatchStateResult::default();
 
-        // Schedule substitution times for second half (randomized)
         let mut next_sub_time_ms: u64 = 0;
         let mut sub_times_initialized = false;
 
-        // Pre-allocate tick context and events, reuse across ticks
         let mut tick_ctx = GameTickContext::new(field);
         let mut events = EventCollection::with_capacity(10);
 
@@ -211,7 +218,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             // Substitutions only during second half
             if context.state.match_state == MatchState::SecondHalf {
                 if !sub_times_initialized {
-                    // First sub between 10-20 min of second half (55'-65')
                     let mut rng = rand::rng();
                     next_sub_time_ms = rng.random_range(10..20) * 60 * 1000;
                     sub_times_initialized = true;
@@ -219,8 +225,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
                 let period_time = context.time.time;
                 if period_time >= next_sub_time_ms {
-                    Self::process_substitutions(field, context, 1);
-                    // Next sub 5-15 min later
+                    process_substitutions(field, context, 1);
                     let mut rng = rand::rng();
                     next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }
@@ -230,16 +235,17 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         result
     }
 
-    /// Have both coaches evaluate the match state and issue instructions
+    // ───────────────────────────────────────────────────────────────────────
+    // Coach evaluation
+    // ───────────────────────────────────────────────────────────────────────
+
     fn evaluate_coaches(field: &MatchField, context: &mut MatchContext) {
         let home_goals = context.score.home_team.get() as i8;
         let away_goals = context.score.away_team.get() as i8;
         let current_tick = context.current_tick();
 
-        // Match progress: 0.0 = start, 1.0 = end of full match
         let match_progress = context.total_match_time as f32 / MATCH_TIME_MS as f32;
 
-        // Compute average condition for each team
         let (home_condition_sum, home_count, away_condition_sum, away_count) =
             field.players.iter().fold(
                 (0.0f32, 0u32, 0.0f32, 0u32),
@@ -256,7 +262,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let home_avg_condition = if home_count > 0 { home_condition_sum / home_count as f32 } else { 0.5 };
         let away_avg_condition = if away_count > 0 { away_condition_sum / away_count as f32 } else { 0.5 };
 
-        // Home coach: positive score_diff = leading
         context.coach_home.evaluate(
             home_goals - away_goals,
             match_progress,
@@ -264,7 +269,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             current_tick,
         );
 
-        // Away coach: positive score_diff = leading
         context.coach_away.evaluate(
             away_goals - home_goals,
             match_progress,
@@ -272,6 +276,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             current_tick,
         );
     }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Tick processing
+    // ───────────────────────────────────────────────────────────────────────
 
     pub fn game_tick(
         field: &mut MatchField,
@@ -292,19 +300,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     ) {
         events.clear();
 
-        // Full ball update without needing GameTickContext
         field.ball.update_light(context, &field.players, events);
 
-        // Players: just apply existing velocity
         for player in field.players.iter_mut() {
             player.check_boundary_collision(context);
             player.move_to();
         }
 
-        // Dispatch ball events (goals, claims, etc.)
         EventDispatcher::dispatch(events, field, context, match_data, true);
 
-        Self::handle_goal_reset(field, context);
+        handle_goal_reset(field, context);
 
         Self::write_match_positions(field, context.total_match_time, match_data);
     }
@@ -328,54 +333,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         EventDispatcher::dispatch(events, field, context, match_data, true);
 
-        // After all events are dispatched, force-reset positions if a goal was scored.
-        // This prevents stale events (ClaimBall, PassTo, etc.) from overriding the goal reset.
-        Self::handle_goal_reset(field, context);
+        handle_goal_reset(field, context);
 
-        // Use total cumulative match time for positions
         Self::write_match_positions(field, context.total_match_time, match_data);
     }
 
-    /// Reset field after a goal: reposition players, assign kickoff possession.
-    fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
-        if !field.ball.goal_scored {
-            return;
-        }
-
-        let kickoff_side = field.ball.kickoff_team_side;
-
-        field.reset_players_positions();
-        field.ball.reset();
-
-        // Kickoff: give the conceding team protected possession at center
-        if let Some(side) = kickoff_side {
-            let ball_pos = field.ball.position;
-            let kickoff_player_id = field.players.iter()
-                .filter(|p| p.side == Some(side))
-                .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-                .min_by(|a, b| {
-                    let da = (a.position - ball_pos).norm_squared();
-                    let db = (b.position - ball_pos).norm_squared();
-                    da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-                })
-                .map(|p| p.id);
-
-            if let Some(player_id) = kickoff_player_id {
-                field.ball.current_owner = Some(player_id);
-                field.ball.claim_cooldown = 120;
-                field.ball.flags.in_flight_state = 120;
-                field.ball.contested_claim_count = 0;
-            }
-        }
-
-        field.ball.goal_scored = false;
-        field.ball.kickoff_team_side = None;
-        context.record_goal_tick();
-    }
+    // ───────────────────────────────────────────────────────────────────────
+    // Position recording
+    // ───────────────────────────────────────────────────────────────────────
 
     /// Record positions every 30ms (every 3rd tick) instead of every 10ms.
-    /// The frontend interpolates between samples, so 30ms intervals are imperceptible.
-    /// This alone reduces position data by ~67%.
     const POSITION_RECORD_INTERVAL_MS: u64 = 30;
 
     #[inline]
@@ -388,21 +355,21 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
 
-        // Subsample: only record every Nth tick
         if timestamp % Self::POSITION_RECORD_INTERVAL_MS != 0 {
             return;
         }
 
-        // player positions and states
         field.players.iter().for_each(|player| {
             match_data.add_player_positions(player.id, timestamp, player.position);
-            // Record state changes (deduped internally — only stores when state differs)
             match_data.add_player_state(player.id, timestamp, &player.state.to_string());
         });
 
-        // write positions
         match_data.add_ball_positions(timestamp, field.ball.position);
     }
+
+    // ───────────────────────────────────────────────────────────────────────
+    // Ball & player dispatchers
+    // ───────────────────────────────────────────────────────────────────────
 
     fn play_ball(
         field: &mut MatchField,
@@ -426,211 +393,11 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .iter_mut()
             .for_each(|player| player.update(context, tick_context, events));
     }
-
-    fn process_substitutions(
-        field: &mut MatchField,
-        context: &mut MatchContext,
-        max_subs_per_team: usize,
-    ) {
-        let team_ids = [field.home_team_id, field.away_team_id];
-
-        for &team_id in &team_ids {
-            if !context.can_substitute(team_id) {
-                continue;
-            }
-
-            // Collect outfield players sorted by condition (worst first)
-            let mut candidates: Vec<(u32, i16, PlayerPositionType)> = field
-                .players
-                .iter()
-                .filter(|p| p.team_id == team_id)
-                .filter(|p| p.tactical_position.current_position != PlayerPositionType::Goalkeeper)
-                .map(|p| (p.id, p.player_attributes.condition, p.tactical_position.current_position))
-                .collect();
-
-            candidates.sort_by_key(|&(_, cond, _)| cond);
-
-            let mut subs_made = 0;
-            for (player_out_id, _, position) in &candidates {
-                if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
-                    break;
-                }
-
-                // Check if there are bench players available for this team
-                let has_bench = field.substitutes.iter().any(|p| p.team_id == team_id);
-                if !has_bench {
-                    break;
-                }
-
-                let position_group = position.position_group();
-
-                // Try to find a bench player with matching position group
-                let sub_id = Self::find_best_substitute(field, team_id, position_group);
-
-                if let Some(player_in_id) = sub_id {
-                    // Save subbed-out player's stats before they're replaced
-                    if let Some(player_out) = field.get_player(*player_out_id) {
-                        let goals = player_out.statistics.goals_count();
-                        let assists = player_out.statistics.assists_count();
-
-                        context.substituted_out_stats.push((*player_out_id, PlayerMatchEndStats {
-                            shots_on_target: player_out.memory.shots_on_target as u16,
-                            shots_total: player_out.memory.shots_taken as u16,
-                            passes_attempted: player_out.statistics.passes_attempted,
-                            passes_completed: player_out.statistics.passes_completed,
-                            tackles: player_out.statistics.tackles,
-                            goals,
-                            assists,
-                            match_rating: 0.0, // Will be calculated at the end
-                        }));
-                    }
-
-                    if field.substitute_player(*player_out_id, player_in_id) {
-                        context.record_substitution(
-                            team_id,
-                            *player_out_id,
-                            player_in_id,
-                            context.total_match_time,
-                        );
-
-                        // Remove substituted-out player from context so AI
-                        // strategies don't try to look up their position
-                        context.players.remove_player(*player_out_id);
-
-                        // Update the substitute's entry in context.players with
-                        // their new tactical position/role from the field
-                        if let Some(field_player) = field.get_player(player_in_id) {
-                            context.players.update_player(player_in_id, field_player.clone());
-                        }
-
-                        // Mark in the appropriate FieldSquad
-                        let left_squad = field.left_side_players.as_mut();
-                        let right_squad = field.right_side_players.as_mut();
-                        if let Some(squad) = left_squad {
-                            if squad.team_id == team_id {
-                                squad.mark_substitute_used(player_in_id);
-                            }
-                        }
-                        if let Some(squad) = right_squad {
-                            if squad.team_id == team_id {
-                                squad.mark_substitute_used(player_in_id);
-                            }
-                        }
-
-                        subs_made += 1;
-                    }
-                }
-            }
-        }
-    }
-
-    fn find_best_substitute(
-        field: &MatchField,
-        team_id: u32,
-        position_group: PlayerFieldPositionGroup,
-    ) -> Option<u32> {
-        let team_subs: Vec<&MatchPlayer> = field
-            .substitutes
-            .iter()
-            .filter(|p| p.team_id == team_id)
-            .collect();
-
-        if team_subs.is_empty() {
-            return None;
-        }
-
-        // Try to find a sub with matching position group
-        let position_match = team_subs
-            .iter()
-            .filter(|p| p.tactical_position.current_position.position_group() == position_group)
-            .max_by_key(|p| p.player_attributes.current_ability);
-
-        if let Some(sub) = position_match {
-            return Some(sub.id);
-        }
-
-        // Fallback: best available outfield sub (never use GK as outfield replacement)
-        team_subs
-            .iter()
-            .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-            .max_by_key(|p| p.player_attributes.current_ability)
-            .map(|p| p.id)
-    }
-
-    /// Calculate a match rating (1.0 - 10.0, base 6.0)
-    fn calculate_match_rating(
-        goals: u16,
-        assists: u16,
-        passes_attempted: u16,
-        passes_completed: u16,
-        shots_on_target: u16,
-        shots_total: u16,
-        tackles: u16,
-        team_goals: u8,
-        opponent_goals: u8,
-        position_group: PlayerFieldPositionGroup,
-    ) -> f32 {
-        let mut rating: f32 = 6.0;
-
-        // Goals: +1.0 each, capped at +3.0
-        rating += (goals as f32 * 1.0).min(3.0);
-
-        // Assists: +0.5 each, capped at +1.5
-        rating += (assists as f32 * 0.5).min(1.5);
-
-        // Pass completion bonus/penalty
-        if passes_attempted > 5 {
-            let pass_pct = passes_completed as f32 / passes_attempted as f32;
-            // 70% = neutral, 90%+ = +0.4, below 50% = -0.4
-            let pass_bonus = (pass_pct - 0.70) * 2.0;
-            rating += pass_bonus.clamp(-0.4, 0.5);
-        }
-
-        // Shooting accuracy (only meaningful if shots taken)
-        if shots_total > 0 {
-            let shot_accuracy = shots_on_target as f32 / shots_total as f32;
-            let shot_bonus = (shot_accuracy - 0.4) * 0.6;
-            rating += shot_bonus.clamp(-0.2, 0.3);
-        }
-
-        // Defensive contribution - tackles
-        // Weighted more for defenders/defensive midfielders
-        let tackle_weight = match position_group {
-            PlayerFieldPositionGroup::Defender => 0.12,
-            PlayerFieldPositionGroup::Midfielder => 0.08,
-            _ => 0.05,
-        };
-        rating += (tackles as f32 * tackle_weight).min(0.5);
-
-        // Team result
-        if team_goals > opponent_goals {
-            rating += 0.3; // Win bonus
-        } else if team_goals < opponent_goals {
-            rating -= 0.2; // Loss penalty
-        }
-
-        // Clean sheet bonus for defenders and goalkeepers
-        if opponent_goals == 0 {
-            match position_group {
-                PlayerFieldPositionGroup::Goalkeeper => rating += 0.8,
-                PlayerFieldPositionGroup::Defender => rating += 0.4,
-                PlayerFieldPositionGroup::Midfielder => rating += 0.1,
-                _ => {}
-            }
-        }
-
-        // Conceding many goals penalty for defenders/GK
-        if opponent_goals >= 3 {
-            match position_group {
-                PlayerFieldPositionGroup::Goalkeeper => rating -= 0.5,
-                PlayerFieldPositionGroup::Defender => rating -= 0.3,
-                _ => {}
-            }
-        }
-
-        rating.clamp(1.0, 10.0)
-    }
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Match events enum
+// ───────────────────────────────────────────────────────────────────────────────
 
 pub enum MatchEvent {
     MatchPlayed(u32, bool, u8),
@@ -638,6 +405,10 @@ pub enum MatchEvent {
     Assist(u32),
     Injury(u32),
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Types: BallSide, TeamsTactics, MatchFieldSize
+// ───────────────────────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum BallSide {
@@ -670,64 +441,6 @@ impl TeamsTactics {
 }
 
 #[derive(Clone)]
-pub struct GoalPosition {
-    pub left: Vector3<f32>,
-    pub right: Vector3<f32>,
-}
-
-impl From<&MatchFieldSize> for GoalPosition {
-    fn from(value: &MatchFieldSize) -> Self {
-        // Left goal at x = 0, centered on width
-        let left_goal = Vector3::new(0.0, value.height as f32 / 2.0, 0.0);
-
-        // Right goal at x = length, centered on width
-        let right_goal = Vector3::new(value.width as f32, (value.height / 2usize) as f32, 0.0);
-
-        GoalPosition {
-            left: left_goal,
-            right: right_goal,
-        }
-    }
-}
-
-pub const GOAL_WIDTH: f32 = 29.0; // half-width in game units (full goal = 58 units, real = 7.32m)
-pub const GOAL_HEIGHT: f32 = 2.44; // Crossbar height in meters (z-axis is in meters)
-
-impl GoalPosition {
-    pub fn is_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        if ball_position.z > GOAL_HEIGHT {
-            return None;
-        }
-        self.check_goal_line(ball_position)
-    }
-
-    /// Check if ball crossed the goal line within goal width but ABOVE the crossbar.
-    /// Returns which side the ball went over (goal kick for the defending team).
-    pub fn is_over_goal(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        if ball_position.z <= GOAL_HEIGHT {
-            return None;
-        }
-        self.check_goal_line(ball_position)
-    }
-
-    fn check_goal_line(&self, ball_position: Vector3<f32>) -> Option<GoalSide> {
-        if ball_position.x <= self.left.x {
-            if (self.left.y - GOAL_WIDTH..=self.left.y + GOAL_WIDTH).contains(&ball_position.y) {
-                return Some(GoalSide::Home);
-            }
-        }
-
-        if ball_position.x >= self.right.x {
-            if (self.right.y - GOAL_WIDTH..=self.right.y + GOAL_WIDTH).contains(&ball_position.y) {
-                return Some(GoalSide::Away);
-            }
-        }
-
-        None
-    }
-}
-
-#[derive(Clone)]
 pub struct MatchFieldSize {
     pub width: usize,
     pub height: usize,
@@ -744,6 +457,10 @@ impl MatchFieldSize {
         }
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Types: PlayerEntry, MatchPlayerCollection
+// ───────────────────────────────────────────────────────────────────────────────
 
 /// Compact player entry for fast iteration in hot loops
 #[derive(Clone, Copy)]
@@ -795,7 +512,6 @@ impl MatchPlayerCollection {
     }
 
     pub fn update_player(&mut self, player_id: u32, player: MatchPlayer) {
-        // Update compact entry
         let pos = player.tactical_position.current_position;
         let team_id = player.team_id;
         if let Some(entry) = self.entries.iter_mut().find(|e| e.id == player_id) {
@@ -807,6 +523,10 @@ impl MatchPlayerCollection {
         self.players.insert(player_id, player);
     }
 }
+
+// ───────────────────────────────────────────────────────────────────────────────
+// Types: MatchTime, PlayMatchStateResult
+// ───────────────────────────────────────────────────────────────────────────────
 
 #[cfg(debug_assertions)]
 pub const MATCH_HALF_TIME_MS: u64 = 5 * 60 * 1000;

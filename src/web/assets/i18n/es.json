@@ -588,5 +588,8 @@
     "dec_reason_aging_surplus": "Jugador veterano, excedente en plantilla",
     "dec_reason_low_ability_surplus": "Nivel bajo, excedente en plantilla",
     "dec_reason_underutilized_top_club": "Infrautilizado en club grande, cesión para jugar",
-    "dec_reason_underutilized": "Infrautilizado, excedente en plantilla"
+    "dec_reason_underutilized": "Infrautilizado, excedente en plantilla",
+    "stats_countries": "países",
+    "stats_clubs": "clubes",
+    "stats_players": "jugadores"
 }

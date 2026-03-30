@@ -588,5 +588,8 @@
     "dec_reason_aging_surplus": "Joueur vieillissant, excédentaire",
     "dec_reason_low_ability_surplus": "Niveau faible, excédentaire",
     "dec_reason_underutilized_top_club": "Sous-utilisé dans un grand club, prêt pour jouer",
-    "dec_reason_underutilized": "Sous-utilisé, excédentaire"
+    "dec_reason_underutilized": "Sous-utilisé, excédentaire",
+    "stats_countries": "pays",
+    "stats_clubs": "clubs",
+    "stats_players": "joueurs"
 }

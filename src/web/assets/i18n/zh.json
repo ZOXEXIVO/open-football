@@ -724,5 +724,8 @@
   "unit_yr": "年",
   "unit_mo": "月",
   "unit_days": "天",
-  "expired": "已到期"
+  "expired": "已到期",
+  "stats_countries": "国家",
+  "stats_clubs": "俱乐部",
+  "stats_players": "球员"
 }

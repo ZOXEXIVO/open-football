@@ -52,17 +52,15 @@ impl SquadManager {
         }
     }
 
-    /// Mandatory administrative demotions: Lst and Loa status players.
+    /// Administrative demotions: transfer-listed (Lst) players move to reserves.
+    /// Loa (Leave of Absence) players stay where they are — the coach decides.
     fn identify_administrative_demotions(main_team: &Team) -> Vec<u32> {
         main_team
             .players
             .players
             .iter()
             .filter_map(|player| {
-                let statuses = player.statuses.get();
-                if statuses.contains(&PlayerStatusType::Lst)
-                    || statuses.contains(&PlayerStatusType::Loa)
-                {
+                if player.statuses.get().contains(&PlayerStatusType::Lst) {
                     Some(player.id)
                 } else {
                     None

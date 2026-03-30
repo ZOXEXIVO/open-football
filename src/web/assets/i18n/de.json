@@ -588,5 +588,8 @@
   "dec_reason_aging_surplus": "Alternder Spieler, überzählig",
   "dec_reason_low_ability_surplus": "Geringe Leistung, überzählig",
   "dec_reason_underutilized_top_club": "Bei Topverein nicht eingesetzt, Leihe für Spielzeit",
-  "dec_reason_underutilized": "Nicht eingesetzt, überzählig"
+  "dec_reason_underutilized": "Nicht eingesetzt, überzählig",
+  "stats_countries": "Länder",
+  "stats_clubs": "Vereine",
+  "stats_players": "Spieler"
 }

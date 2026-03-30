@@ -382,6 +382,18 @@ impl ScoringEngine {
 
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
 
+        // Bench integration bonus: coaches want to give minutes to players
+        // who haven't played much — loan players, youth, returning from injury.
+        // A good coach includes them on the bench to sub in when possible.
+        let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
+        if total_games < 5.0 {
+            // Loan players with no games get a stronger push — the club
+            // brought them in to play, not to sit in reserves
+            let loan_factor = if player.contract_loan.is_some() { 2.0 } else { 1.0 };
+            let need_minutes_bonus = (5.0 - total_games) * 0.4 * loan_factor;
+            score += need_minutes_bonus;
+        }
+
         score
     }
 

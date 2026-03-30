@@ -165,6 +165,13 @@ pub(crate) struct CallUpCandidate {
     league_reputation: u16,
     position_levels: Vec<(PlayerPositionType, u8)>,
     position_group: PlayerFieldPositionGroup,
+    // Season performance events
+    goals: u16,
+    assists: u16,
+    player_of_the_match: u8,
+    clean_sheets: u16,
+    yellow_cards: u8,
+    red_cards: u8,
 }
 
 impl NationalTeam {
@@ -352,10 +359,11 @@ impl NationalTeam {
                         continue;
                     }
 
-                    // Skip unavailable players
+                    // Skip unavailable or unfit players
                     if player.player_attributes.is_injured
                         || player.player_attributes.is_banned
                         || player.statuses.get().contains(&PlayerStatusType::Loa)
+                        || player.player_attributes.condition < 5000 // Below 50% condition
                     {
                         continue;
                     }
@@ -393,6 +401,7 @@ impl NationalTeam {
                         if player.player_attributes.is_injured
                             || player.player_attributes.is_banned
                             || player.statuses.get().contains(&PlayerStatusType::Loa)
+                            || player.player_attributes.condition < 5000
                         {
                             continue;
                         }
@@ -428,13 +437,14 @@ impl NationalTeam {
         let age = date.year() - player.birth_date.year();
         let total_games = player.statistics.played + player.statistics.played_subs;
 
-        // Only skip players who are clearly unfit for any national team:
-        // very low ability, no games played, no reputation, and no youth potential
-        if ability < 20
-            && total_games == 0
-            && player.player_attributes.world_reputation <= 0
-            && !(age <= 21 && potential >= 60)
-        {
+        // Skip players who haven't proven themselves at club level:
+        // - Must have played at least a few matches this season
+        // - Must have reasonable ability (or be a high-potential youth)
+        let is_promising_youth = age <= 21 && potential >= 80 && total_games >= 3;
+        if total_games < 5 && !is_promising_youth {
+            return None;
+        }
+        if ability < 40 && !is_promising_youth {
             return None;
         }
 
@@ -478,6 +488,12 @@ impl NationalTeam {
             league_reputation: league_rep,
             position_levels,
             position_group,
+            goals: player.statistics.goals,
+            assists: player.statistics.assists,
+            player_of_the_match: player.statistics.player_of_the_match,
+            clean_sheets: player.statistics.clean_sheets,
+            yellow_cards: player.statistics.yellow_cards,
+            red_cards: player.statistics.red_cards,
         })
     }
 
@@ -666,16 +682,18 @@ impl NationalTeam {
             * 100.0;
 
         // 4. Form & match readiness (0-100)
+        // Heavily penalize players who aren't match-fit or haven't been playing
         let condition_norm = candidate.condition_pct.clamp(0.0, 100.0);
         let readiness_norm = (candidate.match_readiness / 20.0).clamp(0.0, 1.0) * 100.0;
         let rating_norm = if candidate.average_rating > 0.0 {
             (candidate.average_rating / 10.0).clamp(0.0, 1.0) * 100.0
         } else {
-            50.0
+            30.0  // No rating = below average assumption
         };
-        let games_bonus = (candidate.played as f32).min(30.0) / 30.0 * 20.0;
+        // Games played this season: 0 games = 0 bonus, 15+ games = full bonus
+        let games_norm = (candidate.played as f32).min(15.0) / 15.0 * 100.0;
         let form_score =
-            condition_norm * 0.2 + readiness_norm * 0.2 + rating_norm * 0.4 + games_bonus * 0.2;
+            condition_norm * 0.25 + readiness_norm * 0.25 + rating_norm * 0.30 + games_norm * 0.20;
 
         // 5. Reputation & international experience (0-100)
         // World reputation is on 0-10000 scale — top players are 5000+
@@ -714,10 +732,44 @@ impl NationalTeam {
             }
         };
 
-        // 8. Potential (only meaningful in friendlies)
+        // 8. Season impact — goals, assists, PoM awards, clean sheets (0-100)
+        // A striker scoring 15+ goals or a midfielder with 10+ assists stands out.
+        // Position-aware: goals matter more for forwards, clean sheets for defenders/GKs.
+        let total_games_f = (candidate.played as f32).max(1.0);
+        let goals_per_game = candidate.goals as f32 / total_games_f;
+        let assists_per_game = candidate.assists as f32 / total_games_f;
+        let pom_norm = (candidate.player_of_the_match as f32).min(8.0) / 8.0 * 30.0;
+        let discipline_penalty = candidate.red_cards as f32 * 10.0
+            + candidate.yellow_cards as f32 * 1.5;
+
+        let impact_score = match candidate.position_group {
+            PlayerFieldPositionGroup::Forward => {
+                let goal_score = (goals_per_game * 80.0).min(40.0);
+                let assist_score = (assists_per_game * 60.0).min(15.0);
+                (goal_score + assist_score + pom_norm - discipline_penalty).clamp(0.0, 100.0)
+            }
+            PlayerFieldPositionGroup::Midfielder => {
+                let goal_score = (goals_per_game * 60.0).min(20.0);
+                let assist_score = (assists_per_game * 80.0).min(30.0);
+                (goal_score + assist_score + pom_norm - discipline_penalty).clamp(0.0, 100.0)
+            }
+            PlayerFieldPositionGroup::Defender => {
+                let cs_per_game = candidate.clean_sheets as f32 / total_games_f;
+                let cs_score = (cs_per_game * 80.0).min(35.0);
+                let goal_score = (goals_per_game * 50.0).min(10.0);
+                (cs_score + goal_score + pom_norm - discipline_penalty).clamp(0.0, 100.0)
+            }
+            PlayerFieldPositionGroup::Goalkeeper => {
+                let cs_per_game = candidate.clean_sheets as f32 / total_games_f;
+                let cs_score = (cs_per_game * 100.0).min(45.0);
+                (cs_score + pom_norm - discipline_penalty).clamp(0.0, 100.0)
+            }
+        };
+
+        // 9. Potential (only meaningful in friendlies)
         let potential_score = (candidate.potential_ability as f32 / 200.0) * 100.0;
 
-        // 9. Coach bias — deterministic per country
+        // 10. Coach bias — deterministic per country
         let coach_bias = match country_id % 4 {
             0 => (candidate.international_apps as f32).min(80.0) / 80.0 * 5.0,
             1 => if candidate.age <= 24 { 5.0 } else { 0.0 },
@@ -726,30 +778,32 @@ impl NationalTeam {
         };
 
         // Apply context-dependent weights
-        // Tournament: proven quality + big club players + experience
-        // Friendly: experiment with youth + potential
+        // Tournament: proven quality + match fitness + season impact + experience
+        // Friendly: experiment with youth + potential, but still need fitness
         let weighted = if is_tournament {
-            ability_score * 0.30
-                + league_score * 0.15
-                + tactical_score * 0.15
-                + form_score * 0.10
-                + experience_score * 0.15
+            ability_score * 0.22
+                + league_score * 0.08
+                + tactical_score * 0.10
+                + form_score * 0.18
+                + impact_score * 0.15
+                + experience_score * 0.12
                 + mental_score * 0.08
                 + age_score * 0.07
         } else {
             let youth_bonus = if candidate.age <= 23 && candidate.international_apps < 10 {
-                8.0
+                5.0
             } else {
                 0.0
             };
-            ability_score * 0.20
-                + league_score * 0.10
-                + tactical_score * 0.10
-                + form_score * 0.10
+            ability_score * 0.16
+                + league_score * 0.06
+                + tactical_score * 0.08
+                + form_score * 0.18
+                + impact_score * 0.12
                 + experience_score * 0.05
-                + mental_score * 0.08
-                + age_score * 0.12
-                + potential_score * 0.15
+                + mental_score * 0.06
+                + age_score * 0.08
+                + potential_score * 0.11
                 + youth_bonus
         };
 

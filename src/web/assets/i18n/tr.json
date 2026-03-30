@@ -724,5 +724,8 @@
   "unit_yr": "yıl",
   "unit_mo": "ay",
   "unit_days": "gün",
-  "expired": "Süresi Doldu"
+  "expired": "Süresi Doldu",
+  "stats_countries": "ülke",
+  "stats_clubs": "kulüp",
+  "stats_players": "oyuncu"
 }

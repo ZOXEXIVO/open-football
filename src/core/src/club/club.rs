@@ -187,6 +187,7 @@ impl Club {
 
             self.process_pre_season_reset();
             result.academy_transfers = self.process_academy_graduations(date);
+            self.trim_positional_surplus(date);
         }
 
         result
@@ -393,6 +394,57 @@ impl Club {
                 debug!("loan return -> reserve: {} moved to {}",
                     player.full_name, self.teams.teams[reserve_idx].name);
                 self.teams.teams[reserve_idx].players.add(player);
+            }
+        }
+    }
+
+    /// Release excess players at over-represented positions across all teams.
+    ///
+    /// Real clubs maintain positional balance: 3 GKs in the first team, ~6-8
+    /// defenders, ~6-8 midfielders, ~4-6 forwards. When academy graduations or
+    /// failed transfers cause bloat (e.g. 13 GKs), the worst surplus players
+    /// are released to free agents.
+    fn trim_positional_surplus(&mut self, date: NaiveDate) {
+        use crate::PlayerFieldPositionGroup;
+
+        // Positional limits across ALL teams combined
+        // (GK: max 4, DEF: max 20, MID: max 20, FWD: max 16)
+        let limits: [(PlayerFieldPositionGroup, usize); 4] = [
+            (PlayerFieldPositionGroup::Goalkeeper, 4),
+            (PlayerFieldPositionGroup::Defender, 20),
+            (PlayerFieldPositionGroup::Midfielder, 20),
+            (PlayerFieldPositionGroup::Forward, 16),
+        ];
+
+        for (group, max_count) in &limits {
+            // Collect all players at this position across all teams
+            let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new(); // (team_idx, player_id, ability)
+            for (ti, team) in self.teams.teams.iter().enumerate() {
+                for p in &team.players.players {
+                    if p.position().position_group() == *group {
+                        players_at_pos.push((ti, p.id, p.player_attributes.current_ability));
+                    }
+                }
+            }
+
+            if players_at_pos.len() <= *max_count {
+                continue;
+            }
+
+            // Sort by ability ascending — release the worst first
+            players_at_pos.sort_by_key(|&(_, _, ca)| ca);
+
+            let to_release = players_at_pos.len() - max_count;
+            for &(team_idx, player_id, _) in players_at_pos.iter().take(to_release) {
+                if let Some(player) = self.teams.teams[team_idx].players.take_player(&player_id) {
+                    log::debug!(
+                        "positional surplus release: {} ({:?}, CA={}) from {}",
+                        player.full_name, group, player.player_attributes.current_ability,
+                        self.teams.teams[team_idx].name
+                    );
+                    // Player is simply removed — becomes a free agent
+                    drop(player);
+                }
             }
         }
     }

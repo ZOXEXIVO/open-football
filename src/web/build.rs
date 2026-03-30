@@ -8,8 +8,8 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     let out_dir = env::var("OUT_DIR").unwrap();
 
-    let css_dir = Path::new(&manifest_dir).join("assets").join("css");
-    let output_file = Path::new(&manifest_dir).join("assets").join("css").join("styles.min.css");
+    let css_dir = Path::new(&manifest_dir).join("assets").join("static").join("css");
+    let output_file = Path::new(&manifest_dir).join("assets").join("static").join("css").join("styles.min.css");
 
     // Watch for changes in CSS directory (use absolute path)
     println!("cargo:rerun-if-changed={}", css_dir.display());

@@ -15,10 +15,11 @@ use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::watchlist::watchlist_routes;
 use crate::GameAppData;
-use axum::extract::State;
+use axum::extract::{Request, State};
 use axum::http::header::ACCEPT_LANGUAGE;
 use axum::http::HeaderMap;
-use axum::response::{IntoResponse, Redirect};
+use axum::middleware::Next;
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::get;
 use axum::Router;
 use crate::common::default_handler::default_handler;
@@ -73,6 +74,38 @@ async fn sitemap_xml(State(state): State<GameAppData>) -> impl IntoResponse {
     ([(axum::http::header::CONTENT_TYPE, "application/xml")], xml)
 }
 
+/// Middleware that turns user-facing errors into redirects to the home page.
+///
+/// Pre-handler: rejects unsupported language prefixes (e.g. `/saas/countries/...`).
+/// Post-handler: catches any 4xx response (not-found entity, invalid path param).
+async fn redirect_on_error(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+
+    // Never redirect API endpoints or static assets
+    if path.starts_with("/api/") || path.starts_with("/static/") {
+        return next.run(request).await;
+    }
+
+    // Check language prefix before running the handler
+    let first_segment = path.trim_start_matches('/').split('/').next().unwrap_or("");
+
+    // Only validate paths that look like /{lang}/... (skip `/`, `/sitemap.xml`, assets)
+    if !first_segment.is_empty()
+        && path.matches('/').count() > 1
+        && !SUPPORTED_LANG_CODES.contains(&first_segment)
+    {
+        return Redirect::temporary("/").into_response();
+    }
+
+    let response = next.run(request).await;
+
+    if response.status().is_client_error() {
+        Redirect::temporary("/").into_response()
+    } else {
+        response
+    }
+}
+
 pub struct ServerRoutes;
 
 impl ServerRoutes {
@@ -96,5 +129,6 @@ impl ServerRoutes {
             .merge(watchlist_routes())
             .merge(ai_routes())
             .fallback(default_handler)
+            .layer(axum::middleware::from_fn(redirect_on_error))
     }
 }

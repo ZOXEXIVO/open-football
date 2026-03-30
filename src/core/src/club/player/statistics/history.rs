@@ -151,7 +151,7 @@ impl PlayerStatisticsHistory {
             let days_at_club = (end_date - entry.joined_date).num_days().max(0);
             let season_days = (season_end - entry_season.start_date()).num_days().max(1);
             let time_pct = (days_at_club as f64 / season_days as f64) * 100.0;
-            let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 35.0;
 
             if is_initial_record || (!stale_loan_seed && !trivial_stint) {
                 let mut stats = entry.statistics;
@@ -343,7 +343,7 @@ impl PlayerStatisticsHistory {
 
             // Drop entries where the player barely stayed and never played:
             // - Loan entries with 0 games and no fee are stale seeds (phantom entries)
-            // - Any entry with 0 games and no fee that covers < 15% of the season is noise
+            // - Any entry with 0 games and no fee that covers < 35% of the season is noise
             //   (e.g. returned from loan near season end, 0 apps at parent club)
             // Always keep: entries with games, entries with transfer fees,
             // entries where the player was at the club for a meaningful portion of the season,
@@ -351,7 +351,7 @@ impl PlayerStatisticsHistory {
             //
             let has_fee = entry.transfer_fee.is_some();
             let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
-            let trivial_stint = games == 0 && !has_fee && time_pct < 15.0;
+            let trivial_stint = games == 0 && !has_fee && time_pct < 35.0;
             let stale_loan_seed = entry.is_loan && games == 0 && !has_fee;
 
             let keep = is_initial_record || (!stale_loan_seed && !trivial_stint);
@@ -409,6 +409,17 @@ impl PlayerStatisticsHistory {
 
         for entry in &self.current {
             let is_active = entry.departed_date.is_none();
+
+            // Skip departed entries with 0 games and no transfer fee —
+            // same logic as the trivial stint filter at season end,
+            // so the UI doesn't show empty rows mid-season.
+            if !is_active
+                && entry.statistics.total_games() == 0
+                && entry.transfer_fee.is_none()
+            {
+                continue;
+            }
+
             let statistics = if is_active {
                 if let Some(stats) = live_stats {
                     stats.clone()

@@ -574,25 +574,35 @@ impl PlayerGenerator {
         let raw_ca = 10.0 + rep_factor * 200.0;
 
         // Calculate PA first — skills are PA-anchored for proper position differentiation
-        // Youth Recruitment affects gem chance
-        // Poor recruitment (0.05) → 3% gem, Average (0.35) → 8%, Exceptional (0.95) → 25%
-        let gem_chance = 0.02 + recruitment_quality * 0.24;
+        // Youth Recruitment affects gem chance (rare exceptional talent)
+        // Poor recruitment (0.05) → 0.3%, Average (0.35) → 1%, Exceptional (0.95) → 3%
+        // A top academy producing ~8 players/year: ~0.24 gems/year = 1 gem per ~4 years
+        // A mid-level academy: ~0.08 gems/year = 1 gem per ~12 years
+        let gem_chance = 0.002 + recruitment_quality * 0.03;
 
         let gem_roll = rand::random::<f32>();
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Poor academy (0.05): PA cap ~80,  headroom ~10-20 above raw_ca
-        // Average (0.35):      PA cap ~120, headroom ~15-35
-        // Good (0.55):         PA cap ~145, headroom ~20-45
-        // Excellent (0.75):    PA cap ~170, headroom ~25-55
-        // Best (1.0):          PA cap ~200, headroom ~30-65
+        // Poor academy (0.05): PA cap ~67,  headroom ~5-12 above raw_ca
+        // Average (0.35):      PA cap ~109, headroom ~10-22
+        // Good (0.55):         PA cap ~137, headroom ~14-30
+        // Excellent (0.75):    PA cap ~165, headroom ~18-38
+        // Best (1.0):          PA cap ~200, headroom ~22-48
         let mut academy_pa_cap = (60.0 + academy_quality * 140.0) as i32; // 67..200
 
-        // Rare prodigy: ~0.5% chance any club produces a 160+ PA talent
-        // Even a village club can occasionally birth a Messi
-        if rand::random::<f32>() < 0.005 {
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(150, 170));
+        // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
+        // Even a small club can produce a generational talent — just extremely rarely.
+        let prodigy_roll = rand::random::<f32>();
+        if prodigy_roll < 0.00005 {
+            // Once-in-a-generation: ~0.005% → across 400 players/year = once per ~50 years
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(185, 200));
+        } else if prodigy_roll < 0.00025 {
+            // World-class potential: ~0.02% → roughly once per ~12 years globally
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(170, 190));
+        } else if prodigy_roll < 0.001 {
+            // Very high potential: ~0.075% → roughly once per ~4 years globally
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(150, 175));
         }
 
         // Use raw_ca (peak potential) as PA base, not age-reduced current_ability.
@@ -600,13 +610,14 @@ impl PlayerGenerator {
         let pa_base = raw_ca as i32;
 
         let potential_ability = if is_gem {
-            // Gems: academy quality sets the ceiling, rep_factor fine-tunes
-            let gem_min = (pa_base + 10).min(academy_pa_cap);
-            let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.30)) as i32;
+            // Gems: PA spread between base and a fraction of academy cap.
+            // Even gems don't always reach near the ceiling — talent varies.
+            let gem_min = (pa_base + 5).min(academy_pa_cap - 15).max(pa_base);
+            let gem_max = (academy_pa_cap as f32 * (0.70 + rep_factor * 0.25)) as i32;
             IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Normal players: PA = raw_ca + headroom, capped by academy quality
-            let base_headroom = 10.0 + academy_quality * 55.0; // 10.8..65
+            // Normal players: PA = raw_ca + modest headroom, capped by academy quality
+            let base_headroom = 8.0 + academy_quality * 40.0; // 8.4..48
             let headroom = (base_headroom * (0.6 + rep_factor * 0.8)) as i32;
             let raw_pa = pa_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.min(academy_pa_cap).min(200) as u8
@@ -616,6 +627,10 @@ impl PlayerGenerator {
         let skills = Self::generate_skills(&pos_type, age, rep_factor, potential_ability);
 
         let current_ability = skills.calculate_ability_for_position(position);
+
+        // PA must never be lower than CA — position-weighted skill calculation
+        // can produce CA above the raw PA when skills align well with the position
+        let potential_ability = potential_ability.max(current_ability);
 
         // Higher PA → higher chance of secondary position
         let positions = Self::generate_positions(position, potential_ability);

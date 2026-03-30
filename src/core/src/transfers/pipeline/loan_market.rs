@@ -78,18 +78,20 @@ impl PipelineProcessor {
             let team = &club.teams.teams[0];
             let rep_level = team.reputation.level();
 
-            // Determine if club should scan
-            let should_scan = match rep_level {
-                ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => {
-                    true
-                }
-                ReputationLevel::National => {
-                    is_january || club.finance.balance.balance < 0
-                }
-                ReputationLevel::Continental => {
+            // Determine if club should scan — philosophy overrides reputation defaults.
+            // LoanFocused clubs always scan; SignToCompete clubs almost never loan.
+            let should_scan = match &club.philosophy {
+                crate::ClubPhilosophy::LoanFocused => true,
+                crate::ClubPhilosophy::SignToCompete => {
+                    // Only loan as emergency cover in January
                     is_january && club.finance.balance.balance < 0
                 }
-                ReputationLevel::Elite => false,
+                _ => match rep_level {
+                    ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur => true,
+                    ReputationLevel::National => is_january || club.finance.balance.balance < 0,
+                    ReputationLevel::Continental => is_january && club.finance.balance.balance < 0,
+                    ReputationLevel::Elite => false,
+                },
             };
 
             if !should_scan {
@@ -140,6 +142,47 @@ impl PipelineProcessor {
             // to avoid starting multiple negotiations for the same position
             let mut scanned_position_groups: Vec<PlayerFieldPositionGroup> = Vec::new();
 
+            // Track position group depth + best ability to prevent bloat
+            // while still allowing upgrades. A club with 3 mediocre GKs should
+            // still loan a world-class GK, but not a 4th mediocre one.
+            struct PositionDepth {
+                group: PlayerFieldPositionGroup,
+                count: usize,
+                max: usize,
+                best_ability: u8,
+            }
+
+            let position_depth: Vec<PositionDepth> = [
+                (PlayerFieldPositionGroup::Goalkeeper, 3usize),
+                (PlayerFieldPositionGroup::Defender, 8),
+                (PlayerFieldPositionGroup::Midfielder, 8),
+                (PlayerFieldPositionGroup::Forward, 6),
+            ].iter().map(|&(group, max)| {
+                let players_at_pos: Vec<u8> = team.players.players.iter()
+                    .filter(|p| p.position().position_group() == group)
+                    .map(|p| p.player_attributes.current_ability)
+                    .collect();
+                PositionDepth {
+                    group,
+                    count: players_at_pos.len(),
+                    max,
+                    best_ability: players_at_pos.iter().copied().max().unwrap_or(0),
+                }
+            }).collect();
+
+            let should_skip_loan = |group: PlayerFieldPositionGroup, loan_ability: u8| -> bool {
+                if let Some(depth) = position_depth.iter().find(|d| d.group == group) {
+                    if depth.count < depth.max {
+                        return false; // Still have room — always allow
+                    }
+                    // Position is full — only allow if the loan player is clearly
+                    // better than the best we have (upgrade, not bloat)
+                    loan_ability <= depth.best_ability
+                } else {
+                    false
+                }
+            };
+
             // Check unfulfilled transfer requests first
             let unfulfilled: Vec<&TransferRequest> = plan
                 .transfer_requests
@@ -160,6 +203,11 @@ impl PipelineProcessor {
                 // a separate loan negotiation
                 let pos_group = request.position.position_group();
                 if scanned_position_groups.contains(&pos_group) {
+                    continue;
+                }
+
+                // Skip if position is full AND loan wouldn't be an upgrade
+                if should_skip_loan(pos_group, request.min_ability) {
                     continue;
                 }
 
@@ -203,24 +251,6 @@ impl PipelineProcessor {
                 ReputationLevel::Regional | ReputationLevel::Local | ReputationLevel::Amateur
             );
 
-            // Natural squad depth check — a club wouldn't pursue more loans
-            // for a position group that's already well-covered
-            let has_room_for = |group: PlayerFieldPositionGroup| -> bool {
-                let roster_count = team
-                    .players
-                    .players
-                    .iter()
-                    .filter(|p| p.position().position_group() == group)
-                    .count();
-                let max_depth = match group {
-                    PlayerFieldPositionGroup::Goalkeeper => 3,
-                    PlayerFieldPositionGroup::Defender => 7,
-                    PlayerFieldPositionGroup::Midfielder => 7,
-                    PlayerFieldPositionGroup::Forward => 5,
-                };
-                roster_count < max_depth
-            };
-
             // Small clubs scan for available loan players to strengthen their squad
             if is_small_club && scans_this_club < max_scans {
                 let mut opps: Vec<&LoanListing> = loan_listings
@@ -235,7 +265,7 @@ impl PipelineProcessor {
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
-                            && has_room_for(l.position_group)
+                            && !should_skip_loan(l.position_group, l.ability)
                     })
                     .collect();
                 opps.sort_by(|a, b| b.ability.cmp(&a.ability));
@@ -267,7 +297,7 @@ impl PipelineProcessor {
                                 .has_active_negotiation_for(l.player_id, club.id)
                             && !actions.iter().any(|a| a.player_id == l.player_id)
                             && !scanned_position_groups.contains(&l.position_group)
-                            && has_room_for(l.position_group)
+                            && !should_skip_loan(l.position_group, l.ability)
                     })
                     .max_by_key(|l| l.ability)
                 {
@@ -487,11 +517,14 @@ impl PipelineProcessor {
 
                 let relaxed_min = request.min_ability.saturating_sub(5);
 
-                // Filter foreign loan players: must match position, ability, and be in a scout's known region
+                // Filter foreign loan players: must match position, ability,
+                // be in a scout's known region, and be a realistic move
+                // (players don't go from Serie A to the Nigerian league)
+                let team_rep = team.reputation.world;
                 if let Some(best) = foreign_loans
                     .iter()
                     .filter(|p| {
-                        !club.is_rival(p.club_id) // no loans from rivals
+                        !club.is_rival(p.club_id)
                             && p.position_group == request.position.position_group()
                             && p.skill_ability >= relaxed_min
                             && p.age <= request.preferred_age_max.saturating_add(3)
@@ -501,8 +534,12 @@ impl PipelineProcessor {
                             && !country
                                 .transfer_market
                                 .has_active_negotiation_for(p.player_id, club.id)
-                            // Skip players already targeted in this batch
                             && !actions.iter().any(|a| a.player.player_id == p.player_id)
+                            // Reputation reality check: players don't drop more than
+                            // ~40% in league level on loan. A rep-8000 player won't
+                            // go to a rep-2000 club. This prevents Serie A → Nigeria.
+                            && p.home_reputation <= (team_rep as f32 * 2.0) as i16
+                            && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
                             && {
                                 let player_region = crate::transfers::ScoutingRegion::from_country(
                                     p.continent_id, &p.country_code,

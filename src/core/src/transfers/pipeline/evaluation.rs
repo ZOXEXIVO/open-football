@@ -205,6 +205,32 @@ impl PipelineProcessor {
         };
 
         // ──────────────────────────────────────────────────────────
+        // Philosophy-driven parameters
+        // ──────────────────────────────────────────────────────────
+
+        // Philosophy shapes transfer priorities: what age to target,
+        // how much to spend on youth vs proven players, loan appetite.
+        let philosophy = &club.philosophy;
+
+        // Age preferences: DevelopAndSell targets young players,
+        // SignToCompete targets prime-age proven performers
+        let (preferred_age_min, preferred_age_max, youth_age_max) = match philosophy {
+            ClubPhilosophy::DevelopAndSell => (17u8, 26, 21),
+            ClubPhilosophy::SignToCompete => (23, 32, 19),
+            ClubPhilosophy::LoanFocused => (19, 28, 22),
+            ClubPhilosophy::Balanced => (19, 30, 21),
+        };
+
+        // Ability threshold adjustment: youth-focused clubs accept lower CA
+        // because they invest in potential; compete-now clubs need immediate quality
+        let ability_tolerance: i16 = match philosophy {
+            ClubPhilosophy::DevelopAndSell => 25,   // accept CA 25 below avg
+            ClubPhilosophy::SignToCompete => 5,     // only near or above avg
+            ClubPhilosophy::LoanFocused => 15,
+            ClubPhilosophy::Balanced => 15,
+        };
+
+        // ──────────────────────────────────────────────────────────
         // STEP 1: Coach determines preferred formation
         // ──────────────────────────────────────────────────────────
 
@@ -363,12 +389,13 @@ impl PipelineProcessor {
                 break;
             }
 
+            let min_ca = (avg_ability as i16 - ability_tolerance).max(1) as u8;
             requests.push(TransferRequest::new(
                 next_id,
                 *pos,
                 TransferNeedPriority::Critical,
                 TransferNeedReason::FormationGap,
-                avg_ability.saturating_sub(10),
+                min_ca,
                 avg_ability,
                 alloc,
             ));
@@ -396,12 +423,13 @@ impl PipelineProcessor {
                 break;
             }
 
+            let min_ca = (avg_ability as i16 - ability_tolerance / 2).max(1) as u8;
             requests.push(TransferRequest::new(
                 next_id,
                 *pos,
                 TransferNeedPriority::Important,
                 TransferNeedReason::QualityUpgrade,
-                avg_ability.saturating_sub(5),
+                min_ca,
                 avg_ability + 5,
                 alloc,
             ));
@@ -423,12 +451,13 @@ impl PipelineProcessor {
                 break;
             }
 
+            let min_ca = (avg_ability as i16 - ability_tolerance).max(1) as u8;
             requests.push(TransferRequest::new(
                 next_id,
                 pos,
                 TransferNeedPriority::Optional,
                 TransferNeedReason::DepthCover,
-                avg_ability.saturating_sub(15),
+                min_ca,
                 avg_ability.saturating_sub(5),
                 alloc,
             ));
@@ -440,8 +469,12 @@ impl PipelineProcessor {
         // STEP 4: Succession planning for aging key players
         // ──────────────────────────────────────────────────────────
 
-        // Only elite/continental clubs plan ahead
-        if matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental) {
+        // Succession planning: proactive clubs replace aging stars before decline.
+        // SignToCompete and DevelopAndSell clubs always plan; Balanced only at top tiers.
+        let does_succession = matches!(philosophy,
+            ClubPhilosophy::SignToCompete | ClubPhilosophy::DevelopAndSell)
+            || matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental);
+        if does_succession {
             for player_info in &squad {
                 if player_info.age >= 30
                     && player_info.current_ability >= avg_ability
@@ -477,17 +510,30 @@ impl PipelineProcessor {
         // Like Juventus loaning a 19yo from Serie B who could become world class.
         // ──────────────────────────────────────────────────────────
 
-        if matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National) {
+        // Youth development signings: philosophy-driven.
+        // DevelopAndSell clubs aggressively sign young prospects.
+        // SignToCompete clubs rarely invest in youth (they buy ready-made).
+        // LoanFocused clubs borrow young players instead.
+        let wants_youth = match philosophy {
+            ClubPhilosophy::DevelopAndSell => true,
+            ClubPhilosophy::Balanced => matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental | ReputationLevel::National),
+            ClubPhilosophy::LoanFocused => false, // they borrow, not buy
+            ClubPhilosophy::SignToCompete => false, // they buy proven players
+        };
+        if wants_youth {
             let position_groups = [
                 PlayerFieldPositionGroup::Defender,
                 PlayerFieldPositionGroup::Midfielder,
                 PlayerFieldPositionGroup::Forward,
             ];
 
-            let max_youth_requests = match rep_level {
-                ReputationLevel::Elite => 3,
-                ReputationLevel::Continental => 2,
-                _ => 1,
+            let max_youth_requests = match philosophy {
+                ClubPhilosophy::DevelopAndSell => 4, // aggressive youth policy
+                _ => match rep_level {
+                    ReputationLevel::Elite => 3,
+                    ReputationLevel::Continental => 2,
+                    _ => 1,
+                },
             };
             let mut youth_requests = 0u32;
 
@@ -496,14 +542,15 @@ impl PipelineProcessor {
                     break;
                 }
 
-                // Count young players (<=21) in this position group
+                // Count young players in this position group
                 let young_in_group = squad
                     .iter()
-                    .filter(|p| p.primary_position.position_group() == *group && p.age <= 21)
+                    .filter(|p| p.primary_position.position_group() == *group && p.age <= youth_age_max)
                     .count();
 
-                // If we have fewer than 2 young players in this group, scout for youth
-                if young_in_group < 2 {
+                // DevelopAndSell wants more youth pipeline depth
+                let min_young = if matches!(philosophy, ClubPhilosophy::DevelopAndSell) { 3 } else { 2 };
+                if young_in_group < min_young {
                     let alloc = (budget_per_need * 0.3).min(available_budget - budget_used);
                     if alloc <= 0.0 {
                         break;

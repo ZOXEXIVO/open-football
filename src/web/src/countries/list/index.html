@@ -5,7 +5,7 @@
 {% block content %}
 <div class="fm-page">
     <div class="fm-stats-bar">
-        <span>Loaded {{ total_countries }} countries, with {{ total_clubs }} clubs, with {{ total_players }} players</span>
+        <span>{{ total_countries }} {{ i18n.t("stats_countries") }} · {{ total_clubs }} {{ i18n.t("stats_clubs") }} · {{ total_players }} {{ i18n.t("stats_players") }}</span>
         <button class="fm-holiday-btn" id="holiday-btn" onclick="handleHolidayClick()">
             <span class="fm-holiday-label">{{ i18n.t("go_on_holiday") }}</span>
             <div class="fm-holiday-spinner"><div class="spinner"></div></div>

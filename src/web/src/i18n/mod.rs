@@ -186,13 +186,37 @@ impl I18n {
     }
 }
 
+/// Parse the `Accept-Language` header and return the best supported language.
+///
+/// Respects quality weights (e.g. `fr;q=0.9, de;q=0.8, en;q=0.5`).
+/// Falls back to `DEFAULT_LANGUAGE` if nothing matches.
 pub fn detect_language(accept_language: &str) -> String {
+    let mut candidates: Vec<(&str, f32)> = Vec::new();
+
     for part in accept_language.split(',') {
-        let lang = part.split(';').next().unwrap_or("").trim();
-        let lang_prefix = lang.split('-').next().unwrap_or("").to_lowercase();
-        if SUPPORTED_LANG_CODES.contains(&lang_prefix.as_str()) {
-            return lang_prefix;
+        let mut sections = part.split(';');
+        let lang_tag = sections.next().unwrap_or("").trim();
+        let lang_prefix = lang_tag.split('-').next().unwrap_or("").trim();
+
+        // Parse quality value: "q=0.8" → 0.8, absent → 1.0
+        let quality = sections
+            .find_map(|s| {
+                let s = s.trim();
+                s.strip_prefix("q=")
+                    .and_then(|v| v.parse::<f32>().ok())
+            })
+            .unwrap_or(1.0);
+
+        if let Some(&code) = SUPPORTED_LANG_CODES.iter().find(|&&c| c.eq_ignore_ascii_case(lang_prefix)) {
+            candidates.push((code, quality));
         }
     }
-    DEFAULT_LANGUAGE.to_string()
+
+    // Highest quality first; on tie, keep original order (already stable)
+    candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+    candidates
+        .first()
+        .map(|(code, _)| code.to_string())
+        .unwrap_or_else(|| DEFAULT_LANGUAGE.to_string())
 }
