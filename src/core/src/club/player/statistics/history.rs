@@ -407,13 +407,19 @@ impl PlayerStatisticsHistory {
 
         let mut result: Vec<PlayerStatisticsHistoryItem> = self.items.clone();
 
+        let is_first_season = self.items.is_empty();
+        let first_seq = self.current.iter().map(|e| e.seq_id).min();
+
         for entry in &self.current {
             let is_active = entry.departed_date.is_none();
 
             // Skip departed entries with 0 games and no transfer fee —
             // same logic as the trivial stint filter at season end,
             // so the UI doesn't show empty rows mid-season.
+            // Exception: never skip the initial record (first-ever career entry).
+            let is_initial_record = is_first_season && first_seq == Some(entry.seq_id);
             if !is_active
+                && !is_initial_record
                 && entry.statistics.total_games() == 0
                 && entry.transfer_fee.is_none()
             {
