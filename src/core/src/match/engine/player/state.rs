@@ -6,7 +6,6 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer};
 use crate::PlayerFieldPositionGroup;
-use log::error;
 
 use std::fmt::Display;
 use std::fmt::Formatter;
@@ -52,16 +51,6 @@ impl PlayerMatchState {
             player_position_group.process(player.in_state_time, player, context, tick_context);
 
         if let Some(state) = state_change_result.state {
-            #[cfg(debug_assertions)]
-            {
-                if !Self::validate_state(state, &player_position_group) {
-                    error!(
-                        "invalid state change {:?} -> {:?} for {:?}",
-                        player.state, state, player_position_group
-                    );
-                }
-            }
-
             Self::change_state(player, state);
         } else {
             player.in_state_time += 1;
@@ -115,19 +104,5 @@ impl PlayerMatchState {
     fn change_state(player: &mut MatchPlayer, state: PlayerState) {
         player.in_state_time = 0;
         player.state = state;
-    }
-
-    fn validate_state(
-        player_state: PlayerState,
-        position_group: &PlayerFieldPositionGroup,
-    ) -> bool {
-        match (player_state, position_group) {
-            (PlayerState::Injured, _) => true, // Injured state is valid for all position groups
-            (PlayerState::Goalkeeper(_), PlayerFieldPositionGroup::Goalkeeper) => true,
-            (PlayerState::Defender(_), PlayerFieldPositionGroup::Defender) => true,
-            (PlayerState::Midfielder(_), PlayerFieldPositionGroup::Midfielder) => true,
-            (PlayerState::Forward(_), PlayerFieldPositionGroup::Forward) => true,
-            _ => false, // Any other combination is invalid
-        }
     }
 }

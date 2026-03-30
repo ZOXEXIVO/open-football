@@ -979,6 +979,10 @@ impl PlayerGenerator {
             .unwrap_or(PlayerPositionType::MidfielderCenter);
         let current_ability = skills.calculate_ability_for_position(primary_position);
 
+        // PA must never be lower than CA — position-weighted skill calculation
+        // can produce CA above the raw PA when skills align well with the position
+        let potential_ability = potential_ability.max(current_ability);
+
         let rep_base = (rep_factor * 3000.0) as i32;
 
         // U21 caps

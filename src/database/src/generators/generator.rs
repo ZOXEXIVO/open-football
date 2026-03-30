@@ -359,7 +359,7 @@ impl DatabaseGenerator {
                 board: ClubBoard::new(),
                 status: ClubStatus::Professional,
                 finance: ClubFinances::new(club.finance.balance as i64, Vec::new()),
-                academy: ClubAcademy::new(100),
+                academy: ClubAcademy::new(facilities.academy.to_rating()),
                 colors: ClubColors {
                     background: club.colors.background.clone(),
                     foreground: club.colors.foreground.clone(),

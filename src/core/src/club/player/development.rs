@@ -535,5 +535,11 @@ impl Player {
         let position = self.position();
         self.player_attributes.current_ability =
             self.skills.calculate_ability_for_position(position);
+
+        // PA must never be lower than CA — fix any legacy data where generation
+        // allowed CA > PA, which would cause skill ceilings to crush the player
+        if self.player_attributes.potential_ability < self.player_attributes.current_ability {
+            self.player_attributes.potential_ability = self.player_attributes.current_ability;
+        }
     }
 }

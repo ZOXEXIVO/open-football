@@ -261,13 +261,9 @@
     }
 
     gtag('js', new Date());
-    gtag('config', 'G-2WTTN499YZ');
-
-    gtag('event', 'opened', {
+    gtag('config', 'G-2WTTN499YZ', {
         computer_name: '{{ computer_name }}',
-        env: (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
-            ? 'local'
-            : 'online'
+        env: window.location.hostname === 'open-football.org' ? 'online' : 'local'
     });
 </script>
 </body>

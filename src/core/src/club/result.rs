@@ -8,6 +8,11 @@ use crate::{
 };
 use crate::utils::DateUtils;
 
+enum UnresolvedSalaryDecision {
+    TransferList,
+    FreeTransfer,
+}
+
 pub struct ClubResult {
     pub club_id: u32,
     pub finance: ClubFinanceResult,
@@ -53,6 +58,12 @@ impl ClubResult {
     }
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
+        // Contract rejected — club decides: keep trying, transfer list, or release
+        if result.contract.contract_rejected {
+            Self::handle_unresolved_salary(result.player_id, data, club_id);
+            return;
+        }
+
         if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
             // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
             let (negotiation_skill, judging_ability, wage_budget, current_wage_bill) = data.club(club_id)
@@ -121,8 +132,9 @@ impl ClubResult {
                     .map(|c| matches!(c.squad_status, crate::PlayerSquadStatus::NotNeeded))
                     .unwrap_or(false);
 
-                // Staff blocks: not needed players don't get raises
+                // Not needed players don't get raises — transfer list or release instead
                 if is_not_needed {
+                    Self::handle_unresolved_salary(result.player_id, data, club_id);
                     return;
                 }
 
@@ -147,8 +159,9 @@ impl ClubResult {
                 // Over budget: cap the offer to what the budget allows
                 let remaining = wage_budget.saturating_sub(current_wage_bill);
                 let capped_salary = current_salary + remaining;
-                // If we can't even match current salary, skip the offer entirely
+                // If we can't even match current salary, decide what to do with the player
                 if capped_salary <= current_salary && result.contract.want_improve_contract {
+                    Self::handle_unresolved_salary(result.player_id, data, club_id);
                     return;
                 }
                 let final_salary = capped_salary.max(current_salary);
@@ -304,6 +317,89 @@ impl ClubResult {
 
             // Clamp to realistic range: 1-5 years
             (negotiated.round() as u8).clamp(1, 5)
+        }
+    }
+
+    /// When club can't resolve salary unhappiness (rejected proposal, over budget, not needed):
+    /// decide whether to transfer list, release on free transfer, or do nothing.
+    fn handle_unresolved_salary(player_id: u32, data: &mut SimulatorData, club_id: u32) {
+        let date = data.date.date();
+
+        // Gather decision info from immutable access
+        let decision = {
+            let squad_avg = data.club(club_id)
+                .and_then(|club| club.teams.teams.first())
+                .map(|team| {
+                    if team.players.players.is_empty() {
+                        0i16
+                    } else {
+                        let sum: i16 = team.players.players.iter()
+                            .map(|p| p.player_attributes.current_ability as i16)
+                            .sum();
+                        sum / team.players.players.len() as i16
+                    }
+                })
+                .unwrap_or(0);
+
+            let player = match data.player(player_id) {
+                Some(p) => p,
+                None => return,
+            };
+
+            // Already listed — don't re-process
+            let statuses = player.statuses.get();
+            if statuses.contains(&PlayerStatusType::Lst) || statuses.contains(&PlayerStatusType::Frt) {
+                return;
+            }
+
+            let ability = player.player_attributes.current_ability as i16;
+            let age = DateUtils::age(player.birth_date, date);
+            let loyalty = player.attributes.loyalty;
+            let is_key = player.contract.as_ref()
+                .map(|c| matches!(c.squad_status,
+                    crate::PlayerSquadStatus::KeyPlayer | crate::PlayerSquadStatus::FirstTeamRegular))
+                .unwrap_or(false);
+
+            // Key players with high ability: club keeps trying — don't list them
+            if is_key && ability > squad_avg {
+                return;
+            }
+
+            // Loyal players get more patience
+            if loyalty > 14.0 && ability >= squad_avg - 10 {
+                return;
+            }
+
+            // Low ability or old: release on free transfer
+            if ability < squad_avg - 20 || (age >= 32 && ability < squad_avg) {
+                UnresolvedSalaryDecision::FreeTransfer
+            } else {
+                UnresolvedSalaryDecision::TransferList
+            }
+        };
+
+        // Apply decision with mutable access through club
+        let club = match data.club_mut(club_id) {
+            Some(c) => c,
+            None => return,
+        };
+
+        for team in &mut club.teams.teams {
+            if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                match decision {
+                    UnresolvedSalaryDecision::FreeTransfer => {
+                        player.statuses.add(date, PlayerStatusType::Frt);
+                        player.contract = None;
+                    }
+                    UnresolvedSalaryDecision::TransferList => {
+                        player.statuses.add(date, PlayerStatusType::Lst);
+                        if let Some(ref mut contract) = player.contract {
+                            contract.is_transfer_listed = true;
+                        }
+                    }
+                }
+                break;
+            }
         }
     }
 }
