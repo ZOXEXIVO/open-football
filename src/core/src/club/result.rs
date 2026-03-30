@@ -92,8 +92,11 @@ impl ClubResult {
                 })
                 .unwrap_or((5, 5, 0, 0));
 
-            // Step 2: Look up the player
-            let player = data.player(result.player_id).expect(&format!("player {} not found", result.player_id));
+            // Step 2: Look up the player (may have been released since the result was generated)
+            let player = match data.player(result.player_id) {
+                Some(p) => p,
+                None => return,
+            };
 
             // Don't auto-renew contracts for players on loan — those expire and the player returns
             if player.is_on_loan() {

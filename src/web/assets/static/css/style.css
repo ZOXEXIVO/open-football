@@ -5227,7 +5227,7 @@ a:link, a:visited, a:hover, a:active {
     }
 
     .fm-history-table {
-        min-width: 860px;
+        min-width: 100%;
     }
 
     .fm-schedule thead th,
