@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use crate::club::player::player::Player;
 use crate::league::Season;
 use crate::TeamInfo;
@@ -46,6 +46,98 @@ impl Player {
         // the settling-in protection that prevents clubs from immediately
         // dumping recently-signed players.  The date is already archived in
         // statistics_history, so downstream reads are unaffected.
+    }
+
+    /// Evaluate whether a club should become a favourite based on career history.
+    /// Called at season end. Mirrors FM logic:
+    /// - Youth club: first club where player was aged 16-21, after 2+ seasons
+    /// - Long service: 100+ appearances at a club
+    /// - Legend status: 50+ goals or 15+ player-of-the-match awards
+    /// - Strong impact: average rating >= 7.3 over 30+ games
+    /// Max 3 favourite clubs per player.
+    pub fn evaluate_favorite_club(&mut self, club_id: u32, team_slug: &str, _date: NaiveDate) {
+        const MAX_FAVORITE_CLUBS: usize = 3;
+
+        if self.favorite_clubs.len() >= MAX_FAVORITE_CLUBS {
+            return;
+        }
+        if self.favorite_clubs.contains(&club_id) {
+            return;
+        }
+
+        // Aggregate stats across all history items for this club
+        let mut total_apps: u16 = 0;
+        let mut total_goals: u16 = 0;
+        let mut total_pom: u16 = 0;
+        let mut total_rating_sum: f32 = 0.0;
+        let mut total_rated_games: u16 = 0;
+        let mut seasons_at_club: u16 = 0;
+        let mut first_season_year: Option<u16> = None;
+
+        for item in &self.statistics_history.items {
+            if item.team_slug != team_slug {
+                continue;
+            }
+            let games = item.statistics.played + item.statistics.played_subs;
+            total_apps += games;
+            total_goals += item.statistics.goals;
+            total_pom += item.statistics.player_of_the_match as u16;
+            if games > 0 && item.statistics.average_rating > 0.0 {
+                total_rating_sum += item.statistics.average_rating * games as f32;
+                total_rated_games += games;
+            }
+            seasons_at_club += 1;
+            if first_season_year.is_none() || item.season.start_year < first_season_year.unwrap() {
+                first_season_year = Some(item.season.start_year);
+            }
+        }
+
+        // Also count current-season entries
+        for entry in &self.statistics_history.current {
+            if entry.team_slug != team_slug {
+                continue;
+            }
+            let games = entry.statistics.played + entry.statistics.played_subs;
+            total_apps += games;
+            total_goals += entry.statistics.goals;
+            total_pom += entry.statistics.player_of_the_match as u16;
+            if games > 0 && entry.statistics.average_rating > 0.0 {
+                total_rating_sum += entry.statistics.average_rating * games as f32;
+                total_rated_games += games;
+            }
+        }
+
+        let avg_rating = if total_rated_games > 0 {
+            total_rating_sum / total_rated_games as f32
+        } else {
+            0.0
+        };
+
+        // Youth club: first club where player was aged 16-21, after 2+ seasons
+        if let Some(first_year) = first_season_year {
+            let age_at_first = first_year as i32 - self.birth_date.year();
+            if (16..=21).contains(&age_at_first) && seasons_at_club >= 2 {
+                self.favorite_clubs.push(club_id);
+                return;
+            }
+        }
+
+        // Long service: 100+ competitive appearances
+        if total_apps >= 100 {
+            self.favorite_clubs.push(club_id);
+            return;
+        }
+
+        // Legend: prolific scorer or multiple POM awards
+        if total_goals >= 50 || total_pom >= 15 {
+            self.favorite_clubs.push(club_id);
+            return;
+        }
+
+        // Strong impact: consistently high performer over a meaningful sample
+        if total_rated_games >= 30 && avg_rating >= 7.3 {
+            self.favorite_clubs.push(club_id);
+        }
     }
 
     /// Record a cancel-loan from the web UI.

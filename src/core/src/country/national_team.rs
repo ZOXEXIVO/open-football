@@ -1085,6 +1085,7 @@ impl NationalTeam {
             languages: Vec::new(),
             last_transfer_date: None,
             plan: None,
+            favorite_clubs: Vec::new(),
         }
     }
 

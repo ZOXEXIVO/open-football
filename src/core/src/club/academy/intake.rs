@@ -139,24 +139,22 @@ impl ClubAcademy {
         } else {
             let position_roll = IntegerUtils::random(0, 100);
 
+            // DCL/DCR and MCL/MCR are formation slots, not primary positions.
+            // DC players get DCL/DCR automatically, MC players get MCL/MCR.
             match position_roll {
                 0..=5 => PlayerPositionType::Goalkeeper,
-                6..=20 => match IntegerUtils::random(0, 7) {
+                6..=20 => match IntegerUtils::random(0, 5) {
                     0 => PlayerPositionType::DefenderLeft,
                     1 => PlayerPositionType::DefenderRight,
                     2 | 3 => PlayerPositionType::DefenderCenter,
-                    4 => PlayerPositionType::DefenderCenterLeft,
-                    5 => PlayerPositionType::DefenderCenterRight,
-                    6 => PlayerPositionType::WingbackLeft,
+                    4 => PlayerPositionType::WingbackLeft,
                     _ => PlayerPositionType::WingbackRight,
                 },
-                21..=50 => match IntegerUtils::random(0, 5) {
+                21..=50 => match IntegerUtils::random(0, 3) {
                     0 => PlayerPositionType::DefensiveMidfielder,
                     1 => PlayerPositionType::MidfielderLeft,
                     2 => PlayerPositionType::MidfielderRight,
-                    3 => PlayerPositionType::MidfielderCenter,
-                    4 => PlayerPositionType::MidfielderCenterLeft,
-                    _ => PlayerPositionType::MidfielderCenterRight,
+                    _ => PlayerPositionType::MidfielderCenter,
                 },
                 51..=75 => match IntegerUtils::random(0, 2) {
                     0 => PlayerPositionType::AttackingMidfielderLeft,

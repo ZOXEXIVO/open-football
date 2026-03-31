@@ -1,4 +1,4 @@
-use crate::{Person, Player, PlayerStatusType};
+use crate::{Person, Player, PlayerPositionType, PlayerStatusType};
 use chrono::NaiveDate;
 
 pub struct PlayerValueCalculator;
@@ -295,15 +295,36 @@ fn determine_league_club_factor(league_reputation: u16, club_reputation: u16) ->
     factor.clamp(0.15, 1.30)
 }
 
-/// Position-based value adjustment
+/// Position-based value adjustment.
+/// Includes base position premium and versatility bonus for multi-position players.
+/// Players who can play both flanks (e.g. M L/R) or multiple roles are more valuable.
 fn determine_position_factor(player: &Player) -> f64 {
-    if player.position().is_goalkeeper() {
+    let base = if player.position().is_goalkeeper() {
         0.7 // Goalkeepers typically valued less
     } else if player.position().is_forward() {
         1.15 // Strikers command premium
     } else {
         1.0
-    }
+    };
+
+    // Versatility bonus: players with multiple qualified positions are more valuable.
+    // Formation-slot variants (DCL/DCR for DC, MCL/MCR for MC) don't count.
+    let positions = player.positions.positions();
+    let unique_base_positions = positions.iter().filter(|p| !matches!(p,
+        PlayerPositionType::DefenderCenterLeft |
+        PlayerPositionType::DefenderCenterRight |
+        PlayerPositionType::MidfielderCenterLeft |
+        PlayerPositionType::MidfielderCenterRight
+    )).count();
+
+    let versatility_bonus = match unique_base_positions {
+        0..=1 => 1.0,
+        2 => 1.05,  // +5% for two real positions
+        3 => 1.10,  // +10% for three
+        _ => 1.15,  // +15% for four or more
+    };
+
+    base * versatility_bonus
 }
 
 #[cfg(test)]

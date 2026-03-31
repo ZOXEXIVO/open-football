@@ -2293,6 +2293,16 @@ a:link, a:visited, a:hover, a:active {
     color: #e53935;
 }
 
+.fm-fav-club-link {
+    color: #5ba3d9;
+    text-decoration: none;
+    font-size: 13px;
+}
+
+.fm-fav-club-link:hover {
+    text-decoration: underline;
+}
+
 .fm-mini-bar {
     flex: 1;
     height: 4px;
@@ -3448,6 +3458,44 @@ a:link, a:visited, a:hover, a:active {
     font-size: 13px;
     padding: 8px 0;
     margin-bottom: 10px;
+}
+
+.fm-download-btn {
+    display: none;
+    align-items: center;
+    align-self: center;
+    gap: 5px;
+    height: 26px;
+    margin-right: 2em;
+    padding: 0 10px;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    text-transform: uppercase;
+    text-decoration: none;
+    color: #e8f0f4;
+    background: linear-gradient(180deg, #1a6b35 0%, #145528 100%);
+    border: 1px solid #2a8548;
+    border-radius: 3px;
+    white-space: nowrap;
+    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+
+.fm-download-btn i {
+    font-size: 10px;
+}
+
+.fm-download-btn:hover {
+    background: linear-gradient(180deg, #218240 0%, #1a6b35 100%);
+    border-color: #34a05a;
+    box-shadow: 0 0 6px rgba(42, 133, 72, 0.35);
+    color: #fff;
+}
+
+@media (min-width: 1200px) {
+    .fm-download-btn {
+        display: inline-flex;
+    }
 }
 
 .fm-holiday-btn {
@@ -5226,11 +5274,18 @@ a:link, a:visited, a:hover, a:active {
         display: none;
     }
 
+    .fm-panel > .fm-panel-head {
+        position: sticky;
+        left: 0;
+    }
+
     .fm-stats,
-    .fm-squad {
+    .fm-squad,
+    .fm-watchlist-table {
         width: max-content;
         min-width: 100%;
     }
+
 
     .fm-history-table {
         min-width: 100%;
@@ -5681,24 +5736,14 @@ a:link, a:visited, a:hover, a:active {
 }
 
 @media (max-width: 1199.98px) {
-    .fm-watchlist-table .wl-cond,
-    .fm-watchlist-table thead .wl-cond,
-    .fm-watchlist-table .wl-value,
-    .fm-watchlist-table thead .wl-value {
-        display: none;
-    }
-}
-
-@media (max-width: 767.98px) {
-    .fm-watchlist-table .wl-ability,
-    .fm-watchlist-table .wl-potential,
-    .fm-watchlist-table .wl-league,
-    .fm-watchlist-table .wl-apps,
-    .fm-watchlist-table thead .wl-ability,
-    .fm-watchlist-table thead .wl-potential,
-    .fm-watchlist-table thead .wl-league,
-    .fm-watchlist-table thead .wl-apps {
-        display: none;
+    .fm-watchlist-table .wl-name,
+    .fm-watchlist-table .wl-team,
+    .fm-watchlist-table .wl-league {
+        max-width: none;
+        width: auto;
+        overflow: visible;
+        text-overflow: clip;
+        white-space: nowrap;
     }
 }
 

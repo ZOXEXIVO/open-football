@@ -805,18 +805,19 @@ impl PlayerGenerator {
 
     /// Generate position profile. Primary position always 20.
     /// Higher PA → higher chance of having a secondary position.
+    ///
+    /// DCL/DCR and MCL/MCR are formation slots, not primary positions.
+    /// DC players automatically get DCL/DCR, MC players get MCL/MCR.
+    /// Wide players have a chance of cross-side versatility (e.g. ML + MR).
     fn generate_positions(position: PositionType, potential_ability: u8) -> PlayerPositions {
-        let mut positions = Vec::with_capacity(4);
+        let mut positions = Vec::with_capacity(6);
 
-        // Pick a specific position within the group
         let primary = match position {
             PositionType::Goalkeeper => PlayerPositionType::Goalkeeper,
             PositionType::Defender => match IntegerUtils::random(0, 7) {
                 0 => PlayerPositionType::DefenderLeft,
-                1 | 2 => PlayerPositionType::DefenderCenterLeft,
-                3 | 4 => PlayerPositionType::DefenderCenter,
-                5 => PlayerPositionType::DefenderCenterRight,
-                6 => PlayerPositionType::DefenderRight,
+                1 | 2 | 3 | 4 => PlayerPositionType::DefenderCenter,
+                5 => PlayerPositionType::DefenderRight,
                 _ => if IntegerUtils::random(0, 1) == 0 {
                     PlayerPositionType::WingbackLeft
                 } else {
@@ -825,9 +826,7 @@ impl PlayerGenerator {
             },
             PositionType::Midfielder => match IntegerUtils::random(0, 4) {
                 0 => PlayerPositionType::MidfielderLeft,
-                1 => PlayerPositionType::MidfielderCenterLeft,
-                2 => PlayerPositionType::MidfielderCenter,
-                3 => PlayerPositionType::MidfielderCenterRight,
+                1 | 2 | 3 => PlayerPositionType::MidfielderCenter,
                 _ => PlayerPositionType::MidfielderRight,
             },
             PositionType::Striker => match IntegerUtils::random(0, 3) {
@@ -840,12 +839,48 @@ impl PlayerGenerator {
 
         positions.push(PlayerPosition { position: primary, level: 20 });
 
+        // DC and MC players automatically get formation-slot variants
+        match primary {
+            PlayerPositionType::DefenderCenter => {
+                positions.push(PlayerPosition {
+                    position: PlayerPositionType::DefenderCenterLeft,
+                    level: IntegerUtils::random(17, 20) as u8,
+                });
+                positions.push(PlayerPosition {
+                    position: PlayerPositionType::DefenderCenterRight,
+                    level: IntegerUtils::random(17, 20) as u8,
+                });
+            }
+            PlayerPositionType::MidfielderCenter => {
+                positions.push(PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenterLeft,
+                    level: IntegerUtils::random(17, 20) as u8,
+                });
+                positions.push(PlayerPosition {
+                    position: PlayerPositionType::MidfielderCenterRight,
+                    level: IntegerUtils::random(17, 20) as u8,
+                });
+            }
+            _ => {}
+        }
+
         // Each natural adjacent position has an independent 40% chance of being added
         let adjacent = natural_adjacent_positions(primary);
         for adj in &adjacent {
             if IntegerUtils::random(0, 99) < 40 {
                 let level = IntegerUtils::random(14, 18) as u8;
                 positions.push(PlayerPosition { position: *adj, level });
+            }
+        }
+
+        // Cross-side versatility: ~15% chance for wide players to play opposite flank.
+        // These players (e.g. M L/R, D L/R) are more versatile and valuable.
+        if let Some(opposite) = cross_side_position(primary) {
+            if IntegerUtils::random(0, 99) < 15 {
+                if !positions.iter().any(|p| p.position == opposite) {
+                    let level = IntegerUtils::random(12, 16) as u8;
+                    positions.push(PlayerPosition { position: opposite, level });
+                }
             }
         }
 
@@ -1069,31 +1104,23 @@ impl PlayerGenerator {
 fn natural_adjacent_positions(primary: PlayerPositionType) -> Vec<PlayerPositionType> {
     match primary {
         PlayerPositionType::Goalkeeper => vec![],
-        // Centre-backs: DC ↔ DCL/DCR
-        PlayerPositionType::DefenderCenter => {
-            if IntegerUtils::random(0, 2) == 0 {
-                vec![PlayerPositionType::DefenderCenterLeft, PlayerPositionType::DefenderCenterRight]
-            } else if IntegerUtils::random(0, 1) == 0 {
-                vec![PlayerPositionType::DefenderCenterLeft]
-            } else {
-                vec![PlayerPositionType::DefenderCenterRight]
-            }
-        }
+        // DC: DCL/DCR are auto-added as formation slots; adjacent is DM
+        PlayerPositionType::DefenderCenter => vec![PlayerPositionType::DefensiveMidfielder],
+        // DCL/DCR kept for compatibility (if they appear through other means)
         PlayerPositionType::DefenderCenterLeft => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderLeft],
         PlayerPositionType::DefenderCenterRight => vec![PlayerPositionType::DefenderCenter, PlayerPositionType::DefenderRight],
         // Full-backs: DL ↔ WBL, DR ↔ WBR
         PlayerPositionType::DefenderLeft => vec![PlayerPositionType::WingbackLeft],
         PlayerPositionType::DefenderRight => vec![PlayerPositionType::WingbackRight],
-        // Central midfielders: MC ↔ MCL/MCR
+        // MC: MCL/MCR are auto-added as formation slots; adjacent is DM or AMC
         PlayerPositionType::MidfielderCenter => {
-            if IntegerUtils::random(0, 2) == 0 {
-                vec![PlayerPositionType::MidfielderCenterLeft, PlayerPositionType::MidfielderCenterRight]
-            } else if IntegerUtils::random(0, 1) == 0 {
-                vec![PlayerPositionType::MidfielderCenterLeft]
+            if IntegerUtils::random(0, 1) == 0 {
+                vec![PlayerPositionType::DefensiveMidfielder]
             } else {
-                vec![PlayerPositionType::MidfielderCenterRight]
+                vec![PlayerPositionType::AttackingMidfielderCenter]
             }
         }
+        // MCL/MCR kept for compatibility
         PlayerPositionType::MidfielderCenterLeft => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderLeft],
         PlayerPositionType::MidfielderCenterRight => vec![PlayerPositionType::MidfielderCenter, PlayerPositionType::MidfielderRight],
         // Wide midfielders: ML ↔ AML, MR ↔ AMR
@@ -1121,7 +1148,7 @@ fn natural_adjacent_positions(primary: PlayerPositionType) -> Vec<PlayerPosition
 fn pick_extra_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
     match primary {
         PlayerPositionType::Goalkeeper => None,
-        PlayerPositionType::DefenderCenter => Some(PlayerPositionType::DefensiveMidfielder),
+        PlayerPositionType::DefenderCenter => Some(PlayerPositionType::Sweeper),
         PlayerPositionType::DefenderCenterLeft => Some(PlayerPositionType::DefenderCenterRight),
         PlayerPositionType::DefenderCenterRight => Some(PlayerPositionType::DefenderCenterLeft),
         PlayerPositionType::DefenderLeft => Some(PlayerPositionType::MidfielderLeft),
@@ -1143,6 +1170,24 @@ fn pick_extra_position(primary: PlayerPositionType) -> Option<PlayerPositionType
         PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardCenter),
         PlayerPositionType::ForwardCenter => Some(PlayerPositionType::AttackingMidfielderCenter),
         PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardCenter),
+        _ => None,
+    }
+}
+
+/// Opposite-side position for cross-side versatility.
+/// Players who can play both flanks (e.g. M L/R) are more valuable.
+fn cross_side_position(primary: PlayerPositionType) -> Option<PlayerPositionType> {
+    match primary {
+        PlayerPositionType::DefenderLeft => Some(PlayerPositionType::DefenderRight),
+        PlayerPositionType::DefenderRight => Some(PlayerPositionType::DefenderLeft),
+        PlayerPositionType::MidfielderLeft => Some(PlayerPositionType::MidfielderRight),
+        PlayerPositionType::MidfielderRight => Some(PlayerPositionType::MidfielderLeft),
+        PlayerPositionType::WingbackLeft => Some(PlayerPositionType::WingbackRight),
+        PlayerPositionType::WingbackRight => Some(PlayerPositionType::WingbackLeft),
+        PlayerPositionType::AttackingMidfielderLeft => Some(PlayerPositionType::AttackingMidfielderRight),
+        PlayerPositionType::AttackingMidfielderRight => Some(PlayerPositionType::AttackingMidfielderLeft),
+        PlayerPositionType::ForwardLeft => Some(PlayerPositionType::ForwardRight),
+        PlayerPositionType::ForwardRight => Some(PlayerPositionType::ForwardLeft),
         _ => None,
     }
 }

@@ -112,12 +112,6 @@ pub async fn team_transfers_action(
 
     let league = team.league_id.and_then(|id| simulator_data.league(id));
 
-    let country = simulator_data
-        .country_by_club(team.club_id)
-        .ok_or_else(|| {
-            ApiError::NotFound("Country not found for team".to_string())
-        })?;
-
     let now = simulator_data.date.date();
     let (neighbor_teams, country_leagues) = get_neighbor_teams(team.club_id, simulator_data, &i18n)?;
     let neighbor_refs: Vec<(&str, &str)> = neighbor_teams.iter().map(|(n, s)| (n.as_str(), s.as_str())).collect();
@@ -135,10 +129,11 @@ pub async fn team_transfers_action(
 
     let selected_season = query.season.unwrap_or(current_season_year);
 
-    let min_season_year = country
-        .transfer_market
-        .transfer_history
-        .iter()
+    // Find earliest season that has any transfer involving this club (across all countries)
+    let min_season_year = simulator_data.continents.iter()
+        .flat_map(|cont| cont.countries.iter())
+        .flat_map(|c| c.transfer_market.transfer_history.iter())
+        .filter(|t| t.from_club_id == club_id || t.to_club_id == club_id)
         .map(|t| t.season_year)
         .min()
         .unwrap_or(current_season_year);
@@ -175,43 +170,43 @@ pub async fn team_transfers_action(
         })
         .collect();
 
-    // Incoming transfers (players bought by this club, excluding loans)
-    let incoming_transfers: Vec<TransferHistoryItem> = country
-        .transfer_market
-        .transfer_history
-        .iter()
-        .filter(|t| t.season_year == selected_season && t.to_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
-        .map(|t| {
-            let other_team_slug = get_first_team_slug(country, t.from_club_id);
-            TransferHistoryItem {
-                player_id: t.player_id,
-                player_name: t.player_name.clone(),
-                other_team: t.from_team_name.clone(),
-                other_team_slug,
-                fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
-                date: t.transfer_date.format("%d.%m.%Y").to_string(),
-            }
-        })
-        .collect();
+    // Incoming/outgoing transfers: scan ALL countries because cross-country
+    // transfers are recorded in the buying country's transfer_market, not the
+    // selling country's. Without this, foreign sales/purchases are invisible.
+    let mut incoming_transfers: Vec<TransferHistoryItem> = Vec::new();
+    let mut outgoing_transfers: Vec<TransferHistoryItem> = Vec::new();
 
-    // Outgoing transfers (players sold by this club, excluding loans)
-    let outgoing_transfers: Vec<TransferHistoryItem> = country
-        .transfer_market
-        .transfer_history
-        .iter()
-        .filter(|t| t.season_year == selected_season && t.from_club_id == club_id && !matches!(t.transfer_type, TransferType::Loan(_)))
-        .map(|t| {
-            let other_team_slug = get_first_team_slug(country, t.to_club_id);
-            TransferHistoryItem {
-                player_id: t.player_id,
-                player_name: t.player_name.clone(),
-                other_team: t.to_team_name.clone(),
-                other_team_slug,
-                fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
-                date: t.transfer_date.format("%d.%m.%Y").to_string(),
+    for continent in &simulator_data.continents {
+        for c in &continent.countries {
+            for t in &c.transfer_market.transfer_history {
+                if t.season_year != selected_season || matches!(t.transfer_type, TransferType::Loan(_)) {
+                    continue;
+                }
+                if t.to_club_id == club_id {
+                    let other_team_slug = find_team_slug(simulator_data, t.from_club_id);
+                    incoming_transfers.push(TransferHistoryItem {
+                        player_id: t.player_id,
+                        player_name: t.player_name.clone(),
+                        other_team: t.from_team_name.clone(),
+                        other_team_slug,
+                        fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
+                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                    });
+                }
+                if t.from_club_id == club_id {
+                    let other_team_slug = find_team_slug(simulator_data, t.to_club_id);
+                    outgoing_transfers.push(TransferHistoryItem {
+                        player_id: t.player_id,
+                        player_name: t.player_name.clone(),
+                        other_team: t.to_team_name.clone(),
+                        other_team_slug,
+                        fee: if t.fee.amount > 0.0 { FormattingUtils::format_money(t.fee.amount) } else { "Free".to_string() },
+                        date: t.transfer_date.format("%d.%m.%Y").to_string(),
+                    });
+                }
             }
-        })
-        .collect();
+        }
+    }
 
     // Incoming loans: players on this team with a loan contract
     let incoming_loans: Vec<LoanHistoryItem> = team
@@ -315,12 +310,10 @@ pub async fn team_transfers_action(
     })
 }
 
-fn get_first_team_slug(country: &core::Country, club_id: u32) -> String {
-    country
-        .clubs
-        .iter()
-        .find(|c| c.id == club_id)
-        .and_then(|c| c.teams.teams.first())
+/// Find the main team slug for a club across all countries.
+fn find_team_slug(data: &SimulatorData, club_id: u32) -> String {
+    data.club(club_id)
+        .and_then(|c| c.teams.teams.iter().find(|t| t.team_type == core::TeamType::Main))
         .map(|t| t.slug.clone())
         .unwrap_or_default()
 }

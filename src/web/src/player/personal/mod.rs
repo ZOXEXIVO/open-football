@@ -43,8 +43,14 @@ pub struct PlayerPersonalTemplate {
     pub concerns: Vec<String>,
     pub behaviour: String,
     pub manager_relationship: Option<ManagerRelationshipDto>,
+    pub favorite_clubs: Vec<FavoriteClubDto>,
     pub player_info: PlayerInfoDto,
     pub reputation: ReputationDto,
+}
+
+pub struct FavoriteClubDto {
+    pub name: String,
+    pub slug: String,
 }
 
 pub struct PersonalityDto {
@@ -163,6 +169,22 @@ pub async fn player_personal_action(
             get_manager_relationship(player, head_coach, &i18n)
         })
         .flatten();
+
+    let favorite_clubs: Vec<FavoriteClubDto> = player.favorite_clubs.iter()
+        .filter_map(|&club_id| {
+            simulator_data.club(club_id).map(|club| {
+                let slug = club.teams.teams.iter()
+                    .find(|t| t.team_type == core::TeamType::Main)
+                    .map(|t| t.slug.clone())
+                    .unwrap_or_default();
+                FavoriteClubDto {
+                    name: club.name.clone(),
+                    slug,
+                }
+            })
+        })
+        .collect();
+
     let player_info = get_player_info(player, &i18n);
     let reputation = get_reputation(player, &i18n);
 
@@ -198,6 +220,7 @@ pub async fn player_personal_action(
         concerns,
         behaviour,
         manager_relationship,
+        favorite_clubs,
         player_info,
         reputation,
     })

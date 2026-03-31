@@ -57,6 +57,10 @@ pub struct Player {
     /// Set when a player is permanently transferred. Protects the player from
     /// being sold before the club has given them a fair evaluation.
     pub plan: Option<crate::club::player::plan::PlayerPlan>,
+
+    /// Clubs this player supports or has an affinity for (like FM's "Favoured Clubs").
+    /// Affects willingness to join, morale when playing for them, etc.
+    pub favorite_clubs: Vec<u32>,
 }
 
 impl Player {

@@ -4,6 +4,8 @@ use crate::views::MenuSection;
 use crate::{ApiError, ApiResult, GameAppData};
 use askama::Template;
 use axum::extract::{Path, State};
+use axum::http::header::HOST;
+use axum::http::HeaderMap;
 use axum::response::IntoResponse;
 use serde::Deserialize;
 
@@ -33,6 +35,7 @@ pub struct CountryListTemplate {
     pub total_countries: usize,
     pub total_clubs: usize,
     pub total_players: usize,
+    pub show_download: bool,
 }
 
 pub struct ContinentDto {
@@ -48,6 +51,7 @@ pub struct CountryDto {
 
 pub async fn country_list_action(
     State(state): State<GameAppData>,
+    headers: HeaderMap,
     Path(route_params): Path<CountryListRequest>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
@@ -93,6 +97,12 @@ pub async fn country_list_action(
         }
     }
 
+    let show_download = headers
+        .get(HOST)
+        .and_then(|v| v.to_str().ok())
+        .map(|h| h.starts_with("open-football.org") || h.starts_with("www.open-football.org"))
+        .unwrap_or(false);
+
     Ok(CountryListTemplate {
         css_version: crate::common::default_handler::CSS_VERSION,
         computer_name: &crate::common::default_handler::COMPUTER_NAME,
@@ -112,5 +122,6 @@ pub async fn country_list_action(
         total_countries,
         total_clubs,
         total_players,
+        show_download,
     })
 }

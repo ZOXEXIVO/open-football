@@ -58,6 +58,7 @@ impl CountryResult {
 
                 for player in &mut team.players.players {
                     player.on_season_end(ended_season.clone(), &team_info, date);
+                    player.evaluate_favorite_club(club.id, &team_info.slug, date);
                 }
             }
         }

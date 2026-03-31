@@ -180,6 +180,16 @@
                     </div>
                 </div>
                 {% endif %}
+                {% if !favorite_clubs.is_empty() %}
+                <div class="fm-personal-section">
+                    <h4 class="fm-section-subtitle">{{ i18n.t("favoured_clubs") }}</h4>
+                    {% for club in favorite_clubs %}
+                    <div class="fm-personal-detail">
+                        <a href="/{{ lang }}/teams/{{ club.slug }}" class="fm-fav-club-link">{{ club.name }}</a>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
             </section>
         </div>
 

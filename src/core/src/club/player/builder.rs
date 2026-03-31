@@ -33,6 +33,7 @@ pub struct PlayerBuilder {
     statistics_history: Option<PlayerStatisticsHistory>,
     decision_history: Option<PlayerDecisionHistory>,
     languages: Option<Vec<crate::club::player::language::PlayerLanguage>>,
+    favorite_clubs: Option<Vec<u32>>,
 }
 
 impl PlayerBuilder {
@@ -150,6 +151,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn favorite_clubs(mut self, favorite_clubs: Vec<u32>) -> Self {
+        self.favorite_clubs = Some(favorite_clubs);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
         Ok(Player {
             id: self.id.ok_or("id is required")?,
@@ -178,6 +184,7 @@ impl PlayerBuilder {
             languages: self.languages.unwrap_or_default(),
             last_transfer_date: None,
             plan: None,
+            favorite_clubs: self.favorite_clubs.unwrap_or_default(),
         })
     }
 }

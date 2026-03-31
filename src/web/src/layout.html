@@ -88,6 +88,7 @@
                                             style="vertical-align: middle; margin-right: 6px;"></span></a>{% endif %}<a
                                             href="{{ sub_title_link }}">{{ sub_title }}{% if !sub_title_suffix.is_empty() %} {{ sub_title_suffix }}{% endif %}</a></span>
                                 </div>
+                                {% block header_center %}{% endblock %}
                                 <div class="fm-header-actions">
                                     <a class="fm-ai-icon" href="/{{ lang }}/ai" title="AI">
                                         <i class="fa fa-robot"></i>
@@ -261,10 +262,12 @@
     }
 
     gtag('js', new Date());
-    gtag('config', 'G-2WTTN499YZ', {
-        computer_name: '{{ computer_name }}',
-        env: window.location.hostname === 'open-football.org' ? 'online' : 'local'
-    });
+    const isLocal = window.location.hostname !== 'open-football.org';
+    let config = { env: isLocal ? 'local' : 'online' };
+    if (isLocal) {
+        config.computer_name = '{{ computer_name }}';
+    }
+    gtag('config', 'G-2WTTN499YZ', config);
 </script>
 </body>
 </html>
