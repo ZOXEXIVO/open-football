@@ -225,7 +225,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
                 let period_time = context.time.time;
                 if period_time >= next_sub_time_ms {
-                    process_substitutions(field, context, 1);
+                    process_substitutions(field, context, 2);
                     let mut rng = rand::rng();
                     next_sub_time_ms = period_time + rng.random_range(5..15) * 60 * 1000;
                 }
