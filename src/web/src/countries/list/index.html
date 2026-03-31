@@ -3,7 +3,7 @@
 {% block html_title %}{{ i18n.t("home_page_title") }} v.{{ version }} | {{ i18n.t("site_name") }}{% endblock %}
 
 {% block header_center %}
-<a class="fm-download-btn" href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener">
+<a class="fm-download-btn" href="https://github.com/ZOXEXIVO/open-football/releases" target="_blank" rel="noopener" onclick="gtag('event', 'download')">
     <i class="fa fa-download"></i>
     {% if show_download %}
     <span>{{ i18n.t("download") }}</span>
