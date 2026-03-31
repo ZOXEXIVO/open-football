@@ -240,6 +240,26 @@ impl CountryResult {
             return;
         }
 
+        // Build parent TeamInfo before mutating data — needed by record_loan_return
+        // to create a current-season entry if one was drained by season-end snapshot.
+        let (pci, pcoi, pcli, pti) = parent_pos.unwrap();
+        let parent_info = {
+            let country = &data.continents[pci].countries[pcoi];
+            let club = &country.clubs[pcli];
+            let team = &club.teams.teams[pti];
+            let league_info = team.league_id
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| (l.name.clone(), l.slug.clone()))
+                .unwrap_or_default();
+            TeamInfo {
+                name: team.name.clone(),
+                slug: team.slug.clone(),
+                reputation: team.reputation.world,
+                league_name: league_info.0,
+                league_slug: league_info.1,
+            }
+        };
+
         // Take player from wherever they are
         let player_pos = data.find_player_position(event.player_id);
         let mut player = match player_pos {
@@ -254,17 +274,16 @@ impl CountryResult {
             None => return,
         };
 
-        player.on_loan_return(&event.borrowing_info, date);
+        player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
         player.happiness = crate::PlayerHappiness::new();
         player.statuses.statuses.clear();
 
         // Place at parent club
-        let (ci, coi, cli, ti) = parent_pos.unwrap();
         info!("Loan return: player {} from club {} back to club {}",
             event.player_id, event.borrowing_club_id, event.parent_club_id);
-        data.continents[ci].countries[coi].clubs[cli]
-            .teams.teams[ti].players.add(player);
+        data.continents[pci].countries[pcoi].clubs[pcli]
+            .teams.teams[pti].players.add(player);
     }
 
     /// Monthly check: retire players who are clearly past max retirement age

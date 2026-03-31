@@ -3474,8 +3474,8 @@ a:link, a:visited, a:hover, a:active {
     text-transform: uppercase;
     text-decoration: none;
     color: #e8f0f4;
-    background: linear-gradient(180deg, #1a6b35 0%, #145528 100%);
-    border: 1px solid #2a8548;
+    background: linear-gradient(180deg, #54ab98 0%, #366557 100%);
+    border: 1px solid #56b2a9;
     border-radius: 3px;
     white-space: nowrap;
     transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
@@ -3486,8 +3486,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-download-btn:hover {
-    background: linear-gradient(180deg, #218240 0%, #1a6b35 100%);
-    border-color: #34a05a;
+    background: linear-gradient(180deg, #54ab98 0%, #366557 100%);
+    border-color: #6ed2c8;
     box-shadow: 0 0 6px rgba(42, 133, 72, 0.35);
     color: #fff;
 }

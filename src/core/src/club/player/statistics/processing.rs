@@ -26,9 +26,9 @@ impl Player {
 
     /// Record a loan return (called at end of loan period).
     /// Merges remaining stats into the loan entry, sets transfer date.
-    pub fn on_loan_return(&mut self, borrowing: &TeamInfo, date: NaiveDate) {
+    pub fn on_loan_return(&mut self, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         let stats = std::mem::take(&mut self.statistics);
-        self.statistics_history.record_loan_return(stats, borrowing, date);
+        self.statistics_history.record_loan_return(stats, borrowing, parent, date);
         self.last_transfer_date = Some(date);
     }
 
@@ -323,7 +323,8 @@ mod tests {
         });
 
         let borrowing = make_team("Torino", "torino");
-        player.on_loan_return(&borrowing, make_date(2032, 5, 31));
+        let parent = make_team("Juventus", "juventus");
+        player.on_loan_return(&borrowing, &parent, make_date(2032, 5, 31));
 
         assert_eq!(player.statistics.played, 0);
         // Upsert updates existing Torino loan entry with 15 games
@@ -509,7 +510,7 @@ mod tests {
 
         // Play 10 games at Torino on loan
         player.statistics = make_stats(10, 2);
-        player.on_loan_return(&torino, make_date(2028, 5, 31));
+        player.on_loan_return(&torino, &juve, make_date(2028, 5, 31));
 
         // Back at Juve, 0 more games before season end
         player.statistics = make_stats(0, 0);
@@ -583,7 +584,7 @@ mod tests {
 
         // Loan return (happens after snapshot, just like real game)
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&monza, make_date(2026, 6, 1));
+        player.on_loan_return(&monza, &inter, make_date(2026, 6, 1));
         player.contract_loan = None;
 
         // -- Season 2026/27: back at Inter, full season --
@@ -642,7 +643,7 @@ mod tests {
         ));
         player.on_season_end(Season::new(2025), &birkirkara, make_date(2026, 8, 1));
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&birkirkara, make_date(2026, 6, 1));
+        player.on_loan_return(&birkirkara, &gzira, make_date(2026, 6, 1));
         player.contract_loan = None;
 
         // -- Season 2026/27: at Gzira, then loaned to Marsaxlokk --
@@ -656,7 +657,7 @@ mod tests {
         ));
         player.on_season_end(Season::new(2026), &marsaxlokk, make_date(2027, 8, 1));
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&marsaxlokk, make_date(2027, 6, 1));
+        player.on_loan_return(&marsaxlokk, &gzira, make_date(2027, 6, 1));
         player.contract_loan = None;
 
         // -- Season 2027/28: back at Gzira, plays full season --
@@ -731,7 +732,7 @@ mod tests {
         ));
         player.on_season_end(Season::new(2026), &empoli, make_date(2027, 8, 1));
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&empoli, make_date(2027, 6, 1));
+        player.on_loan_return(&empoli, &juve, make_date(2027, 6, 1));
         player.contract_loan = None;
 
         let history = &player.statistics_history.items;
@@ -779,7 +780,7 @@ mod tests {
 
         // Play 18 games at Mosta
         player.statistics = make_stats(18, 5);
-        player.on_loan_return(&mosta, make_date(2026, 5, 26));
+        player.on_loan_return(&mosta, &gzira, make_date(2026, 5, 26));
         player.contract_loan = None;
 
         // Back at Gzira for just 5 days, 0 games (season ends May 31)
@@ -820,7 +821,7 @@ mod tests {
         player.on_loan(&gzira, &mosta, 200.0, make_date(2025, 8, 10));
 
         player.statistics = make_stats(18, 5);
-        player.on_loan_return(&mosta, make_date(2026, 5, 26));
+        player.on_loan_return(&mosta, &gzira, make_date(2026, 5, 26));
         player.contract_loan = None;
 
         // Back at Gzira for 5 days BUT played 1 game (sub appearance)
@@ -892,7 +893,7 @@ mod tests {
         player.on_loan(&roma, &torino, 30_000.0, make_date(2025, 9, 1));
 
         player.statistics = make_stats(15, 3);
-        player.on_loan_return(&torino, make_date(2026, 3, 31));
+        player.on_loan_return(&torino, &roma, make_date(2026, 3, 31));
         player.contract_loan = None;
 
         // Back at Roma for ~60 days (April + May), 0 games — but 20% of season
@@ -946,7 +947,7 @@ mod tests {
         player.statistics = make_stats(0, 0);
 
         // Loan return (Russia processes first, moves player back to Floriana)
-        player.on_loan_return(&spartak, make_date(2027, 5, 31));
+        player.on_loan_return(&spartak, &floriana, make_date(2027, 5, 31));
         player.contract_loan = None;
 
         // Malta snapshot runs — player is at Floriana now
@@ -993,7 +994,7 @@ mod tests {
         player.statistics = make_stats(15, 3);
 
         // Loan return
-        player.on_loan_return(&spartak, make_date(2027, 5, 31));
+        player.on_loan_return(&spartak, &floriana, make_date(2027, 5, 31));
         player.contract_loan = None;
 
         // Malta snapshot
@@ -1051,7 +1052,7 @@ mod tests {
         player.statistics = make_stats(20, 4);
 
         // Loan return (before season end, like real game flow)
-        player.on_loan_return(&floriana, make_date(2027, 5, 31));
+        player.on_loan_return(&floriana, &spartak, make_date(2027, 5, 31));
         player.contract_loan = None;
 
         // Season end 2026/27 — player is back at Spartak (Russia processes)
@@ -1077,7 +1078,7 @@ mod tests {
 
         // Loan return after season end
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&floriana, make_date(2029, 5, 31));
+        player.on_loan_return(&floriana, &spartak, make_date(2029, 5, 31));
         player.contract_loan = None;
 
         // -- Verify history --
@@ -1146,7 +1147,7 @@ mod tests {
         player.statistics = make_stats(20, 4);
 
         // Loan return (before season end snapshot)
-        player.on_loan_return(&floriana, make_date(2027, 5, 31));
+        player.on_loan_return(&floriana, &spartak, make_date(2027, 5, 31));
         player.contract_loan = None;
 
         // *** KEY DIFFERENCE: Russia's Season(2026) snapshot has NOT run yet ***
@@ -1175,7 +1176,7 @@ mod tests {
 
         // Loan return
         player.statistics = make_stats(0, 0);
-        player.on_loan_return(&floriana, make_date(2029, 5, 31));
+        player.on_loan_return(&floriana, &spartak, make_date(2029, 5, 31));
         player.contract_loan = None;
 
         // -- Verify history --
@@ -1416,7 +1417,7 @@ mod tests {
         player.statistics = make_stats(20, 3);
 
         // Loan expires in May → player returns mid-season
-        player.on_loan_return(&zabbar, make_date(2030, 5, 1));
+        player.on_loan_return(&zabbar, &floriana, make_date(2030, 5, 1));
         player.contract_loan = None;
 
         // -- Season end snapshot: player is now at Floriana --
@@ -1497,7 +1498,7 @@ mod tests {
         player.on_season_end(Season::new(2026), &deportivo, make_date(2027, 2, 1));
 
         // Loan return (May 2027)
-        player.on_loan_return(&deportivo, make_date(2027, 5, 31));
+        player.on_loan_return(&deportivo, &dynamo, make_date(2027, 5, 31));
         player.contract_loan = None;
 
         // -- Season 2027/28: player back at Dynamo --

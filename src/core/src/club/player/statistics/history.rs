@@ -191,8 +191,13 @@ impl PlayerStatisticsHistory {
         self.push_new_entry(to, PlayerStatistics::default(), true, Some(loan_fee), date);
     }
 
-    pub fn record_loan_return(&mut self, remaining_stats: PlayerStatistics, borrowing: &TeamInfo, date: NaiveDate) {
+    pub fn record_loan_return(&mut self, remaining_stats: PlayerStatistics, borrowing: &TeamInfo, parent: &TeamInfo, date: NaiveDate) {
         self.upsert_current(borrowing, remaining_stats, true, None, date);
+
+        // Mark loan entry as departed — the player has returned.
+        // This prevents view_items from applying live_stats (parent club stats)
+        // to the loan entry, which would show wrong stats for the loan row.
+        self.mark_departed(&borrowing.slug, true, date);
 
         // Clean up stale loan entries: after a loan return, any loan entry
         // with 0 games and no fee is a leftover seed from season-end processing.
@@ -202,29 +207,40 @@ impl PlayerStatisticsHistory {
         });
 
         // Clear departed_date on parent entry — the player is back
-        if let Some(parent) = self.current.iter_mut().rev()
+        if let Some(parent_entry) = self.current.iter_mut().rev()
             .find(|e| !e.is_loan && e.departed_date.is_some())
         {
-            parent.departed_date = None;
+            parent_entry.departed_date = None;
             // Reset joined_date to return date for post-loan time calculation
-            if parent.statistics.total_games() == 0 && parent.transfer_fee.is_none() {
-                parent.joined_date = date;
+            if parent_entry.statistics.total_games() == 0 && parent_entry.transfer_fee.is_none() {
+                parent_entry.joined_date = date;
             }
+        } else if !self.current.iter().any(|e| !e.is_loan) {
+            // No parent entry exists — happens when season-end snapshot drained
+            // current before the loan return ran. Create one so the parent club
+            // has a current-season entry and view_items can show live stats.
+            self.push_new_entry(parent, PlayerStatistics::default(), false, None, date);
         }
     }
 
-    pub fn record_cancel_loan(&mut self, old_stats: PlayerStatistics, borrowing: &TeamInfo, _parent: &TeamInfo, _is_loan: bool, date: NaiveDate) {
+    pub fn record_cancel_loan(&mut self, old_stats: PlayerStatistics, borrowing: &TeamInfo, parent: &TeamInfo, _is_loan: bool, date: NaiveDate) {
         self.upsert_current(borrowing, old_stats, true, None, date);
+
+        // Mark loan entry as departed
+        self.mark_departed(&borrowing.slug, true, date);
 
         // Mirror record_loan_return cleanup: clear parent departed_date
         // so the parent entry correctly represents the post-return stint
-        if let Some(parent) = self.current.iter_mut().rev()
+        if let Some(parent_entry) = self.current.iter_mut().rev()
             .find(|e| !e.is_loan && e.departed_date.is_some())
         {
-            parent.departed_date = None;
-            if parent.statistics.total_games() == 0 && parent.transfer_fee.is_none() {
-                parent.joined_date = date;
+            parent_entry.departed_date = None;
+            if parent_entry.statistics.total_games() == 0 && parent_entry.transfer_fee.is_none() {
+                parent_entry.joined_date = date;
             }
+        } else if !self.current.iter().any(|e| !e.is_loan) {
+            // No parent entry exists — create one (same fix as record_loan_return)
+            self.push_new_entry(parent, PlayerStatistics::default(), false, None, date);
         }
     }
 
