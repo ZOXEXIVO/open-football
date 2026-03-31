@@ -1,6 +1,6 @@
 {
   "id": 352,
-  "name": "Lokomotiv 1929 Sofia",
+  "name": "Lokomotiv Sofia",
   "location": {
     "city_id": 0
   },
@@ -10,8 +10,8 @@
   "teams": [
     {
       "id": 352,
-      "name": "Lokomotiv 1929 Sofia",
-      "slug": "lokomotiv-1929-sofia",
+      "name": "Lokomotiv Sofia",
+      "slug": "lokomotiv-sofia",
       "team_type": "Main",
       "reputation": {
         "home": 3800,
@@ -21,7 +21,7 @@
     },
     {
       "id": 100000352,
-      "name": "Lokomotiv 1929 Sofia",
+      "name": "Lokomotiv Sofia",
       "slug": "lokomotiv-1929-sofia-u20",
       "team_type": "U20",
       "reputation": {
@@ -32,7 +32,7 @@
     },
     {
       "id": 200000352,
-      "name": "Lokomotiv 1929 Sofia",
+      "name": "Lokomotiv Sofia",
       "slug": "lokomotiv-1929-sofia-u18",
       "team_type": "U18",
       "reputation": {

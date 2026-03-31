@@ -1,0 +1,57 @@
+{
+  "id": 425922,
+  "name": "Nadroga",
+  "location": {
+    "city_id": 3954
+  },
+  "finance": {
+    "balance": 50000
+  },
+  "teams": [
+    {
+      "id": 425922,
+      "name": "Nadroga",
+      "slug": "nadroga",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1500,
+        "national": 1500,
+        "world": 1500
+      }
+    },
+    {
+      "id": 92000009,
+      "name": "Nadroga",
+      "slug": "nadroga-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 450,
+        "national": 450,
+        "world": 450
+      }
+    },
+    {
+      "id": 92000010,
+      "name": "Nadroga",
+      "slug": "nadroga-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 300,
+        "national": 300,
+        "world": 300
+      }
+    }
+  ],
+  "colors": {
+    "background": "#daa520",
+    "foreground": "#003399"
+  },
+  "philosophy": "LoanFocused",
+  "facilities": {
+    "training": "Basic",
+    "youth": "Basic",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 200
+}

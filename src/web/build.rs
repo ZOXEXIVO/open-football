@@ -72,7 +72,7 @@ fn main() {
     if let Err(e) = fs::write(&output_file, &combined_css) {
         println!("cargo:warning=Failed to write combined CSS: {}", e);
     } else {
-        println!("cargo:warning=Generated {} ({} bytes, minified: {})",
+        println!("cargo:info=Generated {} ({} bytes, minified: {})",
             output_file.display(),
             combined_css.len(),
             minify

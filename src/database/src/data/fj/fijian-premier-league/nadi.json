@@ -1,0 +1,57 @@
+{
+  "id": 130058,
+  "name": "Nadi",
+  "location": {
+    "city_id": 3953
+  },
+  "finance": {
+    "balance": 80000
+  },
+  "teams": [
+    {
+      "id": 130058,
+      "name": "Nadi",
+      "slug": "nadi",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1700,
+        "national": 1700,
+        "world": 1700
+      }
+    },
+    {
+      "id": 92000007,
+      "name": "Nadi",
+      "slug": "nadi-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 510,
+        "national": 510,
+        "world": 510
+      }
+    },
+    {
+      "id": 92000008,
+      "name": "Nadi",
+      "slug": "nadi-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 340,
+        "national": 340,
+        "world": 340
+      }
+    }
+  ],
+  "colors": {
+    "background": "#008000",
+    "foreground": "#ffd700"
+  },
+  "philosophy": "LoanFocused",
+  "facilities": {
+    "training": "Below Average",
+    "youth": "Below Average",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 400
+}

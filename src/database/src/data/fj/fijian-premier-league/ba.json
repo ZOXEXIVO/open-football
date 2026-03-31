@@ -1,0 +1,57 @@
+{
+  "id": 130055,
+  "name": "Ba",
+  "location": {
+    "city_id": 3950
+  },
+  "finance": {
+    "balance": 150000
+  },
+  "teams": [
+    {
+      "id": 130055,
+      "name": "Ba",
+      "slug": "ba",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2000,
+        "national": 2000,
+        "world": 2000
+      }
+    },
+    {
+      "id": 92000001,
+      "name": "Ba",
+      "slug": "ba-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 600,
+        "national": 600,
+        "world": 600
+      }
+    },
+    {
+      "id": 92000002,
+      "name": "Ba",
+      "slug": "ba-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 400,
+        "national": 400,
+        "world": 400
+      }
+    }
+  ],
+  "colors": {
+    "background": "#000000",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Adequate",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1000
+}

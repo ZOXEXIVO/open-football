@@ -1,6 +1,6 @@
 {
   "id": 22019542,
-  "name": "Dobrudzha 1919",
+  "name": "Dobrudzha",
   "location": {
     "city_id": 0
   },
@@ -10,8 +10,8 @@
   "teams": [
     {
       "id": 22019542,
-      "name": "Dobrudzha 1919",
-      "slug": "dobrudzha-1919",
+      "name": "Dobrudzha",
+      "slug": "dobrudzha",
       "team_type": "Main",
       "reputation": {
         "home": 3500,
@@ -21,7 +21,7 @@
     },
     {
       "id": 122019542,
-      "name": "Dobrudzha 1919",
+      "name": "Dobrudzha",
       "slug": "dobrudzha-1919-u20",
       "team_type": "U20",
       "reputation": {
@@ -32,7 +32,7 @@
     },
     {
       "id": 222019542,
-      "name": "Dobrudzha 1919",
+      "name": "Dobrudzha",
       "slug": "dobrudzha-1919-u18",
       "team_type": "U18",
       "reputation": {

@@ -1,0 +1,57 @@
+{
+  "id": 23209622,
+  "name": "Tailevu Naitasiri",
+  "location": {
+    "city_id": 3959
+  },
+  "finance": {
+    "balance": 50000
+  },
+  "teams": [
+    {
+      "id": 23209622,
+      "name": "Tailevu Naitasiri",
+      "slug": "tailevu-naitasiri",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1600,
+        "national": 1600,
+        "world": 1600
+      }
+    },
+    {
+      "id": 92000019,
+      "name": "Tailevu Naitasiri",
+      "slug": "tailevu-naitasiri-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 480,
+        "national": 480,
+        "world": 480
+      }
+    },
+    {
+      "id": 92000020,
+      "name": "Tailevu Naitasiri",
+      "slug": "tailevu-naitasiri-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 320,
+        "national": 320,
+        "world": 320
+      }
+    }
+  ],
+  "colors": {
+    "background": "#87ceeb",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "LoanFocused",
+  "facilities": {
+    "training": "Basic",
+    "youth": "Basic",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 200
+}

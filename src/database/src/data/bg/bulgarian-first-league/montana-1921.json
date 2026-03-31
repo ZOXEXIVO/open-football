@@ -1,6 +1,6 @@
 {
   "id": 353,
-  "name": "Montana 1921",
+  "name": "Montana",
   "location": {
     "city_id": 0
   },
@@ -10,8 +10,8 @@
   "teams": [
     {
       "id": 353,
-      "name": "Montana 1921",
-      "slug": "montana-1921",
+      "name": "Montana",
+      "slug": "montana",
       "team_type": "Main",
       "reputation": {
         "home": 3500,
@@ -21,7 +21,7 @@
     },
     {
       "id": 100000353,
-      "name": "Montana 1921",
+      "name": "Montana",
       "slug": "montana-1921-u20",
       "team_type": "U20",
       "reputation": {
@@ -32,7 +32,7 @@
     },
     {
       "id": 200000353,
-      "name": "Montana 1921",
+      "name": "Montana",
       "slug": "montana-1921-u18",
       "team_type": "U18",
       "reputation": {

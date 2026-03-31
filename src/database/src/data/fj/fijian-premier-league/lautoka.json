@@ -1,0 +1,57 @@
+{
+  "id": 130057,
+  "name": "Lautoka",
+  "location": {
+    "city_id": 3952
+  },
+  "finance": {
+    "balance": 150000
+  },
+  "teams": [
+    {
+      "id": 130057,
+      "name": "Lautoka",
+      "slug": "lautoka",
+      "team_type": "Main",
+      "reputation": {
+        "home": 2100,
+        "national": 2100,
+        "world": 2100
+      }
+    },
+    {
+      "id": 92000005,
+      "name": "Lautoka",
+      "slug": "lautoka-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 630,
+        "national": 630,
+        "world": 630
+      }
+    },
+    {
+      "id": 92000006,
+      "name": "Lautoka",
+      "slug": "lautoka-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 420,
+        "national": 420,
+        "world": 420
+      }
+    }
+  ],
+  "colors": {
+    "background": "#0044aa",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "Balanced",
+  "facilities": {
+    "training": "Adequate",
+    "youth": "Adequate",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 1000
+}

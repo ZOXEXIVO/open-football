@@ -3555,8 +3555,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-country-grid {
-    display: flex;
-    flex-wrap: wrap;
+    columns: 4;
+    column-gap: 0;
     padding: 10px;
 }
 
@@ -3568,8 +3568,7 @@ a:link, a:visited, a:hover, a:active {
     color: #b0bac2;
     font-size: 14px;
     font-weight: 400;
-    width: 25%;
-    min-width: 200px;
+    break-inside: avoid;
     transition: background 0.1s, color 0.1s;
     border-radius: 3px;
 }

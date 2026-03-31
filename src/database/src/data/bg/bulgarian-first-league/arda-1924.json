@@ -1,6 +1,6 @@
 {
   "id": 7506471,
-  "name": "Arda 1924",
+  "name": "Arda",
   "location": {
     "city_id": 0
   },
@@ -10,8 +10,8 @@
   "teams": [
     {
       "id": 7506471,
-      "name": "Arda 1924",
-      "slug": "arda-1924",
+      "name": "Arda",
+      "slug": "arda",
       "team_type": "Main",
       "reputation": {
         "home": 3800,
@@ -21,7 +21,7 @@
     },
     {
       "id": 107506471,
-      "name": "Arda 1924",
+      "name": "Arda",
       "slug": "arda-1924-u20",
       "team_type": "U20",
       "reputation": {
@@ -32,7 +32,7 @@
     },
     {
       "id": 207506471,
-      "name": "Arda 1924",
+      "name": "Arda",
       "slug": "arda-1924-u18",
       "team_type": "U18",
       "reputation": {

@@ -1,0 +1,57 @@
+{
+  "id": 130056,
+  "name": "Labasa",
+  "location": {
+    "city_id": 3951
+  },
+  "finance": {
+    "balance": 100000
+  },
+  "teams": [
+    {
+      "id": 130056,
+      "name": "Labasa",
+      "slug": "labasa",
+      "team_type": "Main",
+      "reputation": {
+        "home": 1900,
+        "national": 1900,
+        "world": 1900
+      }
+    },
+    {
+      "id": 92000003,
+      "name": "Labasa",
+      "slug": "labasa-u20",
+      "team_type": "U20",
+      "reputation": {
+        "home": 570,
+        "national": 570,
+        "world": 570
+      }
+    },
+    {
+      "id": 92000004,
+      "name": "Labasa",
+      "slug": "labasa-u18",
+      "team_type": "U18",
+      "reputation": {
+        "home": 380,
+        "national": 380,
+        "world": 380
+      }
+    }
+  ],
+  "colors": {
+    "background": "#cc0000",
+    "foreground": "#ffffff"
+  },
+  "philosophy": "LoanFocused",
+  "facilities": {
+    "training": "Below Average",
+    "youth": "Below Average",
+    "academy": "Average",
+    "recruitment": "Basic"
+  },
+  "average_attendance": 500
+}

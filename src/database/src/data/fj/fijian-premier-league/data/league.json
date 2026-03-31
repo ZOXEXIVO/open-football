@@ -1,12 +1,12 @@
 {
-  "id": 470,
-  "enabled": false,
-  "slug": "lithuanian-a-lyga",
-  "name": "A Lyga",
-  "reputation": 2600,
+  "id": 8457149,
+  "enabled": true,
+  "slug": "fijian-premier-league",
+  "name": "Premier League",
+  "reputation": 1500,
   "tier": 1,
   "promotion_spots": 0,
-  "relegation_spots": 1,
+  "relegation_spots": 0,
   "sub_leagues_competitions": ["U18"],
   "settings": {
     "season_starting_half": {
@@ -24,11 +24,19 @@
   },
   "foreign_players": [
     {
-      "country_id": 777,
+      "country_id": 1435,
+      "weight": 3
+    },
+    {
+      "country_id": 1438,
       "weight": 2
     },
     {
-      "country_id": 791,
+      "country_id": 1440,
+      "weight": 1
+    },
+    {
+      "country_id": 1443,
       "weight": 1
     }
   ]
