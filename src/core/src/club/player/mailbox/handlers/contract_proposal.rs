@@ -25,7 +25,7 @@ impl ProcessContractHandler {
                 if proposal.salary > player_contract.salary {
                     // Salary increase — always accept
                     AcceptContractHandler::process(player, proposal, now);
-                    player.happiness.add_event(HappinessEventType::WageIncrease, 5.0);
+                    player.happiness.add_event(HappinessEventType::ContractRenewal, 5.0);
                     player.happiness.factors.salary_satisfaction = 0.0;
                     // Reset negotiation timer so cooldown restarts from this raise
                     player.happiness.last_salary_negotiation = Some(now);

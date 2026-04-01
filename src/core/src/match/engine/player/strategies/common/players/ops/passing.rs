@@ -78,7 +78,7 @@ impl<'p> PassingOperationsImpl<'p> {
             - (self
                 .ctx
                 .tick_context
-                .distances
+                .grid
                 .opponents(target.id, 10.0)
                 .count() as f32
                 * 0.2)
@@ -103,7 +103,7 @@ impl<'p> PassingOperationsImpl<'p> {
         // Use pre-computed distance lookup instead of scanning all opponents
         self.ctx
             .tick_context
-            .distances
+            .grid
             .opponents(teammate.id, 10.0)
             .next()
             .is_some()
@@ -163,7 +163,7 @@ impl<'p> PassingOperationsImpl<'p> {
         // Single scan at max distance, bucket by distance
         let mut markers = 0;
         let mut close_markers = 0;
-        for (_id, dist) in self.ctx.tick_context.distances.opponents(teammate.id, marking_distance) {
+        for (_id, dist) in self.ctx.tick_context.grid.opponents(teammate.id, marking_distance) {
             markers += 1;
             if dist <= close_distance {
                 close_markers += 1;
@@ -189,7 +189,7 @@ impl<'p> PassingOperationsImpl<'p> {
             let in_free_space = self
                 .ctx
                 .tick_context
-                .distances
+                .grid
                 .opponents(teammate.id, 12.0)
                 .count()
                 < 2;
@@ -218,7 +218,7 @@ impl<'p> PassingOperationsImpl<'p> {
             let has_space = self
                 .ctx
                 .tick_context
-                .distances
+                .grid
                 .opponents(teammate.id, 10.0)
                 .count()
                 < 2;

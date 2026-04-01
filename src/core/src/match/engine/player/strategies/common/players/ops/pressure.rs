@@ -39,7 +39,7 @@ impl<'p> PressureOperationsImpl<'p> {
     pub fn is_teammate_marked(&self, teammate: &MatchPlayerLite, marking_distance: f32) -> bool {
         // Use pre-computed distances: opponents of teammate = our players near them,
         // but we need opponents near teammate, so from teammate's POV our team are opponents
-        self.ctx.tick_context.distances
+        self.ctx.tick_context.grid
             .opponents(teammate.id, marking_distance)
             .count() >= 1
     }
@@ -49,7 +49,7 @@ impl<'p> PressureOperationsImpl<'p> {
         // Single scan at max distance, bucket by distance
         let mut markers = 0;
         let mut close_markers = 0;
-        for (_id, dist) in self.ctx.tick_context.distances.opponents(teammate.id, 8.0) {
+        for (_id, dist) in self.ctx.tick_context.grid.opponents(teammate.id, 8.0) {
             markers += 1;
             if dist <= 3.0 {
                 close_markers += 1;
@@ -78,7 +78,7 @@ impl<'p> PressureOperationsImpl<'p> {
         let mut close: f32 = 0.0;
         let mut medium: f32 = 0.0;
         let mut far: f32 = 0.0;
-        for (_id, dist) in self.ctx.tick_context.distances.opponents(self.ctx.player.id, 30.0) {
+        for (_id, dist) in self.ctx.tick_context.grid.opponents(self.ctx.player.id, 30.0) {
             far += 1.0;
             if dist <= 20.0 { medium += 1.0; }
             if dist <= 10.0 { close += 1.0; }

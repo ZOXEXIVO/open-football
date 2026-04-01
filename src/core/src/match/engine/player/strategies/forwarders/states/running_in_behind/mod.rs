@@ -28,7 +28,7 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
             if let Some(owner) = ctx.context.players.by_id(owner_id) {
                 if owner.team_id == ctx.player.team_id {
                     // Passer under heavy pressure — abort run, they can't deliver
-                    let opponents_near_passer = ctx.tick_context.distances
+                    let opponents_near_passer = ctx.tick_context.grid
                         .opponents(owner_id, 10.0).count();
                     if opponents_near_passer >= 3 {
                         return Some(StateChangeResult::with_forward_state(

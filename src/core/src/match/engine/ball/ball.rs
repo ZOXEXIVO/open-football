@@ -1142,25 +1142,24 @@ impl Ball {
             return;
         }
 
-        let velocity_norm = self.velocity.norm();
+        let mut velocity_norm_sq = self.velocity.norm_squared();
 
         // Clamp velocity if it exceeds maximum
-        if velocity_norm > MAX_VELOCITY {
+        if velocity_norm_sq > MAX_VELOCITY * MAX_VELOCITY {
+            let velocity_norm = velocity_norm_sq.sqrt();
             self.velocity = self.velocity * (MAX_VELOCITY / velocity_norm);
+            velocity_norm_sq = MAX_VELOCITY * MAX_VELOCITY;
         }
 
-        let velocity_norm = self.velocity.norm();
-
-        if velocity_norm > STOPPING_THRESHOLD {
+        if velocity_norm_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD {
+            let velocity_norm = velocity_norm_sq.sqrt();
             let is_on_ground = self.position.z <= 0.1;
 
             if is_on_ground {
                 // GROUND PHYSICS: Rolling friction proportional to velocity (smooth deceleration)
-                // This creates exponential decay: v(t) = v0 * e^(-kt), which is very smooth
-                let horizontal_velocity = Vector3::new(self.velocity.x, self.velocity.y, 0.0);
-                let horizontal_speed = horizontal_velocity.norm();
+                let horizontal_speed_sq = self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y;
 
-                if horizontal_speed > STOPPING_THRESHOLD {
+                if horizontal_speed_sq > STOPPING_THRESHOLD * STOPPING_THRESHOLD {
                     // Apply friction as a multiplier for smooth exponential decay
                     // friction_factor < 1.0 means the ball gradually slows down
                     let friction_factor = 1.0 - GROUND_FRICTION_COEFFICIENT;

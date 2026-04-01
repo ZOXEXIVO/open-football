@@ -125,7 +125,7 @@ impl ShotQualityEvaluator {
         // Single scan at max distance, bucket by distance
         let mut very_close = 0;
         let mut close = 0;
-        for (_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 10.0) {
+        for (_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, 10.0) {
             if dist <= 5.0 {
                 very_close += 1;
             }

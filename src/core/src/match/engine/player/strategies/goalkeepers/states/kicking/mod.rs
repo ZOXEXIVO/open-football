@@ -89,7 +89,7 @@ impl GoalkeeperKickingState {
             );
 
             // Check space around receiver
-            let nearby_opponents = ctx.tick_context.distances.opponents(teammate.id, 15.0).count();
+            let nearby_opponents = ctx.tick_context.grid.opponents(teammate.id, 15.0).count();
             let space_factor = match nearby_opponents {
                 0 => 3.0, // Completely free
                 1 => 1.8,

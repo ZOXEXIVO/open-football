@@ -209,7 +209,7 @@ impl GoalkeeperPassingState {
             );
 
             // Check if teammate is under pressure
-            let opponents_near_teammate = ctx.tick_context.distances.opponents(teammate.id, 10.0).count();
+            let opponents_near_teammate = ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
             let is_safe = opponents_near_teammate == 0;
 
             // Check if teammate is in good position (not marked)
@@ -256,7 +256,7 @@ impl GoalkeeperPassingState {
             );
 
             // Check space around receiver
-            let opponents_near = ctx.tick_context.distances.opponents(teammate.id, 12.0).count();
+            let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 12.0).count();
             let space_factor = match opponents_near {
                 0 => 2.0,
                 1 => 1.2,
@@ -300,7 +300,7 @@ impl GoalkeeperPassingState {
             let is_wide = teammate.position.y.abs() > (ctx.context.field_size.height as f32 * 0.3);
 
             // Space around receiver
-            let opponents_near = ctx.tick_context.distances.opponents(teammate.id, 10.0).count();
+            let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 10.0).count();
             let space_factor = match opponents_near {
                 0 => 2.0,
                 1 => 1.0,
@@ -359,7 +359,7 @@ impl GoalkeeperPassingState {
             }
 
             // Space around receiver
-            let opponents_near = ctx.tick_context.distances.opponents(teammate.id, 15.0).count();
+            let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 15.0).count();
             let space_factor = match opponents_near {
                 0 => 3.0,
                 1 => 1.5,
@@ -407,7 +407,7 @@ impl GoalkeeperPassingState {
             .nearby(range)
             .filter(|teammate| {
                 // Check if teammate is not heavily marked
-                let opponents_near = ctx.tick_context.distances.opponents(teammate.id, 8.0).count();
+                let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 8.0).count();
                 opponents_near < 2
             })
             .count()
@@ -438,7 +438,7 @@ impl GoalkeeperPassingState {
                 }
 
                 // Must have some space
-                let opponents_near = ctx.tick_context.distances.opponents(teammate.id, 15.0).count();
+                let opponents_near = ctx.tick_context.grid.opponents(teammate.id, 15.0).count();
                 opponents_near <= 1
             })
             .count()

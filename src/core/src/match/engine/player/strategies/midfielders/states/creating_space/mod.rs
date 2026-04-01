@@ -328,7 +328,7 @@ impl MidfielderCreatingSpaceState {
         let player_pos = ctx.player.position;
 
         // Find nearest opponent using pre-computed distances
-        if let Some((nearest_id, _)) = ctx.tick_context.distances
+        if let Some((nearest_id, _)) = ctx.tick_context.grid
             .opponents(ctx.player.id, 50.0)
             .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal))
         {
@@ -468,12 +468,12 @@ impl MidfielderCreatingSpaceState {
 
     /// Calculate local congestion around player
     fn calculate_local_congestion(&self, ctx: &StateProcessingContext) -> f32 {
-        ctx.tick_context.distances.opponents(ctx.player.id, 20.0).count() as f32
+        ctx.tick_context.grid.opponents(ctx.player.id, 20.0).count() as f32
     }
 
     /// Check if player has a close marker
     fn has_close_marker(&self, ctx: &StateProcessingContext) -> bool {
-        ctx.tick_context.distances.opponents(ctx.player.id, 10.0).count() > 0
+        ctx.tick_context.grid.opponents(ctx.player.id, 10.0).count() > 0
     }
 
     /// Make a third man run (beyond the immediate play)
@@ -531,7 +531,7 @@ impl MidfielderCreatingSpaceState {
         let space_radius = SPACE_CREATION_RADIUS;
 
         // No opponents in immediate vicinity (use pre-computed distances)
-        let opponents_nearby = ctx.tick_context.distances
+        let opponents_nearby = ctx.tick_context.grid
             .opponents(ctx.player.id, space_radius).count();
 
         // Good distance from ball
@@ -856,7 +856,7 @@ impl MidfielderCreatingSpaceState {
             let distance = (ctx.player.position - ball_holder.position).magnitude();
 
             // Check for opponents in passing lane using pre-computed distances from ball holder
-            !ctx.tick_context.distances
+            !ctx.tick_context.grid
                 .opponents(ball_holder.id, distance)
                 .any(|(opp_id, _)| {
                     let Some(opp) = ctx.context.players.by_id(opp_id) else {

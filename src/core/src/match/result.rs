@@ -115,6 +115,8 @@ pub struct ResultMatchPositionData {
     events: Vec<MatchEventData>,
     /// Per-player state changes — only populated when track_events is true.
     player_states: HashMap<u32, Vec<PlayerStateEntry>>,
+    /// Fast dedup: last recorded state compact ID per player (avoids String allocation)
+    last_state_ids: HashMap<u32, u16>,
     track_events: bool,
     track_positions: bool,
 }
@@ -156,6 +158,7 @@ impl ResultMatchPositionData {
             passes: Vec::new(),
             events: Vec::new(),
             player_states: HashMap::new(),
+            last_state_ids: HashMap::new(),
             track_events: false,
             track_positions: true,
         }
@@ -168,6 +171,7 @@ impl ResultMatchPositionData {
             passes: Vec::new(),
             events: Vec::new(),
             player_states: HashMap::with_capacity(44),
+            last_state_ids: HashMap::with_capacity(44),
             track_events: true,
             track_positions: true,
         }
@@ -180,6 +184,7 @@ impl ResultMatchPositionData {
             passes: Vec::new(),
             events: Vec::new(),
             player_states: HashMap::new(),
+            last_state_ids: HashMap::new(),
             track_events: false,
             track_positions: false,
         }
@@ -206,6 +211,7 @@ impl ResultMatchPositionData {
                 passes: Vec::new(),
                 events: Vec::new(),
                 player_states: HashMap::new(),
+                last_state_ids: HashMap::new(),
                 track_events: self.track_events,
                 track_positions: self.track_positions,
             };
@@ -430,27 +436,32 @@ impl ResultMatchPositionData {
         }
     }
 
-    /// Record a player state change. Only stores when the state name differs from the last entry.
-    pub fn add_player_state(&mut self, player_id: u32, timestamp: u64, state_name: &str) {
+    /// Record a player state change. Uses a cheap integer ID for fast dedup,
+    /// only allocating the display String when the state actually changed.
+    pub fn add_player_state(&mut self, player_id: u32, timestamp: u64, state_id: u16, state: &impl std::fmt::Display) {
         if !self.track_events {
             return;
         }
 
-        if let Some(entries) = self.player_states.get_mut(&player_id) {
-            // Dedup: skip if same state as last recorded
-            if let Some(last) = entries.last() {
-                if last.state == state_name {
-                    return;
-                }
+        // Fast dedup using integer comparison — avoids to_string() ~90% of the time
+        if let Some(&last_id) = self.last_state_ids.get(&player_id) {
+            if last_id == state_id {
+                return;
             }
+        }
+
+        self.last_state_ids.insert(player_id, state_id);
+        let state_name = state.to_string();
+
+        if let Some(entries) = self.player_states.get_mut(&player_id) {
             entries.push(PlayerStateEntry {
                 timestamp,
-                state: state_name.to_string(),
+                state: state_name,
             });
         } else {
             self.player_states.insert(player_id, vec![PlayerStateEntry {
                 timestamp,
-                state: state_name.to_string(),
+                state: state_name,
             }]);
         }
     }

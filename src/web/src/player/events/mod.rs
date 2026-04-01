@@ -182,7 +182,7 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::ManagerDiscipline
             | HappinessEventType::ManagerCriticism
             | HappinessEventType::ContractOffer
-            | HappinessEventType::WageIncrease
+            | HappinessEventType::ContractRenewal
             | HappinessEventType::InjuryReturn
             | HappinessEventType::LoanListingAccepted
             | HappinessEventType::ConflictWithTeammate
@@ -205,7 +205,7 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::MatchSelection => "event_match_selection",
         HappinessEventType::MatchDropped => "event_match_dropped",
         HappinessEventType::ContractOffer => "event_contract_offer",
-        HappinessEventType::WageIncrease => "event_wage_increase",
+        HappinessEventType::ContractRenewal => "event_contract_renewal",
         HappinessEventType::InjuryReturn => "event_injury_return",
         HappinessEventType::SquadStatusChange => "event_squad_status_change",
         HappinessEventType::LackOfPlayingTime => "event_lack_of_playing_time",

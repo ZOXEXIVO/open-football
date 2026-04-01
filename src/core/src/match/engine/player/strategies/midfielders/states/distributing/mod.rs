@@ -97,7 +97,7 @@ impl MidfielderDistributingState {
         let opponent_distance_threshold = 5.0; // Adjust the threshold as needed
 
         // Use distance closure: from teammate's perspective, opponents are nearby
-        ctx.tick_context.distances.opponents(teammate.id, opponent_distance_threshold)
+        ctx.tick_context.grid.opponents(teammate.id, opponent_distance_threshold)
             .next().is_none()
     }
 
@@ -109,7 +109,7 @@ impl MidfielderDistributingState {
         let space_radius = 10.0; // Adjust the radius as needed
 
         // Use distance closure instead of scanning all opponents
-        let num_opponents_nearby = ctx.tick_context.distances
+        let num_opponents_nearby = ctx.tick_context.grid
             .opponents(player.id, space_radius).count();
 
         space_radius - num_opponents_nearby as f32

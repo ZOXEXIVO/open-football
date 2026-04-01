@@ -392,9 +392,9 @@ impl DefenderRunningState {
 
         // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
         let player_id = ctx.player.id;
-        let total_nearby = ctx.tick_context.distances
+        let total_nearby = ctx.tick_context.grid
             .teammates(player_id, 0.0, 15.0).count()
-            + ctx.tick_context.distances
+            + ctx.tick_context.grid
             .opponents(player_id, 15.0).count();
 
         // If 3 or more players nearby (congestion), need to clear
@@ -423,9 +423,9 @@ impl DefenderRunningState {
         // In congested area — prefer carrying OUT of congestion instead of passing into it
         // Only pass if there's a teammate in open space (not in the same cluster)
         let player_id = ctx.player.id;
-        let nearby_players = ctx.tick_context.distances
+        let nearby_players = ctx.tick_context.grid
             .opponents(player_id, 20.0).count()
-            + ctx.tick_context.distances
+            + ctx.tick_context.grid
             .teammates(player_id, 0.0, 20.0).count();
         if nearby_players >= 4 {
             // Heavily congested — only pass to someone FAR from this cluster
@@ -435,7 +435,7 @@ impl DefenderRunningState {
                     if dist <= 50.0 {
                         return false;
                     }
-                    let opp_near_t = ctx.tick_context.distances
+                    let opp_near_t = ctx.tick_context.grid
                         .opponents(t.id, 15.0).count();
                     opp_near_t < 2 && ctx.player().has_clear_pass(t.id)
                 });
@@ -448,7 +448,7 @@ impl DefenderRunningState {
         let mut opp_within_12 = false;
         let mut opp_within_15 = false;
         let mut opp_within_30 = false;
-        for (_id, dist) in ctx.tick_context.distances.opponents(player_id, 30.0) {
+        for (_id, dist) in ctx.tick_context.grid.opponents(player_id, 30.0) {
             opp_within_30 = true;
             if dist <= 15.0 { opp_within_15 = true; }
             if dist <= 12.0 { opp_within_12 = true; }
@@ -544,7 +544,7 @@ impl DefenderRunningState {
                 continue; // Too close — weak passes create claim loops
             }
 
-            let opponents_near = ctx.tick_context.distances
+            let opponents_near = ctx.tick_context.grid
                 .opponents(t.id, 15.0).count();
             if opponents_near >= 2 {
                 continue; // Not in space
@@ -620,7 +620,7 @@ impl DefenderRunningState {
         let player_pos = ctx.player.position;
         let player_id = ctx.player.id;
 
-        for (_opp_id, dist) in ctx.tick_context.distances.opponents(player_id, 35.0) {
+        for (_opp_id, dist) in ctx.tick_context.grid.opponents(player_id, 35.0) {
             if dist < 10.0 {
                 // Already very close — emergency
                 return true;
@@ -676,7 +676,7 @@ impl DefenderRunningState {
             }
 
             // Prefer teammates with more space around them
-            let opponents_near = ctx.tick_context.distances
+            let opponents_near = ctx.tick_context.grid
                 .opponents(teammate.id, 10.0).count();
 
             let mut score = 100.0 - dist * 0.2; // Closer is slightly better for safety
@@ -732,7 +732,7 @@ impl DefenderRunningState {
             }
 
             // Check teammate is in space (use pre-computed distances)
-            let opponents_near = ctx.tick_context.distances
+            let opponents_near = ctx.tick_context.grid
                 .opponents(teammate.id, 15.0).count();
             if opponents_near >= 2 {
                 continue;
@@ -873,7 +873,7 @@ impl DefenderRunningState {
             if !ctx.player().has_clear_pass(teammate.id) { continue; }
 
             // Must not be under heavy pressure
-            let opp_near = ctx.tick_context.distances.opponents(teammate.id, 12.0).count();
+            let opp_near = ctx.tick_context.grid.opponents(teammate.id, 12.0).count();
             if opp_near >= 2 { continue; }
 
             let group = teammate.tactical_positions.position_group();

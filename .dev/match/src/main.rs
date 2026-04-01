@@ -289,6 +289,6 @@ async fn field_svg_handler() -> impl axum::response::IntoResponse {
 }
 
 async fn pixi_handler() -> impl axum::response::IntoResponse {
-    let js = include_bytes!("../../../src/web/assets/js/pixi.min.js");
+    let js = include_bytes!("../../../src/web/assets/static/js/pixi.min.js");
     ([(axum::http::header::CONTENT_TYPE, "application/javascript")], js.as_slice())
 }

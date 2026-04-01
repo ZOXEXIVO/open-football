@@ -193,71 +193,55 @@ impl DefenderMarkingState {
 
     /// Find the most dangerous opponent to mark based on multiple factors
     fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
-        // Extended search range to catch dangerous runs from distance
-        let nearby_opponents: Vec<_> = ctx.players().opponents().nearby(150.0).collect();
-
-        if nearby_opponents.is_empty() {
-            return None;
-        }
-
         let player_ops = ctx.player();
+        let own_goal_position = ctx.ball().direction_to_own_goal();
+        let ball_position = ctx.tick_context.positions.ball.position;
 
-        // Calculate danger score for each opponent
         let mut best_opponent = None;
         let mut best_score = f32::MIN;
 
-        for opponent in nearby_opponents {
+        // Direct iteration — no .collect() needed
+        for opponent in ctx.players().opponents().nearby(150.0) {
             let mut danger_score = 0.0;
 
-            // Factor 1: Has the ball (VERY dangerous)
             if opponent.has_ball(ctx) {
                 danger_score += 100.0;
             }
 
-            // Factor 2: Distance to our goal (closer = more dangerous)
-            let own_goal_position = ctx.ball().direction_to_own_goal();
             let distance_to_own_goal = (opponent.position - own_goal_position).magnitude();
-            danger_score += (500.0 - distance_to_own_goal) / 10.0; // Max 50 points
+            danger_score += (500.0 - distance_to_own_goal) / 10.0;
 
-            // Factor 3: Distance to defender (closer = needs marking)
             let distance_to_defender = opponent.distance(ctx);
-            danger_score += (100.0 - distance_to_defender.min(100.0)) / 5.0; // Max 20 points
+            danger_score += (100.0 - distance_to_defender.min(100.0)) / 5.0;
 
-            // Factor 4: Opponent facing our goal (attacking posture) - ENHANCED
             let opponent_velocity = opponent.velocity(ctx);
-            let to_our_goal = (own_goal_position - opponent.position).normalize();
-            let speed = opponent_velocity.norm();
+            let speed_sq = opponent_velocity.norm_squared();
 
-            if speed > 0.1 {
-                let velocity_dir = opponent_velocity.normalize();
+            if speed_sq > 0.01 {
+                let speed = speed_sq.sqrt();
+                let to_our_goal = (own_goal_position - opponent.position).normalize();
+                let velocity_dir = opponent_velocity * (1.0 / speed);
                 let alignment = velocity_dir.dot(&to_our_goal);
 
                 if alignment > 0.0 {
-                    // Base points for running towards goal
                     danger_score += alignment * 30.0;
-
-                    // Bonus for dangerous runs: high speed + good alignment
                     if speed > 3.0 && alignment > 0.7 {
-                        danger_score += 25.0; // Additional points for clear dangerous run
+                        danger_score += 25.0;
                     }
                 }
             }
 
-            // Factor 5: Ball proximity (if opponent doesn't have ball, closer to ball = more dangerous)
             if !opponent.has_ball(ctx) {
-                let ball_position = ctx.tick_context.positions.ball.position;
                 let distance_to_ball = (opponent.position - ball_position).magnitude();
-                danger_score += (50.0 - distance_to_ball.min(50.0)) / 5.0; // Max 10 points
+                danger_score += (50.0 - distance_to_ball.min(50.0)) / 5.0;
             }
 
-            // Factor 6: Opponent skill level (better players are more dangerous)
             let opponent_skills = player_ops.skills(opponent.id);
             let attacking_skill = (opponent_skills.physical.pace
                 + opponent_skills.technical.dribbling
                 + opponent_skills.technical.finishing) / 3.0;
-            danger_score += attacking_skill / 20.0; // Max ~5 points for elite attacker
+            danger_score += attacking_skill / 20.0;
 
-            // Update best if this opponent is more dangerous
             if danger_score > best_score {
                 best_score = danger_score;
                 best_opponent = Some(opponent);

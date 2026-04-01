@@ -126,7 +126,7 @@ impl ForwardAssistingState {
             }
 
             // Check if teammate has space (not heavily marked)
-            let close_defenders = ctx.tick_context.distances
+            let close_defenders = ctx.tick_context.grid
                 .opponents(teammate.id, 10.0).count();
 
             // Good if close to goal with some space or is another forward

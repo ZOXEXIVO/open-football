@@ -307,9 +307,10 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             player.move_to();
         }
 
-        EventDispatcher::dispatch(events, field, context, match_data, true);
-
-        handle_goal_reset(field, context);
+        if events.has_events() {
+            EventDispatcher::dispatch(events, field, context, match_data, true);
+            handle_goal_reset(field, context);
+        }
 
         Self::write_match_positions(field, context.total_match_time, match_data);
     }
@@ -321,9 +322,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         tick_ctx: &mut GameTickContext,
         events: &mut EventCollection,
     ) {
-        // Recalculate N² distance matrix every 12 full ticks (~240ms match time)
-        field.update_distances(12);
-
         tick_ctx.update(field);
 
         events.clear();
@@ -359,9 +357,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             return;
         }
 
+        let track_events = match_data.is_tracking_events();
+
         field.players.iter().for_each(|player| {
             match_data.add_player_positions(player.id, timestamp, player.position);
-            match_data.add_player_state(player.id, timestamp, &player.state.to_string());
+            if track_events {
+                match_data.add_player_state(player.id, timestamp, player.state.compact_id(), &player.state);
+            }
         });
 
         match_data.add_ball_positions(timestamp, field.ball.position);

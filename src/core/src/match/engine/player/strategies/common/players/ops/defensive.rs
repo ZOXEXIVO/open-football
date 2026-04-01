@@ -32,9 +32,8 @@ impl<'p> DefensiveOperationsImpl<'p> {
     ) -> Option<MatchPlayerLite> {
         let own_goal_position = self.ctx.ball().direction_to_own_goal();
 
-        // Find opponents making dangerous runs within extended range
-        let dangerous_runners: Vec<MatchPlayerLite> = self
-            .ctx
+        // Find the closest opponent making a dangerous run — no intermediate Vec
+        self.ctx
             .players()
             .opponents()
             .nearby(scan_distance)
@@ -68,68 +67,51 @@ impl<'p> DefensiveOperationsImpl<'p> {
 
                 alignment >= DANGEROUS_RUN_ANGLE && is_in_dangerous_position
             })
-            .collect();
-
-        if dangerous_runners.is_empty() {
-            return None;
-        }
-
-        // Return the closest dangerous runner
-        dangerous_runners
-            .iter()
             .min_by(|a, b| {
                 let dist_a = a.distance(self.ctx);
                 let dist_b = b.distance(self.ctx);
                 dist_a.partial_cmp(&dist_b).unwrap()
             })
-            .copied()
     }
 
-    /// Find the opponent defensive line position
+    /// Find the opponent defensive line position — single-pass, zero allocation
     pub fn find_defensive_line(&self) -> f32 {
-        let defenders: Vec<f32> = self
+        let (sum, count, min_x, max_x) = self
             .ctx
             .players()
             .opponents()
             .all()
             .filter(|p| p.tactical_positions.is_defender())
-            .map(|p| match self.ctx.player.side {
-                Some(PlayerSide::Left) => p.position.x,
-                Some(PlayerSide::Right) => p.position.x,
-                None => p.position.x,
-            })
-            .collect();
+            .map(|p| p.position.x)
+            .fold((0.0f32, 0u32, f32::MAX, f32::MIN), |(s, c, mn, mx), x| {
+                (s + x, c + 1, mn.min(x), mx.max(x))
+            });
 
-        if defenders.is_empty() {
-            self.ctx.context.field_size.width as f32 / 2.0
-        } else {
-            // Return the position of the last defender
-            match self.ctx.player.side {
-                Some(PlayerSide::Left) => defenders.iter().fold(f32::MIN, |a, &b| a.max(b)),
-                Some(PlayerSide::Right) => defenders.iter().fold(f32::MAX, |a, &b| a.min(b)),
-                None => defenders.iter().sum::<f32>() / defenders.len() as f32,
-            }
+        if count == 0 {
+            return self.ctx.context.field_size.width as f32 / 2.0;
+        }
+
+        match self.ctx.player.side {
+            Some(PlayerSide::Left) => max_x,
+            Some(PlayerSide::Right) => min_x,
+            None => sum / count as f32,
         }
     }
 
-    /// Find the own team's defensive line position
+    /// Find the own team's defensive line position — single-pass, zero allocation
     pub fn find_own_defensive_line(&self) -> f32 {
-        let defenders: Vec<f32> = self
+        let (sum, count) = self
             .ctx
             .players()
             .teammates()
             .defenders()
-            .map(|p| match self.ctx.player.side {
-                Some(PlayerSide::Left) => p.position.x,
-                Some(PlayerSide::Right) => p.position.x,
-                None => p.position.x,
-            })
-            .collect();
+            .map(|p| p.position.x)
+            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
-        if defenders.is_empty() {
+        if count == 0 {
             self.ctx.context.field_size.width as f32 / 2.0
         } else {
-            defenders.iter().sum::<f32>() / defenders.len() as f32
+            sum / count as f32
         }
     }
 
@@ -164,22 +146,24 @@ impl<'p> DefensiveOperationsImpl<'p> {
             })
     }
 
-    /// Check if should hold defensive line
+    /// Check if should hold defensive line — single-pass, zero allocation
     pub fn should_hold_defensive_line(&self) -> bool {
-        let ball_ops = self.ctx.ball();
+        let (sum, count) = self
+            .ctx
+            .players()
+            .teammates()
+            .defenders()
+            .map(|d| d.position.x)
+            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
-        let defenders: Vec<MatchPlayerLite> =
-            self.ctx.players().teammates().defenders().collect();
-
-        if defenders.is_empty() {
+        if count == 0 {
             return false;
         }
 
-        let avg_defender_x =
-            defenders.iter().map(|d| d.position.x).sum::<f32>() / defenders.len() as f32;
+        let avg_defender_x = sum / count as f32;
 
         (self.ctx.player.position.x - avg_defender_x).abs() < 5.0
-            && ball_ops.distance() > 200.0
+            && self.ctx.ball().distance() > 200.0
             && !self.ctx.team().is_control_ball()
     }
 
@@ -333,27 +317,20 @@ impl<'p> DefensiveOperationsImpl<'p> {
     }
 
     /// Find an unmarked dangerous opponent that this defender should cover
-    /// Returns the best opponent to mark that isn't already being engaged by a teammate
+    /// Returns the most dangerous opponent not already engaged by a teammate — zero allocation
     pub fn find_unmarked_opponent(&self, max_distance: f32) -> Option<MatchPlayerLite> {
         let own_goal = self.ctx.ball().direction_to_own_goal();
 
-        let mut candidates: Vec<(MatchPlayerLite, f32)> = self
-            .ctx
+        self.ctx
             .players()
             .opponents()
             .nearby(max_distance)
             .filter(|opp| !self.is_opponent_being_engaged(opp))
-            .map(|opp| {
-                let danger_score = self.calculate_opponent_danger_score(&opp, own_goal);
-                (opp, danger_score)
+            .max_by(|a, b| {
+                let score_a = self.calculate_opponent_danger_score(a, own_goal);
+                let score_b = self.calculate_opponent_danger_score(b, own_goal);
+                score_a.partial_cmp(&score_b).unwrap()
             })
-            .collect();
-
-        // Sort by danger score descending
-        candidates.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-
-        // Return the most dangerous unmarked opponent
-        candidates.into_iter().next().map(|(opp, _)| opp)
     }
 
     /// Calculate danger score for an opponent

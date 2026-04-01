@@ -334,10 +334,11 @@ impl DefenderHoldingLineState {
     /// Calculates the defensive line position based on team tactics and defender positions.
     /// Uses tactical defensive line height to bias the position forward or deep.
     fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
-        let defenders: Vec<MatchPlayerLite> = ctx.players().teammates().defenders().collect();
+        let (sum_x, count) = ctx.players().teammates().defenders()
+            .map(|p| p.position.x)
+            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
-        let avg_x: f32 = defenders.iter().map(|p| p.position.x).sum::<f32>()
-            / defenders.len() as f32;
+        let avg_x = if count > 0 { sum_x / count as f32 } else { ctx.player.position.x };
 
         // Apply tactical bias: high line pushes defenders forward, deep block pulls them back
         let line_height = ctx.team().tactics().defensive_line_height();
@@ -362,20 +363,17 @@ impl DefenderHoldingLineState {
     fn scan_for_dangerous_runs(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let own_goal_position = ctx.ball().direction_to_own_goal();
 
-        let dangerous_runners: Vec<MatchPlayerLite> = ctx
-            .players()
+        ctx.players()
             .opponents()
             .nearby(DANGEROUS_RUN_SCAN_DISTANCE)
             .filter(|opp| {
                 let velocity = opp.velocity(ctx);
                 let speed = velocity.norm();
 
-                // Must be moving at significant speed
                 if speed < DANGEROUS_RUN_SPEED {
                     return false;
                 }
 
-                // Check if running toward our goal
                 let to_goal = (own_goal_position - opp.position).normalize();
                 let velocity_dir = velocity.normalize();
                 let alignment = velocity_dir.dot(&to_goal);
@@ -384,27 +382,20 @@ impl DefenderHoldingLineState {
                     return false;
                 }
 
-                // Check if attacker is in dangerous position relative to this defender
                 let defender_x = ctx.player.position.x;
                 let is_ahead_or_close = if own_goal_position.x < ctx.context.field_size.width as f32 / 2.0 {
-                    opp.position.x < defender_x + 30.0 // Attacker is ahead or close
+                    opp.position.x < defender_x + 30.0
                 } else {
                     opp.position.x > defender_x - 30.0
                 };
 
                 alignment >= DANGEROUS_RUN_ANGLE && is_ahead_or_close
             })
-            .collect();
-
-        // Return the closest dangerous runner
-        dangerous_runners
-            .iter()
             .min_by(|a, b| {
                 let dist_a = a.distance(ctx);
                 let dist_b = b.distance(ctx);
                 dist_a.partial_cmp(&dist_b).unwrap()
             })
-            .copied()
     }
 
     /// Determines if the team should set up an offside trap.

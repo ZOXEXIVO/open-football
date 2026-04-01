@@ -299,7 +299,7 @@ impl GoalkeeperDistributingState {
 
             // Check if receiver is in space
             let nearby_opponents = ctx.tick_context
-                .distances
+                .grid
                 .opponents(teammate.id, 15.0)
                 .count();
 
@@ -368,7 +368,7 @@ impl GoalkeeperDistributingState {
     }
 
     pub fn calculate_pass_power(&self, teammate_id: u32, ctx: &StateProcessingContext) -> f64 {
-        let distance = ctx.tick_context.distances.get(ctx.player.id, teammate_id);
+        let distance = ctx.tick_context.grid.get(ctx.player.id, teammate_id);
 
         let pass_skill = ctx.player.skills.technical.passing;
 

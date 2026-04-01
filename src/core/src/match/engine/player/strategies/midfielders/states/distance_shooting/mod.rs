@@ -103,7 +103,7 @@ impl MidfielderDistanceShootingState {
         let has_clear_shot = ctx.player().has_clear_shot();
 
         let distance_threshold = 100.0; // ~50m for long shots
-        let heavily_marked = ctx.tick_context.distances
+        let heavily_marked = ctx.tick_context.grid
             .opponents(ctx.player.id, 10.0).count() >= 2;
 
         distance_to_goal <= distance_threshold

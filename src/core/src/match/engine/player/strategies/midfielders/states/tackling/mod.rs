@@ -56,7 +56,7 @@ impl StateProcessingHandler for MidfielderTacklingState {
         let mut opponents_with_ball = opponents.with_ball();
 
         if let Some(opponent) = opponents_with_ball.next() {
-            let opponent_distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
+            let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
                 if tackle_success {

@@ -69,7 +69,7 @@ impl StateProcessingHandler for MidfielderRunningState {
                         let dist = (t.position - ctx.player.position).magnitude();
                         dist > 40.0
                             && ctx.ball().passer_recency_penalty(t.id) > 0.3
-                            && ctx.tick_context.distances
+                            && ctx.tick_context.grid
                                 .opponents(t.id, 15.0)
                                 .count() < 2
                     })
@@ -730,7 +730,7 @@ impl MidfielderRunningState {
     fn calculate_pressing_intensity(&self, ctx: &StateProcessingContext) -> f32 {
         // Use pre-computed distance closure instead of scanning all players
         let mut weighted_pressure = 0.0f32;
-        for (_opp_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 50.0) {
+        for (_opp_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, 50.0) {
             if dist < 15.0 {
                 weighted_pressure += 0.5; // very close
             } else if dist < 30.0 {
@@ -754,7 +754,7 @@ impl MidfielderRunningState {
                 if !is_closer {
                     return false;
                 }
-                let has_space = ctx.tick_context.distances
+                let has_space = ctx.tick_context.grid
                     .opponents(teammate.id, 30.0)
                     .count() < 2;
                 if !has_space {
@@ -793,7 +793,7 @@ impl MidfielderRunningState {
         }
 
         // Passer must be in open space (no opponents within 50 units)
-        let opponents_near_passer = ctx.tick_context.distances
+        let opponents_near_passer = ctx.tick_context.grid
             .opponents(passer_id, 50.0)
             .count();
         if opponents_near_passer >= 1 {
@@ -850,7 +850,7 @@ impl MidfielderRunningState {
                 // Teammate should be near the vacated space or generally in that direction
                 t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
-                    && ctx.tick_context.distances
+                    && ctx.tick_context.grid
                         .opponents(t.id, 10.0)
                         .count() < 2
             })
@@ -985,7 +985,7 @@ impl MidfielderRunningState {
             }
 
             // Must have space (no opponent within 10 units)
-            let opponents_near = ctx.tick_context.distances
+            let opponents_near = ctx.tick_context.grid
                 .opponents(teammate.id, 10.0)
                 .count();
             if opponents_near >= 2 {
@@ -1055,9 +1055,9 @@ impl MidfielderRunningState {
         }
 
         // Count all nearby players (teammates + opponents) within 15 units
-        let nearby_teammates = ctx.tick_context.distances
+        let nearby_teammates = ctx.tick_context.grid
             .teammates(ctx.player.id, 0.0, 15.0).count();
-        let nearby_opponents = ctx.tick_context.distances
+        let nearby_opponents = ctx.tick_context.grid
             .opponents(ctx.player.id, 15.0).count();
         let total_nearby = nearby_teammates + nearby_opponents;
 
@@ -1112,7 +1112,7 @@ impl MidfielderRunningState {
 
             if !ctx.player().has_clear_pass(teammate.id) { continue; }
 
-            let opp_near = ctx.tick_context.distances.opponents(teammate.id, 12.0).count();
+            let opp_near = ctx.tick_context.grid.opponents(teammate.id, 12.0).count();
             if opp_near >= 2 { continue; }
 
             let group = teammate.tactical_positions.position_group();

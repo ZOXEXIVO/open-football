@@ -186,7 +186,7 @@ impl GoalkeeperStandingState {
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let opponent_distance = ctx
                 .tick_context
-                .distances
+                .grid
                 .get(ctx.player.id, opponent_with_ball.id);
 
             return opponent_distance < DANGER_ZONE_RADIUS;

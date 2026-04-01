@@ -206,9 +206,9 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Single count using pre-computed distances (teammates + opponents)
         let player_id = self.ctx.player.id;
-        let total_nearby = self.ctx.tick_context.distances
+        let total_nearby = self.ctx.tick_context.grid
             .teammates(player_id, 0.0, 15.0).count()
-            + self.ctx.tick_context.distances
+            + self.ctx.tick_context.grid
             .opponents(player_id, 15.0).count();
 
         // If 2 or more players nearby (congestion)
@@ -223,9 +223,9 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Single count using pre-computed distances (teammates + opponents)
         let player_id = self.ctx.player.id;
-        let total_nearby = self.ctx.tick_context.distances
+        let total_nearby = self.ctx.tick_context.grid
             .teammates(player_id, 0.0, CONGESTION_RADIUS).count()
-            + self.ctx.tick_context.distances
+            + self.ctx.tick_context.grid
             .opponents(player_id, CONGESTION_RADIUS).count();
 
         // If 6 or more players clustered together

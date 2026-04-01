@@ -89,15 +89,18 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
     pub fn nearby_range(&'b self, min_distance: f32, max_distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx
             .tick_context
-            .distances
-            .teammates(self.ctx.player.id, min_distance, max_distance)
-            .filter_map(|(pid, _)| {
-                let player = self.ctx.context.players.by_id(pid)?;
-                Some(MatchPlayerLite {
-                    id: pid,
-                    position: self.ctx.tick_context.positions.players.position(pid),
-                    tactical_positions: player.tactical_position.current_position,
-                })
+            .grid
+            .teammates_full(
+                self.ctx.player.id,
+                self.ctx.player.team_id,
+                self.ctx.player.position,
+                min_distance,
+                max_distance,
+            )
+            .map(|(gp, _dist)| MatchPlayerLite {
+                id: gp.id,
+                position: gp.position,
+                tactical_positions: gp.tactical_position,
             })
     }
 
@@ -119,7 +122,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
 
         self.ctx
             .tick_context
-            .distances
+            .grid
             .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
     }
 
@@ -128,7 +131,7 @@ impl<'b> PlayerTeammatesOperationsImpl<'b> {
 
         self.ctx
             .tick_context
-            .distances
+            .grid
             .teammates(self.ctx.player.id, MIN_DISTANCE, max_distance)
             .any(|_| true)
     }

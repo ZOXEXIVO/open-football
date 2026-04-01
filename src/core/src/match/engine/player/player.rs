@@ -268,11 +268,11 @@ impl MatchPlayerLite {
     }
 
     pub fn velocity(&self, ctx: &StateProcessingContext<'_>) -> Vector3<f32> {
-        ctx.tick_context.positions.players.velocity(ctx.player.id)
+        ctx.tick_context.positions.players.velocity(self.id)
     }
 
     pub fn distance(&self, ctx: &StateProcessingContext<'_>) -> f32 {
-        ctx.tick_context.distances.get(self.id, ctx.player.id)
+        ctx.tick_context.grid.get(self.id, ctx.player.id)
     }
 }
 

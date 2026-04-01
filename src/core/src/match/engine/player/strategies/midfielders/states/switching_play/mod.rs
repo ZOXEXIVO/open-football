@@ -109,7 +109,7 @@ impl MidfielderSwitchingPlayState {
     ) -> f32 {
         // Calculate the amount of free space around a player
         let space_radius = 10.0; // Adjust the radius as needed
-        let num_opponents_nearby = ctx.tick_context.distances
+        let num_opponents_nearby = ctx.tick_context.grid
             .opponents(player.id, space_radius).count();
 
         space_radius - num_opponents_nearby as f32

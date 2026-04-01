@@ -186,7 +186,7 @@ impl PassEvaluator {
         let mut closest_distance = PRESSURE_RADIUS;
         let mut num_opponents: f32 = 0.0;
 
-        for (_, dist) in ctx.tick_context.distances.opponents(passer.id, PRESSURE_RADIUS) {
+        for (_, dist) in ctx.tick_context.grid.opponents(passer.id, PRESSURE_RADIUS) {
             num_opponents += 1.0;
             if dist < closest_distance {
                 closest_distance = dist;
@@ -227,7 +227,7 @@ impl PassEvaluator {
         let mut close_opponents: usize = 0;
         let mut medium_opponents: usize = 0;
 
-        for (_, dist) in ctx.tick_context.distances.opponents(receiver.id, MEDIUM_RADIUS) {
+        for (_, dist) in ctx.tick_context.grid.opponents(receiver.id, MEDIUM_RADIUS) {
             if dist < VERY_CLOSE_RADIUS {
                 very_close_opponents += 1;
             } else if dist < CLOSE_RADIUS {
@@ -656,13 +656,13 @@ impl PassEvaluator {
             // CONGESTION PENALTY: Heavily penalize passing into crowded areas.
             // Opponents near the receiver are weighted more heavily than teammates,
             // and close opponents are weighted much more than distant ones.
-            let nearby_teammates_count = ctx.tick_context.distances
+            let nearby_teammates_count = ctx.tick_context.grid
                 .teammates(teammate.id, 0.0, 50.0)
                 .count();
-            let close_opponents_count = ctx.tick_context.distances
+            let close_opponents_count = ctx.tick_context.grid
                 .opponents(teammate.id, 30.0)
                 .count();
-            let medium_opponents_count = ctx.tick_context.distances
+            let medium_opponents_count = ctx.tick_context.grid
                 .opponents(teammate.id, 60.0)
                 .count() - close_opponents_count;
 

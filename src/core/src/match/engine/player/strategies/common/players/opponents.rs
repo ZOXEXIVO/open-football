@@ -27,29 +27,31 @@ impl<'b> PlayerOpponentsOperationsImpl<'b> {
     pub fn nearby(&self, distance: f32) -> impl Iterator<Item = MatchPlayerLite> + 'b {
         self.ctx
             .tick_context
-            .distances
-            .opponents(self.ctx.player.id, distance)
-            .filter_map(|(pid, _)| {
-                let player = self.ctx.context.players.by_id(pid)?;
-                Some(MatchPlayerLite {
-                    id: pid,
-                    position: self.ctx.tick_context.positions.players.position(pid),
-                    tactical_positions: player.tactical_position.current_position,
-                })
+            .grid
+            .opponents_full(
+                self.ctx.player.id,
+                self.ctx.player.team_id,
+                self.ctx.player.position,
+                distance,
+            )
+            .map(|(gp, _dist)| MatchPlayerLite {
+                id: gp.id,
+                position: gp.position,
+                tactical_positions: gp.tactical_position,
             })
     }
 
     pub fn nearby_raw(&self, distance: f32) -> impl Iterator<Item = (u32, f32)> + 'b {
         self.ctx
             .tick_context
-            .distances
+            .grid
             .opponents(self.ctx.player.id, distance)
     }
 
     pub fn exists(&self, distance: f32) -> bool {
         self.ctx
             .tick_context
-            .distances
+            .grid
             .opponents(self.ctx.player.id, distance)
             .any(|_| true)
     }

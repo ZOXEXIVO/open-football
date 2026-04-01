@@ -30,7 +30,7 @@ impl StateProcessingHandler for DefenderPushingUpState {
             if let Some(opponent) = ctx.players().opponents().nearby(TACKLING_DISTANCE_THRESHOLD).next() {
                 let distance_to_opponent = ctx
                     .tick_context
-                    .distances
+                    .grid
                     .get(opponent.id, ctx.player.id);
 
                 if distance_to_opponent <= TACKLING_DISTANCE_THRESHOLD {

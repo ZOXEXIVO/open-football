@@ -92,28 +92,8 @@ Experiment with running it on 256 CPU cores
 /src/database - Simulation data source logic
 /src/web - HTTP server for running API with self contained Askama-templates
 
-/.dev/graphics - Dev utils for instant match development (src/core/src/match)
 /.dev/match - Dev utils for must result fast checking and processing duration
 
-Match dev looks like (cross-platform)
-
-![alt text](.docs/images/match_dev.png "Match dev tools")
-
-
-
----
-
-#### How to run?
-
-1) Download Windows/Linux binary and test it
-2) Local run
-
-```console
-// run backend
-cargo run
-...
-open chrome at http://localhost:18000
-```
 
 ### License
 

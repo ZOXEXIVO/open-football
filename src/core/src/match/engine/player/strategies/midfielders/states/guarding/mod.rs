@@ -225,7 +225,7 @@ impl MidfielderGuardingState {
 
             // Factor 4: Unmarked bonus — no defender or midfielder covering this attacker
             // From the opponent's POV, our teammates are their "opponents"
-            let has_nearby_cover = ctx.tick_context.distances
+            let has_nearby_cover = ctx.tick_context.grid
                 .opponents(opponent.id, 15.0)
                 .any(|(t_id, _)| t_id != ctx.player.id);
 

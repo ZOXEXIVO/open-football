@@ -1,8 +1,7 @@
 use crate::r#match::ball::Ball;
-use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerDistanceClosure, PlayerSide, PositionType, POSITION_POSITIONING};
+use crate::r#match::{FieldSquad, MatchFieldSize, MatchPlayer, MatchSquad, PlayerSide, PositionType, POSITION_POSITIONING};
 use crate::Tactics;
 use nalgebra::Vector3;
-use std::rc::Rc;
 
 pub struct MatchField {
     pub size: MatchFieldSize,
@@ -18,9 +17,6 @@ pub struct MatchField {
 
     pub right_side_players: Option<FieldSquad>,
     pub right_team_tactics: Tactics,
-
-    pub cached_distances: Rc<PlayerDistanceClosure>,
-    pub distance_tick: u32,
 }
 
 impl MatchField {
@@ -42,7 +38,7 @@ impl MatchField {
         let (players_on_field, substitutes) =
             setup_player_on_field(left_team_squad, right_team_squad);
 
-        let mut field = MatchField {
+        let field = MatchField {
             size: MatchFieldSize::new(width, height),
             ball: Ball::with_coord(width as f32, height as f32),
             players: players_on_field,
@@ -53,38 +49,9 @@ impl MatchField {
             left_team_tactics: left_tactics,
             right_side_players: Some(away_squad),
             right_team_tactics: right_tactics,
-            cached_distances: Rc::new(PlayerDistanceClosure::new()),
-            distance_tick: 0,
         };
 
-        field.recalculate_distances();
-
         field
-    }
-
-    fn recalculate_distances(&mut self) {
-        // Try to reuse existing buffer if we have sole ownership
-        let mut reused = false;
-        if Rc::strong_count(&self.cached_distances) == 1 {
-            if let Some(distances) = Rc::get_mut(&mut self.cached_distances) {
-                // Temporarily take the players to avoid borrow conflict
-                let players = std::mem::take(&mut self.players);
-                distances.update_from_players(&players);
-                self.players = players;
-                reused = true;
-            }
-        }
-        if !reused {
-            self.cached_distances = Rc::new(PlayerDistanceClosure::from(&*self));
-        }
-    }
-
-    /// Recalculate distance closure every N ticks (amortized N² cost)
-    pub fn update_distances(&mut self, interval: u32) {
-        self.distance_tick += 1;
-        if self.distance_tick % interval == 0 {
-            self.recalculate_distances();
-        }
     }
 
     pub fn reset_players_positions(&mut self) {
@@ -95,8 +62,6 @@ impl MatchField {
             p.set_default_state();
         });
 
-        // Force distance recalculation after position reset (e.g., after a goal)
-        self.recalculate_distances();
     }
 
     pub fn swap_squads(&mut self) {
@@ -163,9 +128,6 @@ impl MatchField {
 
             // Clear any ball references to the substituted-out player
             self.ball.clear_player_reference(player_out_id);
-
-            // Force distance recalculation after substitution (new player IDs/positions)
-            self.recalculate_distances();
 
             true
         } else {

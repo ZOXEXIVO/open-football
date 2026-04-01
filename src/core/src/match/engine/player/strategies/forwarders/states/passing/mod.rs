@@ -443,7 +443,7 @@ impl ForwardPassingState {
         let mut tight_markers = 0;
         let mut markers = 0;
 
-        for (_opp_id, dist) in ctx.tick_context.distances.opponents(teammate.id, MARKING_DISTANCE) {
+        for (_opp_id, dist) in ctx.tick_context.grid.opponents(teammate.id, MARKING_DISTANCE) {
             markers += 1;
             if dist <= TIGHT_MARKING_DISTANCE {
                 tight_markers += 1;
@@ -489,7 +489,7 @@ impl ForwardPassingState {
         // Count all nearby players (opponents and teammates) - both contribute to congestion
         let num_opponents_nearby = ctx
             .tick_context
-            .distances
+            .grid
             .opponents(player.id, space_radius)
             .count();
 
@@ -585,7 +585,7 @@ impl ForwardPassingState {
     ) -> f32 {
         let nearby_opponents = ctx
             .tick_context
-            .distances
+            .grid
             .opponents(teammate.id, 20.0)
             .count();
 

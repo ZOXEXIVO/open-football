@@ -1,6 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
-use crate::r#match::{ConditionContext, MatchPlayer, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use rand::RngExt;
 
@@ -111,62 +111,57 @@ impl DefenderOffsideTrapState {
         // - Teams that play with high attacking lines
         // - Teams without exceptional passing/vision to break the trap
 
-        let opponent_attackers: Vec<MatchPlayerLite> = ctx
+        let player_ops = ctx.player();
+        let own_goal = ctx.ball().direction_to_own_goal();
+
+        let (total_speed, total_vision, count) = ctx
             .players()
             .opponents()
             .all()
             .filter(|p| {
-                // Filter for attackers (those positioned in attacking areas)
-                let ball_ops = ctx.ball();
-                let distance_to_our_goal = (p.position - ball_ops.direction_to_own_goal()).magnitude();
-                distance_to_our_goal > 200.0 // Attackers are usually far from our goal
+                let distance_to_our_goal = (p.position - own_goal).magnitude();
+                distance_to_our_goal > 200.0
             })
-            .collect();
+            .fold((0.0f32, 0.0f32, 0u32), |(sp, vi, c), p| {
+                (
+                    sp + player_ops.skills(p.id).physical.pace,
+                    vi + player_ops.skills(p.id).mental.vision,
+                    c + 1,
+                )
+            });
 
-        if opponent_attackers.is_empty() {
+        if count == 0 {
             return true; // No attackers present, trap is safe
         }
 
-        // Calculate average opponent attacker speed
-        let player_ops = ctx.player();
-        let total_speed: f32 = opponent_attackers
-            .iter()
-            .map(|p| player_ops.skills(p.id).physical.pace)
-            .sum();
-        let avg_opponent_speed = total_speed / opponent_attackers.len() as f32;
+        let avg_opponent_speed = total_speed / count as f32;
+        let avg_opponent_vision = total_vision / count as f32;
 
-        // Calculate average opponent passing/vision
-        let total_vision: f32 = opponent_attackers
-            .iter()
-            .map(|p| player_ops.skills(p.id).mental.vision)
-            .sum();
-        let avg_opponent_vision = total_vision / opponent_attackers.len() as f32;
-
-        // Trap is suitable if:
-        // 1. Opponents are fast (70+) - they rely on pace, not passing
-        // 2. OR opponents have low vision (<60) - can't break trap with passes
-        // 3. AND there are not too many attackers (overwhelming the defense)
         let opponents_are_fast = avg_opponent_speed >= 70.0;
         let opponents_lack_vision = avg_opponent_vision < 60.0;
-        let reasonable_attacker_count = opponent_attackers.len() <= 3;
+        let reasonable_attacker_count = count <= 3;
 
         (opponents_are_fast || opponents_lack_vision) && reasonable_attacker_count
     }
 
     fn evaluate_defensive_line_cohesion(&self, ctx: &StateProcessingContext) -> bool {
-        // Evaluate the defensive line's cohesion and communication
-        let defenders: Vec<&MatchPlayer> = ctx.players().teammates().defenders().filter_map(|defender| {
-            ctx.context.players.by_id(defender.id)
-        }).collect();
+        let (total_exp, total_comm, count) = ctx.players().teammates().defenders()
+            .filter_map(|defender| ctx.context.players.by_id(defender.id))
+            .fold((0u32, 0u32, 0u32), |(e, c, n), p| {
+                (
+                    e + p.player_attributes.potential_ability as u32,
+                    c + p.skills.mental.teamwork as u32,
+                    n + 1,
+                )
+            });
 
-        // Calculate the average experience and communication attributes of the defenders
-        let total_experience = defenders.iter().map(|p| p.player_attributes.potential_ability as u32).sum::<u32>();
-        let total_communication = defenders.iter().map(|p| p.skills.mental.teamwork as u32).sum::<u32>();
-        let avg_experience = total_experience as f32 / defenders.len() as f32;
-        let avg_communication = total_communication as f32 / defenders.len() as f32;
+        if count == 0 {
+            return false;
+        }
 
-        // Check if the average experience and communication exceed certain thresholds
-        // Adjust the thresholds based on your specific game balance
+        let avg_experience = total_exp as f32 / count as f32;
+        let avg_communication = total_comm as f32 / count as f32;
+
         avg_experience >= 70.0 && avg_communication >= 75.0
     }
 
@@ -182,49 +177,33 @@ impl DefenderOffsideTrapState {
     }
 
     fn attempt_offside_trap(&self, ctx: &StateProcessingContext) -> bool {
-        // Get the positions of opponents and the defensive line
-        let defensive_line_position = self.calculate_defensive_line_position(ctx);
-        let opponent_positions: Vec<f32> = ctx
-            .players()
-            .opponents()
-            .all()
-            .map(|p| p.position.x)
-            .collect();
-
-        // Calculate the success probability based on teamwork and concentration
         let teamwork = ctx.player.skills.mental.teamwork as f32 / 20.0;
         let concentration = ctx.player.skills.mental.concentration as f32 / 20.0;
         let mut rng = rand::rng();
         let success_probability = (teamwork + concentration) / 2.0;
 
-        // Determine the offside trap outcome
-        let offside_trap_successful = rng.random::<f32>() < success_probability;
-
-        if offside_trap_successful {
-            // Check if any opponent is caught offside
-            let caught_offside = opponent_positions.iter().any(|&x| {
-                if ctx.player.side == Some(PlayerSide::Left) {
-                    x > defensive_line_position
-                } else {
-                    x < defensive_line_position
-                }
-            });
-
-            caught_offside
-        } else {
-            false
+        if rng.random::<f32>() >= success_probability {
+            return false;
         }
+
+        let defensive_line_position = self.calculate_defensive_line_position(ctx);
+        let is_left = ctx.player.side == Some(PlayerSide::Left);
+
+        ctx.players()
+            .opponents()
+            .all()
+            .any(|p| {
+                if is_left { p.position.x > defensive_line_position }
+                else { p.position.x < defensive_line_position }
+            })
     }
 
     fn calculate_defensive_line_position(&self, ctx: &StateProcessingContext) -> f32 {
-        let defenders: Vec<MatchPlayerLite> = ctx
-            .players()
-            .teammates()
-            .defenders()
-            .collect();
+        let (sum_x, count) = ctx.players().teammates().defenders()
+            .map(|p| p.position.x)
+            .fold((0.0f32, 0u32), |(s, c), x| (s + x, c + 1));
 
-        let sum_x: f32 = defenders.iter().map(|p| p.position.x).sum();
-        let avg_x = sum_x / defenders.len() as f32;
+        let avg_x = if count > 0 { sum_x / count as f32 } else { ctx.player.position.x };
 
         // Adjust the defensive line position based on the team's tactics
         // You can modify this calculation based on your specific game mechanics

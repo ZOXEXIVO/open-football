@@ -1191,7 +1191,7 @@ impl ForwardCreatingSpaceState {
     fn ball_holder_can_make_forward_pass(&self, ctx: &StateProcessingContext) -> bool {
         if let Some(holder) = self.get_ball_holder(ctx) {
             // Check if holder is under pressure
-            let holder_under_pressure = ctx.tick_context.distances
+            let holder_under_pressure = ctx.tick_context.grid
                 .opponents(holder.id, 8.0).count() > 0;
 
             !holder_under_pressure
@@ -1260,6 +1260,6 @@ impl ForwardCreatingSpaceState {
     /// Check if ball holder is under defensive pressure
     fn is_ball_holder_under_pressure(&self, ctx: &StateProcessingContext, holder_id: u32) -> bool {
         // Use distance closure instead of scanning all opponents
-        ctx.tick_context.distances.opponents(holder_id, 10.0).next().is_some()
+        ctx.tick_context.grid.opponents(holder_id, 10.0).next().is_some()
     }
 }

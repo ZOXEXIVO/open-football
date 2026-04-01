@@ -186,7 +186,7 @@ impl MidfielderPassingState {
         let mut very_close_opponents = 0;
         let mut close_opponents = 0;
         let mut medium_opponents = 0;
-        for (_id, dist) in ctx.tick_context.distances.opponents(teammate.id, 15.0) {
+        for (_id, dist) in ctx.tick_context.grid.opponents(teammate.id, 15.0) {
             if dist < 5.0 {
                 very_close_opponents += 1;
             } else if dist < 10.0 {
@@ -310,7 +310,7 @@ impl MidfielderPassingState {
         let mut marker_count = 0;
         let mut single_marker_id = 0u32;
         let mut single_marker_dist = 0.0f32;
-        for (opp_id, dist) in ctx.tick_context.distances.opponents(teammate.id, MARKING_DISTANCE) {
+        for (opp_id, dist) in ctx.tick_context.grid.opponents(teammate.id, MARKING_DISTANCE) {
             marker_count += 1;
             single_marker_id = opp_id;
             single_marker_dist = dist;
@@ -351,7 +351,7 @@ impl MidfielderPassingState {
             return under_pressure || has_good_vision;
         }
 
-        let teammate_will_be_pressured = ctx.tick_context.distances
+        let teammate_will_be_pressured = ctx.tick_context.grid
             .opponents(teammate.id, 15.0)
             .any(|(opp_id, _dist)| {
                 let opp_pos = ctx.tick_context.positions.players.position(opp_id);

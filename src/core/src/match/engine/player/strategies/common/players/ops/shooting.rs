@@ -107,7 +107,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         }
 
         // Single scan: count opponents within 8 units (reused below)
-        let opponents_within_8 = self.ctx.tick_context.distances
+        let opponents_within_8 = self.ctx.tick_context.grid
             .opponents(self.ctx.player.id, 8.0).count();
 
         // Check if heavily marked — prefer pass if 2+ opponents very close
@@ -222,7 +222,7 @@ impl<'p> ShootingOperationsImpl<'p> {
         // Single scan at max distance, bucket by distance
         let mut close_opponents = 0;
         let mut medium_opponents = 0;
-        for (_id, dist) in self.ctx.tick_context.distances.opponents(self.ctx.player.id, 10.0) {
+        for (_id, dist) in self.ctx.tick_context.grid.opponents(self.ctx.player.id, 10.0) {
             if dist <= 5.0 {
                 close_opponents += 1;
             }

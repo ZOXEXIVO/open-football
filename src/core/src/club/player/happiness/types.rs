@@ -43,7 +43,7 @@ pub enum HappinessEventType {
     MatchDropped,
     // Contract & transfers
     ContractOffer,
-    WageIncrease,
+    ContractRenewal,
     SquadStatusChange,
     LackOfPlayingTime,
     LoanListingAccepted,

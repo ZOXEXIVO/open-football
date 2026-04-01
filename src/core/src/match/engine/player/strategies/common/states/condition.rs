@@ -38,27 +38,28 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         let fitness_factor = 1.3 - (natural_fitness / 20.0) * 0.6;
 
         // Calculate velocity-based fatigue (75% of total effect)
-        let velocity_magnitude = ctx.player.velocity.norm();
+        // Use squared values to avoid sqrt — compare ratio² against threshold²
+        let velocity_sq = ctx.player.velocity.norm_squared();
         let max_speed = ctx.player.skills.max_speed_with_condition(
             ctx.player.player_attributes.condition,
         );
+        let max_speed_sq = max_speed * max_speed;
 
-        // Use ratio of current speed to max speed for fatigue classification
-        // This ensures slow players still get tired when running at their max
-        let intensity_ratio = if max_speed > 0.0 {
-            (velocity_magnitude / max_speed).clamp(0.0, 1.0)
+        // intensity_ratio_sq = (speed / max_speed)²
+        let intensity_ratio_sq = if max_speed_sq > 0.0 {
+            (velocity_sq / max_speed_sq).clamp(0.0, 1.0)
         } else {
             0.0
         };
 
-        let velocity_fatigue = if intensity_ratio < 0.05 {
-            // Nearly stationary - recovery
-            -4.0 * 1.5 // Negative = recovery, boosted for visibility
-        } else if intensity_ratio < 0.3 {
+        // Compare against squared thresholds: 0.05² = 0.0025, 0.3² = 0.09, 0.6² = 0.36, 0.85² = 0.7225
+        let velocity_fatigue = if intensity_ratio_sq < 0.0025 {
+            -4.0 * 1.5 // Nearly stationary - recovery
+        } else if intensity_ratio_sq < 0.09 {
             -2.0 // Walking slowly - light recovery
-        } else if intensity_ratio < 0.6 {
+        } else if intensity_ratio_sq < 0.36 {
             3.0 // Jogging
-        } else if intensity_ratio < 0.85 {
+        } else if intensity_ratio_sq < 0.7225 {
             6.0 // Running
         } else {
             // Sprinting - varies by role
@@ -105,9 +106,9 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
                 (ctx.player.player_attributes.condition - condition_change).clamp(MATCH_CONDITION_FLOOR, MAX_CONDITION);
 
             trace!(
-                "Condition: player={}, vel={:.3}, change={}, acc={:.3}, condition: {} -> {}",
+                "Condition: player={}, vel_sq={:.3}, change={}, acc={:.3}, condition: {} -> {}",
                 ctx.player.id,
-                velocity_magnitude,
+                velocity_sq,
                 condition_change,
                 ctx.player.fatigue_accumulator,
                 old_condition,

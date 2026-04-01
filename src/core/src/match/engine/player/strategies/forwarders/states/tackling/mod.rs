@@ -35,7 +35,7 @@ impl StateProcessingHandler for ForwardTacklingState {
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
-            let opponent_distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
+            let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
 
             // Immediate tackle if very close
             if opponent_distance <= CLOSE_TACKLE_DISTANCE {
@@ -129,7 +129,7 @@ impl StateProcessingHandler for ForwardTacklingState {
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
         if let Some(opponent) = opponents_with_ball.first() {
-            let opponent_distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
+            let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
 
             // If very close, move more carefully to avoid overrunning
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
@@ -238,7 +238,7 @@ impl ForwardTacklingState {
         let opponent_composure = opponent_skills.mental.composure / 20.0;
 
         // Calculate relative positioning advantage
-        let distance = ctx.tick_context.distances.get(ctx.player.id, opponent.id);
+        let distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
         let distance_factor = (TACKLE_DISTANCE_THRESHOLD - distance) / TACKLE_DISTANCE_THRESHOLD;
         let distance_factor = distance_factor.clamp(0.0, 1.0);
 

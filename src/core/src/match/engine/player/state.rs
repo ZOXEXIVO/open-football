@@ -19,6 +19,21 @@ pub enum PlayerState {
     Forward(ForwardState),
 }
 
+impl PlayerState {
+    /// Cheap integer ID for fast dedup — avoids `to_string()` allocation.
+    /// Each (outer variant, inner variant) pair maps to a unique u16.
+    #[inline]
+    pub fn compact_id(&self) -> u16 {
+        match self {
+            PlayerState::Injured => 0,
+            PlayerState::Goalkeeper(s) => 100 + (*s as u16),
+            PlayerState::Defender(s) => 200 + (*s as u16),
+            PlayerState::Midfielder(s) => 300 + (*s as u16),
+            PlayerState::Forward(s) => 400 + (*s as u16),
+        }
+    }
+}
+
 impl Display for PlayerState {
     fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
         match self {

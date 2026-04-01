@@ -202,7 +202,7 @@ impl<'p> PlayerOperationsImpl<'p> {
     }
 
     pub fn pass_teammate_power(&self, teammate_id: u32) -> f32 {
-        let distance = self.ctx.tick_context.distances.get(self.ctx.player.id, teammate_id);
+        let distance = self.ctx.tick_context.grid.get(self.ctx.player.id, teammate_id);
 
         let skills = &self.ctx.player.skills;
 
@@ -243,7 +243,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let distance = self
             .ctx
             .tick_context
-            .distances
+            .grid
             .get(self.ctx.player.id, teammate_id);
 
         let kick_skill = self.ctx.player.skills.technical.free_kicks / 20.0;
@@ -261,7 +261,7 @@ impl<'p> PlayerOperationsImpl<'p> {
         let distance = self
             .ctx
             .tick_context
-            .distances
+            .grid
             .get(self.ctx.player.id, teammate_id);
 
         let throw_skill = self.ctx.player.skills.technical.long_throws / 20.0;
@@ -316,7 +316,7 @@ impl<'p> PlayerOperationsImpl<'p> {
     pub fn distance_to_player(&self, player_id: u32) -> f32 {
         self.ctx
             .tick_context
-            .distances
+            .grid
             .get(self.ctx.player.id, player_id)
     }
 

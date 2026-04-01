@@ -237,11 +237,14 @@ impl DefenderCoveringState {
             0.0,
         );
 
+        // Cache own goal position (expensive to recompute)
+        let own_goal = ctx.ball().direction_to_own_goal();
+
         // Get direction to own goal and normalize it
-        let ball_to_goal = (ctx.ball().direction_to_own_goal() - ball_position).normalize();
+        let ball_to_goal = (own_goal - ball_position).normalize();
 
         // Calculate base covering position with better distance scaling
-        let covering_distance = (ball_position - ctx.ball().direction_to_own_goal()).magnitude() * 0.35;
+        let covering_distance = (ball_position - own_goal).magnitude() * 0.35;
         let covering_position = ball_position + ball_to_goal * covering_distance.min(field_width * 0.3);
 
         // Apply exponential moving average for position smoothing
@@ -311,64 +314,51 @@ impl DefenderCoveringState {
             .nearby(THREAT_SCAN_DISTANCE)
             .any(|opp| {
                 let velocity = opp.velocity(ctx);
-                let speed = velocity.norm();
+                let speed_sq = velocity.norm_squared();
 
-                if speed < DANGEROUS_RUN_SPEED {
+                if speed_sq < DANGEROUS_RUN_SPEED * DANGEROUS_RUN_SPEED {
                     return false;
                 }
 
+                let speed = speed_sq.sqrt();
                 let to_goal = (own_goal_position - opp.position).normalize();
-                let velocity_dir = velocity.normalize();
-                let alignment = velocity_dir.dot(&to_goal);
+                let velocity_dir = velocity * (1.0 / speed);
 
-                alignment >= DANGEROUS_RUN_ANGLE
+                velocity_dir.dot(&to_goal) >= DANGEROUS_RUN_ANGLE
             })
     }
 
-    /// Find dangerous space that needs to be covered (e.g., unmarked attackers in dangerous positions)
+    /// Find dangerous space that needs to be covered — zero allocation
     fn find_dangerous_space(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let own_goal_position = ctx.ball().direction_to_own_goal();
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let ball_distance_to_goal = (ball_pos - own_goal_position).magnitude();
 
-        // Find opponents making dangerous runs or in dangerous positions
-        let dangerous_opponents: Vec<_> = ctx
+        // Find the most dangerous opponent closest to goal — no collect needed
+        let most_dangerous = ctx
             .players()
             .opponents()
             .nearby(THREAT_SCAN_DISTANCE)
             .filter(|opp| {
                 let velocity = opp.velocity(ctx);
-                let speed = velocity.norm();
+                let speed_sq = velocity.norm_squared();
 
-                // Either running toward goal OR in a dangerous static position
-                if speed >= DANGEROUS_RUN_SPEED {
+                if speed_sq >= DANGEROUS_RUN_SPEED * DANGEROUS_RUN_SPEED {
+                    let speed = speed_sq.sqrt();
                     let to_goal = (own_goal_position - opp.position).normalize();
-                    let velocity_dir = velocity.normalize();
+                    let velocity_dir = velocity * (1.0 / speed);
                     velocity_dir.dot(&to_goal) >= DANGEROUS_RUN_ANGLE
                 } else {
-                    // Check if in dangerous static position (between ball and goal)
-                    let ball_pos = ctx.tick_context.positions.ball.position;
                     let distance_to_goal = (opp.position - own_goal_position).magnitude();
-                    let ball_distance_to_goal = (ball_pos - own_goal_position).magnitude();
-
-                    // Opponent is closer to goal than ball and within threatening distance
                     distance_to_goal < ball_distance_to_goal && distance_to_goal < 300.0
                 }
             })
-            .collect();
-
-        if dangerous_opponents.is_empty() {
-            return None;
-        }
-
-        // Find the most dangerous opponent's position
-        let most_dangerous = dangerous_opponents
-            .iter()
             .min_by(|a, b| {
-                let dist_a = (a.position - own_goal_position).magnitude();
-                let dist_b = (b.position - own_goal_position).magnitude();
+                let dist_a = (a.position - own_goal_position).norm_squared();
+                let dist_b = (b.position - own_goal_position).norm_squared();
                 dist_a.partial_cmp(&dist_b).unwrap()
             })?;
 
-        // Calculate position between the dangerous opponent and our goal
         let direction_to_goal = (own_goal_position - most_dangerous.position).normalize();
         Some(most_dangerous.position + direction_to_goal * 15.0)
     }

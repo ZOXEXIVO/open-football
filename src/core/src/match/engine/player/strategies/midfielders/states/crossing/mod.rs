@@ -118,7 +118,7 @@ impl MidfielderCrossingState {
             };
 
             // Penalize targets with tight marking
-            let close_opponents = ctx.tick_context.distances
+            let close_opponents = ctx.tick_context.grid
                 .opponents(teammate.id, 8.0)
                 .count();
             let marking_penalty = match close_opponents {

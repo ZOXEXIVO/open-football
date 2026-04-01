@@ -1035,7 +1035,7 @@ impl ForwardRunningState {
                 // Teammate must be significantly closer (at least 40% closer)
                 let is_much_closer = teammate_distance < own_distance * 0.6;
                 let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
-                let not_heavily_marked = ctx.tick_context.distances
+                let not_heavily_marked = ctx.tick_context.grid
                     .opponents(teammate.id, 8.0).count() < 2;
 
                 is_much_closer && has_clear_pass && not_heavily_marked
@@ -1107,7 +1107,7 @@ impl ForwardRunningState {
             let in_attacking_position = teammate_distance < current_distance * 1.1;
 
             // Check if teammate is in free space (use pre-computed distances)
-            let in_free_space = ctx.tick_context.distances
+            let in_free_space = ctx.tick_context.grid
                 .opponents(teammate.id, 12.0).count() < 2;
 
             // Check if teammate is making a forward run
@@ -1131,7 +1131,7 @@ impl ForwardRunningState {
     ) -> bool {
         teammates.iter().any(|teammate| {
             let has_clear_lane = ctx.player().has_clear_pass(teammate.id);
-            let has_space = ctx.tick_context.distances
+            let has_space = ctx.tick_context.grid
                 .opponents(teammate.id, 10.0).count() < 2;
 
             // Prefer forward passes (side-aware)
@@ -1153,7 +1153,7 @@ impl ForwardRunningState {
         // Single scan at max distance, bucket by distance
         let mut markers = 0;
         let mut very_close = 0;
-        for (_id, dist) in ctx.tick_context.distances.opponents(ctx.player.id, 8.0) {
+        for (_id, dist) in ctx.tick_context.grid.opponents(ctx.player.id, 8.0) {
             markers += 1;
             if dist <= 3.0 {
                 very_close += 1;
@@ -1340,7 +1340,7 @@ impl ForwardRunningState {
         }
 
         // Passer must be in open space (no opponents within 50 units)
-        let opponents_near_passer = ctx.tick_context.distances
+        let opponents_near_passer = ctx.tick_context.grid
             .opponents(passer_id, 50.0).count();
         if opponents_near_passer >= 1 {
             return None;
@@ -1392,7 +1392,7 @@ impl ForwardRunningState {
                 // Teammate must be further from opponent goal (behind us)
                 let is_behind = t_goal_dist > our_goal_dist * 1.1;
                 // Teammate must be in space
-                let in_space = ctx.tick_context.distances
+                let in_space = ctx.tick_context.grid
                     .opponents(t.id, 10.0).count() < 2;
                 // Prefer midfielders who can carry forward
                 let is_midfielder_or_attacker = t.tactical_positions.is_midfielder()
@@ -1449,7 +1449,7 @@ impl ForwardRunningState {
                     && t_dist_to_vacated < 60.0
                     && ctx.player().has_clear_pass(t.id)
                     && ctx.ball().passer_recency_penalty(t.id) > 0.3
-                    && ctx.tick_context.distances
+                    && ctx.tick_context.grid
                         .opponents(t.id, 10.0).count() < 2
             })
             .min_by(|a, b| {
@@ -1478,9 +1478,9 @@ impl ForwardRunningState {
 
         // Count all nearby players (teammates + opponents) within 15 units using pre-computed distances
         let player_id = ctx.player.id;
-        let total_nearby = ctx.tick_context.distances
+        let total_nearby = ctx.tick_context.grid
             .teammates(player_id, 0.0, 15.0).count()
-            + ctx.tick_context.distances
+            + ctx.tick_context.grid
             .opponents(player_id, 15.0).count();
 
         // If 3 or more players nearby (congestion), need to clear

@@ -920,9 +920,9 @@ impl MidfielderAttackSupportingState {
     fn calculate_crowd_factor(&self, ctx: &StateProcessingContext, _position: Vector3<f32>) -> f32 {
         // Use pre-computed distances from current player (position ≈ player position)
         let player_id = ctx.player.id;
-        let players_nearby = ctx.tick_context.distances
+        let players_nearby = ctx.tick_context.grid
             .teammates(player_id, 0.0, 30.0).count()
-            + ctx.tick_context.distances
+            + ctx.tick_context.grid
             .opponents(player_id, 30.0).count();
 
         (players_nearby as f32 / 8.0).min(1.0)

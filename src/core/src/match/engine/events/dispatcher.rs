@@ -56,6 +56,11 @@ impl EventCollection {
         }
     }
 
+    #[inline]
+    pub fn has_events(&self) -> bool {
+        !self.events.is_empty()
+    }
+
     pub fn clear(&mut self) {
         self.events.clear();
     }
@@ -89,7 +94,7 @@ impl EventDispatcher {
         match_data: &mut ResultMatchPositionData,
         process_remaining_events: bool,
     ) {
-        let mut remaining_events = Vec::with_capacity(10);
+        let mut remaining_events: Vec<Event> = Vec::new();
 
         for event in events {
             match event {
@@ -106,7 +111,7 @@ impl EventDispatcher {
                     let mut ball_remaining_events =
                         BallEventDispatcher::dispatch(ball_event, field, context);
 
-                    if process_remaining_events {
+                    if process_remaining_events && !ball_remaining_events.is_empty() {
                         remaining_events.append(&mut ball_remaining_events);
                     }
                 }
@@ -123,7 +128,7 @@ impl EventDispatcher {
                     let mut player_remaining_events =
                         PlayerEventDispatcher::dispatch(player_event, field, context, match_data);
 
-                    if process_remaining_events {
+                    if process_remaining_events && !player_remaining_events.is_empty() {
                         remaining_events.append(&mut player_remaining_events);
                     }
                 }
