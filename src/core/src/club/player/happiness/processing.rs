@@ -18,7 +18,20 @@ impl Player {
         self.happiness.factors.playing_time = playing_time_factor;
 
         // 2. Salary vs ability
-        let salary_factor = self.calculate_salary_factor(age);
+        let mut salary_factor = self.calculate_salary_factor(age);
+
+        // After 2 years of unresolved salary unhappiness, player accepts situation
+        // and salary frustration dampens — prevents permanent unhappiness loops.
+        // Must be applied BEFORE recalculate_morale() so dampening actually affects morale.
+        let gave_up_on_salary = salary_factor <= -5.0
+            && self.happiness.last_salary_negotiation
+                .map(|d| (now - d).num_days() > 730)
+                .unwrap_or(false);
+
+        if gave_up_on_salary {
+            salary_factor = (salary_factor * 0.5).clamp(-5.0, 0.0);
+        }
+
         self.happiness.factors.salary_satisfaction = salary_factor;
 
         // 3. Manager relationship
@@ -46,37 +59,26 @@ impl Player {
             .sum();
         self.happiness.factors.recent_discipline = discipline.clamp(-10.0, 0.0);
 
-        // Recalculate overall morale
+        // Recalculate overall morale (now uses dampened salary factor)
         self.happiness.recalculate_morale();
 
         // Salary unhappy: player wants contract renegotiation (with 1-year cooldown)
-        // After 2 years of unresolved unhappiness, player accepts situation
-        // and salary frustration dampens — prevents permanent unhappiness loops
-        if salary_factor <= -5.0 {
-            let days_since_first_request = self.happiness.last_salary_negotiation
-                .map(|d| (now - d).num_days())
-                .unwrap_or(0);
+        if salary_factor <= -5.0 && !gave_up_on_salary {
+            let cooldown_passed = self.happiness.last_salary_negotiation
+                .map(|d| (now - d).num_days() >= 365)
+                .unwrap_or(true);
 
-            if days_since_first_request > 730 {
-                // Player gives up on salary demands — dampen frustration
-                self.happiness.factors.salary_satisfaction =
-                    (self.happiness.factors.salary_satisfaction * 0.5).clamp(-5.0, 0.0);
-            } else {
-                let cooldown_passed = self.happiness.last_salary_negotiation
-                    .map(|d| (now - d).num_days() >= 365)
-                    .unwrap_or(true);
-
-                if cooldown_passed {
-                    result.contract.want_improve_contract = true;
-                    if self.happiness.last_salary_negotiation.is_none() {
-                        self.happiness.last_salary_negotiation = Some(now);
-                    }
+            if cooldown_passed {
+                result.contract.want_improve_contract = true;
+                if self.happiness.last_salary_negotiation.is_none() {
+                    self.happiness.last_salary_negotiation = Some(now);
                 }
             }
-        } else {
+        } else if salary_factor > -5.0 && !gave_up_on_salary {
             // Salary is acceptable now — reset negotiation tracking
             self.happiness.last_salary_negotiation = None;
         }
+        // If gave_up_on_salary: keep last_salary_negotiation but don't request improvements
 
         // Set Unh status if morale < 35
         if self.happiness.morale < 35.0 {

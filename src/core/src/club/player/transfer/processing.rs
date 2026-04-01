@@ -55,8 +55,10 @@ impl Player {
         }
 
         // Salary unhappy for a long time with no resolution → wants to leave
+        // Only in the 540–730 day window; after 730 days the player has accepted the situation
         if let Some(first_request) = self.happiness.last_salary_negotiation {
-            if (now - first_request).num_days() > 540 && self.happiness.factors.salary_satisfaction <= -5.0 {
+            let days = (now - first_request).num_days();
+            if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
                 wants_transfer = true;
             }
         }

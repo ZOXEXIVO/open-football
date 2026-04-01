@@ -475,9 +475,9 @@ impl PlayerGenerator {
 
         let base_salary = (IntegerUtils::random(salary_min, salary_max) as f64 * age_salary_factor * ability_salary_factor) as u32;
         let salary = if is_youth {
-            (base_salary / 10).max(200)
+            Self::youth_salary(player_attributes.current_ability)
         } else {
-            base_salary.max(500)
+            base_salary.max(Self::reserve_salary(player_attributes.current_ability))
         };
         let contract_years = Self::generate_contract_years(age, player_attributes.current_ability, player_attributes.current_reputation);
         let expiration =
@@ -904,6 +904,28 @@ impl PlayerGenerator {
     }
 
     // ── Person attributes ───────────────────────────────────────────────
+
+    fn youth_salary(current_ability: u8) -> u32 {
+        match current_ability {
+            0..=60 => 2_000,
+            61..=80 => 5_000,
+            81..=100 => 10_000,
+            101..=120 => 20_000,
+            121..=150 => 40_000,
+            _ => 60_000,
+        }
+    }
+
+    fn reserve_salary(current_ability: u8) -> u32 {
+        match current_ability {
+            0..=60 => 5_000,
+            61..=80 => 12_000,
+            81..=100 => 25_000,
+            101..=120 => 50_000,
+            121..=150 => 100_000,
+            _ => 150_000,
+        }
+    }
 
     /// Smart initial contract duration based on age, ability, and reputation.
     /// Mirrors real football: young prospects get longer deals, aging players get shorter ones.

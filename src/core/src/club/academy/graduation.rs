@@ -55,7 +55,7 @@ impl ClubAcademy {
             .players
             .players
             .iter()
-            .filter(|p| p.age(date) >= 16)
+            .filter(|p| p.age(date) >= 18)
             .map(|p| p.id)
             .collect();
 
@@ -69,11 +69,11 @@ impl ClubAcademy {
 
 fn graduation_salary(current_ability: u8) -> u32 {
     match current_ability {
-        0..=60 => 500,
-        61..=80 => 1000,
-        81..=100 => 2000,
-        101..=120 => 3000,
-        121..=150 => 5000,
-        _ => 8000,
+        0..=60 => 2_000,
+        61..=80 => 5_000,
+        81..=100 => 10_000,
+        101..=120 => 20_000,
+        121..=150 => 40_000,
+        _ => 60_000,
     }
 }

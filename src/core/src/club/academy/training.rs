@@ -369,27 +369,27 @@ impl ClubAcademy {
 
     /// Enforce age-based and PA-based skill ceilings.
     ///
-    /// Youth players develop gradually — a 14-year-old even at the best
-    /// academy should have modest skills compared to professionals:
-    ///   age  8 → 3.0    age 12 →  6.0    age 16 → 10.0
-    ///   age  9 → 3.5    age 13 →  7.0    age 17 → 11.0
-    ///   age 10 → 4.0    age 14 →  8.0    age 18 → 12.0
-    ///   age 11 → 5.0    age 15 →  9.0
+    /// Youth players develop gradually — but elite academy players should
+    /// show real quality by 15-16, approaching lower-professional levels:
+    ///   age  8 → 3.0    age 12 →  7.0    age 16 → 13.0
+    ///   age  9 → 3.5    age 13 →  8.5    age 17 → 14.0
+    ///   age 10 → 4.5    age 14 → 10.0    age 18 → 15.0
+    ///   age 11 → 5.5    age 15 → 12.0
     ///
     /// The effective ceiling is the LOWER of the age cap and the PA-derived cap.
     fn enforce_skill_ceilings(player: &mut Player, age: u8) {
         let age_cap = match age {
             0..=8 => 3.0_f32,
             9 => 3.5,
-            10 => 4.0,
-            11 => 5.0,
-            12 => 6.0,
-            13 => 7.0,
-            14 => 8.0,
-            15 => 9.0,
-            16 => 10.0,
-            17 => 11.0,
-            _ => 12.0,
+            10 => 4.5,
+            11 => 5.5,
+            12 => 7.0,
+            13 => 8.5,
+            14 => 10.0,
+            15 => 12.0,
+            16 => 13.0,
+            17 => 14.0,
+            _ => 15.0,
         };
 
         // PA-based ceiling: PA 200 → 20.0, PA 100 → 10.0

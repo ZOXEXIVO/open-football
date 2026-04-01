@@ -562,43 +562,41 @@ impl PlayerGenerator {
         let age = (now.year() as u32).saturating_sub(year);
 
         // Academy level (1-20 from facility rating) → reputation factor via power curve.
-        // Linear mapping (level/20) was too generous: "Adequate" (level 9) produced
-        // players with PA 111+ (equivalent to strong European first-division clubs).
-        // Power curve (exponent 1.5) keeps low/mid academies modest while elite
-        // academies approach professional levels:
-        //   Level  1 (Poor):       ~0.004  →  raw_ca ~11
-        //   Level  7 (Average):    ~0.074  →  raw_ca ~25
-        //   Level  9 (Adequate):   ~0.121  →  raw_ca ~34
-        //   Level 11 (Good):       ~0.163  →  raw_ca ~43
-        //   Level 15 (Excellent):  ~0.260  →  raw_ca ~62
-        //   Level 20 (Best):       ~0.400  →  raw_ca ~90
+        // Softer exponent (1.2) so mid-tier academies produce competitive youth:
+        //   Level  1 (Poor):       ~0.012  →  raw_ca ~13
+        //   Level  7 (Average):    ~0.128  →  raw_ca ~36
+        //   Level  9 (Adequate):   ~0.176  →  raw_ca ~45
+        //   Level 11 (Good):       ~0.220  →  raw_ca ~54
+        //   Level 15 (Excellent):  ~0.318  →  raw_ca ~74
+        //   Level 20 (Best):       ~0.450  →  raw_ca ~100
         let norm = (level as f32 / 20.0).clamp(0.0, 1.0);
-        let base_rep_factor = (norm.powf(1.5) * 0.40).clamp(0.01, 0.40);
+        let base_rep_factor = (norm.powf(1.2) * 0.45).clamp(0.01, 0.45);
 
         // Youth Facilities boost the effective rep_factor for skill generation
         // Poor youth facilities (0.05) → -20% CA, Best (1.0) → +30% CA
         let youth_boost = 0.80 + youth_facility_quality * 0.50; // 0.83 to 1.30
-        let rep_factor = (base_rep_factor * youth_boost).clamp(0.01, 0.50);
+        let rep_factor = (base_rep_factor * youth_boost).clamp(0.01, 0.55);
 
         // Raw CA = peak potential before age reduction
         let raw_ca = 10.0 + rep_factor * 200.0;
 
         // Calculate PA first — skills are PA-anchored for proper position differentiation
         // Youth Recruitment affects gem chance (rare exceptional talent)
-        // Poor recruitment (0.05) → 0.3%, Average (0.35) → 1%, Exceptional (0.95) → 3%
-        // A top academy producing ~8 players/year: ~0.24 gems/year = 1 gem per ~4 years
-        // A mid-level academy: ~0.08 gems/year = 1 gem per ~12 years
-        let gem_chance = 0.002 + recruitment_quality * 0.03;
+        // Poor recruitment (0.05) → 0.7%, Average (0.35) → 1.9%, Best (1.0) → 4.0%
+        // A top academy producing ~8 players/year: ~0.32 gems/year = 1 gem per ~3 years
+        // A mid-level academy: ~0.15 gems/year = 1 gem per ~7 years
+        let gem_chance = 0.005 + recruitment_quality * 0.035;
 
         let gem_roll = rand::random::<f32>();
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Poor academy (0.05): PA cap ~67,  headroom ~5-12 above raw_ca
-        // Average (0.35):      PA cap ~109, headroom ~10-22
-        // Good (0.55):         PA cap ~137, headroom ~14-30
-        // Excellent (0.75):    PA cap ~165, headroom ~18-38
-        // Best (1.0):          PA cap ~200, headroom ~22-48
+        // Talent jitter (0.35-1.65x on raw_ca) creates wide spread within each academy.
+        // Poor academy (0.05): PA cap ~67,  typical PA 10-55
+        // Average (0.35):      PA cap ~109, typical PA 15-95
+        // Good (0.55):         PA cap ~137, typical PA 25-130
+        // Excellent (0.75):    PA cap ~165, typical PA 35-160
+        // Best (1.0):          PA cap ~200, typical PA 50-200
         let mut academy_pa_cap = (60.0 + academy_quality * 140.0) as i32; // 67..200
 
         // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
@@ -620,17 +618,26 @@ impl PlayerGenerator {
         let pa_base = raw_ca as i32;
 
         let potential_ability = if is_gem {
-            // Gems: PA spread between base and a fraction of academy cap.
-            // Even gems don't always reach near the ceiling — talent varies.
-            let gem_min = (pa_base + 5).min(academy_pa_cap - 15).max(pa_base);
-            let gem_max = (academy_pa_cap as f32 * (0.70 + rep_factor * 0.25)) as i32;
+            // Gems: PA spread between base and a high fraction of academy cap.
+            // Gems represent exceptional finds — they should reach near the ceiling.
+            let gem_min = (pa_base + 10).min(academy_pa_cap - 10).max(pa_base);
+            let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.15)) as i32;
             IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Normal players: PA = raw_ca + modest headroom, capped by academy quality
-            let base_headroom = 8.0 + academy_quality * 40.0; // 8.4..48
-            let headroom = (base_headroom * (0.6 + rep_factor * 0.8)) as i32;
-            let raw_pa = pa_base + IntegerUtils::random(0, headroom.max(5));
-            raw_pa.min(academy_pa_cap).min(200) as u8
+            // Individual talent varies widely — even elite academies produce many
+            // average players alongside occasional standouts. Cubed distribution
+            // heavily skews toward modest potential (long right tail):
+            //   ~30% weak (factor 0.35-0.50), ~35% average (0.50-0.80),
+            //   ~20% good (0.80-1.15), ~10% standout (1.15-1.50), ~5% exceptional (1.50+)
+            let talent_roll = rand::random::<f32>();
+            let talent_factor = 0.35 + talent_roll.powi(3) * 1.30; // 0.35..1.65
+            let jittered_base = (raw_ca as f32 * talent_factor) as i32;
+
+            // Modest headroom on top of jittered base, capped by academy quality
+            let base_headroom = 10.0 + academy_quality * 50.0; // 12.5..60
+            let headroom = (base_headroom * (0.70 + academy_quality * 0.35)) as i32;
+            let raw_pa = jittered_base + IntegerUtils::random(0, headroom.max(5));
+            raw_pa.max(20).min(academy_pa_cap).min(200) as u8
         };
 
         let pos_type = position_type_from(position);
@@ -682,7 +689,7 @@ impl PlayerGenerator {
         // Youth contract
         let expiration =
             NaiveDate::from_ymd_opt(now.year() + IntegerUtils::random(2, 4), 6, 30).unwrap();
-        let salary = (100 + (rep_factor * 500.0) as u32) as u32;
+        let salary = (500 + (rep_factor * 5000.0) as u32) as u32;
         let contract = PlayerClubContract::new_youth(salary, expiration);
 
         Player {

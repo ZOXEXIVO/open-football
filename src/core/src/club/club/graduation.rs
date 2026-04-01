@@ -82,7 +82,7 @@ impl Club {
             }
         }
 
-        // Release aged-out academy players (16+) that were NOT graduated
+        // Release aged-out academy players (18+) that were NOT graduated
         let released = self.academy.release_aged_out(date);
         if released > 0 {
             debug!("academy {}: {} aged-out players released", self.name, released);

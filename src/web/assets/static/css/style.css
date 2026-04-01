@@ -3560,6 +3560,12 @@ a:link, a:visited, a:hover, a:active {
     padding: 10px;
 }
 
+@media (max-width: 768px) {
+    .fm-country-grid {
+        columns: 2;
+    }
+}
+
 .fm-country-item {
     display: flex;
     align-items: center;
