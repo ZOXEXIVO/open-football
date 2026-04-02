@@ -17,46 +17,54 @@ impl Continent {
         away_country_id: u32,
         player_goals: &HashMap<u32, u16>,
     ) {
-        for country in &mut self.countries {
+        // Collect squad player IDs and country weights for both teams
+        let mut squad_player_ids: Vec<u32> = Vec::new();
+        let mut country_weights: HashMap<u32, f32> = HashMap::new();
+
+        for country in &self.countries {
             if country.id != home_country_id && country.id != away_country_id {
                 continue;
             }
-
-            // Country reputation affects how much playing for this NT boosts reputation
-            // Playing for Brazil/Germany = bigger boost than a small nation
             let country_rep = country.reputation as f32;
             let country_weight = (country_rep / 500.0).clamp(0.5, 2.0);
+            for s in &country.national_team.squad {
+                squad_player_ids.push(s.player_id);
+                country_weights.insert(s.player_id, country_weight);
+            }
+        }
 
+        // Search ALL countries' clubs — squad members may play abroad
+        // (e.g. a Kazakh player at Eintracht Frankfurt)
+        for country in &mut self.countries {
             for club in &mut country.clubs {
                 for team in &mut club.teams.teams {
                     for player in &mut team.players.players {
-                        if country.national_team.squad.iter().any(|s| s.player_id == player.id) {
-                            player.player_attributes.international_apps += 1;
-
-                            let mut goal_bonus: f32 = 0.0;
-
-                            if let Some(&goals) = player_goals.get(&player.id) {
-                                player.player_attributes.international_goals += goals;
-                                goal_bonus = goals.min(3) as f32 * 20.0;
-                            }
-
-                            // Reputation boost for playing in a national team competition:
-                            // Base: just playing = +10-20 per tier
-                            // Goals: up to +60 extra
-                            // Country weight: 0.5x (small nation) to 2.0x (top nation)
-                            let base = 15.0;
-                            let raw = base + goal_bonus;
-
-                            let current_delta = (raw * 0.6 * country_weight) as i16;
-                            let home_delta = (raw * 0.8 * country_weight) as i16;
-                            let world_delta = (raw * 1.0 * country_weight) as i16;
-
-                            player.player_attributes.update_reputation(
-                                current_delta,
-                                home_delta,
-                                world_delta,
-                            );
+                        if !squad_player_ids.contains(&player.id) {
+                            continue;
                         }
+                        let country_weight = country_weights.get(&player.id).copied().unwrap_or(1.0);
+
+                        player.player_attributes.international_apps += 1;
+
+                        let mut goal_bonus: f32 = 0.0;
+
+                        if let Some(&goals) = player_goals.get(&player.id) {
+                            player.player_attributes.international_goals += goals;
+                            goal_bonus = goals.min(3) as f32 * 20.0;
+                        }
+
+                        let base = 15.0;
+                        let raw = base + goal_bonus;
+
+                        let current_delta = (raw * 0.6 * country_weight) as i16;
+                        let home_delta = (raw * 0.8 * country_weight) as i16;
+                        let world_delta = (raw * 1.0 * country_weight) as i16;
+
+                        player.player_attributes.update_reputation(
+                            current_delta,
+                            home_delta,
+                            world_delta,
+                        );
                     }
                 }
             }

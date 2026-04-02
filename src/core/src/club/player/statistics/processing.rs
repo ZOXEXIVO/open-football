@@ -46,6 +46,10 @@ impl Player {
         // the settling-in protection that prevents clubs from immediately
         // dumping recently-signed players.  The date is already archived in
         // statistics_history, so downstream reads are unaffected.
+
+        // Clear sold_from at season end — the buy-back protection only needs
+        // to last one season to prevent same-window or next-window re-purchases.
+        self.sold_from = None;
     }
 
     /// Evaluate whether a club should become a favourite based on career history.

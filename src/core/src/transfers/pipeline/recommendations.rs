@@ -152,6 +152,9 @@ impl PipelineProcessor {
                 .map(|r| r.player_id)
                 .collect();
 
+            // Budget cap: scouts should not recommend players the club cannot afford
+            let max_recommend_value = plan.total_budget * 2.0;
+
             // ── Scout network recommendations ──
             for scout in &resolved.scouts {
                 let judging = scout.staff_attributes.knowledge.judging_player_ability;
@@ -171,6 +174,7 @@ impl PipelineProcessor {
                             && !p.is_transfer_protected
                             && p.ability >= avg_ability.saturating_sub(10)
                             && p.ability <= avg_ability + (judging / 2)
+                            && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
                             && !already_recommended.contains(&p.id)
                             && !actions
                                 .iter()

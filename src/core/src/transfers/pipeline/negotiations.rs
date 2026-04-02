@@ -26,6 +26,7 @@ struct NegotiationAction {
     reason: String,
     player_name: String,
     selling_club_name: String,
+    player_sold_from: Option<(u32, f64)>,
 }
 
 impl PipelineProcessor {
@@ -269,6 +270,7 @@ impl PipelineProcessor {
                         reason,
                         player_name: player.full_name.to_string(),
                         selling_club_name: selling_club.name.clone(),
+                        player_sold_from: player.sold_from.clone(),
                     });
 
                     negotiations_this_club += 1;
@@ -337,6 +339,7 @@ impl PipelineProcessor {
                     negotiation.reason = action.reason.clone();
                     negotiation.player_name = action.player_name.clone();
                     negotiation.selling_club_name = action.selling_club_name.clone();
+                    negotiation.player_sold_from = action.player_sold_from.clone();
                 }
 
                 if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
@@ -677,6 +680,8 @@ impl PipelineProcessor {
         struct ResolvedNeg {
             buying_club_id: u32,
             selling_country_id: u32,
+            selling_continent_id: u32,
+            selling_country_code: String,
             selling_club_id: u32,
             player_id: u32,
             is_loan: bool,
@@ -690,6 +695,7 @@ impl PipelineProcessor {
             asking_price: CurrencyValue,
             player_name: String,
             selling_club_name: String,
+            player_sold_from: Option<(u32, f64)>,
         }
 
         let mut resolved: Vec<ResolvedNeg> = Vec::new();
@@ -702,7 +708,7 @@ impl PipelineProcessor {
                     if country.id == country_id { continue; }
                     for club in &country.clubs {
                         if club.teams.teams.iter().any(|t| t.players.players.iter().any(|p| p.id == cand.player_id)) {
-                            found = Some((country.id, club.id, country.settings.pricing.price_level));
+                            found = Some((country.id, club.id, country.settings.pricing.price_level, country.continent_id, country.code.clone()));
                             break;
                         }
                     }
@@ -711,7 +717,7 @@ impl PipelineProcessor {
                 if found.is_some() { break; }
             }
 
-            let (sell_country_id, sell_club_id, sell_price_level) = match found {
+            let (sell_country_id, sell_club_id, sell_price_level, sell_continent_id, sell_country_code) = match found {
                 Some(v) => v,
                 None => continue,
             };
@@ -782,9 +788,12 @@ impl PipelineProcessor {
             let reason = if is_loan { "Loan signing".to_string() } else { "Transfer signing".to_string() };
 
             resolved.push(ResolvedNeg {
-                buying_club_id: cand.buying_club_id, selling_country_id: sell_country_id, selling_club_id: sell_club_id,
+                buying_club_id: cand.buying_club_id, selling_country_id: sell_country_id,
+                selling_continent_id: sell_continent_id, selling_country_code: sell_country_code,
+                selling_club_id: sell_club_id,
                 player_id: cand.player_id, is_loan, offer, reason, shortlist_request_id: cand.shortlist_request_id,
                 selling_rep, buying_rep, player_age, player_ambition, asking_price, player_name, selling_club_name,
+                player_sold_from: player.sold_from.clone(),
             });
         }
 
@@ -806,6 +815,9 @@ impl PipelineProcessor {
                     negotiation.is_loan = action.is_loan;
                     negotiation.reason = action.reason;
                     negotiation.selling_country_id = Some(action.selling_country_id);
+                    negotiation.selling_continent_id = Some(action.selling_continent_id);
+                    negotiation.selling_country_code = action.selling_country_code;
+                    negotiation.player_sold_from = action.player_sold_from;
                     negotiation.player_name = action.player_name;
                     negotiation.selling_club_name = action.selling_club_name;
                 }

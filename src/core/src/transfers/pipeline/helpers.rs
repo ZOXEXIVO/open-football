@@ -177,6 +177,7 @@ impl PipelineProcessor {
                         current_reputation: player.player_attributes.current_reputation,
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
+                        country_reputation: country.reputation,
                     });
                 }
             }

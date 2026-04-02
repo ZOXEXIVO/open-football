@@ -402,9 +402,11 @@ impl PipelineProcessor {
         let is_january = Self::is_january_window(date);
 
         // Collect loan-listed foreign players
+        // Only consider players from countries with equal or lower reputation
+        let country_rep = country.reputation;
         let foreign_loans: Vec<&PlayerSummary> = foreign_players
             .iter()
-            .filter(|p| p.is_loan_listed)
+            .filter(|p| p.is_loan_listed && p.country_reputation <= country_rep)
             .collect();
 
         if foreign_loans.is_empty() {
@@ -586,6 +588,7 @@ impl PipelineProcessor {
                             current_reputation: best.current_reputation,
                             home_reputation: best.home_reputation,
                             world_reputation: best.world_reputation,
+                            country_reputation: best.country_reputation,
                         },
                         offer_amount: loan_fee,
                         reason,
@@ -645,6 +648,8 @@ impl PipelineProcessor {
                     negotiation.is_unsolicited = false;
                     negotiation.reason = action.reason;
                     negotiation.selling_country_id = Some(action.player.country_id);
+                    negotiation.selling_continent_id = Some(action.player.continent_id);
+                    negotiation.selling_country_code = action.player.country_code.clone();
                     negotiation.player_name = action.player.player_name.clone();
                     negotiation.selling_club_name = action.player.club_name.clone();
                 }

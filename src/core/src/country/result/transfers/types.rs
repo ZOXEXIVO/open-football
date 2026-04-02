@@ -53,6 +53,12 @@ pub(crate) struct NegotiationData {
     pub(crate) is_listed: bool,
     /// Country the player is sold from (None = same as buying country)
     pub(crate) selling_country_id: Option<u32>,
+    /// Selling country's continent_id (for geographic preference)
+    pub(crate) selling_continent_id: Option<u32>,
+    /// Selling country's code (for geographic preference)
+    pub(crate) selling_country_code: String,
+    /// If buying club previously sold this player: (club_id, fee)
+    pub(crate) player_sold_from: Option<(u32, f64)>,
     /// Cached names for cross-country (player not accessible from buying country)
     pub(crate) player_name: String,
     pub(crate) selling_club_name: String,

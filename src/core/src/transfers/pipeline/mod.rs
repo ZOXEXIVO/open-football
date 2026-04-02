@@ -66,6 +66,7 @@ mod processor {
         pub current_reputation: i16,
         pub home_reputation: i16,
         pub world_reputation: i16,
+        pub country_reputation: u16,
     }
 }
 

@@ -66,6 +66,13 @@ pub struct TransferNegotiation {
     pub reason: String,
     /// Source country ID (None = same country as buying club)
     pub selling_country_id: Option<u32>,
+    /// Selling country's continent_id (for geographic preference checks)
+    pub selling_continent_id: Option<u32>,
+    /// Selling country's code (for geographic preference checks)
+    pub selling_country_code: String,
+    /// If the buying club previously sold this player: (club_id, fee).
+    /// Used in personal terms — player may resist returning to club that sold them.
+    pub player_sold_from: Option<(u32, f64)>,
     /// Cached player name (resolved at negotiation start)
     pub player_name: String,
     /// Cached selling club name (resolved at negotiation start)
@@ -123,6 +130,9 @@ impl TransferNegotiation {
             negotiator_staff_id: None,
             reason: String::new(),
             selling_country_id: None,
+            selling_continent_id: None,
+            selling_country_code: String::new(),
+            player_sold_from: None,
             player_name: String::new(),
             selling_club_name: String::new(),
         }

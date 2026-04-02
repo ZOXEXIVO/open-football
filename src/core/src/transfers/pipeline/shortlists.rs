@@ -63,6 +63,7 @@ impl PipelineProcessor {
 
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
+                    .filter(|r| budget_alloc <= 0.0 || r.estimated_value <= budget_alloc * 2.0)
                     .map(|r| {
                         let ability_score = r.assessed_ability as f32 / 200.0;
                         let potential_score = r.assessed_potential as f32 / 200.0;
@@ -136,7 +137,7 @@ impl PipelineProcessor {
                             |p| {
                                 if p.position_group == request.position.position_group()
                                     && p.skill_ability >= request.min_ability
-                                    && p.estimated_value <= request.budget_allocation * 5.0
+                                    && p.estimated_value <= request.budget_allocation * 1.5
                                 {
                                     Some(ShortlistCandidate {
                                         player_id: p.player_id,

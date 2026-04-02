@@ -1086,15 +1086,23 @@ impl NationalTeam {
             last_transfer_date: None,
             plan: None,
             favorite_clubs: Vec::new(),
+            sold_from: None,
         }
     }
 
     /// Build a MatchSquad from the called-up squad + generated players
     pub fn build_match_squad(&self, clubs: &[Club]) -> MatchSquad {
+        let club_refs: Vec<&Club> = clubs.iter().collect();
+        self.build_match_squad_from_refs(&club_refs)
+    }
+
+    /// Build a MatchSquad searching across all provided clubs (including foreign).
+    /// This variant accepts refs so the caller can collect clubs from multiple countries.
+    pub fn build_match_squad_from_refs(&self, clubs: &[&Club]) -> MatchSquad {
         let team_id = self.country_id;
         let team_name = self.country_name.clone();
 
-        // Collect real players from clubs
+        // Collect real players from clubs (may span multiple countries)
         let mut all_players: Vec<&Player> = Vec::new();
 
         for squad_player in &self.squad {

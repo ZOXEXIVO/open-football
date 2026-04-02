@@ -3,6 +3,7 @@ use super::types::{DeferredTransfer, NegotiationData, TransferActivitySummary, f
 use crate::country::result::CountryResult;
 use crate::utils::FloatUtils;
 use crate::{Country, PlayerSquadStatus, PlayerStatusType};
+use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::TransferListingStatus;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::pipeline::PipelineProcessor;
@@ -51,6 +52,9 @@ impl CountryResult {
                         asking_price,
                         is_listed,
                         selling_country_id: n.selling_country_id,
+                        selling_continent_id: n.selling_continent_id,
+                        selling_country_code: n.selling_country_code.clone(),
+                        player_sold_from: n.player_sold_from.clone(),
                         player_name: n.player_name.clone(),
                         selling_club_name: n.selling_club_name.clone(),
                     }
@@ -242,7 +246,56 @@ impl CountryResult {
             chance -= 10.0;
         }
 
-        // For domestic, check player details; for foreign, use cached data
+        // Age + reputation interaction: how players at different career stages
+        // evaluate upward vs downward moves
+        let age = neg_data.player_age;
+        let ambition = neg_data.player_ambition;
+
+        if age < 23 {
+            // Young players dream big — they want to develop at the highest level.
+            // Resist downward moves strongly; welcome upward moves for development.
+            if rep_diff > 0.1 {
+                chance += 5.0; // Happy to move up
+            } else if rep_diff < -0.3 {
+                chance -= 20.0; // "I'm not throwing away my career"
+            } else if rep_diff < -0.1 {
+                chance -= 12.0; // Reluctant to step down
+            }
+        } else if age <= 28 {
+            // Prime years — players want the best competition and exposure.
+            // Very resistant to downward moves; moving up is welcome.
+            if rep_diff > 0.15 {
+                chance += 5.0;
+            } else if rep_diff < -0.3 {
+                chance -= 15.0; // Strong resistance in peak years
+            } else if rep_diff < -0.1 {
+                chance -= 10.0;
+            }
+        } else {
+            // Veteran players — pragmatic, value playing time and money.
+            // Accept downward moves more easily, especially for salary.
+            chance += 5.0;
+        }
+
+        // Ambition: ambitious players dream of top clubs and resist stepping down.
+        // Low-ambition players are more content wherever they are.
+        if ambition > 0.7 {
+            if rep_diff > 0.1 {
+                chance += 10.0; // Ambitious + moving up = eager
+            } else if rep_diff < -0.1 {
+                // Scale penalty with the gap: bigger drop = stronger refusal
+                let penalty = if rep_diff < -0.3 { 20.0 }
+                    else { 12.0 };
+                chance -= penalty;
+            }
+        } else if ambition < 0.4 {
+            // Low ambition: less bothered by prestige, more accepting
+            if rep_diff < -0.1 {
+                chance += 5.0;
+            }
+        }
+
+        // For domestic, check salary and player-specific details
         if neg_data.selling_country_id.is_none() {
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
                 let current_salary = player.contract.as_ref()
@@ -250,50 +303,109 @@ impl CountryResult {
                     .unwrap_or(500.0);
                 let offered_salary = (neg_data.offer_amount / 200.0).max(500.0);
                 let salary_ratio = offered_salary / current_salary;
-                if salary_ratio >= 2.0 {
-                    chance += 20.0;
-                } else if salary_ratio >= 1.3 {
-                    chance += 10.0;
-                } else if salary_ratio < 0.8 {
-                    chance -= 20.0;
-                }
 
-                let age = neg_data.player_age;
-                if age < 23 {
-                    if rep_diff > 0.4 {
-                        chance -= 5.0;
+                // Salary influence: money talks, but can't override everything.
+                // For downward moves, salary can soften the blow.
+                // For veterans, salary is a bigger motivator.
+                if salary_ratio >= 2.0 {
+                    if age >= 29 {
+                        chance += 20.0; // Veterans: big payday is very tempting
+                    } else {
+                        chance += 12.0; // Younger: money helps but doesn't override ambition
                     }
-                    if rep_diff > 0.1 {
+                } else if salary_ratio >= 1.3 {
+                    if age >= 29 {
+                        chance += 12.0;
+                    } else {
                         chance += 5.0;
                     }
-                } else if age <= 28 {
-                    if rep_diff < -0.1 {
-                        chance -= 10.0;
-                    }
-                } else {
-                    if salary_ratio >= 1.5 {
-                        chance += 10.0;
-                    }
-                    chance += 5.0;
+                } else if salary_ratio < 0.8 {
+                    chance -= 20.0; // Pay cut on top of prestige drop = very unattractive
                 }
 
                 let statuses = player.statuses.get();
                 if statuses.contains(&PlayerStatusType::Req) {
-                    chance += 25.0;
+                    chance += 25.0; // Wants out — will accept more
                 } else if statuses.contains(&PlayerStatusType::Unh) {
-                    chance += 20.0;
-                }
-
-                let ambition = neg_data.player_ambition;
-                if ambition > 0.7 && rep_diff > 0.1 {
-                    chance += 10.0;
-                } else if ambition > 0.7 && rep_diff < -0.1 {
-                    chance -= 10.0;
+                    chance += 20.0; // Unhappy — willing to move
                 }
             }
         } else {
-            // Foreign player — use reputation diff as primary driver
-            if rep_diff > 0.2 { chance += 15.0; }
+            // Foreign player — same age/ambition checks already applied above.
+            // Add salary estimate since we can't access the actual contract.
+            if rep_diff > 0.2 {
+                chance += 10.0;
+            }
+        }
+
+        // Player reluctance to return to a club that sold them.
+        // The feeling of rejection is strong — but context matters:
+        // - Sold cheaply → player felt undervalued → strong resentment
+        // - Club is much bigger → prestige pull can overcome hurt pride
+        // - Ambitious player → may want to prove themselves, reduces penalty
+        // - Older player → more pragmatic, sentimental about returning "home"
+        // - Player was unhappy/requested transfer → less resentment (they wanted out)
+        if let Some((sold_club_id, sold_fee)) = &neg_data.player_sold_from {
+            if *sold_club_id == neg_data.buying_club_id {
+                // Base: player doesn't want to go back to club that rejected them
+                let mut return_penalty: f32 = 25.0;
+
+                // Sold cheaply relative to current offer → felt undervalued
+                if *sold_fee > 0.0 && neg_data.offer_amount > sold_fee * 3.0 {
+                    return_penalty += 10.0;
+                }
+
+                // Club is much bigger → prestige can overcome pride
+                if rep_diff > 0.3 {
+                    return_penalty -= 15.0;
+                } else if rep_diff > 0.15 {
+                    return_penalty -= 8.0;
+                }
+
+                // Ambitious players want to prove themselves at big clubs
+                if neg_data.player_ambition > 0.7 && rep_diff > 0.1 {
+                    return_penalty -= 8.0;
+                }
+
+                // Older players are more pragmatic
+                if neg_data.player_age >= 30 {
+                    return_penalty -= 5.0;
+                }
+
+                chance -= return_penalty.max(5.0);
+            }
+        }
+
+        // Geographic preference: players resist moves to less prestigious regions
+        if let Some(sell_continent_id) = neg_data.selling_continent_id {
+            let buying_region = ScoutingRegion::from_country(country.continent_id, &country.code);
+            let selling_region = ScoutingRegion::from_country(sell_continent_id, &neg_data.selling_country_code);
+
+            if buying_region != selling_region {
+                let buy_prestige = buying_region.league_prestige();
+                let sell_prestige = selling_region.league_prestige();
+                let prestige_drop = sell_prestige - buy_prestige;
+
+                if prestige_drop > 0.0 {
+                    // Moving to less prestigious region — players resist this
+                    let base_penalty = prestige_drop * 60.0;
+
+                    // Ambitious players resist prestige drops more
+                    let ambition_factor = if neg_data.player_ambition > 0.7 { 1.5 }
+                        else if neg_data.player_ambition > 0.5 { 1.0 }
+                        else { 0.7 };
+
+                    // Older players (30+) more willing to accept for money/playing time
+                    let age_factor = if neg_data.player_age >= 32 { 0.3 }
+                        else if neg_data.player_age >= 30 { 0.5 }
+                        else { 1.0 };
+
+                    chance -= base_penalty * ambition_factor * age_factor;
+                } else if prestige_drop < -0.1 {
+                    // Moving to more prestigious region — bonus
+                    chance += (-prestige_drop) * 20.0;
+                }
+            }
         }
 
         chance = chance.clamp(5.0, 95.0);

@@ -93,7 +93,12 @@ impl PipelineProcessor {
                     })
                 }).collect();
                 plan.transfer_requests.extend(new_requests);
-                plan.loan_out_candidates.extend(eval.loan_outs);
+                // Deduplicate loan-out candidates — don't re-add players already in the list
+                for candidate in eval.loan_outs {
+                    if !plan.loan_out_candidates.iter().any(|existing| existing.player_id == candidate.player_id) {
+                        plan.loan_out_candidates.push(candidate);
+                    }
+                }
                 plan.last_evaluation_date = Some(date);
                 plan.initialized = true;
             }
@@ -729,6 +734,21 @@ impl PipelineProcessor {
 
             // Skip players already on loan
             if player.is_on_loan() {
+                continue;
+            }
+
+            // Players loaned out 2+ times should be sold, not loaned again.
+            // Repeated loans from the same parent club are unrealistic.
+            let previous_loan_count = player.statistics_history.items.iter()
+                .filter(|h| h.is_loan)
+                .count();
+            if previous_loan_count >= 2 {
+                continue;
+            }
+
+            // Players who are regular contributors (15+ appearances) should not
+            // be loaned out — they're getting enough game time already.
+            if player_info.appearances >= 15 {
                 continue;
             }
 

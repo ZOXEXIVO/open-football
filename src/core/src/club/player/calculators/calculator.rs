@@ -182,15 +182,21 @@ fn determine_performance_factor(player: &Player) -> f64 {
     let stats = &player.statistics;
     let mut factor = 1.0;
 
-    // Appearances
+    // Appearances — regular playing time proves value
     if stats.played > 25 {
         factor *= 1.1;
-    } else if stats.played < 5 {
-        factor *= 0.85;
+    } else if stats.played > 15 {
+        // Decent number of apps, no adjustment
+    } else if stats.played > 5 {
+        factor *= 0.9;
+    } else if stats.played > 0 {
+        factor *= 0.75; // Barely played — significant discount
+    } else {
+        factor *= 0.65; // Zero appearances — not proven at this level
     }
 
-    // Goals contribution
-    if stats.played > 0 {
+    // Goals contribution — position-aware
+    if stats.played > 5 {
         let goals_per_game = stats.goals as f64 / stats.played as f64;
         let assists_per_game = stats.assists as f64 / stats.played as f64;
 
@@ -199,6 +205,8 @@ fn determine_performance_factor(player: &Player) -> f64 {
                 factor *= 1.2;
             } else if goals_per_game > 0.3 {
                 factor *= 1.1;
+            } else if goals_per_game < 0.1 {
+                factor *= 0.8; // Forward who can't score
             }
         }
 
@@ -212,13 +220,19 @@ fn determine_performance_factor(player: &Player) -> f64 {
         }
     }
 
-    // Average match rating
+    // Average match rating — stronger impact for mediocre/poor performers
     if stats.average_rating > 7.5 {
         factor *= 1.15;
     } else if stats.average_rating > 7.0 {
         factor *= 1.05;
-    } else if stats.average_rating > 0.0 && stats.average_rating < 6.0 {
-        factor *= 0.9;
+    } else if stats.average_rating > 6.8 {
+        // Decent — no adjustment
+    } else if stats.average_rating > 6.5 {
+        factor *= 0.92; // Below average performer
+    } else if stats.average_rating > 6.0 {
+        factor *= 0.82; // Poor performer — clear discount
+    } else if stats.average_rating > 0.0 {
+        factor *= 0.7; // Very poor
     }
 
     // International experience

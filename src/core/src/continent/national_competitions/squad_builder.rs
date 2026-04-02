@@ -44,8 +44,12 @@ impl Continent {
             country.national_team.call_up_squad(&mut country.clubs, candidates, date, cid, &country_ids);
         }
 
+        // Collect clubs from ALL countries — squad members may play abroad
+        let all_clubs: Vec<&crate::Club> = self.countries.iter()
+            .flat_map(|c| &c.clubs)
+            .collect();
         let country = &self.countries[country_idx];
-        let squad = country.national_team.build_match_squad(&country.clubs);
+        let squad = country.national_team.build_match_squad_from_refs(&all_clubs);
         Some(squad)
     }
 }

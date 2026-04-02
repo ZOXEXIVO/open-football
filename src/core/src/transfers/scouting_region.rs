@@ -241,6 +241,29 @@ impl ScoutingRegion {
         }
     }
 
+    /// Relative league prestige for each region.
+    /// Used by players when evaluating cross-region transfers —
+    /// players resist moves to less prestigious regions.
+    pub fn league_prestige(&self) -> f32 {
+        match self {
+            ScoutingRegion::WesternEurope => 1.0,
+            ScoutingRegion::EasternEurope => 0.50,
+            ScoutingRegion::Scandinavia => 0.45,
+            ScoutingRegion::SouthAmerica => 0.45,
+            ScoutingRegion::MiddleEastEurope => 0.40,
+            ScoutingRegion::MiddleEast => 0.40,
+            ScoutingRegion::NorthAmerica => 0.35,
+            ScoutingRegion::EastAsia => 0.30,
+            ScoutingRegion::NorthAfrica => 0.25,
+            ScoutingRegion::CentralAmericaCaribbean => 0.20,
+            ScoutingRegion::WestAfrica => 0.20,
+            ScoutingRegion::Oceania => 0.20,
+            ScoutingRegion::EastSouthAfrica => 0.15,
+            ScoutingRegion::SoutheastAsia => 0.15,
+            ScoutingRegion::SouthAsia => 0.10,
+        }
+    }
+
     /// All regions as a static array (for iteration).
     pub fn all() -> &'static [ScoutingRegion] {
         &[

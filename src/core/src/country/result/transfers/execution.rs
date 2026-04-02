@@ -142,6 +142,7 @@ pub(crate) fn execute_transfer_within_country(
             league_name: String::new(), league_slug: String::new(),
         });
         player.on_transfer(&from, &to, fee, date);
+        player.sold_from = Some((selling_club_id, fee));
 
         clear_transfer_statuses(&mut player);
         assign_new_contract(&mut player, fee, date, false);
@@ -414,6 +415,7 @@ fn execute_transfer_across_countries(
         league_name: String::new(), league_slug: String::new(),
     });
     player.on_transfer(&from_info, &to, fee, date);
+    player.sold_from = Some((selling_club_id, fee));
 
     clear_transfer_statuses(&mut player);
     assign_new_contract(&mut player, fee, date, false);

@@ -756,6 +756,7 @@ impl PlayerGenerator {
             last_transfer_date: None,
             plan: None,
             favorite_clubs: Vec::new(),
+            sold_from: None,
         }
     }
 

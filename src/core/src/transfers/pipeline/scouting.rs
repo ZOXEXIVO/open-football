@@ -572,6 +572,7 @@ impl PipelineProcessor {
     pub fn collect_player_pool(country: &Country, date: NaiveDate) -> Vec<PlayerSummary> {
         let price_level = country.settings.pricing.price_level;
         let country_id = country.id;
+        let country_reputation = country.reputation;
         let mut players = Vec::new();
 
         for club in &country.clubs {
@@ -613,6 +614,7 @@ impl PipelineProcessor {
                         current_reputation: player.player_attributes.current_reputation,
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
+                        country_reputation,
                     });
                 }
             }
@@ -624,6 +626,7 @@ impl PipelineProcessor {
     pub fn process_scouting(country: &mut Country, foreign_players: &[PlayerSummary], date: NaiveDate) {
         let price_level = country.settings.pricing.price_level;
         let country_id = country.id;
+        let country_reputation = country.reputation;
 
         // Domestic players
         let mut all_players: Vec<PlayerSummary> = Vec::new();
@@ -671,6 +674,7 @@ impl PipelineProcessor {
                         current_reputation: player.player_attributes.current_reputation,
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
+                        country_reputation,
                     });
                 }
             }
@@ -754,9 +758,14 @@ impl PipelineProcessor {
                     .collect();
 
                 // Foreign players from scout's known regions (region-based matching)
+                // Only scout leagues with equal or lower reputation than our own country.
+                // e.g. Italian clubs can scout Nigeria, but Nigerian clubs cannot scout Serie A.
                 if !scout_known_regions.is_empty() {
                     let foreign_matching: Vec<&PlayerSummary> = foreign_players
                         .iter()
+                        .filter(|p| {
+                            p.country_reputation <= country_reputation
+                        })
                         .filter(|p| {
                             let player_region = crate::transfers::ScoutingRegion::from_country(
                                 p.continent_id, &p.country_code,

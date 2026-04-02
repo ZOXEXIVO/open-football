@@ -61,6 +61,11 @@ pub struct Player {
     /// Clubs this player supports or has an affinity for (like FM's "Favoured Clubs").
     /// Affects willingness to join, morale when playing for them, etc.
     pub favorite_clubs: Vec<u32>,
+
+    /// The club that sold this player and the fee paid.
+    /// Prevents unrealistic buy-back scenarios where a club sells a player
+    /// cheaply and then buys them back at a huge markup one season later.
+    pub sold_from: Option<(u32, f64)>, // (club_id, fee_paid)
 }
 
 impl Player {

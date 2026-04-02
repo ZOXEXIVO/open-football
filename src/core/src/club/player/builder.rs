@@ -185,6 +185,7 @@ impl PlayerBuilder {
             last_transfer_date: None,
             plan: None,
             favorite_clubs: self.favorite_clubs.unwrap_or_default(),
+            sold_from: None,
         })
     }
 }
