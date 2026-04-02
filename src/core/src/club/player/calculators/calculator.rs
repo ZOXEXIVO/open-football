@@ -188,11 +188,11 @@ fn determine_performance_factor(player: &Player) -> f64 {
     } else if stats.played > 15 {
         // Decent number of apps, no adjustment
     } else if stats.played > 5 {
-        factor *= 0.9;
+        factor *= 0.95;
     } else if stats.played > 0 {
-        factor *= 0.75; // Barely played — significant discount
+        factor *= 0.85; // Barely played — mild discount
     } else {
-        factor *= 0.65; // Zero appearances — not proven at this level
+        factor *= 0.90; // No appearances yet — slight discount
     }
 
     // Goals contribution — position-aware

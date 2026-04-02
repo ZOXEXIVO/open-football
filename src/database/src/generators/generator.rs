@@ -456,6 +456,11 @@ impl DatabaseGenerator {
 
         let total_foreign_weight: i32 = foreign_players.iter().map(|fp| fp.weight as i32).sum();
 
+        let domestic_continent_id = data.countries.iter()
+            .find(|c| c.id == country_id)
+            .map(|c| c.continent_id)
+            .unwrap_or(1);
+
         let mut generate_one = |pos: PositionType| -> Player {
             // 10-20% chance this player is a youth gem with boosted skills
             let effective_rep = if is_non_main && IntegerUtils::random(0, 100) < 15 {
@@ -486,23 +491,23 @@ impl DatabaseGenerator {
                                 },
                             };
                             let mut foreign_gen = PlayerGenerator::with_people_names(&people_names);
-                            let foreign_country_rep = data.countries.iter()
-                                .find(|c| c.id == fp.country_id)
-                                .map(|c| c.reputation)
-                                .unwrap_or(3000);
-                            return foreign_gen.generate(fp.country_id, pos, effective_rep, foreign_country_rep, min_age, max_age, is_youth);
+                            let foreign_country = data.countries.iter()
+                                .find(|c| c.id == fp.country_id);
+                            let foreign_country_rep = foreign_country.map(|c| c.reputation).unwrap_or(3000);
+                            let foreign_continent_id = foreign_country.map(|c| c.continent_id).unwrap_or(1);
+                            return foreign_gen.generate(fp.country_id, foreign_continent_id, pos, effective_rep, foreign_country_rep, min_age, max_age, is_youth);
                         }
                     }
                 }
             }
-            player_generator.generate(country_id, pos, effective_rep, country_reputation, min_age, max_age, is_youth)
+            player_generator.generate(country_id, domestic_continent_id, pos, effective_rep, country_reputation, min_age, max_age, is_youth)
         };
 
         // Main teams need larger squads to avoid fielding fewer than 11 after
         // injuries, bans, international duty, and condition drops.
         let (gk_range, def_range, mid_range, st_range) = match team_type {
-            TeamType::Main => ((3, 4), (6, 8), (9, 11), (4, 5)),
-            _ => ((3, 5), (4, 8), (7, 11), (2, 5)),
+            TeamType::Main => ((3, 5), (6, 9), (7, 10), (5, 8)),
+            _ => ((3, 5), (4, 9), (6, 10), (3, 6)),
         };
 
         for _ in 0..IntegerUtils::random(gk_range.0, gk_range.1) {

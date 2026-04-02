@@ -105,6 +105,30 @@ fn age_curve(skill_idx: usize, age: u32) -> f32 {
     }
 }
 
+// ── Age-based skill cap ────────────────────────────────────────────────
+
+/// Young players cannot reach elite skill levels regardless of talent.
+/// Consistent with the core generator's age_skill_cap.
+fn age_skill_cap(age: u32) -> f32 {
+    match age {
+        0..=14 => 12.0,
+        15 => 13.0,
+        16 => 14.0,
+        17 => 15.0,
+        18 => 15.5,
+        19 => 16.0,
+        20 => 17.0,
+        21 => 17.5,
+        22 => 18.0,
+        23 => 18.5,
+        24 => 19.0,
+        25..=30 => 20.0,
+        31..=33 => 19.0,
+        34..=35 => 18.0,
+        _ => 17.0,
+    }
+}
+
 // ── Position weight tables ──────────────────────────────────────────────
 
 /// Position weights with wide range (0.1-1.8) for clear skill differentiation.
@@ -400,6 +424,7 @@ impl PlayerGenerator {
     pub fn generate(
         &mut self,
         country_id: u32,
+        continent_id: u32,
         position: PositionType,
         team_reputation: u16,
         country_reputation: u16,
@@ -431,7 +456,8 @@ impl PlayerGenerator {
         let positions = Self::generate_positions(position, potential_ability);
 
         // Skills target a CA appropriate for this PA and age, not just team rep
-        let skills = Self::generate_skills(&position, age, rep_factor, potential_ability);
+        let country_code = crate::loaders::CountryLoader::code_for_id(country_id);
+        let skills = Self::generate_skills(&position, age, rep_factor, potential_ability, continent_id, &country_code);
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
 
@@ -514,7 +540,7 @@ impl PlayerGenerator {
 
     // ── Skill generation pipeline ───────────────────────────────────────
 
-    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8) -> PlayerSkills {
+    fn generate_skills(position: &PositionType, age: u32, rep_factor: f32, potential_ability: u8, continent_id: u32, country_code: &str) -> PlayerSkills {
         // ── PA is the anchor ───────────────────────────────────────────────
         // PA maps to a "fully developed" skill level: what this player's average
         // skill would be at peak. Position weights create FM-like differentiation
@@ -619,7 +645,7 @@ impl PlayerGenerator {
             skills[i] = skills[i] * 0.85 + p_avg * 0.15;
         }
 
-        // 7. PA-based floors
+        // 7. PA-based floors and age cap
         let key_floor = (pa_final * 0.40).clamp(1.0, 9.0);
         // Universal minimum: no professional footballer should have any skill at 1-3.
         // PA 20 (pa_final ~2.8) → floor 4, PA 70 → floor 4, PA 150 → floor 5
@@ -635,6 +661,7 @@ impl PlayerGenerator {
         let trained_floor = (pa_final * 0.35 + 3.0).clamp(6.0, 9.0);
         // PA 50 → floor ~5, PA 100 → floor ~6, PA 150 → floor ~7, PA 180 → floor ~8
         let footballer_tech_floor = (pa_final * 0.30 + 2.0).clamp(4.0, 9.0);
+        let cap = age_skill_cap(age);
         for i in 0..SKILL_COUNT {
             if pos_w[i] >= 1.2 {
                 skills[i] = skills[i].max(key_floor);
@@ -643,26 +670,32 @@ impl PlayerGenerator {
                 // Physical: per-skill jitter so not every physical lands at the same value
                 let jitter = (random_normal() * 2.0).clamp(-2.0, 2.0);
                 let floor = (physical_floor_base + jitter).max(4.0);
-                skills[i] = skills[i].max(floor);
+                skills[i] = skills[i].clamp(floor, cap);
             } else if skill_group(i) == 0 && pos_w[i] >= 0.8 {
                 // Technical skills this position trains regularly
                 let jitter = (random_normal() * 1.5).clamp(-2.0, 2.0);
                 let floor = (trained_floor + jitter).max(4.0);
-                skills[i] = skills[i].max(floor);
+                skills[i] = skills[i].clamp(floor, cap);
             } else if skill_group(i) == 0 {
                 // All other technical skills — footballers can still pass, shoot, etc.
                 let jitter = (random_normal() * 1.0).clamp(-1.0, 1.0);
                 let floor = (footballer_tech_floor + jitter).max(4.0);
-                skills[i] = skills[i].max(floor);
+                skills[i] = skills[i].clamp(floor, cap);
             } else {
-                skills[i] = skills[i].max(universal_floor);
+                skills[i] = skills[i].clamp(universal_floor, cap);
             }
         }
 
         // 8. Apply affinities
         apply_affinities(&mut skills);
 
-        // 9. Final clamp
+        // 9. Country-specific bias — national football culture
+        let bias = super::country_bias::country_skill_bias(continent_id, country_code);
+        for i in 0..SKILL_COUNT {
+            skills[i] += bias[i];
+        }
+
+        // 10. Final clamp
         for v in skills.iter_mut() {
             *v = v.clamp(1.0, 20.0);
         }
@@ -814,26 +847,25 @@ impl PlayerGenerator {
 
         let primary = match position {
             PositionType::Goalkeeper => PlayerPositionType::Goalkeeper,
-            PositionType::Defender => match IntegerUtils::random(0, 7) {
+            PositionType::Defender => match IntegerUtils::random(0, 8) {
                 0 => PlayerPositionType::DefenderLeft,
                 1 | 2 | 3 | 4 => PlayerPositionType::DefenderCenter,
                 5 => PlayerPositionType::DefenderRight,
-                _ => if IntegerUtils::random(0, 1) == 0 {
-                    PlayerPositionType::WingbackLeft
-                } else {
-                    PlayerPositionType::WingbackRight
-                },
+                6 => PlayerPositionType::WingbackLeft,
+                _ => PlayerPositionType::WingbackRight,
             },
-            PositionType::Midfielder => match IntegerUtils::random(0, 4) {
+            PositionType::Midfielder => match IntegerUtils::random(0, 6) {
                 0 => PlayerPositionType::MidfielderLeft,
-                1 | 2 | 3 => PlayerPositionType::MidfielderCenter,
-                _ => PlayerPositionType::MidfielderRight,
+                1 => PlayerPositionType::MidfielderRight,
+                2 | 3 | 4 => PlayerPositionType::MidfielderCenter,
+                _ => PlayerPositionType::DefensiveMidfielder,
             },
-            PositionType::Striker => match IntegerUtils::random(0, 3) {
+            PositionType::Striker => match IntegerUtils::random(0, 5) {
                 0 => PlayerPositionType::Striker,
                 1 => PlayerPositionType::ForwardLeft,
                 2 => PlayerPositionType::ForwardCenter,
-                _ => PlayerPositionType::ForwardRight,
+                3 => PlayerPositionType::ForwardRight,
+                _ => PlayerPositionType::AttackingMidfielderCenter,
             },
         };
 
@@ -1059,9 +1091,9 @@ impl PlayerGenerator {
         PlayerAttributes {
             is_banned: false,
             is_injured: false,
-            condition: IntegerUtils::random(3000, 10000) as i16,
-            fitness: IntegerUtils::random(3000, 10000) as i16,
-            jadedness: IntegerUtils::random(0, 5000) as i16,
+            condition: IntegerUtils::random(6000, 9500) as i16,
+            fitness: IntegerUtils::random(5000, 9500) as i16,
+            jadedness: IntegerUtils::random(0, 3000) as i16,
             weight: IntegerUtils::random(60, 100) as u8,
             height: IntegerUtils::random(150, 220) as u8,
             value: 0,

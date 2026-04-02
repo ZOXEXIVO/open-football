@@ -3464,32 +3464,56 @@ a:link, a:visited, a:hover, a:active {
     display: none;
     align-items: center;
     align-self: center;
-    gap: 5px;
-    height: 26px;
+    gap: 6px;
+    height: 30px;
     margin-right: 2em;
-    padding: 0 10px;
-    font-size: 11px;
-    font-weight: 700;
-    letter-spacing: 0.4px;
+    padding: 0 14px;
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.8px;
     text-transform: uppercase;
     text-decoration: none;
-    color: #e8f0f4;
-    background: linear-gradient(180deg, #54ab98 0%, #366557 100%);
-    border: 1px solid #56b2a9;
-    border-radius: 3px;
+    color: #fff;
+    background: linear-gradient(160deg, #48b89e 0%, #3a9a80 100%);
+    border: 1px solid #50c4a8;
+    border-radius: 6px;
     white-space: nowrap;
-    transition: background 0.15s, border-color 0.15s, box-shadow 0.15s;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.15) inset,
+        0 1px 3px rgba(50, 140, 120, 0.25);
+    transition: color 0.25s, background 0.3s, border-color 0.3s, box-shadow 0.35s, transform 0.25s;
+    position: relative;
 }
 
 .fm-download-btn i {
     font-size: 10px;
+    opacity: 0.8;
+    transition: opacity 0.25s, transform 0.3s;
 }
 
 .fm-download-btn:hover {
-    background: linear-gradient(180deg, #54ab98 0%, #366557 100%);
-    border-color: #6ed2c8;
-    box-shadow: 0 0 6px rgba(42, 133, 72, 0.35);
     color: #fff;
+    background: linear-gradient(160deg, #52c4a8 0%, #42a88c 100%);
+    border-color: #5cd4b6;
+    box-shadow:
+        0 1px 0 rgba(255, 255, 255, 0.18) inset,
+        0 0 10px rgba(65, 190, 160, 0.3),
+        0 2px 8px rgba(50, 140, 120, 0.3);
+    transform: translateY(-1px);
+}
+
+.fm-download-btn:hover i {
+    opacity: 1;
+    transform: translateY(-0.5px);
+}
+
+.fm-download-btn:active {
+    transform: translateY(0);
+    background: linear-gradient(160deg, #40a890 0%, #358e76 100%);
+    box-shadow:
+        0 1px 2px rgba(0, 0, 0, 0.15) inset,
+        0 1px 2px rgba(50, 140, 120, 0.2);
+    transition-duration: 0.08s;
 }
 
 @media (min-width: 1200px) {
