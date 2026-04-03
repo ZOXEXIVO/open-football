@@ -128,6 +128,7 @@ impl Country {
                 country_ctx.tv_revenue_multiplier = self.economic_factors.tv_revenue_multiplier;
                 country_ctx.sponsorship_market_strength = self.economic_factors.sponsorship_market_strength;
                 country_ctx.stadium_attendance_factor = self.economic_factors.stadium_attendance_factor;
+                country_ctx.price_level = self.settings.pricing.price_level;
             }
             c
         };

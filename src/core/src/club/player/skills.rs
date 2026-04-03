@@ -52,9 +52,16 @@ impl PlayerSkills {
         Self::skill_to_ability(weighted)
     }
 
-    /// GK ability uses key GK skills instead of raw group averages.
-    /// Irrelevant skills (corners, crossing, finishing) don't affect GK ability.
+    /// GK ability uses goalkeeping attributes as the primary factor,
+    /// supplemented by key mental and physical skills.
     fn calculate_gk_ability(&self) -> u8 {
+        let gk = &self.goalkeeping;
+
+        // Core goalkeeping: handling, reflexes, one-on-ones, aerial reach,
+        // command of area, communication, rushing out, punching
+        let key_gk = (gk.handling + gk.reflexes + gk.one_on_ones + gk.aerial_reach
+            + gk.command_of_area + gk.communication + gk.rushing_out + gk.punching) / 8.0;
+
         // Key mental: positioning, concentration, anticipation, composure, decisions
         let key_mental = (self.mental.positioning
             + self.mental.concentration
@@ -68,13 +75,11 @@ impl PlayerSkills {
             + self.physical.strength
             + self.physical.acceleration) / 4.0;
 
-        // Key technical: first touch, passing, technique (modern GK distribution)
-        let key_technical = (self.technical.first_touch
-            + self.technical.passing
-            + self.technical.technique) / 3.0;
+        // Key technical: kicking, first touch, passing (modern GK distribution)
+        let key_technical = (gk.kicking + gk.first_touch + gk.passing + gk.throwing) / 4.0;
 
-        // GK ability: mental-dominant (key decisions/positioning matter most)
-        let weighted = key_technical * 0.25 + key_mental * 0.45 + key_physical * 0.30;
+        // GK ability: goalkeeping-dominant
+        let weighted = key_gk * 0.40 + key_mental * 0.25 + key_physical * 0.20 + key_technical * 0.15;
         Self::skill_to_ability(weighted)
     }
 

@@ -518,8 +518,10 @@ impl CountryResult {
         for club in &mut country.clubs {
             let balance = club.finance.balance.balance;
             if balance > 0 {
-                // 2% return on positive balance (savings/investments)
-                let interest = (balance as f64 * 0.02) as i64;
+                // 1% return on positive balance, capped at 2M per year.
+                // Prevents infinite wealth compounding — clubs can't earn
+                // meaningful interest on $500M+ balances.
+                let interest = ((balance as f64 * 0.01) as i64).min(2_000_000);
                 club.finance.balance.push_income(interest);
             } else if balance < 0 {
                 // 5% penalty on negative balance (debt interest)

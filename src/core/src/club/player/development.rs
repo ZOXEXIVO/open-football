@@ -17,7 +17,7 @@ use chrono::NaiveDate;
 
 // ── Skill indices (flat [f32; 37] layout) ───────────────────────────────
 
-const SKILL_COUNT: usize = 37;
+const SKILL_COUNT: usize = 50;
 
 // Technical 0..14
 const SK_CORNERS: usize = 0;
@@ -59,6 +59,20 @@ const SK_PACE: usize = 33;
 const SK_STAMINA: usize = 34;
 const SK_STRENGTH: usize = 35;
 const SK_MATCH_READINESS: usize = 36;
+// Goalkeeping 37..50
+const SK_GK_AERIAL_REACH: usize = 37;
+const SK_GK_COMMAND_OF_AREA: usize = 38;
+const SK_GK_COMMUNICATION: usize = 39;
+const SK_GK_ECCENTRICITY: usize = 40;
+const SK_GK_FIRST_TOUCH: usize = 41;
+const SK_GK_HANDLING: usize = 42;
+const SK_GK_KICKING: usize = 43;
+const SK_GK_ONE_ON_ONES: usize = 44;
+const SK_GK_PASSING: usize = 45;
+const SK_GK_PUNCHING: usize = 46;
+const SK_GK_REFLEXES: usize = 47;
+const SK_GK_RUSHING_OUT: usize = 48;
+const SK_GK_THROWING: usize = 49;
 
 // ── Skill category ──────────────────────────────────────────────────────
 
@@ -67,6 +81,8 @@ enum SkillCategory {
     Technical,
     Mental,
     Physical,
+    /// GK-specific skills: peak later (28-33), decline slowly — GKs have long careers.
+    Goalkeeping,
 }
 
 fn skill_category(idx: usize) -> SkillCategory {
@@ -76,6 +92,7 @@ fn skill_category(idx: usize) -> SkillCategory {
         SK_AGGRESSION | SK_ANTICIPATION | SK_BRAVERY | SK_COMPOSURE | SK_CONCENTRATION
         | SK_DECISIONS | SK_DETERMINATION | SK_FLAIR | SK_LEADERSHIP | SK_OFF_THE_BALL
         | SK_POSITIONING | SK_TEAMWORK | SK_VISION | SK_WORK_RATE => SkillCategory::Mental,
+        SK_GK_AERIAL_REACH..=SK_GK_THROWING => SkillCategory::Goalkeeping,
         _ => SkillCategory::Technical,
     }
 }
@@ -128,6 +145,12 @@ fn pos_group_from(pos: PlayerPositionType) -> PosGroup {
 
 fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
     let mut w = [0.8f32; SKILL_COUNT];
+
+    // GK-specific skills default to 0 for outfield players — they don't train them
+    for i in SK_GK_AERIAL_REACH..=SK_GK_THROWING {
+        w[i] = 0.0;
+    }
+
     match group {
         PosGroup::Goalkeeper => {
             // Core GK skills — high ceiling and fast development
@@ -162,6 +185,20 @@ fn position_dev_weights(group: PosGroup) -> [f32; SKILL_COUNT] {
             w[SK_WORK_RATE] = 0.5;
             w[SK_FLAIR] = 0.4;
             w[SK_ACCELERATION] = 0.6;
+            // Goalkeeping-specific attributes
+            w[SK_GK_HANDLING] = 1.5;
+            w[SK_GK_REFLEXES] = 1.5;
+            w[SK_GK_ONE_ON_ONES] = 1.4;
+            w[SK_GK_AERIAL_REACH] = 1.3;
+            w[SK_GK_COMMAND_OF_AREA] = 1.3;
+            w[SK_GK_COMMUNICATION] = 1.3;
+            w[SK_GK_RUSHING_OUT] = 1.2;
+            w[SK_GK_PUNCHING] = 1.2;
+            w[SK_GK_KICKING] = 1.1;
+            w[SK_GK_THROWING] = 1.1;
+            w[SK_GK_FIRST_TOUCH] = 1.0;
+            w[SK_GK_PASSING] = 1.0;
+            w[SK_GK_ECCENTRICITY] = 0.6;
         }
         PosGroup::Defender => {
             w[SK_TACKLING] = 1.4;
@@ -286,6 +323,18 @@ fn base_weekly_rate(age: u8, cat: SkillCategory) -> (f32, f32) {
             33..=35 => ( 0.002, 0.008),
             _       => (-0.003, 0.003),
         },
+        // GK skills: later peak (28-33), slower decline — GKs play into late 30s
+        SkillCategory::Goalkeeping => match age {
+            0..=15  => ( 0.012, 0.030),
+            16..=17 => ( 0.030, 0.070),
+            18..=19 => ( 0.025, 0.060),
+            20..=22 => ( 0.020, 0.050),
+            23..=26 => ( 0.015, 0.035),
+            27..=29 => ( 0.010, 0.025),
+            30..=33 => ( 0.004, 0.015),
+            34..=36 => (-0.002, 0.005),
+            _       => (-0.008,-0.001),
+        },
     }
 }
 
@@ -362,6 +411,29 @@ fn skill_gap_factor(current_skill: f32, skill_ceiling: f32) -> f32 {
     (gap_ratio * 2.0).sqrt().clamp(0.1, 1.5)
 }
 
+// ── Competition quality multiplier ──────────────────────────────────────
+//
+// Players in stronger leagues develop faster because they face better
+// opposition, higher tactical demands, and greater physical intensity.
+// A player getting 30 apps in the Russian First Division develops slower
+// than one getting 30 apps in La Liga.
+//
+// League reputation 0-10000 maps to a 0.70-1.15 multiplier:
+//   rep ~1000 (semi-pro) → 0.70
+//   rep ~3000 (lower div) → 0.82
+//   rep ~5000 (mid-tier)  → 0.92
+//   rep ~7000 (strong)    → 1.02
+//   rep ~9000 (elite)     → 1.12
+//   rep 10000             → 1.15
+
+fn competition_quality_multiplier(league_reputation: u16) -> f32 {
+    if league_reputation == 0 {
+        return 0.75; // No league context (youth/reserve) — reduced development
+    }
+    let normalized = (league_reputation as f32 / 10000.0).clamp(0.0, 1.0);
+    (0.70 + normalized * 0.45).clamp(0.70, 1.15)
+}
+
 // ── Decline protection ──────────────────────────────────────────────────
 
 fn decline_protection(natural_fitness: f32, professionalism: f32) -> f32 {
@@ -384,6 +456,12 @@ fn individual_peak_offset(idx: usize) -> i8 {
         SK_DECISIONS | SK_VISION | SK_POSITIONING => 2,
         SK_ANTICIPATION => 1,
         SK_FLAIR | SK_DRIBBLING => -1,
+        // GK: experience-based skills peak later
+        SK_GK_COMMAND_OF_AREA | SK_GK_COMMUNICATION => 3,
+        SK_GK_ONE_ON_ONES | SK_GK_RUSHING_OUT => 2,
+        SK_GK_HANDLING | SK_GK_PUNCHING => 1,
+        // GK: reflexes/aerial reach are more physical, peak earlier
+        SK_GK_REFLEXES | SK_GK_AERIAL_REACH => -1,
         _ => 0,
     }
 }
@@ -394,6 +472,7 @@ fn skills_to_array(player: &Player) -> [f32; SKILL_COUNT] {
     let t = &player.skills.technical;
     let m = &player.skills.mental;
     let p = &player.skills.physical;
+    let g = &player.skills.goalkeeping;
     [
         t.corners, t.crossing, t.dribbling, t.finishing, t.first_touch,
         t.free_kicks, t.heading, t.long_shots, t.long_throws, t.marking,
@@ -403,6 +482,9 @@ fn skills_to_array(player: &Player) -> [f32; SKILL_COUNT] {
         m.positioning, m.teamwork, m.vision, m.work_rate,
         p.acceleration, p.agility, p.balance, p.jumping, p.natural_fitness,
         p.pace, p.stamina, p.strength, p.match_readiness,
+        g.aerial_reach, g.command_of_area, g.communication, g.eccentricity,
+        g.first_touch, g.handling, g.kicking, g.one_on_ones, g.passing,
+        g.punching, g.reflexes, g.rushing_out, g.throwing,
     ]
 }
 
@@ -431,6 +513,15 @@ fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
     p.natural_fitness = arr[SK_NATURAL_FITNESS]; p.pace = arr[SK_PACE];
     p.stamina = arr[SK_STAMINA]; p.strength = arr[SK_STRENGTH];
     p.match_readiness = arr[SK_MATCH_READINESS];
+
+    let g = &mut player.skills.goalkeeping;
+    g.aerial_reach = arr[SK_GK_AERIAL_REACH]; g.command_of_area = arr[SK_GK_COMMAND_OF_AREA];
+    g.communication = arr[SK_GK_COMMUNICATION]; g.eccentricity = arr[SK_GK_ECCENTRICITY];
+    g.first_touch = arr[SK_GK_FIRST_TOUCH]; g.handling = arr[SK_GK_HANDLING];
+    g.kicking = arr[SK_GK_KICKING]; g.one_on_ones = arr[SK_GK_ONE_ON_ONES];
+    g.passing = arr[SK_GK_PASSING]; g.punching = arr[SK_GK_PUNCHING];
+    g.reflexes = arr[SK_GK_REFLEXES]; g.rushing_out = arr[SK_GK_RUSHING_OUT];
+    g.throwing = arr[SK_GK_THROWING];
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -443,7 +534,7 @@ impl Player {
     /// Key difference from naive approach: each skill has its OWN ceiling and
     /// growth rate based on position weights. A striker's finishing develops fast
     /// toward a high ceiling while their tackling barely moves.
-    pub fn process_development(&mut self, now: NaiveDate) {
+    pub fn process_development(&mut self, now: NaiveDate, league_reputation: u16) {
         let age = DateUtils::age(self.birth_date, now);
         let pa = self.player_attributes.potential_ability as f32;
 
@@ -483,6 +574,8 @@ impl Player {
             self.attributes.professionalism,
         );
 
+        let comp_quality = competition_quality_multiplier(league_reputation);
+
         // ── Process each skill ────────────────────────────────────────
 
         let mut skills = skills_to_array(self);
@@ -510,8 +603,8 @@ impl Player {
             let pos_rate_mult = dev_weights[i];
 
             let change = if base > 0.0 {
-                // Growth: scale by all positive multipliers + position relevance
-                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult
+                // Growth: scale by all positive multipliers + position relevance + competition quality
+                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality
             } else {
                 // Decline: position-irrelevant skills decline slightly faster
                 // Key skills are more "maintained" by regular use

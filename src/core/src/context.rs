@@ -58,9 +58,9 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_league(&self, league_id: u32, league_slug: String, team_ids: &'gc [u32]) -> Self {
+    pub fn with_league(&self, league_id: u32, league_slug: String, team_ids: &'gc [u32], reputation: u16) -> Self {
         let mut ctx = GlobalContext::clone(self);
-        ctx.league = Some(LeagueContext::new(league_id, league_slug, team_ids));
+        ctx.league = Some(LeagueContext::new(league_id, league_slug, team_ids, reputation));
         ctx
     }
 
@@ -292,7 +292,7 @@ mod tests {
         let updated_global_ctx = global_ctx
             .with_continent(1)
             .with_country(1)
-            .with_league(1, "slug".to_owned(), &[1, 2])
+            .with_league(1, "slug".to_owned(), &[1, 2], 5000)
             .with_club(1, "Test Club")
             .with_team(1)
             .with_finance()

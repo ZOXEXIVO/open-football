@@ -166,6 +166,15 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                // Elite/Continental clubs require candidates from at least National-level clubs.
+                // This prevents top clubs from scouting players in semi-professional leagues
+                // whose inflated ability numbers don't reflect proven quality at a high level.
+                let min_source_rep = match club_rep {
+                    ReputationLevel::Elite => ReputationLevel::National,
+                    ReputationLevel::Continental => ReputationLevel::Regional,
+                    _ => ReputationLevel::Amateur,
+                };
+
                 // Filter candidates from other clubs
                 let candidates: Vec<&PlayerSnapshot> = all_snapshots
                     .iter()
@@ -175,6 +184,8 @@ impl PipelineProcessor {
                             && p.ability >= avg_ability.saturating_sub(10)
                             && p.ability <= avg_ability + (judging / 2)
                             && (max_recommend_value <= 0.0 || p.estimated_value <= max_recommend_value)
+                            && Self::rep_level_value(&p.parent_club_reputation)
+                                >= Self::rep_level_value(&min_source_rep)
                             && !already_recommended.contains(&p.id)
                             && !actions
                                 .iter()

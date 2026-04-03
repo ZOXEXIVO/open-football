@@ -122,7 +122,8 @@ impl Player {
         if ctx.simulation.is_week_beginning() {
             self.process_happiness(&mut result, now.date(), team_reputation);
             // Natural skill development (weekly)
-            self.process_development(now.date());
+            let league_reputation = ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0);
+            self.process_development(now.date(), league_reputation);
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);

@@ -10,6 +10,9 @@ pub struct CountryContext {
     pub tv_revenue_multiplier: f32,
     pub sponsorship_market_strength: f32,
     pub stadium_attendance_factor: f32,
+    /// Country-level price multiplier for transfers and budgets (from country data).
+    /// England 1.5, Spain 1.2, Colombia 0.4, etc. Default 1.0.
+    pub price_level: f32,
 }
 
 impl CountryContext {
@@ -20,6 +23,7 @@ impl CountryContext {
             tv_revenue_multiplier: 1.0,
             sponsorship_market_strength: 1.0,
             stadium_attendance_factor: 1.0,
+            price_level: 1.0,
         }
     }
 
@@ -30,6 +34,7 @@ impl CountryContext {
             tv_revenue_multiplier: 1.0,
             sponsorship_market_strength: 1.0,
             stadium_attendance_factor: 1.0,
+            price_level: 1.0,
         }
     }
 

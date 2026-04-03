@@ -17,6 +17,7 @@ impl PlayerValueCalculator {
         let status_factor = determine_status_factor(player);
         let contract_factor = determine_contract_factor(player, now);
         let performance_factor = determine_performance_factor(player);
+        let career_factor = determine_career_consistency_factor(player);
         let reputation_factor = determine_reputation_factor(player);
         let position_factor = determine_position_factor(player);
         let league_club_factor = determine_league_club_factor(league_reputation, club_reputation);
@@ -27,6 +28,7 @@ impl PlayerValueCalculator {
             * status_factor
             * contract_factor
             * performance_factor
+            * career_factor
             * reputation_factor
             * position_factor
             * league_club_factor
@@ -225,14 +227,16 @@ fn determine_performance_factor(player: &Player) -> f64 {
         factor *= 1.15;
     } else if stats.average_rating > 7.0 {
         factor *= 1.05;
+    } else if stats.average_rating > 6.9 {
+        factor *= 0.97; // Slightly below par — mild discount
     } else if stats.average_rating > 6.8 {
-        // Decent — no adjustment
+        factor *= 0.93; // Average at best — noticeable discount
     } else if stats.average_rating > 6.5 {
-        factor *= 0.92; // Below average performer
+        factor *= 0.85; // Below average performer
     } else if stats.average_rating > 6.0 {
-        factor *= 0.82; // Poor performer — clear discount
+        factor *= 0.75; // Poor performer — clear discount
     } else if stats.average_rating > 0.0 {
-        factor *= 0.7; // Very poor
+        factor *= 0.65; // Very poor
     }
 
     // International experience
@@ -246,6 +250,49 @@ fn determine_performance_factor(player: &Player) -> f64 {
     }
 
     factor
+}
+
+/// Career consistency: players with a track record of mediocre performance across
+/// multiple seasons should not command premium fees. This prevents the "stepping stone"
+/// effect where a player's value inflates purely from moving to bigger clubs without
+/// ever performing well.
+///
+/// Only applies to players with 2+ seasons of history. Young players (<22) are exempt
+/// since their career is still developing.
+fn determine_career_consistency_factor(player: &Player) -> f64 {
+    let history = &player.statistics_history.items;
+
+    // Need meaningful history to judge
+    let rated_seasons: Vec<_> = history.iter()
+        .filter(|h| h.statistics.played >= 10 && h.statistics.average_rating > 0.0)
+        .collect();
+
+    if rated_seasons.len() < 2 {
+        return 1.0; // Not enough data
+    }
+
+    let total_games: u32 = rated_seasons.iter().map(|h| h.statistics.played as u32).sum();
+    let weighted_rating: f64 = rated_seasons.iter()
+        .map(|h| h.statistics.average_rating as f64 * h.statistics.played as f64)
+        .sum::<f64>() / total_games as f64;
+
+    // Career average rating impact:
+    //   7.5+ → 1.10 (proven elite performer)
+    //   7.0+ → 1.0  (solid career, no adjustment)
+    //   6.9+ → 0.92 (slightly below par over career)
+    //   6.8+ → 0.85 (consistently mediocre — significant discount)
+    //   <6.8 → 0.75 (poor career record)
+    if weighted_rating > 7.5 {
+        1.10
+    } else if weighted_rating > 7.0 {
+        1.0
+    } else if weighted_rating > 6.9 {
+        0.92
+    } else if weighted_rating > 6.8 {
+        0.85
+    } else {
+        0.75
+    }
 }
 
 /// Player reputation adds premium for well-known players

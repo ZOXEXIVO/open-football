@@ -80,15 +80,55 @@ impl CountryResult {
         }
     }
 
-    fn calculate_league_competitiveness(_league: &crate::league::League) -> f32 {
-        0.5
+    fn calculate_league_competitiveness(league: &crate::league::League) -> f32 {
+        if league.table.rows.is_empty() {
+            return 0.0;
+        }
+
+        let rows = &league.table.rows;
+        let total = rows.len() as f32;
+        if total < 2.0 {
+            return 0.0;
+        }
+
+        // Measure point spread between top and bottom — tighter = more competitive
+        let max_points = rows.iter().map(|r| r.points).max().unwrap_or(0) as f32;
+        let min_points = rows.iter().map(|r| r.points).min().unwrap_or(0) as f32;
+
+        if max_points <= 0.0 {
+            return 0.0;
+        }
+
+        let spread = (max_points - min_points) / max_points;
+        // spread ~0.3 = very competitive, spread ~0.8 = dominated
+        // Map to -1.0 (bad) to 1.0 (good)
+        (1.0 - spread * 2.0).clamp(-1.0, 1.0)
     }
 
-    fn calculate_international_success(_country: &Country) -> i16 {
-        0
+    fn calculate_international_success(country: &Country) -> i16 {
+        // Count clubs in continental competitions (approximated by having high world reputation)
+        let high_rep_clubs = country.clubs.iter()
+            .filter(|c| c.teams.teams.first()
+                .map(|t| t.reputation.overall_score() >= 0.6)
+                .unwrap_or(false))
+            .count();
+
+        match high_rep_clubs {
+            0 => -2,
+            1 => 0,
+            2..=3 => 2,
+            _ => 5,
+        }
     }
 
-    fn calculate_transfer_market_reputation(_country: &Country) -> i16 {
-        0
+    fn calculate_transfer_market_reputation(country: &Country) -> i16 {
+        // Active transfer market with incoming signings boosts reputation
+        let completed = country.transfer_market.transfer_history.len();
+        match completed {
+            0..=5 => -1,
+            6..=20 => 0,
+            21..=50 => 1,
+            _ => 3,
+        }
     }
 }

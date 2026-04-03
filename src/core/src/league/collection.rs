@@ -37,7 +37,7 @@ impl LeagueCollection {
                         || {
                             league.simulate(
                                 clubs,
-                                ctx.with_league(league.id, league_slug, &league_team_ids),
+                                ctx.with_league(league.id, league_slug, &league_team_ids, league.reputation),
                             )
                         },
                         message,

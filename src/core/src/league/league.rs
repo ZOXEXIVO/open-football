@@ -109,7 +109,7 @@ impl League {
 
         let mut schedule_result = self.schedule.simulate(
             &self.settings,
-            ctx.with_league(self.id, String::from(&self.slug), &league_teams),
+            ctx.with_league(self.id, String::from(&self.slug), &league_teams, self.reputation),
         );
 
         let new_season_started = schedule_result.generated

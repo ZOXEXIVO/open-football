@@ -78,11 +78,23 @@ impl ClubBoard {
             0.20 // Amateur
         };
 
-        let transfer_budget = if board_ctx.balance > 0 {
-            (board_ctx.balance as f64 * budget_pct) as i32
+        let raw_budget = if board_ctx.balance > 0 {
+            (board_ctx.balance as f64 * budget_pct) as i64
         } else {
             0
         };
+
+        // Cap transfer budget by country financial tier.
+        // Uses the minimum of two ceilings:
+        //   1. price_level² × 80M (spending culture: England 1.5→180M, Colombia 0.4→12.8M)
+        //   2. eco² × 300M (economy size: England 0.72→156M, Malta 0.08→1.8M)
+        // The min() ensures both small economies AND low-spending cultures are capped.
+        let eco = board_ctx.country_economic_factor as f64;
+        let price = board_ctx.country_price_level as f64;
+        let price_ceiling = price * price * 80_000_000.0;
+        let eco_ceiling = eco * eco * 300_000_000.0;
+        let budget_ceiling = price_ceiling.min(eco_ceiling) as i64;
+        let transfer_budget = raw_budget.min(budget_ceiling) as i32;
 
         // Wage budget: current annual wages * growth factor
         let wage_growth = if rep >= 0.7 {

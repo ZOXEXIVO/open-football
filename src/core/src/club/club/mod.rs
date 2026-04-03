@@ -122,7 +122,13 @@ impl Club {
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubResult {
         let date = ctx.simulation.date.date();
 
-        let board_ctx = self.build_board_context();
+        let country_economic_factor = ctx.country.as_ref()
+            .map(|c| c.tv_revenue_multiplier)
+            .unwrap_or(1.0);
+        let country_price_level = ctx.country.as_ref()
+            .map(|c| c.price_level)
+            .unwrap_or(1.0);
+        let board_ctx = self.build_board_context(country_economic_factor, country_price_level);
 
         // Build club context with facility data for training/academy
         let club_ctx = ctx.with_club(self.id, &self.name);
@@ -197,7 +203,7 @@ impl Club {
         result
     }
 
-    fn build_board_context(&self) -> BoardContext {
+    fn build_board_context(&self, country_economic_factor: f32, country_price_level: f32) -> BoardContext {
         let main_team = self.teams.teams.iter().find(|t| t.team_type == TeamType::Main);
 
         let main_squad_size = main_team.map(|t| t.players.players.len()).unwrap_or(0);
@@ -221,6 +227,8 @@ impl Club {
             reputation_score,
             main_squad_size,
             reserve_squad_size,
+            country_economic_factor,
+            country_price_level,
         }
     }
 }
