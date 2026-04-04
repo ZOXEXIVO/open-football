@@ -26,6 +26,7 @@ impl AcceptContractHandler {
             loan_from_club_id: None,
             loan_from_team_id: None,
             loan_to_club_id: None,
+            loan_match_fee: None,
             bonuses: vec![],
             clauses: vec![],
         });

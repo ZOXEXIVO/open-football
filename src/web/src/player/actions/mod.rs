@@ -371,7 +371,12 @@ pub async fn loan_action(
             }
         };
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
-        player.contract_loan = Some(PlayerClubContract::new_loan(salary, expiration, parent_club_id, parent_team_id, body.to_club_id));
+        // Match fee based on player salary — parent club pays per official appearance
+        let match_fee = (salary / 4).max(500);
+        player.contract_loan = Some(
+            PlayerClubContract::new_loan(salary, expiration, parent_club_id, parent_team_id, body.to_club_id)
+                .with_loan_match_fee(match_fee)
+        );
 
         sim.continents[dest_pos.0].countries[dest_pos.1].clubs[dest_pos.2]
             .teams.teams[dest_pos.3].players.add(player);

@@ -116,6 +116,10 @@ pub struct ClubFinancialBalance {
     pub expense_player_wages: i64,
     pub expense_staff_wages: i64,
     pub expense_facilities: i64,
+
+    // Loan match fee tracking
+    pub income_loan_fees: i64,
+    pub expense_loan_fees: i64,
 }
 
 impl ClubFinancialBalance {
@@ -132,6 +136,8 @@ impl ClubFinancialBalance {
             expense_player_wages: 0,
             expense_staff_wages: 0,
             expense_facilities: 0,
+            income_loan_fees: 0,
+            expense_loan_fees: 0,
         }
     }
 
@@ -187,6 +193,17 @@ impl ClubFinancialBalance {
         self.push_outcome(amount);
     }
 
+    // Loan match fee methods
+    pub fn push_income_loan_fees(&mut self, amount: i64) {
+        self.income_loan_fees += amount;
+        self.push_income(amount);
+    }
+
+    pub fn push_expense_loan_fees(&mut self, amount: i64) {
+        self.expense_loan_fees += amount;
+        self.push_outcome(amount);
+    }
+
     pub fn clear(&mut self) {
         self.income = 0;
         self.outcome = 0;
@@ -198,5 +215,7 @@ impl ClubFinancialBalance {
         self.expense_player_wages = 0;
         self.expense_staff_wages = 0;
         self.expense_facilities = 0;
+        self.income_loan_fees = 0;
+        self.expense_loan_fees = 0;
     }
 }

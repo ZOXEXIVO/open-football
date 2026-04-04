@@ -1,4 +1,5 @@
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
+use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
@@ -153,6 +154,12 @@ impl LeagueResult {
             }
         }
 
+        // Process loan match fees for official matches.
+        // The parent club pays the borrowing club for each appearance.
+        if !is_friendly {
+            Self::process_loan_match_fees(details, data);
+        }
+
         // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
 
@@ -210,6 +217,44 @@ impl LeagueResult {
         // Save PoM to match result
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
+        }
+    }
+
+    /// Process loan match fees: parent club pays borrowing club per official appearance.
+    /// Collects (parent_club_id, borrowing_club_id, fee) for all loan players who appeared,
+    /// then applies the financial transactions.
+    fn process_loan_match_fees(details: &MatchResultRaw, data: &mut SimulatorData) {
+        // Collect fee transfers: (parent_club_id, borrowing_club_id, fee)
+        let mut fee_transfers: Vec<(u32, u32, u32)> = Vec::new();
+
+        let all_players = details.left_team_players.main.iter()
+            .chain(details.left_team_players.substitutes_used.iter())
+            .chain(details.right_team_players.main.iter())
+            .chain(details.right_team_players.substitutes_used.iter());
+
+        for &player_id in all_players {
+            if let Some(player) = data.player(player_id) {
+                if let Some(ref loan) = player.contract_loan {
+                    if let (Some(fee), Some(parent_id), Some(borrowing_id)) =
+                        (loan.loan_match_fee, loan.loan_from_club_id, loan.loan_to_club_id)
+                    {
+                        if fee > 0 {
+                            fee_transfers.push((parent_id, borrowing_id, fee));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Apply financial transactions
+        for (parent_club_id, borrowing_club_id, fee) in fee_transfers {
+            let amount = fee as i64;
+            if let Some(parent_club) = data.club_mut(parent_club_id) {
+                parent_club.finance.balance.push_expense_loan_fees(amount);
+            }
+            if let Some(borrowing_club) = data.club_mut(borrowing_club_id) {
+                borrowing_club.finance.balance.push_income_loan_fees(amount);
+            }
         }
     }
 }

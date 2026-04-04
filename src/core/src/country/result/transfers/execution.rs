@@ -273,7 +273,12 @@ fn execute_loan_within_country(
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let salary = (loan_fee / 50.0).max(200.0) as u32;
-            player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id));
+            // Match fee: parent club pays ~2% of the loan fee per appearance, min 500
+            let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
+            player.contract_loan = Some(
+                PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id)
+                    .with_loan_match_fee(match_fee)
+            );
 
             buying_club.finance.spend_from_transfer_budget(loan_fee);
             if !buying_club.teams.teams.is_empty() {
@@ -287,7 +292,7 @@ fn execute_loan_within_country(
             selling_club.transfer_plan.loan_out_candidates.retain(|c| c.player_id != player_id);
         }
 
-        debug!("Loan completed: player {} from club {} to club {} (fee: {})", player_id, selling_club_id, buying_club_id, loan_fee);
+        debug!("Loan completed: player {} from club {} to club {} (fee: {}, match_fee: {})", player_id, selling_club_id, buying_club_id, loan_fee, ((loan_fee * 0.02).max(500.0)) as u32);
         true
     } else {
         debug!("Loan failed: player {} not found at club {}", player_id, selling_club_id);
@@ -498,7 +503,11 @@ fn execute_loan_across_countries(
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
         let salary = (loan_fee / 50.0).max(200.0) as u32;
-        player.contract_loan = Some(PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id));
+        let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
+        player.contract_loan = Some(
+            PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id)
+                .with_loan_match_fee(match_fee)
+        );
 
         buying_club.finance.spend_from_transfer_budget(loan_fee);
         if !buying_club.teams.teams.is_empty() {

@@ -387,11 +387,20 @@ impl ScoringEngine {
         // A good coach includes them on the bench to sub in when possible.
         let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
         if total_games < 5.0 {
-            // Loan players with no games get a stronger push — the club
-            // brought them in to play, not to sit in reserves
-            let loan_factor = if player.contract_loan.is_some() { 2.0 } else { 1.0 };
+            let loan_factor = if player.contract_loan.is_some() { 1.3 } else { 1.0 };
             let need_minutes_bonus = (5.0 - total_games) * 0.4 * loan_factor;
             score += need_minutes_bonus;
+        }
+
+        // Loan match fee incentive: if the parent club pays per appearance,
+        // the borrowing club has a financial reason to include the player.
+        if let Some(ref loan) = player.contract_loan {
+            if let Some(fee) = loan.loan_match_fee {
+                // Small score bonus proportional to the fee — capped so it
+                // nudges selection without overriding quality.
+                let fee_bonus = (fee as f32 / 10000.0).min(1.0);
+                score += fee_bonus;
+            }
         }
 
         score

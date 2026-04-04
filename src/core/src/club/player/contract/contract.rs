@@ -94,6 +94,10 @@ pub struct PlayerClubContract {
     pub loan_from_team_id: Option<u32>,
     pub loan_to_club_id: Option<u32>,
 
+    /// Fee the parent club pays the borrowing club per official match played.
+    /// Incentivises the borrowing club to give the player minutes.
+    pub loan_match_fee: Option<u32>,
+
     pub bonuses: Vec<ContractBonus>,
     pub clauses: Vec<ContractClause>,
 }
@@ -112,6 +116,7 @@ impl PlayerClubContract {
             loan_from_club_id: None,
             loan_from_team_id: None,
             loan_to_club_id: None,
+            loan_match_fee: None,
             bonuses: vec![],
             clauses: vec![],
         }
@@ -130,6 +135,7 @@ impl PlayerClubContract {
             loan_from_club_id: None,
             loan_from_team_id: None,
             loan_to_club_id: None,
+            loan_match_fee: None,
             bonuses: vec![],
             clauses: vec![],
         }
@@ -148,9 +154,15 @@ impl PlayerClubContract {
             loan_from_club_id: Some(from_club_id),
             loan_from_team_id: Some(from_team_id),
             loan_to_club_id: Some(to_club_id),
+            loan_match_fee: None,
             bonuses: vec![],
             clauses: vec![],
         }
+    }
+
+    pub fn with_loan_match_fee(mut self, fee: u32) -> Self {
+        self.loan_match_fee = Some(fee);
+        self
     }
 
     pub fn is_expired(&self, now: NaiveDateTime) -> bool {
