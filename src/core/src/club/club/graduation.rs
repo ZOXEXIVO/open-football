@@ -88,11 +88,8 @@ impl Club {
             debug!("academy {}: {} aged-out players released", self.name, released);
         }
 
-        // Move overage players from youth teams to main team
-        self.enforce_youth_team_age_limits(date);
-
-        // Fill main team if still short
-        self.promote_youth_to_main_if_needed(date);
+        // Rebalance: overage moves, talent promotions, backfill
+        self.rebalance_squads(date);
 
         transfers
     }

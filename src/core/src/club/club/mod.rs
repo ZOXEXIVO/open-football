@@ -160,9 +160,8 @@ impl Club {
             // Weekly: move loan returnees from main to reserve
             self.move_loan_returns_to_reserve(date);
 
-            // Weekly: enforce youth team age limits and fill main squad
-            self.enforce_youth_team_age_limits(date);
-            self.promote_youth_to_main_if_needed(date);
+            // Weekly: rebalance players across all teams
+            self.rebalance_squads(date);
         } else {
             self.teams.manage_critical_squad_moves(date);
         }

@@ -191,6 +191,7 @@ impl TeamCollection {
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::Reserve))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U23))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U21))
+            .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U20))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U19))
             .or_else(|| self.teams.iter().position(|t| t.team_type == TeamType::U18))
     }

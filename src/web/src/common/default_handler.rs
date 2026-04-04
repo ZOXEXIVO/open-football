@@ -9,11 +9,15 @@ use std::sync::LazyLock;
 // Also provides CSS_VERSION for cache-busting query params
 include!(concat!(env!("OUT_DIR"), "/css_hash.rs"));
 
-/// Machine hostname, resolved once at startup.
+/// Machine hostname with CPU info, resolved once at startup.
 pub static COMPUTER_NAME: LazyLock<String> = LazyLock::new(|| {
-    hostname::get()
+    let name = hostname::get()
         .map(|h| h.to_string_lossy().into_owned())
-        .unwrap_or_else(|_| "unknown".to_string())
+        .unwrap_or_else(|_| "unknown".to_string());
+    let cpus = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1);
+    format!("{name} (CPU: {cpus})")
 });
 
 #[derive(RustEmbed)]
