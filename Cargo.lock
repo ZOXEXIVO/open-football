@@ -1502,7 +1502,6 @@ dependencies = [
  "core",
  "database",
  "env_logger",
- "hostname",
  "log",
  "tikv-jemallocator",
  "tokio",

@@ -14,14 +14,13 @@ authors.workspace = true
 edition.workspace = true
 
 [dependencies]
-game_core = { path = "src/core", package = "core" }
+simulator_core = { path = "src/core", package = "core" }
 web = { path = "src/web" }
 database = { path = "src/database" }
 log = { version = "0.4.29", features = ["release_max_level_info"] }
 env_logger = "0.11.10"
 color-eyre = "0.6.5"
 tokio = { version = "1.51.0", features = ["full"] }
-hostname = "0.4.2"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 tikv-jemallocator = "0.6"
