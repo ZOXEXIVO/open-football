@@ -62,8 +62,13 @@ impl Club {
                 let ca = p.player_attributes.current_ability;
                 let overage = max_age.map_or(false, |limit| age > limit);
 
+                // Never promote players marked for departure
+                let statuses = p.statuses.get();
+                let listed = statuses.contains(&crate::PlayerStatusType::Lst)
+                    || statuses.contains(&crate::PlayerStatusType::Loa);
+
                 // High ability → promote straight to main team
-                if ca >= main_ability_floor {
+                if ca >= main_ability_floor && !listed {
                     moves.push(PendingMove {
                         from: ti,
                         to: main_idx,
@@ -76,9 +81,18 @@ impl Club {
                 // Overage → move to next team in progression (or main)
                 if overage {
                     let next = self.find_next_youth_team(team.team_type, age);
+                    // Listed players: only move within youth progression, not to main
+                    let dest = if listed {
+                        match next {
+                            Some(idx) => idx,
+                            None => continue, // no youth team available, skip
+                        }
+                    } else {
+                        next.unwrap_or(main_idx)
+                    };
                     moves.push(PendingMove {
                         from: ti,
-                        to: next.unwrap_or(main_idx),
+                        to: dest,
                         player_id: p.id,
                         reason: "overage for current team",
                     });
@@ -149,6 +163,10 @@ impl Club {
                     continue;
                 }
                 for p in &team.players.players {
+                    let st = p.statuses.get();
+                    if st.contains(&crate::PlayerStatusType::Lst) || st.contains(&crate::PlayerStatusType::Loa) {
+                        continue;
+                    }
                     candidates.push((ti, p.id, p.player_attributes.current_ability));
                 }
             }

@@ -2,7 +2,7 @@
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-use core::utils::TimeEstimation;
+use game_core::utils::TimeEstimation;
 use database::{DatabaseGenerator, DatabaseLoader};
 use env_logger::Env;
 use log::info;
@@ -32,7 +32,7 @@ async fn main() {
     // ).await;
 
     // Register service so core can use it via trait — no tokio in core
-    core::ai::set_ai_service(Box::new(RegistryAiService {
+    game_core::ai::set_ai_service(Box::new(RegistryAiService {
         registry: Arc::clone(&ai_registry),
     }));
 

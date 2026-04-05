@@ -195,7 +195,8 @@ impl Club {
             }
 
             self.process_pre_season_reset();
-            result.academy_transfers = self.process_academy_graduations(date);
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            result.academy_transfers = self.process_academy_graduations(date, country_code);
             self.trim_positional_surplus(date);
         }
 

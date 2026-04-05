@@ -1,3 +1,4 @@
+use crate::club::player::language::{Language, PlayerLanguage};
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{CompletedTransfer, TransferType};
 use crate::{PlayerStatusType, TeamType};
@@ -38,7 +39,7 @@ impl Club {
     /// Move overage youth players to main team.
     /// Aged-out academy players disappear.
     /// Returns completed transfer records for graduated players.
-    pub(super) fn process_academy_graduations(&mut self, date: NaiveDate) -> Vec<CompletedTransfer> {
+    pub(super) fn process_academy_graduations(&mut self, date: NaiveDate, country_code: &str) -> Vec<CompletedTransfer> {
         let mut transfers = Vec::new();
 
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
@@ -64,7 +65,15 @@ impl Club {
             if !graduated.is_empty() {
                 debug!("academy {}: {} players graduated (contract: {}, assigned: {:?}, was {})",
                     self.name, graduated.len(), main_team_name, youth_team_type, youth_count);
-                for player in graduated {
+                for mut player in graduated {
+                    // Assign native languages based on player's nationality
+                    if player.languages.is_empty() {
+                        player.languages = Language::from_country_code(country_code)
+                            .into_iter()
+                            .map(|lang| PlayerLanguage::native(lang))
+                            .collect();
+                    }
+
                     transfers.push(CompletedTransfer::new(
                         player.id,
                         player.full_name.to_string(),
