@@ -1031,23 +1031,23 @@ impl PlayerGenerator {
         let standout_chance = gem_chance + 0.05 + rep_factor * 0.04;
 
         if roll < gem_chance {
-            // Gem: PA well above club range
-            let gem_min = (100.0 + rep_factor * 65.0) as i32;
-            let gem_max = (130.0 + rep_factor * 60.0).min(190.0) as i32;
-            IntegerUtils::random(gem_min, gem_max).min(195) as u8
+            // Gem: PA well above club range (5★ potential)
+            let gem_min = (110.0 + rep_factor * 65.0) as i32;
+            let gem_max = (140.0 + rep_factor * 55.0).min(195.0) as i32;
+            IntegerUtils::random(gem_min, gem_max).min(200) as u8
         } else if roll < standout_chance {
-            // Standout: clearly best players at the club
-            let standout_base = 55.0 + rep_factor * 50.0 + rep_factor * rep_factor * 60.0;
-            let noise = random_normal() * 8.0;
+            // Standout: clearly best players at the club (4-5★)
+            let standout_base = 60.0 + rep_factor * 55.0 + rep_factor * rep_factor * 65.0;
+            let noise = random_normal() * 10.0;
             let pa = standout_base + noise;
-            pa.clamp(30.0, 175.0) as u8
+            pa.clamp(30.0, 190.0) as u8
         } else {
             // Normal: bulk of squad — top clubs should have mostly 3-4★ players
-            let base = 20.0 + rep_factor * 55.0 + rep_factor * rep_factor * 75.0;
-            let youth_bonus = if age <= 21 { 4.0 } else if age <= 25 { 1.5 } else { 0.0 };
-            let noise = random_normal() * (5.0 + rep_factor * 8.0);
+            let base = 25.0 + rep_factor * 60.0 + rep_factor * rep_factor * 80.0;
+            let youth_bonus = if age <= 21 { 5.0 } else if age <= 25 { 2.0 } else { 0.0 };
+            let noise = random_normal() * (5.0 + rep_factor * 10.0);
             let pa = base + youth_bonus + noise;
-            pa.clamp(20.0, 160.0) as u8
+            pa.clamp(20.0, 185.0) as u8
         }
     }
 

@@ -582,35 +582,34 @@ impl PlayerGenerator {
 
         // Calculate PA first — skills are PA-anchored for proper position differentiation
         // Youth Recruitment affects gem chance (rare exceptional talent)
-        // Poor recruitment (0.05) → 0.7%, Average (0.35) → 1.9%, Best (1.0) → 4.0%
-        // A top academy producing ~8 players/year: ~0.32 gems/year = 1 gem per ~3 years
-        // A mid-level academy: ~0.15 gems/year = 1 gem per ~7 years
-        let gem_chance = 0.005 + recruitment_quality * 0.035;
+        // Poor recruitment (0.05) → 0.5%, Average (0.35) → 1.2%, Best (1.0) → 2.5%
+        // Aligned with initial generation gem rates (~1-2% at top clubs)
+        let gem_chance = 0.003 + recruitment_quality * 0.022;
 
         let gem_roll = rand::random::<f32>();
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Talent jitter (0.35-1.65x on raw_ca) creates wide spread within each academy.
-        // Poor academy (0.05): PA cap ~67,  typical PA 10-55
-        // Average (0.35):      PA cap ~109, typical PA 15-95
-        // Good (0.55):         PA cap ~137, typical PA 25-130
-        // Excellent (0.75):    PA cap ~165, typical PA 35-160
-        // Best (1.0):          PA cap ~200, typical PA 50-200
-        let mut academy_pa_cap = (60.0 + academy_quality * 140.0) as i32; // 67..200
+        // Talent jitter (0.35-1.45x on raw_ca) creates wide spread within each academy.
+        // Poor academy (0.05): PA cap ~55,  typical PA 10-45
+        // Average (0.35):      PA cap ~85,  typical PA 15-70
+        // Good (0.55):         PA cap ~105, typical PA 20-90
+        // Excellent (0.75):    PA cap ~125, typical PA 30-110
+        // Best (1.0):          PA cap ~150, typical PA 40-135
+        let mut academy_pa_cap = (50.0 + academy_quality * 100.0) as i32; // 55..150
 
         // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
         // Even a small club can produce a generational talent — just extremely rarely.
         let prodigy_roll = rand::random::<f32>();
         if prodigy_roll < 0.00005 {
             // Once-in-a-generation: ~0.005% → across 400 players/year = once per ~50 years
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(185, 200));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(170, 190));
         } else if prodigy_roll < 0.00025 {
             // World-class potential: ~0.02% → roughly once per ~12 years globally
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(170, 190));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(155, 175));
         } else if prodigy_roll < 0.001 {
             // Very high potential: ~0.075% → roughly once per ~4 years globally
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(150, 175));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(140, 160));
         }
 
         // Use raw_ca (peak potential) as PA base, not age-reduced current_ability.
@@ -627,15 +626,15 @@ impl PlayerGenerator {
             // Individual talent varies widely — even elite academies produce many
             // average players alongside occasional standouts. Cubed distribution
             // heavily skews toward modest potential (long right tail):
-            //   ~30% weak (factor 0.35-0.50), ~35% average (0.50-0.80),
-            //   ~20% good (0.80-1.15), ~10% standout (1.15-1.50), ~5% exceptional (1.50+)
+            //   ~35% weak (factor 0.30-0.45), ~35% average (0.45-0.70),
+            //   ~20% good (0.70-1.00), ~8% standout (1.00-1.25), ~2% exceptional (1.25+)
             let talent_roll = rand::random::<f32>();
-            let talent_factor = 0.35 + talent_roll.powi(3) * 1.30; // 0.35..1.65
+            let talent_factor = 0.30 + talent_roll.powi(3) * 1.15; // 0.30..1.45
             let jittered_base = (raw_ca as f32 * talent_factor) as i32;
 
             // Modest headroom on top of jittered base, capped by academy quality
-            let base_headroom = 10.0 + academy_quality * 50.0; // 12.5..60
-            let headroom = (base_headroom * (0.70 + academy_quality * 0.35)) as i32;
+            let base_headroom = 5.0 + academy_quality * 25.0; // 6.3..30
+            let headroom = (base_headroom * (0.70 + academy_quality * 0.30)) as i32;
             let raw_pa = jittered_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.max(20).min(academy_pa_cap).min(200) as u8
         };
