@@ -590,26 +590,26 @@ impl PlayerGenerator {
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Talent jitter (0.35-1.45x on raw_ca) creates wide spread within each academy.
-        // Poor academy (0.05): PA cap ~55,  typical PA 10-45
-        // Average (0.35):      PA cap ~85,  typical PA 15-70
-        // Good (0.55):         PA cap ~105, typical PA 20-90
-        // Excellent (0.75):    PA cap ~125, typical PA 30-110
-        // Best (1.0):          PA cap ~150, typical PA 40-135
-        let mut academy_pa_cap = (50.0 + academy_quality * 100.0) as i32; // 55..150
+        // Square-root curve so mid-tier academies (Good/Adequate) aren't overly punished:
+        //   Poor academy (0.05): PA cap ~92,  typical PA 15-65
+        //   Average (0.35):      PA cap ~139, typical PA 25-110
+        //   Good (0.55):         PA cap ~154, typical PA 35-130
+        //   Excellent (0.75):    PA cap ~167, typical PA 40-150
+        //   Best (1.0):          PA cap ~180, typical PA 50-165
+        let mut academy_pa_cap = (80.0 + academy_quality.sqrt() * 100.0) as i32; // 82..180
 
         // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
         // Even a small club can produce a generational talent — just extremely rarely.
         let prodigy_roll = rand::random::<f32>();
         if prodigy_roll < 0.00005 {
             // Once-in-a-generation: ~0.005% → across 400 players/year = once per ~50 years
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(170, 190));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(175, 195));
         } else if prodigy_roll < 0.00025 {
             // World-class potential: ~0.02% → roughly once per ~12 years globally
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(155, 175));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(160, 180));
         } else if prodigy_roll < 0.001 {
             // Very high potential: ~0.075% → roughly once per ~4 years globally
-            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(140, 160));
+            academy_pa_cap = academy_pa_cap.max(IntegerUtils::random(145, 165));
         }
 
         // Use raw_ca (peak potential) as PA base, not age-reduced current_ability.
@@ -633,7 +633,7 @@ impl PlayerGenerator {
             let jittered_base = (raw_ca as f32 * talent_factor) as i32;
 
             // Modest headroom on top of jittered base, capped by academy quality
-            let base_headroom = 5.0 + academy_quality * 25.0; // 6.3..30
+            let base_headroom = 8.0 + academy_quality * 35.0; // 9.8..43
             let headroom = (base_headroom * (0.70 + academy_quality * 0.30)) as i32;
             let raw_pa = jittered_base + IntegerUtils::random(0, headroom.max(5));
             raw_pa.max(20).min(academy_pa_cap).min(200) as u8
