@@ -207,6 +207,11 @@ pub async fn transfer_action(
         player.statuses.remove(core::PlayerStatusType::Wnt);
         player.statuses.remove(core::PlayerStatusType::Req);
         player.statuses.remove(core::PlayerStatusType::Frt);
+        player.statuses.remove(core::PlayerStatusType::Unh);
+
+        // Fresh start at new club: reset happiness so old salary/playing-time
+        // frustrations don't carry over from the previous club.
+        player.happiness.clear();
 
         let expiration = chrono::NaiveDate::from_ymd_opt(date.year() + 3, 6, 30)
             .unwrap_or(date);
@@ -341,6 +346,11 @@ pub async fn loan_action(
         player.statuses.remove(core::PlayerStatusType::Wnt);
         player.statuses.remove(core::PlayerStatusType::Req);
         player.statuses.remove(core::PlayerStatusType::Loa);
+        player.statuses.remove(core::PlayerStatusType::Unh);
+
+        // Fresh start at new club: reset happiness so old frustrations
+        // don't carry over from the previous club.
+        player.happiness.clear();
 
         // Loan contract with original parent — expiration from league season end
         let seasons = body.seasons.unwrap_or(1).clamp(1, 5) as i32;

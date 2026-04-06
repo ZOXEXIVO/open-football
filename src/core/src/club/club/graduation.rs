@@ -35,7 +35,7 @@ impl Club {
         }
     }
 
-    /// Graduate best academy players to U18 team (5-10 per year).
+    /// Graduate best academy players to U18 team (8-12 per year).
     /// Move overage youth players to main team.
     /// Aged-out academy players disappear.
     /// Returns completed transfer records for graduated players.
@@ -50,9 +50,9 @@ impl Club {
         // so 16+ year olds get a chance to graduate instead of being deleted
         if let Some(idx) = youth_idx {
             let youth_count = self.teams.teams[idx].players.players.len();
-            let target = 20usize;
+            let target = 25usize;
             let space = target.saturating_sub(youth_count);
-            let to_graduate = space.max(5).min(10);
+            let to_graduate = space.max(8).min(12);
 
             // Main team name for contract registration
             let main_team_name = self.teams.teams.iter()

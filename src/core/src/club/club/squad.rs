@@ -272,6 +272,12 @@ impl Club {
 
             let to_release = players_at_pos.len() - max_count;
             for &(team_idx, player_id, _) in players_at_pos.iter().take(to_release) {
+                // Don't drain youth teams below minimum viable squad
+                if self.teams.teams[team_idx].team_type.max_age().is_some()
+                    && self.teams.teams[team_idx].players.players.len() <= MIN_YOUTH_SQUAD
+                {
+                    continue;
+                }
                 if let Some(player) = self.teams.teams[team_idx].players.take_player(&player_id) {
                     log::debug!(
                         "positional surplus release: {} ({:?}, CA={}) from {}",
