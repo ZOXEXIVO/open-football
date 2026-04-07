@@ -556,7 +556,28 @@ impl PlayerGenerator {
         academy_quality: f32,
         recruitment_quality: f32,
     ) -> Player {
-        let year = IntegerUtils::random(now.year() - 14, now.year() - 12) as u32;
+        Self::generate_for_age_range(
+            country_id, now, position, level, people_names,
+            youth_facility_quality, academy_quality, recruitment_quality,
+            14, 14,
+        )
+    }
+
+    /// Generate a youth player with facility modifiers and custom age range.
+    /// Used both for academy intake (age 12-14) and initial U18 squad generation (age 15-18).
+    pub fn generate_for_age_range(
+        country_id: u32,
+        now: NaiveDate,
+        position: PlayerPositionType,
+        level: u8,
+        people_names: &PeopleNameGeneratorData,
+        youth_facility_quality: f32,
+        academy_quality: f32,
+        recruitment_quality: f32,
+        min_age: i32,
+        max_age: i32,
+    ) -> Player {
+        let year = IntegerUtils::random(now.year() - max_age, now.year() - min_age) as u32;
         let month = IntegerUtils::random(1, 12) as u32;
         let day = IntegerUtils::random(1, 28) as u32;
         let age = (now.year() as u32).saturating_sub(year);
@@ -582,21 +603,21 @@ impl PlayerGenerator {
 
         // Calculate PA first — skills are PA-anchored for proper position differentiation
         // Youth Recruitment affects gem chance (rare exceptional talent)
-        // Poor recruitment (0.05) → 0.5%, Average (0.35) → 1.2%, Best (1.0) → 2.5%
-        // Aligned with initial generation gem rates (~1-2% at top clubs)
-        let gem_chance = 0.003 + recruitment_quality * 0.022;
+        // Poor recruitment (0.05) → 0.9%, Average (0.35) → 1.6%, Best (1.0) → 3.0%
+        // Gives small clubs a realistic path to occasional standout talents
+        let gem_chance = 0.008 + recruitment_quality * 0.022;
 
         let gem_roll = rand::random::<f32>();
         let is_gem = gem_roll < gem_chance;
 
         // Academy quality is the primary driver of PA ceiling.
-        // Square-root curve so mid-tier academies (Good/Adequate) aren't overly punished:
-        //   Poor academy (0.05): PA cap ~92,  typical PA 15-65
-        //   Average (0.35):      PA cap ~139, typical PA 25-110
-        //   Good (0.55):         PA cap ~154, typical PA 35-130
-        //   Excellent (0.75):    PA cap ~167, typical PA 40-150
-        //   Best (1.0):          PA cap ~180, typical PA 50-165
-        let mut academy_pa_cap = (80.0 + academy_quality.sqrt() * 100.0) as i32; // 82..180
+        // Higher floor so good academies regularly produce strong players without needing gems:
+        //   Poor academy (0.05): PA cap ~107, typical PA 15-75
+        //   Average (0.35):      PA cap ~147, typical PA 25-120
+        //   Good (0.55):         PA cap ~159, typical PA 35-140
+        //   Excellent (0.75):    PA cap ~169, typical PA 40-155
+        //   Best (1.0):          PA cap ~180, typical PA 50-170
+        let mut academy_pa_cap = (100.0 + academy_quality.sqrt() * 80.0) as i32; // 102..180
 
         // Rare prodigy: tiered chance for exceptional talent beyond normal academy cap.
         // Even a small club can produce a generational talent — just extremely rarely.
@@ -623,13 +644,13 @@ impl PlayerGenerator {
             let gem_max = (academy_pa_cap as f32 * (0.85 + rep_factor * 0.15)) as i32;
             IntegerUtils::random(gem_min, gem_max.clamp(gem_min, 200)).min(200) as u8
         } else {
-            // Individual talent varies widely — even elite academies produce many
-            // average players alongside occasional standouts. Cubed distribution
-            // heavily skews toward modest potential (long right tail):
-            //   ~35% weak (factor 0.30-0.45), ~35% average (0.45-0.70),
-            //   ~20% good (0.70-1.00), ~8% standout (1.00-1.25), ~2% exceptional (1.25+)
+            // Better academies develop more talent to higher levels through superior training.
+            // Squared distribution (not cubed) — good academies regularly push players
+            // toward their PA ceiling, not just occasionally:
+            //   ~25% modest (factor 0.35-0.55), ~35% average (0.55-0.85),
+            //   ~25% good (0.85-1.15), ~15% standout (1.15-1.45)
             let talent_roll = rand::random::<f32>();
-            let talent_factor = 0.30 + talent_roll.powi(3) * 1.15; // 0.30..1.45
+            let talent_factor = 0.35 + talent_roll.powi(2) * 1.10; // 0.35..1.45
             let jittered_base = (raw_ca as f32 * talent_factor) as i32;
 
             // Modest headroom on top of jittered base, capped by academy quality

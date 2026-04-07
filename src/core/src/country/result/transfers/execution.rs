@@ -241,6 +241,11 @@ fn execute_loan_within_country(
 
         let loan_end = compute_loan_end(selling_league_id, country, date);
 
+        // Ensure parent contract doesn't expire during the loan.
+        // Extend it to at least loan_end + 1 year so the parent club
+        // has time to evaluate and renew after the player returns.
+        ensure_parent_contract_covers_loan(&mut player, loan_end);
+
         // Check squad capacity BEFORE recording history — otherwise a rejected
         // loan creates a phantom career entry with no matching transfer record
         let to_info = resolve_buying_club_info(country, buying_club_id);
@@ -470,6 +475,9 @@ fn execute_loan_across_countries(
         }
     };
 
+    // Ensure parent contract doesn't expire during the loan.
+    ensure_parent_contract_covers_loan(&mut player, loan_end);
+
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
         None => return false,
@@ -578,6 +586,27 @@ fn assign_new_contract(player: &mut Player, fee: f64, date: NaiveDate, _is_loan:
 fn assign_signing_plan(player: &mut Player, fee: f64, date: NaiveDate) {
     let age = player.age(date);
     player.plan = Some(PlayerPlan::from_signing(age, fee, date));
+}
+
+/// Extend the player's parent contract so it doesn't expire during the loan.
+/// If the contract would expire before `loan_end + 1 year`, push it out.
+/// This prevents the bug where nobody renews a loaned player's contract
+/// (the borrowing club skips it, and the parent club can't see the player),
+/// causing the player to become a free agent immediately on return.
+fn ensure_parent_contract_covers_loan(player: &mut Player, loan_end: NaiveDate) {
+    let min_expiry = loan_end
+        .checked_add_signed(chrono::Duration::days(365))
+        .unwrap_or(loan_end);
+
+    if let Some(ref mut contract) = player.contract {
+        if contract.expiration < min_expiry {
+            debug!(
+                "Extending parent contract for player {} from {} to {} (loan ends {})",
+                player.id, contract.expiration, min_expiry, loan_end
+            );
+            contract.expiration = min_expiry;
+        }
+    }
 }
 
 fn compute_loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) -> NaiveDate {
