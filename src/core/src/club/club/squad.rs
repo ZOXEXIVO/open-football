@@ -5,6 +5,8 @@ use super::Club;
 
 /// Minimum players a youth/reserve team should keep to remain functional.
 const MIN_YOUTH_SQUAD: usize = 11;
+/// Minimum players the main team should keep before allowing demotions.
+const MIN_MAIN_SQUAD: usize = 22;
 
 impl Club {
     /// Weekly squad rebalance across all teams.
@@ -100,6 +102,36 @@ impl Club {
             }
         }
 
+        // ── Phase 1b: demote young main-team players below first-team level
+        //
+        // Loan arrivals (and premature promotions) land on teams[0].
+        // Move young players whose ability doesn't match the first team
+        // to the most appropriate youth team so they get development time.
+        for p in &self.teams.teams[main_idx].players.players {
+            let age = p.age(date);
+            let ca = p.player_attributes.current_ability;
+
+            if ca >= main_ability_floor {
+                continue;
+            }
+
+            let statuses = p.statuses.get();
+            let listed = statuses.contains(&crate::PlayerStatusType::Lst)
+                || statuses.contains(&crate::PlayerStatusType::Loa);
+            if listed {
+                continue;
+            }
+
+            if let Some(youth_idx) = self.find_youth_team_for_age(age) {
+                moves.push(PendingMove {
+                    from: main_idx,
+                    to: youth_idx,
+                    player_id: p.id,
+                    reason: "young player better suited to youth team",
+                });
+            }
+        }
+
         // ── Phase 2: execute moves, respecting squad-size guards ─────
 
         // Sort: talent promotions (to main) first, then overage moves,
@@ -118,10 +150,11 @@ impl Club {
             let source_size = self.teams.teams[m.from].players.players.len();
             let already_taken = taken[m.from];
 
-            // Don't drain youth/reserve teams below minimum viable squad,
+            // Don't drain any team below its minimum viable squad,
             // unless the player is overage (must leave regardless)
+            let min_for_source = if m.from == main_idx { MIN_MAIN_SQUAD } else { MIN_YOUTH_SQUAD };
             if m.reason != "overage for current team"
-                && source_size.saturating_sub(already_taken) <= MIN_YOUTH_SQUAD
+                && source_size.saturating_sub(already_taken) <= min_for_source
             {
                 continue;
             }
@@ -148,10 +181,9 @@ impl Club {
         // ── Phase 3: backfill if main team is still short ────────────
 
         let main_count = self.teams.teams[main_idx].players.players.len();
-        let min_squad = 22usize;
 
-        if main_count < min_squad {
-            let deficit = min_squad - main_count;
+        if main_count < MIN_MAIN_SQUAD {
+            let deficit = MIN_MAIN_SQUAD - main_count;
             let mut candidates: Vec<(usize, u32, u8)> = Vec::new();
 
             for (ti, team) in self.teams.teams.iter().enumerate() {
@@ -205,6 +237,27 @@ impl Club {
             }
         }
 
+        None
+    }
+
+    /// Find the best-fitting youth team for a player of the given age.
+    /// Returns the youngest team the player is eligible for.
+    fn find_youth_team_for_age(&self, player_age: u8) -> Option<usize> {
+        let targets: [(TeamType, u8); 5] = [
+            (TeamType::U18, 18),
+            (TeamType::U19, 19),
+            (TeamType::U20, 20),
+            (TeamType::U21, 21),
+            (TeamType::U23, 23),
+        ];
+
+        for (team_type, max_age) in targets {
+            if player_age <= max_age {
+                if let Some(idx) = self.teams.teams.iter().position(|t| t.team_type == team_type) {
+                    return Some(idx);
+                }
+            }
+        }
         None
     }
 
