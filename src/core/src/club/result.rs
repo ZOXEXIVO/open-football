@@ -60,6 +60,11 @@ impl ClubResult {
     }
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
+        // Loaned players — contract matters are handled by the parent club
+        if data.player(result.player_id).map(|p| p.is_on_loan()).unwrap_or(false) {
+            return;
+        }
+
         // Contract rejected — club decides: keep trying, transfer list, or release
         if result.contract.contract_rejected {
             Self::handle_unresolved_salary(result.player_id, data, club_id);

@@ -737,6 +737,12 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Players aged 30+ should not be loaned — they should be sold or released.
+            // Loaning older players is unrealistic in real football.
+            if player_info.age >= 30 {
+                continue;
+            }
+
             // Players loaned out 2+ times should be sold, not loaned again.
             // Repeated loans from the same parent club are unrealistic.
             let previous_loan_count = player.statistics_history.items.iter()

@@ -555,6 +555,7 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
 fn clear_transfer_statuses(player: &mut Player) {
     player.statuses.remove(PlayerStatusType::Lst);
     player.statuses.remove(PlayerStatusType::Loa);
+    player.statuses.remove(PlayerStatusType::Frt);
     player.statuses.remove(PlayerStatusType::Req);
     player.statuses.remove(PlayerStatusType::Unh);
     player.statuses.remove(PlayerStatusType::Trn);
