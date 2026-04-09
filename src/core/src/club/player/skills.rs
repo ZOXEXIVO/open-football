@@ -207,7 +207,15 @@ impl Technical {
         self.technique = self.technique.max(min);
     }
 
-    pub fn rest(&mut self) {}
+    /// Small recovery of technique-related skills between matches.
+    /// Simulates sharpness returning through regular practice.
+    pub fn rest(&mut self) {
+        const RECOVERY: f32 = 0.02;
+        // Core technique skills recover slightly with practice
+        self.first_touch = (self.first_touch + RECOVERY).min(20.0);
+        self.passing = (self.passing + RECOVERY).min(20.0);
+        self.technique = (self.technique + RECOVERY).min(20.0);
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -264,7 +272,14 @@ impl Mental {
         self.work_rate = self.work_rate.max(min);
     }
 
-    pub fn rest(&mut self) {}
+    /// Mental recovery between matches — concentration and composure
+    /// restore naturally with rest days.
+    pub fn rest(&mut self) {
+        const RECOVERY: f32 = 0.03;
+        self.concentration = (self.concentration + RECOVERY).min(20.0);
+        self.composure = (self.composure + RECOVERY).min(20.0);
+        self.decisions = (self.decisions + RECOVERY * 0.5).min(20.0);
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default)]
@@ -305,7 +320,14 @@ impl Physical {
         self.strength = self.strength.max(min);
     }
 
-    pub fn rest(&mut self) {}
+    /// Physical recovery between matches — stamina and match readiness
+    /// recover based on natural_fitness.
+    pub fn rest(&mut self) {
+        // Natural fitness determines recovery rate (0-20 scale → 0.5%-2% per rest)
+        let recovery_rate = 0.005 + (self.natural_fitness / 20.0) * 0.015;
+        self.stamina = (self.stamina + recovery_rate * 20.0).min(20.0);
+        self.match_readiness = (self.match_readiness + recovery_rate * 15.0).min(100.0);
+    }
 }
 
 #[derive(Debug, Copy, Clone, Default)]

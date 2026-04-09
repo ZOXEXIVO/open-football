@@ -4,13 +4,14 @@ use crate::continent::ContinentResult;
 use crate::continent::{
     ContinentalCompetitions, ContinentalRankings, ContinentalRegulations, EconomicZone,
 };
-use crate::country::{CallUpCandidate, CountryResult};
+use crate::country::CountryResult;
 use crate::utils::Logging;
+use crate::country::national_team::MIN_REPUTATION_FOR_FRIENDLIES;
 use crate::{Country, NationalTeam};
-use log::{debug};
+use chrono::NaiveDate;
+use log::debug;
 use rayon::prelude::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
-use std::collections::HashMap;
 
 #[derive(Clone)]
 pub struct Continent {
@@ -48,11 +49,14 @@ impl Continent {
             continent_name,
             self.countries.len()
         );
-        
+
         // Phase 0: National team competition matches (full engine via pool)
         let national_match_results = self.simulate_national_competitions(date);
 
-        // Phase 1+: Simulate all child entities and accumulate results
+        // Phase 1: National team call-ups (needs cross-country visibility)
+        self.process_national_team_callups(date);
+
+        // Phase 2: Country simulation (parallel — no cross-country dependencies)
         let country_results = self.simulate_countries(&ctx);
 
         debug!("Continent {} simulation complete", continent_name);
@@ -60,32 +64,58 @@ impl Continent {
         ContinentResult::new(self.id, country_results, national_match_results)
     }
 
-    fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
-        use rayon::iter::{IntoParallelIterator, IndexedParallelIterator};
-
-        let country_ids: Vec<(u32, String)> = self.countries.iter().map(|c| (c.id, c.name.clone())).collect();
-        let date = ctx.simulation.date.date();
-
-        // Pre-collect national team candidates from ALL clubs across ALL countries
+    /// National team call-ups run at the continent level because players of
+    /// nationality X may play at clubs in country Y. The continent has
+    /// visibility across all countries so it can scan all clubs at once.
+    fn process_national_team_callups(&mut self, date: NaiveDate) {
         let need_callups = NationalTeam::is_break_start(date) || NationalTeam::is_tournament_start(date);
+        let need_release = NationalTeam::is_break_end(date) || NationalTeam::is_tournament_end(date);
 
-        let mut candidates_by_country = if need_callups {
-            NationalTeam::collect_all_candidates_by_country(&self.countries, date)
-        } else {
-            HashMap::new()
-        };
+        if !need_callups && !need_release {
+            return;
+        }
 
-        // Pre-extract candidates per country for parallel-safe access
-        let candidates_vec: Vec<Option<Vec<CallUpCandidate>>> =
-            self.countries.iter().map(|c| candidates_by_country.remove(&c.id)).collect();
+        let country_ids: Vec<(u32, String)> = self.countries.iter()
+            .map(|c| (c.id, c.name.clone()))
+            .collect();
 
+        if need_callups {
+            // Scan all clubs across all countries for eligible players
+            let mut candidates_by_country =
+                NationalTeam::collect_all_candidates_by_country(&self.countries, date);
+
+            for country in &mut self.countries {
+                if country.reputation < MIN_REPUTATION_FOR_FRIENDLIES {
+                    continue;
+                }
+
+                country.national_team.country_name = country.name.clone();
+                country.national_team.reputation = country.reputation;
+
+                let candidates = candidates_by_country.remove(&country.id)
+                    .unwrap_or_default();
+                country.national_team.call_up_squad(
+                    &mut country.clubs, candidates, date, country.id, &country_ids,
+                );
+            }
+        }
+
+        if need_release {
+            for country in &mut self.countries {
+                if !country.national_team.squad.is_empty() {
+                    country.national_team.release_player_status(&mut country.clubs);
+                }
+            }
+        }
+    }
+
+    fn simulate_countries(&mut self, ctx: &GlobalContext<'_>) -> Vec<CountryResult> {
         self.countries
             .par_iter_mut()
-            .zip(candidates_vec.into_par_iter())
-            .map(|(country, candidates)| {
+            .map(|country| {
                 let message = &format!("simulate country: {}", &country.name);
                 Logging::estimate_result(
-                    || country.simulate(ctx.with_country_and_names(country.id, country.code.clone(), country.generator_data.people_names.clone(), country.season_dates()), &country_ids, candidates),
+                    || country.simulate(ctx.with_country_and_names(country.id, country.code.clone(), country.generator_data.people_names.clone(), country.season_dates())),
                     message,
                 )
             })

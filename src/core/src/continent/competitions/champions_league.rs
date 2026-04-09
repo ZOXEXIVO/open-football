@@ -213,6 +213,7 @@ impl ChampionsLeague {
         let selection_ctx = SelectionContext {
             is_friendly: false,
             date,
+            match_importance: 1.0,
         };
 
         let engine_matches: Vec<Match> = todays_matches

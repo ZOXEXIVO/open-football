@@ -26,6 +26,9 @@ pub struct PlayerSelectionResult {
 pub struct SelectionContext {
     pub is_friendly: bool,
     pub date: NaiveDate,
+    /// Match importance: 0.0 = dead rubber, 1.0 = must-win.
+    /// Below 0.4: use rotation selection — reserve/youth players get chances.
+    pub match_importance: f32,
 }
 
 impl Default for SelectionContext {
@@ -33,6 +36,7 @@ impl Default for SelectionContext {
         SelectionContext {
             is_friendly: false,
             date: chrono::Utc::now().date_naive(),
+            match_importance: 0.7,
         }
     }
 }
@@ -110,7 +114,7 @@ impl SquadSelector {
         }
 
         let main_squad = competitive::select_starting_eleven(
-            team.id, &available, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly,
+            team.id, &available, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly, ctx.match_importance,
         );
 
         let remaining: Vec<&Player> = available
@@ -120,7 +124,7 @@ impl SquadSelector {
             .collect();
 
         let mut substitutes = competitive::select_substitutes(
-            team.id, &remaining, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly,
+            team.id, &remaining, staff, tactics.borrow(), &engine, ctx.date, ctx.is_friendly, ctx.match_importance,
         );
 
         if substitutes.is_empty() && !remaining.is_empty() {
@@ -256,7 +260,7 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        competitive::select_starting_eleven(team_id, players, staff, tactics, &engine, date, false)
+        competitive::select_starting_eleven(team_id, players, staff, tactics, &engine, date, false, 0.7)
     }
 
     pub fn select_substitutes_legacy(
@@ -267,6 +271,6 @@ impl SquadSelector {
     ) -> Vec<MatchPlayer> {
         let engine = ScoringEngine::from_staff(staff);
         let date = chrono::Utc::now().date_naive();
-        competitive::select_substitutes(team_id, players, staff, tactics, &engine, date, false)
+        competitive::select_substitutes(team_id, players, staff, tactics, &engine, date, false, 0.7)
     }
 }

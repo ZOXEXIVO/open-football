@@ -128,7 +128,15 @@ impl Club {
         let country_price_level = ctx.country.as_ref()
             .map(|c| c.price_level)
             .unwrap_or(1.0);
-        let board_ctx = self.build_board_context(country_economic_factor, country_price_level);
+        // League position from country-level context
+        let (league_pos, league_sz, total_matches) = ctx.club.as_ref()
+            .map(|c| (c.league_position, c.league_size, c.total_league_matches))
+            .unwrap_or((0, 0, 0));
+
+        let mut board_ctx = self.build_board_context(country_economic_factor, country_price_level);
+        board_ctx.league_position = league_pos;
+        board_ctx.league_size = league_sz;
+        board_ctx.total_matches = total_matches;
 
         // Build club context with facility data for training/academy
         let club_ctx = ctx.with_club(self.id, &self.name);
@@ -221,6 +229,31 @@ impl Club {
             .map(|t| t.reputation.overall_score())
             .unwrap_or(0.0);
 
+        // Recent form from match history (last 5 matches)
+        let (recent_wins, recent_losses) = main_team
+            .map(|t| {
+                let recent: Vec<_> = t.match_history.items().iter().rev().take(5).collect();
+                let wins = recent.iter().filter(|m| m.score.0.get() > m.score.1.get()).count() as u8;
+                let losses = recent.iter().filter(|m| m.score.0.get() < m.score.1.get()).count() as u8;
+                (wins, losses)
+            })
+            .unwrap_or((0, 0));
+
+        let matches_played = main_team
+            .map(|t| t.match_history.items().len().min(255) as u8)
+            .unwrap_or(0);
+
+        // Average squad ability
+        let avg_squad_ability = main_team
+            .map(|t| {
+                if t.players.players.is_empty() { return 0u8; }
+                let sum: u32 = t.players.players.iter()
+                    .map(|p| p.player_attributes.current_ability as u32)
+                    .sum();
+                (sum / t.players.players.len() as u32) as u8
+            })
+            .unwrap_or(0);
+
         BoardContext {
             balance: self.finance.balance.balance,
             total_annual_wages,
@@ -229,6 +262,13 @@ impl Club {
             reserve_squad_size,
             country_economic_factor,
             country_price_level,
+            league_position: 0,
+            league_size: 0,
+            recent_wins,
+            recent_losses,
+            matches_played,
+            total_matches: 0,
+            avg_squad_ability,
         }
     }
 }

@@ -16,6 +16,7 @@ pub(crate) fn select_starting_eleven(
     engine: &ScoringEngine,
     date: NaiveDate,
     is_friendly: bool,
+    match_importance: f32,
 ) -> Vec<MatchPlayer> {
     let mut squad: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_SQUAD_SIZE);
     let mut used_ids: Vec<u32> = Vec::new();
@@ -49,8 +50,10 @@ pub(crate) fn select_starting_eleven(
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| !helpers::is_goalkeeper_player(p))
             .max_by(|a, b| {
-                let sa = engine.score_player_for_slot(a, pos, target_group, staff, tactics, date, is_friendly, &selected_players);
-                let sb = engine.score_player_for_slot(b, pos, target_group, staff, tactics, date, is_friendly, &selected_players);
+                let sa = engine.score_player_for_slot(a, pos, target_group, staff, tactics, date, is_friendly, &selected_players)
+                    + engine.development_minutes_bonus(a, match_importance);
+                let sb = engine.score_player_for_slot(b, pos, target_group, staff, tactics, date, is_friendly, &selected_players)
+                    + engine.development_minutes_bonus(b, match_importance);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -69,8 +72,10 @@ pub(crate) fn select_starting_eleven(
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| !helpers::is_goalkeeper_player(p))
             .max_by(|a, b| {
-                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
-                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
+                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(a, match_importance);
+                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(b, match_importance);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -124,6 +129,7 @@ pub(crate) fn select_substitutes(
     engine: &ScoringEngine,
     date: NaiveDate,
     is_friendly: bool,
+    match_importance: f32,
 ) -> Vec<MatchPlayer> {
     let mut subs: Vec<MatchPlayer> = Vec::with_capacity(helpers::DEFAULT_BENCH_SIZE);
     let mut used_ids: Vec<u32> = Vec::new();
@@ -155,8 +161,10 @@ pub(crate) fn select_substitutes(
             .filter(|p| !used_ids.contains(&p.id))
             .filter(|p| p.position().position_group() == *target_group)
             .max_by(|a, b| {
-                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
-                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
+                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(a, match_importance);
+                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(b, match_importance);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -174,8 +182,10 @@ pub(crate) fn select_substitutes(
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
             .max_by(|a, b| {
-                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly);
-                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly);
+                let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(a, match_importance);
+                let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
+                    + engine.development_minutes_bonus(b, match_importance);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();

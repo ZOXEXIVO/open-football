@@ -41,12 +41,26 @@ impl ClubFinances {
     }
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> ClubFinanceResult {
-        let result = ClubFinanceResult::new();
+        let mut result = ClubFinanceResult::new();
         let club_name = ctx.club.as_ref().expect("no club found").name;
+        let club_id = ctx.club.as_ref().map(|c| c.id).unwrap_or(0);
+        result = result.with_club(club_id);
 
         if ctx.simulation.is_month_beginning() {
             debug!("club: {}, finance: start new month", club_name);
             self.start_new_month(club_name, ctx.simulation.date.date());
+
+            // Check financial distress: balance deeply negative (more than 3 months of wages)
+            let monthly_wages: i64 = self.balance.expense_player_wages.max(1);
+            if self.balance.balance < -(monthly_wages * 3) {
+                result.is_in_distress = true;
+            }
+
+            // Count expired sponsorships (get_sponsorship_incomes prunes expired ones internally)
+            let before = self.sponsorship.sponsorship_contracts.len();
+            let _ = self.sponsorship.get_sponsorship_incomes(ctx.simulation.date.date());
+            let after = self.sponsorship.sponsorship_contracts.len();
+            result.expired_sponsorships = (before - after) as u32;
         }
 
         result

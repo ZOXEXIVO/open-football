@@ -591,9 +591,9 @@ fn assign_signing_plan(player: &mut Player, fee: f64, date: NaiveDate) {
 
 /// Extend the player's parent contract so it doesn't expire during the loan.
 /// If the contract would expire before `loan_end + 1 year`, push it out.
-/// This prevents the bug where nobody renews a loaned player's contract
-/// (the borrowing club skips it, and the parent club can't see the player),
-/// causing the player to become a free agent immediately on return.
+/// Safety net: the parent club will attempt a proper renewal while the player
+/// is on loan, but if the player rejects, this ensures the contract still
+/// covers the loan period.
 fn ensure_parent_contract_covers_loan(player: &mut Player, loan_end: NaiveDate) {
     let min_expiry = loan_end
         .checked_add_signed(chrono::Duration::days(365))

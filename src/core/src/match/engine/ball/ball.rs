@@ -319,7 +319,101 @@ impl Ball {
         }
     }
 
-    pub fn try_intercept(&mut self, _players: &[MatchPlayer], _events: &mut EventCollection) {}
+    /// Opposing players near the ball's flight path can intercept passes.
+    /// Interception chance depends on tackling, anticipation, positioning skills
+    /// and proximity to the ball's trajectory.
+    pub fn try_intercept(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
+        // Only intercept unowned balls that are in flight (active pass)
+        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+            return;
+        }
+
+        // Don't intercept aerial balls above player reach
+        if self.position.z > 2.5 {
+            return;
+        }
+
+        // Need to know who passed to determine the opposing team
+        let passer_team = match self.previous_owner {
+            Some(prev_id) => players.iter().find(|p| p.id == prev_id).map(|p| p.team_id),
+            None => return,
+        };
+        let passer_team = match passer_team {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Ball velocity determines the interception corridor width
+        let ball_speed_sq = self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y;
+        if ball_speed_sq < 1.0 {
+            return; // Ball too slow, normal claiming handles it
+        }
+
+        // Interception corridor: how close a player must be to the ball's path
+        const INTERCEPT_RADIUS: f32 = 2.5;
+        const INTERCEPT_RADIUS_SQ: f32 = INTERCEPT_RADIUS * INTERCEPT_RADIUS;
+
+        let mut best_interceptor: Option<u32> = None;
+        let mut best_chance: f32 = 0.0;
+
+        for player in players {
+            // Only opposing team players can intercept
+            if player.team_id == passer_team {
+                continue;
+            }
+
+            // Don't let the pass target's team intercept their own pass target
+            if Some(player.id) == self.pass_target_player_id {
+                continue;
+            }
+
+            // Distance from player to ball
+            let dx = player.position.x - self.position.x;
+            let dy = player.position.y - self.position.y;
+            let dist_sq = dx * dx + dy * dy;
+
+            if dist_sq > INTERCEPT_RADIUS_SQ {
+                continue;
+            }
+
+            // Calculate interception probability from player skills
+            let tackling = player.skills.technical.tackling;
+            let anticipation = player.skills.mental.anticipation;
+            let positioning = player.skills.mental.positioning;
+            let concentration = player.skills.mental.concentration;
+
+            // Base chance: average of key defensive skills (0-20 scale → 0-1)
+            let skill_factor = (tackling + anticipation + positioning + concentration) / (4.0 * 20.0);
+
+            // Proximity factor: closer = higher chance (1.0 at 0m, 0.3 at max radius)
+            let dist = dist_sq.sqrt();
+            let proximity_factor = 1.0 - (dist / INTERCEPT_RADIUS) * 0.7;
+
+            // Fast passes are harder to intercept
+            let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.02);
+
+            // Final interception chance (very low per tick — happens across many ticks)
+            let chance = skill_factor * proximity_factor * speed_penalty * 0.08;
+
+            if chance > best_chance {
+                best_chance = chance;
+                best_interceptor = Some(player.id);
+            }
+        }
+
+        // Deterministic threshold: only intercept if chance exceeds threshold
+        // This avoids needing RNG in the match engine
+        if best_chance > 0.04 {
+            if let Some(interceptor_id) = best_interceptor {
+                self.current_owner = Some(interceptor_id);
+                self.pass_target_player_id = None;
+                self.flags.in_flight_state = 0;
+                self.claim_cooldown = 15;
+                self.velocity *= 0.3; // Ball slows down on interception
+                events.add_ball_event(BallEvent::Claimed(interceptor_id));
+            }
+        }
+    }
 
     /// Calculate where an aerial ball will land (when z reaches 0)
     /// Returns the predicted landing position using simple projection

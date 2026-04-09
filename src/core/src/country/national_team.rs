@@ -111,7 +111,7 @@ const MIN_REAL_PLAYERS: usize = 16;
 const SQUAD_SIZE: usize = 23;
 
 /// Minimum country reputation to simulate friendlies (skips ~147 small nations)
-const MIN_REPUTATION_FOR_FRIENDLIES: u16 = 4000;
+pub(crate) const MIN_REPUTATION_FOR_FRIENDLIES: u16 = 4000;
 
 /// Positions template for generating a balanced synthetic squad
 const SYNTHETIC_POSITIONS: [PlayerPositionType; 23] = [
@@ -223,44 +223,6 @@ impl NationalTeam {
             .unwrap_or_else(|| "Unknown".to_string())
     }
 
-    /// Daily state management — call-ups, releases, scheduling.
-    /// Match execution is handled separately at the continent level for parallelism.
-    pub(crate) fn simulate_state(
-        &mut self,
-        clubs: &mut [Club],
-        date: NaiveDate,
-        country_id: u32,
-        country_ids: &[(u32, String)],
-        candidates: Option<Vec<CallUpCandidate>>,
-    ) {
-        if self.reputation < MIN_REPUTATION_FOR_FRIENDLIES {
-            return;
-        }
-
-        // Handle international break call-ups
-        if Self::is_break_start(date) {
-            let candidates = candidates
-                .unwrap_or_else(|| Self::collect_candidates(clubs, country_id, date));
-            self.call_up_squad(clubs, candidates, date, country_id, country_ids);
-        } else if Self::is_tournament_start(date) && self.squad.is_empty() {
-            // Handle tournament period call-ups (June-July)
-            let candidates = candidates
-                .unwrap_or_else(|| Self::collect_candidates(clubs, country_id, date));
-            self.call_up_squad(clubs, candidates, date, country_id, country_ids);
-        }
-
-        // Release squad at break end — clear Int status but keep squad data
-        // so the national squad page can still display the last selection
-        if Self::is_break_end(date) {
-            self.release_player_status(clubs);
-        }
-
-        // Release squad at tournament end
-        if Self::is_tournament_end(date) && !self.squad.is_empty() {
-            self.release_player_status(clubs);
-        }
-    }
-
     /// Returns the fixture index of a pending friendly for today, if any.
     pub fn pending_friendly(&self, date: NaiveDate) -> Option<usize> {
         self.schedule
@@ -335,47 +297,6 @@ impl NationalTeam {
     /// Maximum candidate pool size returned to the squad selection stage.
     /// The coach scouts broadly but narrows down to a shortlist.
     const MAX_CANDIDATE_POOL: usize = 60;
-
-    pub(crate) fn collect_candidates(
-        clubs: &[Club],
-        country_id: u32,
-        date: NaiveDate,
-    ) -> Vec<CallUpCandidate> {
-        let mut candidates = Vec::new();
-
-        for club in clubs.iter() {
-            for team in club.teams.teams.iter() {
-                if team.team_type != TeamType::Main {
-                    continue;
-                }
-
-                let league_rep = team.league_id
-                    .map(|_| team.reputation.world)
-                    .unwrap_or(0);
-
-                for player in team.players.players.iter() {
-                    if player.country_id != country_id {
-                        continue;
-                    }
-
-                    // Skip unavailable or unfit players
-                    if player.player_attributes.is_injured
-                        || player.player_attributes.is_banned
-                        || player.statuses.get().contains(&PlayerStatusType::Loa)
-                        || player.player_attributes.condition < 5000 // Below 50% condition
-                    {
-                        continue;
-                    }
-
-                    if let Some(candidate) = Self::build_candidate(player, club.id, team.id, league_rep, date) {
-                        candidates.push(candidate);
-                    }
-                }
-            }
-        }
-
-        Self::rank_and_trim_candidates(candidates)
-    }
 
     /// Collect eligible candidates from all clubs across all countries, grouped by nationality.
     /// Used at the continent level to find players playing abroad.
@@ -1337,7 +1258,7 @@ impl NationalTeam {
     }
 
     /// Remove Int status from players but keep squad data for display
-    fn release_player_status(&mut self, clubs: &mut [Club]) {
+    pub(crate) fn release_player_status(&mut self, clubs: &mut [Club]) {
         let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
         for club in clubs.iter_mut() {
             for team in club.teams.teams.iter_mut() {
@@ -1421,7 +1342,7 @@ impl NationalTeam {
         date.month() == TOURNAMENT_WINDOW.0 && date.day() == TOURNAMENT_WINDOW.1
     }
 
-    fn is_tournament_end(date: NaiveDate) -> bool {
+    pub fn is_tournament_end(date: NaiveDate) -> bool {
         date.month() == TOURNAMENT_WINDOW.2 && date.day() == TOURNAMENT_WINDOW.3
     }
 

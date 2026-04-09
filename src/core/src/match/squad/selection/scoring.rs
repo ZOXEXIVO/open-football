@@ -330,6 +330,33 @@ impl ScoringEngine {
         score
     }
 
+    /// Bonus for underplayed players in low-importance matches.
+    /// When match_importance < 0.4, reserve/youth players who haven't played
+    /// much get a significant boost — simulates managers resting stars and
+    /// giving fringe players chances in dead rubbers.
+    pub fn development_minutes_bonus(&self, player: &Player, match_importance: f32) -> f32 {
+        if match_importance >= 0.5 {
+            return 0.0;
+        }
+
+        let rotation_factor = (0.5 - match_importance) * 2.0; // 0.0 at 0.5, 1.0 at 0.0
+
+        let days_idle = player.player_attributes.days_since_last_match as f32;
+        let total_games = (player.statistics.played + player.statistics.played_subs) as f32;
+
+        // Players who haven't played recently need minutes
+        let rest_bonus = (days_idle / 21.0).min(1.0) * 2.0;
+
+        // Players with few season appearances need development time
+        let minutes_bonus = if total_games < 10.0 {
+            (10.0 - total_games) * 0.3
+        } else {
+            0.0
+        };
+
+        (rest_bonus + minutes_bonus) * rotation_factor
+    }
+
     /// Overall quality score (bench selection)
     pub fn overall_quality(
         &self,

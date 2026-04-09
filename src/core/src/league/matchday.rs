@@ -108,17 +108,23 @@ impl League {
             table,
         );
 
+        // Calculate match importance for squad selection decisions
+        let match_importance = if friendly {
+            0.1
+        } else {
+            Self::calculate_match_importance(table, home_team, away_team, ctx.simulation.date.date())
+        };
+
         let selection_ctx = SelectionContext {
             is_friendly: friendly,
             date: ctx.simulation.date.date(),
+            match_importance,
         };
 
         let (mut home_squad, mut away_squad) = if friendly {
             let mut home_supplements = Self::collect_supplementary_players(clubs, home_team.club_id, home_team.id, friendly);
             let mut away_supplements = Self::collect_supplementary_players(clubs, away_team.club_id, away_team.id, friendly);
 
-            // U18/U19 teams can include up to 3 overage players from U20/U21/U23
-            // who need match practice — similar to real youth football rules
             let home_overage = Self::collect_overage_development_players(
                 clubs, home_team.club_id, home_team.id, &home_team.team_type, ctx.simulation.date.date(),
             );
@@ -242,6 +248,99 @@ impl League {
 
         candidates.truncate(MAX_OVERAGE_SLOTS);
         candidates
+    }
+
+    /// Calculate how important a match is for squad selection decisions.
+    /// Returns 0.0 (dead rubber) to 1.0 (must-win).
+    ///
+    /// Key principle: if a team has nothing to play for, importance drops
+    /// significantly — reserves and youth get chances.
+    fn calculate_match_importance(
+        table: &LeagueTable,
+        home_team: &Team,
+        away_team: &Team,
+        _date: NaiveDate,
+    ) -> f32 {
+        let total_teams = table.rows.len();
+        if total_teams == 0 {
+            return 0.5;
+        }
+
+        let home_row = table.rows.iter().enumerate().find(|(_, r)| r.team_id == home_team.id);
+        let away_row = table.rows.iter().enumerate().find(|(_, r)| r.team_id == away_team.id);
+
+        let (home_pos, home_played, home_points) = home_row
+            .map(|(i, r)| (i + 1, r.played as f32, r.points as i32))
+            .unwrap_or((total_teams / 2, 0.0, 0));
+
+        let away_pos = away_row.map(|(i, _)| i + 1).unwrap_or(total_teams / 2);
+
+        let total_matches = if total_teams > 1 { ((total_teams - 1) * 2) as f32 } else { 1.0 };
+        let season_progress = (home_played / total_matches).clamp(0.0, 1.0);
+        let remaining_matches = (total_matches - home_played).max(0.0) as i32;
+
+        // Points gap to key positions
+        let top3_points = table.rows.get(2).map(|r| r.points as i32).unwrap_or(0);
+        let relegation_pos = total_teams.saturating_sub(3);
+        let relegation_points = table.rows.get(relegation_pos).map(|r| r.points as i32).unwrap_or(0);
+        // Can the team still catch top 3? (3 pts per remaining match)
+        let max_reachable = home_points + remaining_matches * 3;
+        let can_reach_top3 = max_reachable >= top3_points;
+
+        // Is the team safe from relegation? (gap too large to close)
+        let is_safe = home_points > relegation_points + remaining_matches * 3
+            || home_pos <= total_teams / 2;
+        let is_in_danger = home_points <= relegation_points + 3 && home_pos > total_teams / 2;
+
+        // ── Determine importance ──
+
+        // Title contenders: fighting for top 3
+        if home_pos <= 3 && season_progress > 0.3 {
+            return if season_progress > 0.7 { 1.0 } else { 0.85 };
+        }
+
+        // Chasing top 3 and still mathematically possible
+        if home_pos <= 6 && can_reach_top3 && season_progress > 0.5 {
+            let gap = top3_points - home_points;
+            return if gap <= 6 { 0.85 } else { 0.7 };
+        }
+
+        // Relegation battle
+        if is_in_danger && season_progress > 0.3 {
+            return if season_progress > 0.7 { 1.0 } else { 0.85 };
+        }
+
+        // Direct rival: both in top 5 or both in bottom 5
+        let both_top = home_pos <= 5 && away_pos <= 5;
+        let both_bottom = home_pos > total_teams - 5 && away_pos > total_teams - 5;
+        if both_top || both_bottom {
+            return 0.8;
+        }
+
+        // ── Nothing to play for: dead rubber territory ──
+
+        // Safe from relegation + can't reach top 3 + late season = dead rubber
+        if is_safe && !can_reach_top3 && season_progress > 0.7 {
+            return 0.15;
+        }
+
+        // Same but mid-season: still rotate but less aggressively
+        if is_safe && !can_reach_top3 && season_progress > 0.5 {
+            return 0.3;
+        }
+
+        // Safe, can't reach top 3, early season — moderate rotation
+        if is_safe && !can_reach_top3 {
+            return 0.4;
+        }
+
+        // Early season: everyone still optimistic, moderate importance
+        if season_progress < 0.25 {
+            return 0.5;
+        }
+
+        // Default: standard competitive match
+        0.6
     }
 
     fn is_player_available(player: &Player, is_friendly: bool) -> bool {

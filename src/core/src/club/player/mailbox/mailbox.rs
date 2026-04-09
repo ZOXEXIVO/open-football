@@ -41,12 +41,6 @@ impl PlayerMailbox {
     ) -> PlayerMailboxResult {
         let result = PlayerMailboxResult::new();
 
-        // Loaned players — contract proposals belong to the parent club,
-        // not the borrowing club. Skip mailbox processing until the player returns.
-        if player.is_on_loan() {
-            return result;
-        }
-
         let messages: Vec<PlayerMessage> = player.mailbox.messages.drain(..).collect();
         for message in messages {
             match message.message_type {

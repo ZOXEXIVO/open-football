@@ -1,4 +1,3 @@
-use rayon::iter::{IntoParallelRefMutIterator, ParallelIterator};
 use crate::context::GlobalContext;
 use crate::league::{League, LeagueResult};
 use crate::{Club, Logging};
@@ -21,28 +20,26 @@ impl LeagueCollection {
             .collect();
 
         self.leagues
-            .par_iter_mut()
+            .iter_mut()
             .map(|league| {
                 let league_team_ids: Vec<u32> = teams_ids
                     .iter()
                     .filter(|(_, league_id)| *league_id == Some(league.id))
                     .map(|(id, _)| *id)
                     .collect();
-                {
-                    let message = &format!("simulate league: {}", &league.name);
 
-                    let league_slug = String::from(&league.slug);
+                let message = &format!("simulate league: {}", &league.name);
+                let league_slug = String::from(&league.slug);
 
-                    Logging::estimate_result(
-                        || {
-                            league.simulate(
-                                clubs,
-                                ctx.with_league(league.id, league_slug, &league_team_ids, league.reputation),
-                            )
-                        },
-                        message,
-                    )
-                }
+                Logging::estimate_result(
+                    || {
+                        league.simulate(
+                            clubs,
+                            ctx.with_league(league.id, league_slug, &league_team_ids, league.reputation),
+                        )
+                    },
+                    message,
+                )
             })
             .collect()
     }

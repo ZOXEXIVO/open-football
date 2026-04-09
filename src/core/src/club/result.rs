@@ -60,20 +60,40 @@ impl ClubResult {
     }
 
     fn process_player_contract_interaction(result: &PlayerResult, data: &mut SimulatorData, club_id: u32) {
-        // Loaned players — contract matters are handled by the parent club
-        if data.player(result.player_id).map(|p| p.is_on_loan()).unwrap_or(false) {
-            return;
-        }
+        let is_on_loan = data.player(result.player_id).map(|p| p.is_on_loan()).unwrap_or(false);
 
         // Contract rejected — club decides: keep trying, transfer list, or release
+        // Loaned players can't be transfer-listed remotely by the parent club
         if result.contract.contract_rejected {
-            Self::handle_unresolved_salary(result.player_id, data, club_id);
+            if !is_on_loan {
+                Self::handle_unresolved_salary(result.player_id, data, club_id);
+            }
             return;
         }
 
         if result.contract.no_contract || result.contract.want_improve_contract || result.contract.want_extend_contract {
+            // For loaned players, only handle parent contract extensions
+            // Salary improvements are between the player and borrowing club — not relevant here
+            if is_on_loan && !result.contract.want_extend_contract {
+                return;
+            }
+
+            // Resolve which club handles the contract: parent club for loaned players
+            let contract_club_id = if is_on_loan {
+                match data.player(result.player_id)
+                    .and_then(|p| p.contract_loan.as_ref())
+                    .and_then(|c| c.loan_from_club_id)
+                {
+                    Some(id) => id,
+                    None => return,
+                }
+            } else {
+                club_id
+            };
+
             // Step 1: Resolve contract renewal staff, wage budget, and current wage bill
-            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill) = data.club(club_id)
+            // Uses the parent club's context for loaned players
+            let (negotiation_skill, judging_ability, wage_budget, current_wage_bill) = data.club(contract_club_id)
                 .map(|club| {
                     let (neg, judge) = club.teams.teams.first()
                         .map(|team| {
@@ -116,11 +136,6 @@ impl ClubResult {
                 None => return,
             };
 
-            // Don't auto-renew contracts for players on loan — those expire and the player returns
-            if player.is_on_loan() {
-                return;
-            }
-
             let current_salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(0);
             let ability = player.player_attributes.current_ability;
             let age = DateUtils::age(player.birth_date, data.date.date());
@@ -131,7 +146,8 @@ impl ClubResult {
             let accuracy = 0.70 + (judging_ability as f32 / 20.0) * 0.35;
             let adjusted_base = (base_salary as f32 * accuracy) as u32;
 
-            let offered_salary = if result.contract.want_improve_contract {
+            // Loaned players always get the extension path (parent club renewing remotely)
+            let offered_salary = if !is_on_loan && result.contract.want_improve_contract {
                 // Staff evaluates whether this player deserves a raise
                 let ability_f = ability as f32;
                 let matches_played = player.statistics.played + player.statistics.played_subs;
@@ -167,7 +183,8 @@ impl ClubResult {
                 let remaining = wage_budget.saturating_sub(current_wage_bill);
                 let capped_salary = current_salary + remaining;
                 // If we can't even match current salary, decide what to do with the player
-                if capped_salary <= current_salary && result.contract.want_improve_contract {
+                // Loaned players can't be transfer-listed remotely
+                if capped_salary <= current_salary && result.contract.want_improve_contract && !is_on_loan {
                     Self::handle_unresolved_salary(result.player_id, data, club_id);
                     return;
                 }
@@ -179,6 +196,7 @@ impl ClubResult {
             let years = negotiate_contract_years(player, age, negotiation_skill);
 
             // Step 3: Deliver proposal via mutable club access
+            // Player physically resides at the borrowing club (club_id)
             Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
                     salary: final_salary,
@@ -359,8 +377,9 @@ impl ClubResult {
                     crate::PlayerSquadStatus::KeyPlayer | crate::PlayerSquadStatus::FirstTeamRegular))
                 .unwrap_or(false);
 
-            // Key players with high ability: club keeps trying — don't list them
-            if is_key && ability > squad_avg {
+            // Key players and first-team regulars: club keeps trying — don't list them
+            // unless they're well below squad average
+            if is_key && ability >= squad_avg - 10 {
                 return;
             }
 
@@ -369,8 +388,15 @@ impl ClubResult {
                 return;
             }
 
-            // Low ability or old: release on free transfer
-            if ability < squad_avg - 20 || (age >= 32 && ability < squad_avg) {
+            // Competitive players (within 15 CA of squad avg): keep trying regardless of age
+            // A 32-year-old with ability near the squad average is still valuable
+            if ability >= squad_avg - 15 && age < 35 {
+                return;
+            }
+
+            // Low ability: release on free transfer
+            // Only release for age if truly past it (35+) or far below average
+            if ability < squad_avg - 25 || (age >= 35 && ability < squad_avg - 10) {
                 UnresolvedSalaryDecision::FreeTransfer
             } else {
                 UnresolvedSalaryDecision::TransferList

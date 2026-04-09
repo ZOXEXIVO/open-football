@@ -423,7 +423,7 @@ checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
 name = "core"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chrono",
  "itertools",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "database"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "chrono",
  "core",
@@ -1496,7 +1496,7 @@ checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
 name = "open_football"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "color-eyre",
  "core",
@@ -2296,9 +2296,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.51.0"
+version = "1.51.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2bd1c4c0fc4a7ab90fc15ef6daaa3ec3b893f004f915f2392557ed23237820cd"
+checksum = "f66bf9585cda4b724d3e78ab34b73fb2bbaba9011b9bfdf69dc836382ea13b8c"
 dependencies = [
  "bytes",
  "libc",
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.9.0"
+version = "0.9.1"
 dependencies = [
  "askama",
  "askama_web",

@@ -75,21 +75,32 @@ impl Club {
                 let ca = player.player_attributes.current_ability;
                 let pa = player.player_attributes.potential_ability;
 
+                // Compare player CA to the main team average —
+                // don't list players who are still competitive with the first team
+                let main_avg_ca = self.teams.teams[main_idx].players.players.iter()
+                    .map(|p| p.player_attributes.current_ability as u16)
+                    .sum::<u16>()
+                    .checked_div(self.teams.teams[main_idx].players.players.len() as u16)
+                    .unwrap_or(0) as u8;
+
                 // Wealthy clubs within squad limits: only list truly unwanted players
-                if wealthy_within_limits && ca >= 50 && age < 32 {
+                if wealthy_within_limits && ca >= 50 {
+                    continue;
+                }
+
+                // Protect quality players who are competitive with the main team,
+                // regardless of age — don't list a CA 120 player just because they're 31
+                if ca >= main_avg_ca.saturating_sub(10) && age < 35 {
                     continue;
                 }
 
                 // Decision: choose Lst vs Loa based on player profile and club context
                 if age <= 23 && pa > ca.saturating_add(5) {
                     loan_players.push((ti, player.id, "dec_reason_young_develop".to_string()));
-                } else if age >= 30 || (ca < 60 && pa < 70) {
-                    let reason = if age >= 30 {
-                        "dec_reason_aging_surplus"
-                    } else {
-                        "dec_reason_low_ability_surplus"
-                    };
-                    transfer_players.push((ti, player.id, reason.to_string()));
+                } else if ca < 60 && pa < 70 {
+                    transfer_players.push((ti, player.id, "dec_reason_low_ability_surplus".to_string()));
+                } else if age >= 34 && ca < main_avg_ca.saturating_sub(20) {
+                    transfer_players.push((ti, player.id, "dec_reason_aging_surplus".to_string()));
                 } else if matches!(rep_level, ReputationLevel::Elite | ReputationLevel::Continental) && age <= 29 {
                     loan_players.push((ti, player.id, "dec_reason_underutilized_top_club".to_string()));
                 } else {

@@ -5,12 +5,24 @@ pub struct BoardContext {
     pub reputation_score: f32,
     pub main_squad_size: usize,
     pub reserve_squad_size: usize,
-    /// Country economic multiplier (0.0-1.0). Derived from country reputation squared.
-    /// Top countries ≈ 0.9, Colombia ≈ 0.56, Malta ≈ 0.08.
     pub country_economic_factor: f32,
-    /// Country-level price multiplier from data. England 1.5, Colombia 0.4, default 1.0.
-    /// Used together with economic factor to cap transfer budgets realistically.
     pub country_price_level: f32,
+
+    // Performance tracking
+    /// Current league position (1-based, 0 = unknown)
+    pub league_position: u8,
+    /// Total teams in the league
+    pub league_size: u8,
+    /// Recent form: wins in last 5 matches
+    pub recent_wins: u8,
+    /// Recent form: losses in last 5 matches
+    pub recent_losses: u8,
+    /// Season progress: matches played
+    pub matches_played: u8,
+    /// Season progress: total matches in a full season
+    pub total_matches: u8,
+    /// Average squad CA (main team)
+    pub avg_squad_ability: u8,
 }
 
 impl BoardContext {
@@ -23,6 +35,13 @@ impl BoardContext {
             reserve_squad_size: 0,
             country_economic_factor: 1.0,
             country_price_level: 1.0,
+            league_position: 0,
+            league_size: 0,
+            recent_wins: 0,
+            recent_losses: 0,
+            matches_played: 0,
+            total_matches: 0,
+            avg_squad_ability: 0,
         }
     }
 }

@@ -197,6 +197,7 @@ impl EuropaLeague {
         let selection_ctx = SelectionContext {
             is_friendly: false,
             date,
+            match_importance: 0.9,
         };
 
         let engine_matches: Vec<Match> = todays_matches

@@ -1,15 +1,12 @@
 use chrono::{Datelike, NaiveDate};
 use crate::context::GlobalContext;
 use crate::country::CountryResult;
-use crate::country::national_team::{NationalTeam, CallUpCandidate};
+use crate::country::national_team::NationalTeam;
 use crate::league::LeagueCollection;
 use crate::transfers::market::TransferMarket;
-use crate::utils::Logging;
 use crate::{Club, ClubResult, Player};
-use log::{debug};
-use rayon::prelude::IntoParallelRefMutIterator;
+use log::debug;
 use crate::country::builder::CountryBuilder;
-use rayon::iter::ParallelIterator;
 
 use super::{
     CountrySettings, CountryGeneratorData, CountryEconomicFactors,
@@ -97,31 +94,16 @@ impl Country {
             .unwrap_or_default()
     }
 
-    pub(crate) fn simulate(
-        &mut self,
-        ctx: GlobalContext<'_>,
-        country_ids: &[(u32, String)],
-        candidates: Option<Vec<CallUpCandidate>>,
-    ) -> CountryResult {
+    pub(crate) fn simulate(&mut self, ctx: GlobalContext<'_>) -> CountryResult {
         let country_name = self.name.clone();
-        let _date = ctx.simulation.date.date();
 
-        debug!("🌍 Simulating country: {} (Reputation: {})", country_name, self.reputation);
+        debug!("Simulating country: {} (Reputation: {})", country_name, self.reputation);
 
         // Phase 1: League Competitions
         let league_results = self.leagues.simulate(&self.clubs, &ctx);
 
-        // Phase 2: National Team (international breaks)
-        let date = ctx.simulation.date.date();
-        let country_id = self.id;
-        
-        // Pass country context to national team
-        self.national_team.country_name = self.name.clone();
-        self.national_team.reputation = self.reputation;
-        
-        self.national_team.simulate_state(&mut self.clubs, date, country_id, country_ids, candidates);
-
-        // Phase 3: Club Operations (with economic factors)
+        // Phase 2: Club Operations (with economic factors)
+        // National team call-ups are handled at the continent level (cross-country visibility)
         let ctx = {
             let mut c = ctx;
             if let Some(ref mut country_ctx) = c.country {
@@ -134,20 +116,46 @@ impl Country {
         };
         let clubs_results = self.simulate_clubs(&ctx);
 
-        debug!("✅ Country {} simulation complete", country_name);
+        debug!("Country {} simulation complete", country_name);
 
         CountryResult::new(self.id, league_results, clubs_results)
     }
 
     fn simulate_clubs(&mut self, ctx: &GlobalContext<'_>) -> Vec<ClubResult> {
+        // Build team_id → (league_position, league_size, total_matches) from league tables
+        let mut team_league_info: std::collections::HashMap<u32, (u8, u8, u8)> = std::collections::HashMap::new();
+        for league in &self.leagues.leagues {
+            if league.friendly {
+                continue;
+            }
+            let league_size = league.table.rows.len() as u8;
+            // Total matches in a full season: (n-1) * 2 for double round-robin
+            let total_matches = if league_size > 1 { (league_size - 1) * 2 } else { 0 };
+            for (pos, row) in league.table.rows.iter().enumerate() {
+                team_league_info.insert(row.team_id, ((pos + 1) as u8, league_size, total_matches));
+            }
+        }
+
         self.clubs
-            .par_iter_mut()
+            .iter_mut()
             .map(|club| {
-                let message = &format!("simulate club: {}", &club.name);
-                Logging::estimate_result(
-                    || club.simulate(ctx.with_club(club.id, &club.name.clone())),
-                    message,
-                )
+                // Find main team's league position
+                let league_info = club.teams.teams.iter()
+                    .find(|t| t.team_type == crate::TeamType::Main)
+                    .and_then(|t| team_league_info.get(&t.id))
+                    .copied()
+                    .unwrap_or((0, 0, 0));
+
+                let name = club.name.clone();
+                let club_ctx = ctx.with_club(club.id, &name);
+                let club_ctx = {
+                    let mut c = club_ctx;
+                    if let Some(ref mut cc) = c.club {
+                        *cc = cc.clone().with_league_position(league_info.0, league_info.1, league_info.2);
+                    }
+                    c
+                };
+                club.simulate(club_ctx)
             })
             .collect()
     }
