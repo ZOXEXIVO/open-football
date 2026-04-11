@@ -1,3 +1,4 @@
+use crate::club::player::rapport::PlayerRapport;
 use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchSquad};
 use crate::shared::FullName;
@@ -261,8 +262,8 @@ impl NationalTeam {
         let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
 
         for club in clubs.iter_mut() {
-            for team in club.teams.teams.iter_mut() {
-                for player in team.players.players.iter_mut() {
+            for team in club.teams.iter_mut() {
+                for player in team.players.iter_mut() {
                     if squad_player_ids.contains(&player.id) {
                         player.player_attributes.international_apps += 1;
 
@@ -505,8 +506,8 @@ impl NationalTeam {
 
         // Set Int status on called-up players in own clubs
         for club in own_clubs.iter_mut() {
-            for team in club.teams.teams.iter_mut() {
-                for player in team.players.players.iter_mut() {
+            for team in club.teams.iter_mut() {
+                for player in team.players.iter_mut() {
                     if self.squad.iter().any(|s| s.player_id == player.id) {
                         player.statuses.add(date, PlayerStatusType::Int);
                     }
@@ -1012,6 +1013,7 @@ impl NationalTeam {
             favorite_clubs: Vec::new(),
             sold_from: None,
             traits: Vec::new(),
+            rapport: PlayerRapport::new(),
         }
     }
 
@@ -1032,11 +1034,9 @@ impl NationalTeam {
 
         for squad_player in &self.squad {
             for club in clubs.iter() {
-                for team in club.teams.teams.iter() {
-                    for player in team.players.players.iter() {
-                        if player.id == squad_player.player_id {
-                            all_players.push(player);
-                        }
+                for team in club.teams.iter() {
+                    if let Some(player) = team.players.find(squad_player.player_id) {
+                        all_players.push(player);
                     }
                 }
             }
@@ -1265,8 +1265,8 @@ impl NationalTeam {
     pub(crate) fn release_player_status(&mut self, clubs: &mut [Club]) {
         let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
         for club in clubs.iter_mut() {
-            for team in club.teams.teams.iter_mut() {
-                for player in team.players.players.iter_mut() {
+            for team in club.teams.iter_mut() {
+                for player in team.players.iter_mut() {
                     if squad_player_ids.contains(&player.id) {
                         player.statuses.remove(PlayerStatusType::Int);
                     }
@@ -1280,8 +1280,8 @@ impl NationalTeam {
         let squad_player_ids: Vec<u32> = self.squad.iter().map(|s| s.player_id).collect();
 
         for club in clubs.iter_mut() {
-            for team in club.teams.teams.iter_mut() {
-                for player in team.players.players.iter_mut() {
+            for team in club.teams.iter_mut() {
+                for player in team.players.iter_mut() {
                     if squad_player_ids.contains(&player.id) {
                         player.statuses.remove(PlayerStatusType::Int);
                     }

@@ -1,4 +1,4 @@
 mod types;
-mod processing;
+pub mod processing;
 
 pub use types::*;

@@ -2,14 +2,15 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::shared::{Currency, CurrencyValue};
-use crate::transfers::market::{TransferListing, TransferListingType};
-use crate::transfers::pipeline::{
-    LoanOutStatus, TransferRequest, TransferRequestStatus,
-};
+use crate::transfers::market::{TransferListing, TransferListingStatus, TransferListingType};
+use crate::transfers::offer::{TransferClause, TransferOffer};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
+use crate::transfers::pipeline::{LoanOutStatus, TransferRequest, TransferRequestStatus};
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::ScoutingRegion;
+use crate::utils::FormattingUtils;
 use crate::{
-    Country, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
+    ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
 };
 
 impl PipelineProcessor {
@@ -36,7 +37,7 @@ impl PipelineProcessor {
             if listing.listing_type != TransferListingType::Loan {
                 continue;
             }
-            if listing.status != crate::transfers::market::TransferListingStatus::Available {
+            if listing.status != TransferListingStatus::Available {
                 continue;
             }
             if let Some(player) = Self::find_player_in_country(country, listing.player_id) {
@@ -81,8 +82,8 @@ impl PipelineProcessor {
             // Determine if club should scan — philosophy overrides reputation defaults.
             // LoanFocused clubs always scan; SignToCompete clubs almost never loan.
             let should_scan = match &club.philosophy {
-                crate::ClubPhilosophy::LoanFocused => true,
-                crate::ClubPhilosophy::SignToCompete => {
+                ClubPhilosophy::LoanFocused => true,
+                ClubPhilosophy::SignToCompete => {
                     // Only loan as emergency cover in January
                     is_january && club.finance.balance.balance < 0
                 }
@@ -126,16 +127,9 @@ impl PipelineProcessor {
             };
             let mut scans_this_club = 0usize;
 
-            let avg_ability: u8 = if !team.players.players.is_empty() {
-                let total: u32 = team
-                    .players
-                    .players
-                    .iter()
-                    .map(|p| p.player_attributes.current_ability as u32)
-                    .sum();
-                (total / team.players.players.len() as u32) as u8
-            } else {
-                50
+            let avg_ability = {
+                let avg = team.players.current_ability_avg();
+                if avg == 0 { 50 } else { avg }
             };
 
             // Track position groups already targeted in this scan pass
@@ -158,7 +152,7 @@ impl PipelineProcessor {
                 (PlayerFieldPositionGroup::Midfielder, 8),
                 (PlayerFieldPositionGroup::Forward, 6),
             ].iter().map(|&(group, max)| {
-                let players_at_pos: Vec<u8> = team.players.players.iter()
+                let players_at_pos: Vec<u8> = team.players.iter()
                     .filter(|p| p.position().position_group() == group)
                     .map(|p| p.player_attributes.current_ability)
                     .collect();
@@ -237,7 +231,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: best.player_id,
                         selling_club_id: best.club_id,
-                        offer_amount: crate::utils::FormattingUtils::round_fee(best.asking_price * 0.8),
+                        offer_amount: FormattingUtils::round_fee(best.asking_price * 0.8),
                         reason,
                     });
                     scanned_position_groups.push(pos_group);
@@ -275,7 +269,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
-                        offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
+                        offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
                         reason: "Loan signing — opportunistic squad upgrade".to_string(),
                     });
                     scanned_position_groups.push(opp.position_group);
@@ -305,7 +299,7 @@ impl PipelineProcessor {
                         club_id: club.id,
                         player_id: opp.player_id,
                         selling_club_id: opp.club_id,
-                        offer_amount: crate::utils::FormattingUtils::round_fee(opp.asking_price * 0.8),
+                        offer_amount: FormattingUtils::round_fee(opp.asking_price * 0.8),
                         reason: "Loan signing — January window reinforcement".to_string(),
                     });
                 }
@@ -325,18 +319,18 @@ impl PipelineProcessor {
             let selling_rep_level = Self::get_club_reputation_level(country, action.selling_club_id);
             match selling_rep_level {
                 ReputationLevel::Elite => {
-                    clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                    clauses.push(TransferClause::AppearanceFee(
                         CurrencyValue {
-                            amount: crate::utils::FormattingUtils::round_fee(action.offer_amount * 0.30),
+                            amount: FormattingUtils::round_fee(action.offer_amount * 0.30),
                             currency: Currency::Usd,
                         },
                         10,
                     ));
                 }
                 ReputationLevel::Continental => {
-                    clauses.push(crate::transfers::offer::TransferClause::AppearanceFee(
+                    clauses.push(TransferClause::AppearanceFee(
                         CurrencyValue {
-                            amount: crate::utils::FormattingUtils::round_fee(action.offer_amount * 0.20),
+                            amount: FormattingUtils::round_fee(action.offer_amount * 0.20),
                             currency: Currency::Usd,
                         },
                         15,
@@ -345,7 +339,7 @@ impl PipelineProcessor {
                 _ => {}
             }
 
-            let offer = crate::transfers::offer::TransferOffer {
+            let offer = TransferOffer {
                 base_fee: CurrencyValue {
                     amount: action.offer_amount,
                     currency: Currency::Usd,
@@ -403,7 +397,7 @@ impl PipelineProcessor {
 
         // The scanning country's own region — used to block loans from
         // clearly more prestigious regions (Paraguay can't loan from England).
-        let club_region = crate::transfers::ScoutingRegion::from_country(
+        let club_region = ScoutingRegion::from_country(
             country.continent_id,
             &country.code,
         );
@@ -419,7 +413,7 @@ impl PipelineProcessor {
                 if !p.is_loan_listed || p.country_reputation > country_rep {
                     return false;
                 }
-                let player_region = crate::transfers::ScoutingRegion::from_country(
+                let player_region = ScoutingRegion::from_country(
                     p.continent_id,
                     &p.country_code,
                 );
@@ -486,20 +480,13 @@ impl PipelineProcessor {
                 (balance as f64 * 0.15).min(500_000.0)
             };
 
-            let avg_ability: u8 = if !team.players.players.is_empty() {
-                let total: u32 = team
-                    .players
-                    .players
-                    .iter()
-                    .map(|p| p.player_attributes.current_ability as u32)
-                    .sum();
-                (total / team.players.players.len() as u32) as u8
-            } else {
-                50
+            let avg_ability = {
+                let avg = team.players.current_ability_avg();
+                if avg == 0 { 50 } else { avg }
             };
 
             // Get scout known regions for this club
-            let scout_regions: Vec<crate::transfers::ScoutingRegion> = club
+            let scout_regions: Vec<ScoutingRegion> = club
                 .teams
                 .teams
                 .iter()
@@ -564,7 +551,7 @@ impl PipelineProcessor {
                             && p.home_reputation <= (team_rep as f32 * 2.0) as i16
                             && team_rep >= (p.home_reputation.max(0) as f32 * 0.35) as u16
                             && {
-                                let player_region = crate::transfers::ScoutingRegion::from_country(
+                                let player_region = ScoutingRegion::from_country(
                                     p.continent_id, &p.country_code,
                                 );
                                 scout_regions.contains(&player_region)
@@ -572,7 +559,7 @@ impl PipelineProcessor {
                     })
                     .max_by_key(|p| p.skill_ability)
                 {
-                    let loan_fee = crate::utils::FormattingUtils::round_fee(
+                    let loan_fee = FormattingUtils::round_fee(
                         best.estimated_value * 0.1 * 0.8,
                     );
                     let reason = format!(
@@ -645,7 +632,7 @@ impl PipelineProcessor {
             // Use a reasonable estimate for selling club rep
             let selling_rep = (action.player.skill_ability as f32 / 200.0).clamp(0.1, 0.9);
 
-            let offer = crate::transfers::offer::TransferOffer {
+            let offer = TransferOffer {
                 base_fee: asking_price,
                 clauses: Vec::new(),
                 salary_contribution: None,
@@ -728,7 +715,7 @@ impl PipelineProcessor {
                             0, 0,
                         );
                         CurrencyValue {
-                            amount: crate::utils::FormattingUtils::round_fee(full_value.amount * 0.10),
+                            amount: FormattingUtils::round_fee(full_value.amount * 0.10),
                             currency: full_value.currency,
                         }
                     };

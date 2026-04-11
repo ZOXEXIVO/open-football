@@ -1,12 +1,12 @@
 use chrono::NaiveDate;
 use super::types::{DeferredTransfer, NegotiationData, TransferActivitySummary, find_player_in_country};
 use crate::country::result::CountryResult;
-use crate::utils::FloatUtils;
-use crate::{Country, PlayerSquadStatus, PlayerStatusType};
-use crate::transfers::scouting_region::ScoutingRegion;
-use crate::transfers::TransferListingStatus;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::scouting_region::ScoutingRegion;
+use crate::transfers::TransferListingStatus;
+use crate::utils::{FloatUtils, FormattingUtils};
+use crate::{Country, PlayerSquadStatus, PlayerStatusType};
 
 impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(
@@ -202,7 +202,7 @@ impl CountryResult {
             }
         } else if round < 3 {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
-                let new_amount = crate::utils::FormattingUtils::round_fee(
+                let new_amount = FormattingUtils::round_fee(
                     negotiation.current_offer.base_fee.amount * 1.15
                 );
                 negotiation.current_offer.base_fee.amount = new_amount;
@@ -472,9 +472,7 @@ impl CountryResult {
         } else {
             let player_at_selling_club = country.clubs.iter()
                 .find(|c| c.id == neg_data.selling_club_id)
-                .map(|c| c.teams.teams.iter().any(|t|
-                    t.players.players.iter().any(|p| p.id == neg_data.player_id)
-                ))
+                .map(|c| c.teams.contains_player(neg_data.player_id))
                 .unwrap_or(false);
 
             if !player_at_selling_club {

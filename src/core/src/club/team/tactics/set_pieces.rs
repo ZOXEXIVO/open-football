@@ -5,8 +5,10 @@
 //! / Penalty Taking. The match engine can consult `SetPieceSetup` when a
 //! set-piece event fires.
 
+use crate::club::player::skills::Mental;
 use crate::club::player::Player;
 use crate::club::PlayerPositionType;
+use crate::PersonAttributes;
 
 #[derive(Debug, Clone, Default)]
 pub struct SetPieceSetup {
@@ -127,11 +129,11 @@ impl SetPieceSetup {
 // Placeholder mental helper — pressure_handling doesn't exist, so we inline
 // a small compatibility shim using existing composure + pressure personality.
 trait MentalPressureHelper {
-    fn pressure_handling(&self, personality: &crate::PersonAttributes) -> f32;
+    fn pressure_handling(&self, personality: &PersonAttributes) -> f32;
 }
 
-impl MentalPressureHelper for crate::club::player::skills::Mental {
-    fn pressure_handling(&self, personality: &crate::PersonAttributes) -> f32 {
+impl MentalPressureHelper for Mental {
+    fn pressure_handling(&self, personality: &PersonAttributes) -> f32 {
         // Low number = player handles pressure well (used as cost in ranking).
         let composure_bonus = self.composure * 0.7;
         let personality_bonus = personality.pressure * 0.3;

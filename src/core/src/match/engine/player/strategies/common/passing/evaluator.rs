@@ -1,5 +1,6 @@
 use crate::club::player::traits::PlayerTrait;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext};
+use crate::PlayerFieldPositionGroup;
 
 /// Comprehensive pass evaluation result
 #[derive(Debug, Clone)]
@@ -349,7 +350,7 @@ impl PassEvaluator {
         // Strong penalty for backward passes, strong reward for forward
         // Defenders get extra penalty for backward passes since they're already deep
         let is_defender = ctx.player.tactical_position.current_position.position_group()
-            == crate::PlayerFieldPositionGroup::Defender;
+            == PlayerFieldPositionGroup::Defender;
 
         // Penalize pure sideways passes that don't progress the ball
         // But exempt wide switches — lateral passes that spread the play are valuable
@@ -433,7 +434,7 @@ impl PassEvaluator {
 
         // Midfielder-specific width incentive — midfielders should distribute wide
         let is_midfielder = ctx.player.tactical_position.current_position.position_group()
-            == crate::PlayerFieldPositionGroup::Midfielder;
+            == PlayerFieldPositionGroup::Midfielder;
         let midfielder_width_bonus = if is_midfielder && receiver_width_ratio > 0.4 {
             0.15 // Midfielders get extra reward for wide distribution
         } else {
@@ -508,10 +509,10 @@ impl PassEvaluator {
 
         // Passes to advanced positions are more valuable
         let position_value = match receiver.tactical_positions.position_group() {
-            crate::PlayerFieldPositionGroup::Forward => 1.0,
-            crate::PlayerFieldPositionGroup::Midfielder => 0.7,
-            crate::PlayerFieldPositionGroup::Defender => 0.4,
-            crate::PlayerFieldPositionGroup::Goalkeeper => 0.2,
+            PlayerFieldPositionGroup::Forward => 1.0,
+            PlayerFieldPositionGroup::Midfielder => 0.7,
+            PlayerFieldPositionGroup::Defender => 0.4,
+            PlayerFieldPositionGroup::Goalkeeper => 0.2,
         };
 
         // Weighted combination - includes width and switching bonuses
@@ -871,7 +872,7 @@ impl PassEvaluator {
             // GOALKEEPER PENALTY: Almost completely eliminate passing to goalkeeper
             let is_goalkeeper = matches!(
                 teammate.tactical_positions.position_group(),
-                crate::PlayerFieldPositionGroup::Goalkeeper
+                PlayerFieldPositionGroup::Goalkeeper
             );
 
             let goalkeeper_penalty = if is_goalkeeper {

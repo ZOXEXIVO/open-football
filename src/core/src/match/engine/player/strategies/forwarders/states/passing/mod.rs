@@ -617,36 +617,40 @@ impl ForwardPassingState {
         let goal_pos = ctx.player().opponent_goal_position();
         let to_goal_direction = (goal_pos - player_pos).normalize();
 
-        // Get opponents between player and goal
-        let opponents_between = ctx
+        // Collect opponent POSITIONS only (24 bytes each), not full player
+        // refs — we only need positions for the O(n²) gap scan.
+        let goal_distance = (goal_pos - player_pos).magnitude();
+        let opponent_positions: Vec<Vector3<f32>> = ctx
             .players()
             .opponents()
             .all()
-            .filter(|opp| {
+            .filter_map(|opp| {
                 let to_opp = opp.position - player_pos;
                 let projection = to_opp.dot(&to_goal_direction);
-                // Only consider opponents between player and goal
-                projection > 0.0 && projection < (goal_pos - player_pos).magnitude()
+                if projection > 0.0 && projection < goal_distance {
+                    Some(opp.position)
+                } else {
+                    None
+                }
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        if opponents_between.len() < 2 {
-            return None; // Not enough opponents to find a gap
+        if opponent_positions.len() < 2 {
+            return None;
         }
 
         // Find the pair of opponents with the largest gap between them
         let mut best_gap = None;
         let mut max_gap_width = 0.0;
 
-        for i in 0..opponents_between.len() {
-            for j in i + 1..opponents_between.len() {
-                let opp1 = &opponents_between[i];
-                let opp2 = &opponents_between[j];
+        for i in 0..opponent_positions.len() {
+            for j in i + 1..opponent_positions.len() {
+                let pos_i = opponent_positions[i];
+                let pos_j = opponent_positions[j];
 
-                let midpoint = (opp1.position + opp2.position) * 0.5;
-                let gap_width = (opp1.position - opp2.position).magnitude();
+                let midpoint = (pos_i + pos_j) * 0.5;
+                let gap_width = (pos_i - pos_j).magnitude();
 
-                // Check if midpoint is roughly toward goal
                 let to_midpoint = midpoint - player_pos;
                 let dot_product = to_midpoint.dot(&to_goal_direction);
 
@@ -657,7 +661,6 @@ impl ForwardPassingState {
             }
         }
 
-        // Return the midpoint of the largest gap
         best_gap
     }
 }

@@ -179,7 +179,7 @@ impl League {
                 t.id != team_id
                     && matches!(t.team_type, TeamType::B | TeamType::Reserve | TeamType::U21 | TeamType::U23)
             })
-            .flat_map(|t| t.players.players.iter())
+            .flat_map(|t| t.players.iter())
             .filter(|p| Self::is_player_available(p, is_friendly))
             .collect()
     }
@@ -200,7 +200,7 @@ impl League {
             .teams
             .iter()
             .filter(|t| t.id != team_id)
-            .flat_map(|t| t.players.players.iter())
+            .flat_map(|t| t.players.iter())
             .filter(|p| Self::is_player_available(p, is_friendly))
             .collect()
     }
@@ -233,7 +233,7 @@ impl League {
                 t.id != team_id
                     && matches!(t.team_type, TeamType::U20 | TeamType::U21 | TeamType::U23)
             })
-            .flat_map(|t| t.players.players.iter())
+            .flat_map(|t| t.players.iter())
             .filter(|p| {
                 Self::is_player_available(p, true)
                     && p.player_attributes.days_since_last_match >= MIN_IDLE_DAYS

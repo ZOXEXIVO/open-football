@@ -131,6 +131,21 @@ impl<'gc> GlobalContext<'gc> {
     pub fn club_recruitment_quality(&self) -> f32 {
         self.club.as_ref().map(|c| c.recruitment_quality).unwrap_or(0.35)
     }
+
+    /// Best physiotherapy score on the club's medical staff (0.0-1.0).
+    pub fn club_medical_quality(&self) -> f32 {
+        self.club.as_ref().map(|c| c.medical_quality).unwrap_or(0.35)
+    }
+
+    /// Best sports_science score on the club's medical staff (0.0-1.0).
+    pub fn club_sports_science_quality(&self) -> f32 {
+        self.club.as_ref().map(|c| c.sports_science_quality).unwrap_or(0.35)
+    }
+
+    /// Best working_with_youngsters score on the club's coaching staff (0.0-1.0).
+    pub fn club_youth_coaching_quality(&self) -> f32 {
+        self.club.as_ref().map(|c| c.youth_coaching_quality).unwrap_or(0.35)
+    }
 }
 
 #[derive(Clone)]

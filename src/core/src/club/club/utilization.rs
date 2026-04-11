@@ -1,6 +1,7 @@
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::pipeline::{LoanOutCandidate, LoanOutReason, LoanOutStatus};
-use crate::{ContractType, Person, PlayerStatusType, ReputationLevel, TeamType, TransferItem};
+use crate::utils::FormattingUtils;
+use crate::{ContractType, Person, PlayerStatusType, ReputationLevel, TransferItem};
 use chrono::NaiveDate;
 use log::debug;
 use super::Club;
@@ -8,7 +9,7 @@ use super::Club;
 impl Club {
     /// Monthly audit: identify underutilized players in non-main teams and list them for loan/transfer.
     pub(super) fn audit_squad_utilization(&mut self, date: NaiveDate) {
-        let main_idx = match self.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.teams.main_index() {
             Some(idx) => idx,
             None => return,
         };
@@ -25,8 +26,8 @@ impl Club {
         };
 
         // Wealthy clubs within squad targets don't need to aggressively list
-        let total_squad: usize = self.teams.teams.iter()
-            .map(|t| t.players.players.len()).sum();
+        let total_squad: usize = self.teams.iter()
+            .map(|t| t.players.len()).sum();
         let max_squad = self.board.season_targets
             .as_ref()
             .map(|t| t.max_squad_size as usize)
@@ -38,12 +39,12 @@ impl Club {
         let mut loan_players: Vec<(usize, u32, String)> = Vec::new();
         let mut transfer_players: Vec<(usize, u32, String)> = Vec::new();
 
-        for (ti, team) in self.teams.teams.iter().enumerate() {
+        for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx {
                 continue;
             }
 
-            for player in &team.players.players {
+            for player in team.players.iter() {
                 // Skip youth contracts
                 if player.contract.as_ref()
                     .map(|c| c.contract_type == ContractType::Youth)
@@ -77,11 +78,7 @@ impl Club {
 
                 // Compare player CA to the main team average —
                 // don't list players who are still competitive with the first team
-                let main_avg_ca = self.teams.teams[main_idx].players.players.iter()
-                    .map(|p| p.player_attributes.current_ability as u16)
-                    .sum::<u16>()
-                    .checked_div(self.teams.teams[main_idx].players.players.len() as u16)
-                    .unwrap_or(0) as u8;
+                let main_avg_ca = self.teams.teams[main_idx].players.current_ability_avg();
 
                 // Wealthy clubs within squad limits: only list truly unwanted players
                 if wealthy_within_limits && ca >= 50 {
@@ -121,10 +118,10 @@ impl Club {
     ) {
         // Reputation-based loan fee multiplier
         let rep_multiplier = match self.teams.teams[main_idx].reputation.level() {
-            crate::ReputationLevel::Elite => 0.15,
-            crate::ReputationLevel::Continental => 0.10,
-            crate::ReputationLevel::National => 0.05,
-            crate::ReputationLevel::Regional => 0.02,
+            ReputationLevel::Elite => 0.15,
+            ReputationLevel::Continental => 0.10,
+            ReputationLevel::National => 0.05,
+            ReputationLevel::Regional => 0.02,
             _ => 0.0, // Local/Amateur: free loan
         };
 
@@ -135,18 +132,15 @@ impl Club {
             let team_name = self.teams.teams[team_idx].name.clone();
 
             let loan_fee = if rep_multiplier > 0.0 {
-                let player_value = self.teams.teams[team_idx].players.players.iter()
-                    .find(|p| p.id == player_id)
+                let player_value = self.teams.teams[team_idx].players.find(player_id)
                     .map(|p| p.value(date, 0, 0))
                     .unwrap_or(0.0);
-                crate::utils::FormattingUtils::round_fee(player_value * rep_multiplier)
+                FormattingUtils::round_fee(player_value * rep_multiplier)
             } else {
                 0.0
             };
 
-            let player = match self.teams.teams[team_idx].players.players.iter_mut()
-                .find(|p| p.id == player_id)
-            {
+            let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
                 Some(p) => p,
                 None => continue,
             };
@@ -179,18 +173,14 @@ impl Club {
             let team_name = self.teams.teams[team_idx].name.clone();
 
             let asking_price = {
-                let player = match self.teams.teams[team_idx].players.players.iter()
-                    .find(|p| p.id == player_id)
-                {
+                let player = match self.teams.teams[team_idx].players.find(player_id) {
                     Some(p) => p,
                     None => continue,
                 };
                 player.value(date, 0, 0) * 0.5
             };
 
-            let player = match self.teams.teams[team_idx].players.players.iter_mut()
-                .find(|p| p.id == player_id)
-            {
+            let player = match self.teams.teams[team_idx].players.find_mut(player_id) {
                 Some(p) => p,
                 None => continue,
             };

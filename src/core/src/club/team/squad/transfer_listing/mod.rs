@@ -1,7 +1,7 @@
 use crate::club::player::player::Player;
 use crate::club::team::squad::MIN_FIRST_TEAM_SQUAD;
 use crate::shared::{Currency, CurrencyValue};
-use crate::{PlayerStatusType, Team, TransferItem};
+use crate::{PlayerStatusType, Team, TeamType, TransferItem};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -83,14 +83,14 @@ impl TransferListManager {
             .enumerate()
             .map(|(idx, t)| {
                 let label = match t.team_type {
-                    crate::TeamType::Main => "Main Team",
-                    crate::TeamType::B => "B Team",
-                    crate::TeamType::Reserve => "Reserve Team",
-                    crate::TeamType::U18 => "Under 18s",
-                    crate::TeamType::U19 => "Under 19s",
-                    crate::TeamType::U20 => "Under 20s",
-                    crate::TeamType::U21 => "Under 21s",
-                    crate::TeamType::U23 => "Under 23s",
+                    TeamType::Main => "Main Team",
+                    TeamType::B => "B Team",
+                    TeamType::Reserve => "Reserve Team",
+                    TeamType::U18 => "Under 18s",
+                    TeamType::U19 => "Under 19s",
+                    TeamType::U20 => "Under 20s",
+                    TeamType::U21 => "Under 21s",
+                    TeamType::U23 => "Under 23s",
                 };
                 (idx, label)
             })
@@ -260,7 +260,7 @@ impl TransferListManager {
         let loan_ids: Vec<u32> = advice.loan_list.iter().map(|d| d.player_id).collect();
 
         // Count non-listed first team players to enforce minimum squad size
-        let available_main = teams[main_idx].players.players.iter()
+        let available_main = teams[main_idx].players.iter()
             .filter(|p| {
                 let s = p.statuses.get();
                 !s.contains(&PlayerStatusType::Lst) && !s.contains(&PlayerStatusType::Loa)
@@ -311,7 +311,7 @@ impl TransferListManager {
             }
 
             // Guard: skip listing main team players when budget exhausted
-            let is_main_team_player = teams[main_idx].players.players.iter().any(|p| p.id == decision.player_id);
+            let is_main_team_player = teams[main_idx].players.contains(decision.player_id);
             if is_main_team_player && *listing_budget == 0 {
                 continue;
             }
@@ -365,7 +365,7 @@ impl TransferListManager {
             }
 
             // Guard: skip listing main team players when budget exhausted
-            let is_main_team_player = teams[main_idx].players.players.iter().any(|p| p.id == decision.player_id);
+            let is_main_team_player = teams[main_idx].players.contains(decision.player_id);
             if is_main_team_player && *listing_budget == 0 {
                 continue;
             }
@@ -425,7 +425,7 @@ impl TransferListManager {
 fn player_exists_in_teams(teams: &[Team], indices: &[(usize, &str)], player_id: u32) -> bool {
     indices
         .iter()
-        .any(|&(idx, _)| teams[idx].players.players.iter().any(|p| p.id == player_id))
+        .any(|&(idx, _)| teams[idx].players.contains(player_id))
 }
 
 fn find_player_in_teams<'a>(
@@ -434,7 +434,7 @@ fn find_player_in_teams<'a>(
     player_id: u32,
 ) -> Option<&'a Player> {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find(player_id) {
             return Some(p);
         }
     }
@@ -448,7 +448,7 @@ fn has_status(
     status: PlayerStatusType,
 ) -> bool {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find(player_id) {
             return p.statuses.get().contains(&status);
         }
     }
@@ -463,7 +463,7 @@ fn set_player_status(
     date: NaiveDate,
 ) {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter_mut().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find_mut(player_id) {
             p.statuses.add(date, status);
             return;
         }
@@ -477,7 +477,7 @@ fn remove_player_status(
     status: PlayerStatusType,
 ) {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter_mut().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find_mut(player_id) {
             p.statuses.remove(status);
             return;
         }
@@ -490,7 +490,7 @@ fn is_on_loan(
     player_id: u32,
 ) -> bool {
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find(player_id) {
             return p.is_on_loan();
         }
     }
@@ -505,7 +505,7 @@ fn is_protected_from_listing(
     use crate::PlayerSquadStatus;
 
     for &(idx, _) in indices {
-        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+        if let Some(p) = teams[idx].players.find(player_id) {
             let wants_out = p.statuses.get().iter().any(|s| {
                 matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh)
             });

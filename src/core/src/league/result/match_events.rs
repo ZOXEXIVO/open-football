@@ -1,6 +1,8 @@
 use std::collections::HashMap;
-use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
 use crate::club::player::contract::ContractBonusType;
+use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone};
+use crate::club::StaffPosition;
+use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::MatchResult;
@@ -333,10 +335,6 @@ impl LeagueResult {
         details: &MatchResultRaw,
         data: &mut SimulatorData,
     ) {
-        use crate::club::team::team_talks::{
-            apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone,
-        };
-
         let score = &result.score;
         let home_goals = score.home_team.get() as i8;
         let away_goals = score.away_team.get() as i8;
@@ -390,18 +388,14 @@ impl LeagueResult {
         }
 
         for side in sides {
-            // Find the head coach (Manager) for this club.
+            // Find the head coach (Manager) for this club. Scans each team's
+            // staff collection via StaffCollection::find_by_position — the
+            // first team that has a Manager on the books wins.
             let manager_ref = data.club(side.club_id).and_then(|club| {
                 club.teams
                     .teams
                     .iter()
-                    .flat_map(|t| t.staffs.staffs.iter())
-                    .find(|s| {
-                        s.contract
-                            .as_ref()
-                            .map(|c| c.position == crate::club::StaffPosition::Manager)
-                            .unwrap_or(false)
-                    })
+                    .find_map(|t| t.staffs.find_by_position(StaffPosition::Manager))
             });
             let manager_clone = manager_ref.cloned();
 

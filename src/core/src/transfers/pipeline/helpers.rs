@@ -1,14 +1,13 @@
 use chrono::{Datelike, NaiveDate};
 
 use crate::shared::CurrencyValue;
-use crate::transfers::pipeline::{
-    DetailedScoutingReport, TransferNeedReason, TransferRequest,
-};
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
-use crate::transfers::window::PlayerValuationCalculator;
-use crate::{
-    Club, Country, Person, Player, PlayerStatusType, ReputationLevel,
+use crate::transfers::pipeline::{
+    DetailedScoutingReport, ScoutingRecommendation, TransferNeedReason, TransferRequest,
 };
+use crate::transfers::window::PlayerValuationCalculator;
+use crate::utils::FormattingUtils;
+use crate::{Club, Country, Person, Player, PlayerStatusType, ReputationLevel};
 
 impl PipelineProcessor {
     pub(super) fn is_january_window(date: NaiveDate) -> bool {
@@ -61,8 +60,6 @@ impl PipelineProcessor {
         request: Option<&TransferRequest>,
         report: Option<&DetailedScoutingReport>,
     ) -> String {
-        use crate::transfers::pipeline::ScoutingRecommendation;
-
         let need_reason = request.map(|r| Self::transfer_need_reason_text(&r.reason));
 
         let scout_reason = report.map(|r| {
@@ -105,7 +102,7 @@ impl PipelineProcessor {
     pub(super) fn find_player_in_country<'a>(country: &'a Country, player_id: u32) -> Option<&'a Player> {
         for club in &country.clubs {
             for team in &club.teams.teams {
-                if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+                if let Some(player) = team.players.find(player_id) {
                     return Some(player);
                 }
             }
@@ -116,9 +113,8 @@ impl PipelineProcessor {
     /// Resolve player full name and selling club name from the country data.
     pub(super) fn resolve_player_and_club_name(country: &Country, player_id: u32, club_id: u32) -> (String, String) {
         let player_name = country.clubs.iter()
-            .flat_map(|c| c.teams.teams.iter())
-            .flat_map(|t| t.players.players.iter())
-            .find(|p| p.id == player_id)
+            .flat_map(|c| c.teams.iter())
+            .find_map(|t| t.players.find(player_id))
             .map(|p| p.full_name.to_string())
             .unwrap_or_default();
 
@@ -132,7 +128,7 @@ impl PipelineProcessor {
 
     pub(super) fn find_player_in_club<'a>(club: &'a Club, player_id: u32) -> Option<&'a Player> {
         for team in &club.teams.teams {
-            if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+            if let Some(player) = team.players.find(player_id) {
                 return Some(player);
             }
         }
@@ -146,7 +142,7 @@ impl PipelineProcessor {
     ) -> Option<PlayerSummary> {
         for club in &country.clubs {
             for team in &club.teams.teams {
-                if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+                if let Some(player) = team.players.find(player_id) {
                     let skill_ability = player.skills.calculate_ability_for_position(player.position());
                     return Some(PlayerSummary {
                         player_id: player.id,
@@ -187,7 +183,7 @@ impl PipelineProcessor {
 
     pub(super) fn get_scout_skills(club: &Club, scout_id: u32) -> (u8, u8) {
         for team in &club.teams.teams {
-            if let Some(staff) = team.staffs.staffs.iter().find(|s| s.id == scout_id) {
+            if let Some(staff) = team.staffs.find(scout_id) {
                 return (
                     staff.staff_attributes.knowledge.judging_player_ability,
                     staff.staff_attributes.knowledge.judging_player_potential,
@@ -255,7 +251,7 @@ impl PipelineProcessor {
         };
 
         CurrencyValue {
-            amount: crate::utils::FormattingUtils::round_fee(base_value.amount * multiplier),
+            amount: FormattingUtils::round_fee(base_value.amount * multiplier),
             currency: base_value.currency,
         }
     }

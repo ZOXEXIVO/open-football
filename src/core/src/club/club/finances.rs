@@ -1,5 +1,5 @@
 use crate::context::GlobalContext;
-use crate::TeamType;
+use crate::ReputationLevel;
 use super::Club;
 
 /// Country price level: scales ticket prices, merchandising etc. by local economy.
@@ -27,19 +27,15 @@ impl Club {
             .unwrap_or(1.0);
 
         // 1. Player wages: annual salary / 12
-        for team in &self.teams.teams {
+        for team in self.teams.iter() {
             let annual_salary = team.get_annual_salary();
             let monthly_salary = annual_salary / 12;
             self.finance.push_salary(club_name, monthly_salary as i64);
         }
 
         // 2. Staff wages: coaching, medical, scouting staff
-        for team in &self.teams.teams {
-            let staff_annual: u32 = team.staffs.staffs.iter()
-                .filter_map(|s| s.contract.as_ref())
-                .map(|c| c.salary)
-                .sum();
-            let staff_monthly = staff_annual / 12;
+        for team in self.teams.iter() {
+            let staff_monthly = team.staffs.get_annual_salary() / 12;
             if staff_monthly > 0 {
                 self.finance.balance.push_expense_staff_wages(staff_monthly as i64);
             }
@@ -56,16 +52,16 @@ impl Club {
         }
 
         // 4. TV, matchday, merchandising, facility costs — from main team reputation
-        let main_team = self.teams.teams.iter().find(|t| t.team_type == TeamType::Main);
+        let main_team = self.teams.main();
         if let Some(team) = main_team {
             // TV revenue (reputation-based, scaled by country TV multiplier)
             let tv_base: i64 = match team.reputation.level() {
-                crate::ReputationLevel::Elite => 2_000_000,
-                crate::ReputationLevel::Continental => 800_000,
-                crate::ReputationLevel::National => 300_000,
-                crate::ReputationLevel::Regional => 70_000,
-                crate::ReputationLevel::Local => 20_000,
-                crate::ReputationLevel::Amateur => 5_000,
+                ReputationLevel::Elite => 2_000_000,
+                ReputationLevel::Continental => 800_000,
+                ReputationLevel::National => 300_000,
+                ReputationLevel::Regional => 70_000,
+                ReputationLevel::Local => 20_000,
+                ReputationLevel::Amateur => 5_000,
             };
             let tv_revenue = (tv_base as f64 * tv_multiplier as f64) as i64;
             self.finance.balance.push_income_tv(tv_revenue);
@@ -87,12 +83,12 @@ impl Club {
             let dynamic_attendance =
                 (base_attendance * attendance_factor as f64 * form_mult) as i64;
             let ticket_base: f64 = match team.reputation.level() {
-                crate::ReputationLevel::Elite => 55.0,
-                crate::ReputationLevel::Continental => 40.0,
-                crate::ReputationLevel::National => 28.0,
-                crate::ReputationLevel::Regional => 15.0,
-                crate::ReputationLevel::Local => 8.0,
-                crate::ReputationLevel::Amateur => 4.0,
+                ReputationLevel::Elite => 55.0,
+                ReputationLevel::Continental => 40.0,
+                ReputationLevel::National => 28.0,
+                ReputationLevel::Regional => 15.0,
+                ReputationLevel::Local => 8.0,
+                ReputationLevel::Amateur => 4.0,
             };
             let ticket_price = (ticket_base * price_level) as i64;
             let matchday_revenue = dynamic_attendance * ticket_price * 2;
@@ -100,12 +96,12 @@ impl Club {
 
             // Merchandising (reputation-based, scaled by sponsorship market AND price level)
             let merch_base: f64 = match team.reputation.level() {
-                crate::ReputationLevel::Elite => 500_000.0,
-                crate::ReputationLevel::Continental => 150_000.0,
-                crate::ReputationLevel::National => 50_000.0,
-                crate::ReputationLevel::Regional => 10_000.0,
-                crate::ReputationLevel::Local => 2_000.0,
-                crate::ReputationLevel::Amateur => 500.0,
+                ReputationLevel::Elite => 500_000.0,
+                ReputationLevel::Continental => 150_000.0,
+                ReputationLevel::National => 50_000.0,
+                ReputationLevel::Regional => 10_000.0,
+                ReputationLevel::Local => 2_000.0,
+                ReputationLevel::Amateur => 500.0,
             };
             let merch_revenue = (merch_base * sponsorship_strength as f64 * price_level) as i64;
             self.finance.balance.push_income_merchandising(merch_revenue);
@@ -129,12 +125,12 @@ impl Club {
             let balance_overhead = (balance as f64 * 0.003) as i64;
             let tier_overhead: i64 = if let Some(team) = main_team {
                 match team.reputation.level() {
-                    crate::ReputationLevel::Elite => 500_000,
-                    crate::ReputationLevel::Continental => 200_000,
-                    crate::ReputationLevel::National => 80_000,
-                    crate::ReputationLevel::Regional => 30_000,
-                    crate::ReputationLevel::Local => 10_000,
-                    crate::ReputationLevel::Amateur => 3_000,
+                    ReputationLevel::Elite => 500_000,
+                    ReputationLevel::Continental => 200_000,
+                    ReputationLevel::National => 80_000,
+                    ReputationLevel::Regional => 30_000,
+                    ReputationLevel::Local => 10_000,
+                    ReputationLevel::Amateur => 3_000,
                 }
             } else {
                 0

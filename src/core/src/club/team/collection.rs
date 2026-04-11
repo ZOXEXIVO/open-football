@@ -39,11 +39,69 @@ impl TeamCollection {
             .expect(format!("no team with id = {}", id).as_str())
     }
 
+    /// Borrow a team by id. Unlike `by_id`, returns `None` for missing ids
+    /// — prefer this when the caller can gracefully handle absence.
+    pub fn find(&self, team_id: u32) -> Option<&Team> {
+        self.teams.iter().find(|t| t.id == team_id)
+    }
+
+    /// Mutable variant of `find`.
+    pub fn find_mut(&mut self, team_id: u32) -> Option<&mut Team> {
+        self.teams.iter_mut().find(|t| t.id == team_id)
+    }
+
+    pub fn contains(&self, team_id: u32) -> bool {
+        self.teams.iter().any(|t| t.id == team_id)
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Team> {
+        self.teams.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Team> {
+        self.teams.iter_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        self.teams.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.teams.is_empty()
+    }
+
+    /// Borrow the main first team if one exists.
+    pub fn main(&self) -> Option<&Team> {
+        self.teams.iter().find(|t| t.team_type == TeamType::Main)
+    }
+
+    /// Mutable variant of `main`.
+    pub fn main_mut(&mut self) -> Option<&mut Team> {
+        self.teams.iter_mut().find(|t| t.team_type == TeamType::Main)
+    }
+
+    /// Array index of the main team, if any.
+    pub fn main_index(&self) -> Option<usize> {
+        self.teams.iter().position(|t| t.team_type == TeamType::Main)
+    }
+
+    /// Borrow the first team matching a specific TeamType.
+    pub fn by_type(&self, team_type: TeamType) -> Option<&Team> {
+        self.teams.iter().find(|t| t.team_type == team_type)
+    }
+
+    /// Mutable variant of `by_type`.
+    pub fn by_type_mut(&mut self, team_type: TeamType) -> Option<&mut Team> {
+        self.teams.iter_mut().find(|t| t.team_type == team_type)
+    }
+
+    /// Array index of the first team matching a specific TeamType.
+    pub fn index_of_type(&self, team_type: TeamType) -> Option<usize> {
+        self.teams.iter().position(|t| t.team_type == team_type)
+    }
+
     pub fn main_team_id(&self) -> Option<u32> {
-        self.teams
-            .iter()
-            .find(|t| t.team_type == TeamType::Main)
-            .map(|t| t.id)
+        self.main().map(|t| t.id)
     }
 
     pub fn with_league(&self, league_id: u32) -> Vec<u32> {
@@ -54,10 +112,38 @@ impl TeamCollection {
             .collect()
     }
 
+    /// Is a player with this id currently registered with any of the
+    /// teams in this collection?
+    pub fn contains_player(&self, player_id: u32) -> bool {
+        self.teams.iter().any(|t| t.players.contains(player_id))
+    }
+
+    /// Find the team that currently holds a given player.
+    pub fn find_team_with_player(&self, player_id: u32) -> Option<&Team> {
+        self.teams.iter().find(|t| t.players.contains(player_id))
+    }
+
+    /// Mutable variant of `find_team_with_player`.
+    pub fn find_team_with_player_mut(&mut self, player_id: u32) -> Option<&mut Team> {
+        self.teams.iter_mut().find(|t| t.players.contains(player_id))
+    }
+
+    /// Index of the first reserve-tier team: prefers B-team, then
+    /// Reserve, then the highest youth tier available. Use this instead
+    /// of open-coding the fallback chain.
+    pub fn reserve_index(&self) -> Option<usize> {
+        self.find_reserve_team_index()
+    }
+
+    /// Index of a youth team (U18 preferred, then U19).
+    pub fn youth_index(&self) -> Option<usize> {
+        self.find_youth_team_index()
+    }
+
     // ─── Coach state management ──────────────────────────────────────
 
     pub fn ensure_coach_state(&mut self, date: NaiveDate) {
-        let main_team = match self.teams.iter().find(|t| t.team_type == TeamType::Main) {
+        let main_team = match self.main() {
             Some(t) => t,
             None => return,
         };
@@ -86,8 +172,8 @@ impl TeamCollection {
             None => return,
         };
 
-        for team in &self.teams {
-            for player in &team.players.players {
+        for team in self.teams.iter() {
+            for player in team.players.iter() {
                 state.update_impression(player, date, &team.team_type);
             }
         }
@@ -107,7 +193,7 @@ impl TeamCollection {
             return Vec::new();
         }
 
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.main_index() {
             Some(idx) => idx,
             None => return Vec::new(),
         };
@@ -166,7 +252,7 @@ impl TeamCollection {
         if self.teams.is_empty() {
             return;
         }
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.main_index() {
             Some(idx) => idx,
             None => return,
         };
@@ -178,11 +264,11 @@ impl TeamCollection {
         if self.teams.len() < 2 {
             return;
         }
-        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.main_index() {
             Some(idx) => idx,
             None => return,
         };
-        let reserve_idx = match self.find_reserve_team_index() {
+        let reserve_idx = match self.reserve_index() {
             Some(idx) => idx,
             None => return,
         };

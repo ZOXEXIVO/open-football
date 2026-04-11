@@ -2,7 +2,7 @@ use log::info;
 use super::CountryResult;
 use crate::league::Season;
 use crate::simulator::SimulatorData;
-use crate::TeamInfo;
+use crate::{TeamInfo, TeamType};
 
 impl CountryResult {
     /// Snapshot all player statistics into history when a new season starts.
@@ -26,12 +26,10 @@ impl CountryResult {
 
         for club in &mut country.clubs {
             // Get main team info — used for all teams in player history
-            let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
-                .find(|t| t.team_type == crate::TeamType::Main)
+            let main_team_info: Option<(String, String, u16)> = club.teams.main()
                 .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
 
-            let main_team_league = club.teams.teams.iter()
-                .find(|t| t.team_type == crate::TeamType::Main)
+            let main_team_league = club.teams.main()
                 .and_then(|t| t.league_id)
                 .and_then(|lid| league_lookup.get(&lid))
                 .cloned()
@@ -40,7 +38,7 @@ impl CountryResult {
             for team in &mut club.teams.teams {
                 // Always use main team info in history (show club name, not sub-team)
                 let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
-                    (crate::TeamType::Main, _) | (_, None) => {
+                    (TeamType::Main, _) | (_, None) => {
                         (team.name.clone(), team.slug.clone(), team.reputation.world)
                     }
                     (_, Some((name, slug, rep))) => {

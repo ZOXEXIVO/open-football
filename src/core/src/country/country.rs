@@ -140,8 +140,7 @@ impl Country {
             .iter_mut()
             .map(|club| {
                 // Find main team's league position
-                let league_info = club.teams.teams.iter()
-                    .find(|t| t.team_type == crate::TeamType::Main)
+                let league_info = club.teams.main()
                     .and_then(|t| team_league_info.get(&t.id))
                     .copied()
                     .unwrap_or((0, 0, 0));

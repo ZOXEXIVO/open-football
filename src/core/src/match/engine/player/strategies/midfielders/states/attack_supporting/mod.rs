@@ -627,35 +627,36 @@ impl MidfielderAttackSupportingState {
 
     /// Identify free channels between defenders
     fn identify_free_channels(&self, ctx: &StateProcessingContext, goal_position: Vector3<f32>) -> Vec<Channel> {
-        let mut channels = Vec::new();
-        let defenders = ctx.players().opponents().all()
+        // Collect only defender positions (small data), not the full player
+        // structs, and sort in place — avoids two Vec<MatchPlayerLite> clones.
+        let mut defender_ys: Vec<(f32, Vector3<f32>)> = ctx
+            .players()
+            .opponents()
+            .all()
             .filter(|opp| opp.tactical_positions.is_defender())
-            .collect::<Vec<_>>();
+            .map(|opp| (opp.position.y, opp.position))
+            .collect();
 
-        if defenders.len() < 2 {
-            // If few defenders, the whole width is available
-            channels.push(Channel {
+        if defender_ys.len() < 2 {
+            return vec![Channel {
                 center_y: goal_position.y,
                 width: 30.0,
                 congestion: 0.0,
-            });
-            return channels;
+            }];
         }
 
-        // Sort defenders by Y position
-        let mut sorted_defenders = defenders.clone();
-        sorted_defenders.sort_by(|a, b|
-            a.position.y.partial_cmp(&b.position.y).unwrap_or(std::cmp::Ordering::Equal)
-        );
+        defender_ys.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+
+        let mut channels: Vec<Channel> = Vec::with_capacity(defender_ys.len().saturating_sub(1));
 
         // Find gaps between defenders
-        for window in sorted_defenders.windows(2) {
-            let gap = (window[1].position.y - window[0].position.y).abs();
+        for window in defender_ys.windows(2) {
+            let gap = (window[1].0 - window[0].0).abs();
             if gap > CHANNEL_WIDTH {
                 channels.push(Channel {
-                    center_y: (window[0].position.y + window[1].position.y) / 2.0,
+                    center_y: (window[0].0 + window[1].0) / 2.0,
                     width: gap,
-                    congestion: self.calculate_channel_congestion(ctx, window[0].position, window[1].position),
+                    congestion: self.calculate_channel_congestion(ctx, window[0].1, window[1].1),
                 });
             }
         }

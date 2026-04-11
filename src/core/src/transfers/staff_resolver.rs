@@ -26,40 +26,34 @@ impl StaffResolver {
     fn resolve_squad_evaluator(staffs: &StaffCollection) -> Option<&Staff> {
         // Try: staff assigned to find_and_make_offers_first_team
         if let Some(id) = staffs.responsibility.incoming_transfers.find_and_make_offers_first_team {
-            if let Some(staff) = staffs.staffs.iter().find(|s| s.id == id) {
+            if let Some(staff) = staffs.find(id) {
                 return Some(staff);
             }
         }
 
         // Fallback 1: Manager
-        if let Some(staff) = Self::find_by_position(staffs, StaffPosition::Manager) {
+        if let Some(staff) = staffs.find_by_position(StaffPosition::Manager) {
             return Some(staff);
         }
 
         // Fallback 2: Assistant Manager
-        Self::find_by_position(staffs, StaffPosition::AssistantManager)
+        staffs.find_by_position(StaffPosition::AssistantManager)
     }
 
     /// DoF: DirectorOfFootball -> Manager -> Head coach
     fn resolve_dof(staffs: &StaffCollection) -> Option<&Staff> {
-        // Try: Director of Football
-        if let Some(staff) = Self::find_by_position(staffs, StaffPosition::DirectorOfFootball) {
+        if let Some(staff) = staffs.find_by_position(StaffPosition::DirectorOfFootball) {
             return Some(staff);
         }
-
-        // Fallback 1: Manager
-        if let Some(staff) = Self::find_by_position(staffs, StaffPosition::Manager) {
+        if let Some(staff) = staffs.find_by_position(StaffPosition::Manager) {
             return Some(staff);
         }
-
-        // Fallback 2: Any coaching staff
-        Self::find_by_position(staffs, StaffPosition::AssistantManager)
+        staffs.find_by_position(StaffPosition::AssistantManager)
     }
 
     /// Scouts: all Scout/ChiefScout positions. Falls back to Manager (limited).
     fn resolve_scouts(staffs: &StaffCollection) -> Vec<&Staff> {
         let mut scouts: Vec<&Staff> = staffs
-            .staffs
             .iter()
             .filter(|s| {
                 matches!(
@@ -71,7 +65,7 @@ impl StaffResolver {
 
         if scouts.is_empty() {
             // No scouts: Manager acts as a limited scout
-            if let Some(manager) = Self::find_by_position(staffs, StaffPosition::Manager) {
+            if let Some(manager) = staffs.find_by_position(StaffPosition::Manager) {
                 scouts.push(manager);
             }
         }
@@ -81,29 +75,15 @@ impl StaffResolver {
 
     /// Negotiator: finalize_first_team_signings -> DoF -> Manager
     fn resolve_negotiator(staffs: &StaffCollection) -> Option<&Staff> {
-        // Try: staff assigned to finalize_first_team_signings
         if let Some(id) = staffs.responsibility.incoming_transfers.finalize_first_team_signings {
-            if let Some(staff) = staffs.staffs.iter().find(|s| s.id == id) {
+            if let Some(staff) = staffs.find(id) {
                 return Some(staff);
             }
         }
-
-        // Fallback 1: Director of Football
-        if let Some(staff) = Self::find_by_position(staffs, StaffPosition::DirectorOfFootball) {
+        if let Some(staff) = staffs.find_by_position(StaffPosition::DirectorOfFootball) {
             return Some(staff);
         }
-
-        // Fallback 2: Manager
-        Self::find_by_position(staffs, StaffPosition::Manager)
-    }
-
-    fn find_by_position(staffs: &StaffCollection, position: StaffPosition) -> Option<&Staff> {
-        staffs.staffs.iter().find(|s| {
-            s.contract
-                .as_ref()
-                .map(|c| c.position == position)
-                .unwrap_or(false)
-        })
+        staffs.find_by_position(StaffPosition::Manager)
     }
 }
 

@@ -1,5 +1,8 @@
 use crate::club::player::training::result::PlayerTrainingResult;
-use crate::{ChangeType, Player, PlayerPositionType, PlayerTraining, RelationshipChange, Staff, Team, TeamTrainingResult};
+use crate::{
+    ChangeType, Player, PlayerFieldPositionGroup, PlayerPositionType, PlayerTraining,
+    RelationshipChange, Staff, Team, TeamTrainingResult,
+};
 use chrono::{Datelike, NaiveDateTime, Weekday};
 use std::collections::HashMap;
 
@@ -78,13 +81,46 @@ impl TeamTraining {
         results
     }
 
+    /// Credit the coach with specialization days for each participant's
+    /// position group. Called after training, so the coach develops deep
+    /// expertise over time in whichever groups they spend most sessions on.
+    fn accrue_coach_specialization(
+        team: &mut Team,
+        coach_id: u32,
+        participant_ids: &[u32],
+    ) {
+        // Build a multiset of groups trained this session.
+        let mut group_counts: [u32; 4] = [0; 4];
+        for pid in participant_ids {
+            if let Some(player) = team.players.find(*pid) {
+                let group = player.position().position_group();
+                let idx = match group {
+                    PlayerFieldPositionGroup::Goalkeeper => 0,
+                    PlayerFieldPositionGroup::Defender => 1,
+                    PlayerFieldPositionGroup::Midfielder => 2,
+                    PlayerFieldPositionGroup::Forward => 3,
+                };
+                group_counts[idx] += 1;
+            }
+        }
+        // Credit the coach with ONE specialization day for each group that
+        // had participants. Multiple players don't double-count — what
+        // matters is whether the coach ran that group today.
+        if let Some(coach) = team.staffs.find_mut(coach_id) {
+            if group_counts[0] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Goalkeeper, 1); }
+            if group_counts[1] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Defender, 1); }
+            if group_counts[2] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Midfielder, 1); }
+            if group_counts[3] > 0 { coach.accrue_specialization(PlayerFieldPositionGroup::Forward, 1); }
+        }
+    }
+
     fn select_participants<'a>(team: &'a Team, session: &TrainingSession) -> Vec<&'a Player> {
         let mut participants = Vec::new();
 
         // If specific participants are listed, use those
         if !session.participants.is_empty() {
             for player_id in &session.participants {
-                if let Some(player) = team.players.players.iter().find(|p| p.id == *player_id) {
+                if let Some(player) = team.players.find(*player_id) {
                     if Self::can_participate(player) {
                         participants.push(player);
                     }
@@ -92,7 +128,7 @@ impl TeamTraining {
             }
         } else if !session.focus_positions.is_empty() {
             // Select players based on focus positions
-            for player in &team.players.players {
+            for player in team.players.iter() {
                 if Self::can_participate(player) {
                     for position in &session.focus_positions {
                         if player.positions.has_position(*position) {
@@ -104,7 +140,7 @@ impl TeamTraining {
             }
         } else {
             // All available players participate
-            for player in &team.players.players {
+            for player in team.players.iter() {
                 if Self::can_participate(player) {
                     participants.push(player);
                 }
@@ -130,10 +166,10 @@ impl TeamTraining {
         // Small relationship improvements between training partners
         for i in 0..participant_ids.len() {
             for j in i + 1..participant_ids.len() {
-                if let Some(player_i) = team.players.players.iter_mut().find(|p| p.id == participant_ids[i]) {
+                if let Some(player_i) = team.players.find_mut(participant_ids[i]) {
                     player_i.relations.update(participant_ids[j], 0.01, sim_date);
                 }
-                if let Some(player_j) = team.players.players.iter_mut().find(|p| p.id == participant_ids[j]) {
+                if let Some(player_j) = team.players.find_mut(participant_ids[j]) {
                     player_j.relations.update(participant_ids[i], 0.01, sim_date);
                 }
             }
@@ -142,6 +178,21 @@ impl TeamTraining {
         // Coach-player relationship updates based on training quality
         let coach_id = team.staffs.head_coach().id;
         let coach_effectiveness = team.staffs.head_coach().recent_performance.training_effectiveness;
+
+        // Rapport accrual: every participant spent a day with the coach.
+        // Small positive drift + shared_days increment, even if no other
+        // events fire this tick.
+        for &player_id in &participant_ids {
+            if let Some(player) = team.players.find_mut(player_id) {
+                player.rapport.accrue_training_day(coach_id, sim_date, 1);
+            }
+        }
+
+        // Coach specialization: credit the coach with one day per position
+        // group covered in this session. Over hundreds of sessions a coach
+        // organically becomes a "midfield specialist" or "striker clinic"
+        // without any manual assignment.
+        Self::accrue_coach_specialization(team, coach_id, &participant_ids);
 
         // Calculate average morale change across training results
         let total_morale: f32 = training_results.player_results
@@ -159,7 +210,7 @@ impl TeamTraining {
             let relationship_boost = 0.01 + coach_effectiveness * 0.02; // 0.01 to 0.03
 
             for &player_id in &participant_ids {
-                if let Some(player) = team.players.players.iter_mut().find(|p| p.id == player_id) {
+                if let Some(player) = team.players.find_mut(player_id) {
                     let change = RelationshipChange::positive(
                         ChangeType::CoachingSuccess,
                         relationship_boost,

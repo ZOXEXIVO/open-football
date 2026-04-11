@@ -92,6 +92,7 @@ impl StaffStub {
             coaching_style: Default::default(),
             training_schedule: vec![],
             recent_events: Vec::new(),
+            specialization_days: [0; 4],
         };
         staff
     }

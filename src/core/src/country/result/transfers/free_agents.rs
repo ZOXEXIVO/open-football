@@ -1,13 +1,15 @@
 use chrono::NaiveDate;
-use crate::utils::IntegerUtils;
 use log::debug;
-use super::types::{TransferActivitySummary, can_club_accept_player};
+use super::types::{can_club_accept_player, TransferActivitySummary};
 use crate::country::result::CountryResult;
-use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
+use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationStatus, TransferNegotiation};
-use crate::transfers::pipeline::TransferRequest;
-use crate::transfers::pipeline::PipelineProcessor;
+use crate::transfers::offer::TransferOffer;
+use crate::transfers::pipeline::{PipelineProcessor, TransferRequest, TransferRequestStatus};
 use crate::transfers::staff_resolver::StaffResolver;
+use crate::transfers::{CompletedTransfer, TransferType};
+use crate::utils::IntegerUtils;
+use crate::{Country, Person, PlayerFieldPositionGroup, PlayerStatusType};
 
 impl CountryResult {
     /// Handle expiring contracts and free agent signings.
@@ -140,8 +142,8 @@ impl CountryResult {
                 .transfer_requests
                 .iter()
                 .filter(|r| {
-                    r.status != crate::transfers::pipeline::TransferRequestStatus::Fulfilled
-                        && r.status != crate::transfers::pipeline::TransferRequestStatus::Abandoned
+                    r.status != TransferRequestStatus::Fulfilled
+                        && r.status != TransferRequestStatus::Abandoned
                 })
                 .collect();
 
@@ -229,8 +231,8 @@ impl CountryResult {
             let neg_id = country.transfer_market.next_negotiation_id;
             country.transfer_market.next_negotiation_id += 1;
 
-            let offer = crate::transfers::offer::TransferOffer::new(
-                crate::shared::CurrencyValue::new(0.0, crate::shared::Currency::Usd),
+            let offer = TransferOffer::new(
+                CurrencyValue::new(0.0, Currency::Usd),
                 signing.to_club_id,
                 date,
             );
@@ -262,7 +264,7 @@ impl CountryResult {
                 .unwrap_or_default();
 
             country.transfer_market.transfer_history.push(
-                crate::transfers::CompletedTransfer::new(
+                CompletedTransfer::new(
                     signing.player_id,
                     signing.player_name,
                     signing.from_club_id,
@@ -271,8 +273,8 @@ impl CountryResult {
                     signing.to_club_id,
                     to_club_name,
                     date,
-                    crate::shared::CurrencyValue::new(0.0, crate::shared::Currency::Usd),
-                    crate::transfers::TransferType::Free,
+                    CurrencyValue::new(0.0, Currency::Usd),
+                    TransferType::Free,
                 ).with_reason(signing.reason),
             );
 

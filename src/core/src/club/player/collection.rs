@@ -81,6 +81,69 @@ impl PlayerCollection {
     pub fn contains(&self, player_id: u32) -> bool {
         self.players.iter().any(|p| p.id == player_id)
     }
+
+    /// Borrow a player by id. Returns `None` if the id is not in this
+    /// collection — prefer this over open-coding `.players.iter().find(...)`
+    /// so future changes (sorted lookup, HashMap cache, …) are a one-line fix.
+    pub fn find(&self, player_id: u32) -> Option<&Player> {
+        self.players.iter().find(|p| p.id == player_id)
+    }
+
+    /// Mutable variant of `find`.
+    pub fn find_mut(&mut self, player_id: u32) -> Option<&mut Player> {
+        self.players.iter_mut().find(|p| p.id == player_id)
+    }
+
+    /// Shorthand for `self.players.iter()`.
+    pub fn iter(&self) -> std::slice::Iter<'_, Player> {
+        self.players.iter()
+    }
+
+    /// Shorthand for `self.players.iter_mut()`.
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Player> {
+        self.players.iter_mut()
+    }
+
+    /// Number of players in the collection.
+    pub fn len(&self) -> usize {
+        self.players.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.players.is_empty()
+    }
+
+    /// Sum of `current_ability` across all players. Used by squad
+    /// evaluation, transfer valuation and board expectation code — was
+    /// previously re-inlined in 4+ places.
+    pub fn current_ability_sum(&self) -> u32 {
+        self.players
+            .iter()
+            .map(|p| p.player_attributes.current_ability as u32)
+            .sum()
+    }
+
+    /// Average `current_ability` across the collection. Returns 0 when
+    /// the collection is empty.
+    pub fn current_ability_avg(&self) -> u8 {
+        if self.players.is_empty() {
+            0
+        } else {
+            (self.current_ability_sum() / self.players.len() as u32) as u8
+        }
+    }
+
+    /// Descending-sorted CAs — used by squad-status calculation and
+    /// several transfer/listing heuristics.
+    pub fn current_abilities_desc(&self) -> Vec<u8> {
+        let mut cas: Vec<u8> = self
+            .players
+            .iter()
+            .map(|p| p.player_attributes.current_ability)
+            .collect();
+        cas.sort_unstable_by(|a, b| b.cmp(a));
+        cas
+    }
 }
 
 impl Index<u32> for PlayerCollection {

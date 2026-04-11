@@ -3,6 +3,7 @@ pub mod builder;
 pub mod collection;
 pub mod context;
 pub mod matches;
+pub mod mentorship;
 pub mod reputation;
 pub mod result;
 pub mod squad;

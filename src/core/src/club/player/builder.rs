@@ -1,10 +1,16 @@
-use crate::club::{
-    PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
-    PlayerSkills, PlayerTraining,
-};
+use crate::club::player::language::PlayerLanguage;
+use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::{generate_player_traits, PlayerTrait};
+use crate::club::{
+    PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox, PlayerSkills,
+    PlayerTraining,
+};
 use crate::shared::fullname::FullName;
-use crate::{PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, Relations};
+use crate::{
+    PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, PlayerPositions,
+    PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
+    PlayerTrainingHistory, Relations,
+};
 use chrono::NaiveDate;
 
 // Builder for Player
@@ -33,7 +39,7 @@ pub struct PlayerBuilder {
     cup_statistics: Option<PlayerStatistics>,
     statistics_history: Option<PlayerStatisticsHistory>,
     decision_history: Option<PlayerDecisionHistory>,
-    languages: Option<Vec<crate::club::player::language::PlayerLanguage>>,
+    languages: Option<Vec<PlayerLanguage>>,
     favorite_clubs: Option<Vec<u32>>,
     traits: Option<Vec<PlayerTrait>>,
 }
@@ -148,7 +154,7 @@ impl PlayerBuilder {
         self
     }
 
-    pub fn languages(mut self, languages: Vec<crate::club::player::language::PlayerLanguage>) -> Self {
+    pub fn languages(mut self, languages: Vec<PlayerLanguage>) -> Self {
         self.languages = Some(languages);
         self
     }
@@ -204,6 +210,7 @@ impl PlayerBuilder {
             favorite_clubs: self.favorite_clubs.unwrap_or_default(),
             sold_from: None,
             traits,
+            rapport: PlayerRapport::new(),
         })
     }
 }

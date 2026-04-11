@@ -132,16 +132,9 @@ impl PipelineProcessor {
             let team = &club.teams.teams[0];
             let resolved = StaffResolver::resolve(&team.staffs);
 
-            let avg_ability: u8 = if !team.players.players.is_empty() {
-                let total: u32 = team
-                    .players
-                    .players
-                    .iter()
-                    .map(|p| p.player_attributes.current_ability as u32)
-                    .sum();
-                (total / team.players.players.len() as u32) as u8
-            } else {
-                50
+            let avg_ability = {
+                let avg = team.players.current_ability_avg();
+                if avg == 0 { 50 } else { avg }
             };
 
             let club_rep = team.reputation.level();

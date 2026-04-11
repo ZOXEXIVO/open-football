@@ -125,7 +125,7 @@ impl ContinentResult {
             for row in table.rows.iter().take(spots) {
                 if row.team_id > 0 {
                     if let Some(club) = country.clubs.iter().find(|c|
-                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                        c.teams.contains(row.team_id)
                     ) {
                         qualified.push(club.id);
                     }
@@ -173,7 +173,7 @@ impl ContinentResult {
             for row in table.rows.iter().skip(skip).take(take) {
                 if row.team_id > 0 {
                     if let Some(club) = country.clubs.iter().find(|c|
-                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                        c.teams.contains(row.team_id)
                     ) {
                         qualified.push(club.id);
                     }
@@ -221,7 +221,7 @@ impl ContinentResult {
             for row in table.rows.iter().skip(skip).take(take) {
                 if row.team_id > 0 {
                     if let Some(club) = country.clubs.iter().find(|c|
-                        c.teams.teams.iter().any(|t| t.id == row.team_id)
+                        c.teams.contains(row.team_id)
                     ) {
                         qualified.push(club.id);
                     }

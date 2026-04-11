@@ -1,17 +1,17 @@
 use chrono::NaiveDate;
 use log::debug;
 
+use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, ScoutMatchAssignment, ScoutingAssignment,
+    DetailedScoutingReport, PlayerObservation, ScoutMatchAssignment, ScoutingAssignment,
     ScoutingRecommendation, TransferNeedPriority, TransferRequest, TransferRequestStatus,
 };
-use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::ScoutingRegion;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerStatusType,
-    StaffEventType, TeamType,
+    ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, TeamType,
 };
 
 struct ScoutAssignmentAction {
@@ -320,7 +320,7 @@ impl PipelineProcessor {
                 // Find the target team and check if it played today
                 let target_team = country.clubs.iter()
                     .find(|c| c.id == match_assignment.target_club_id)
-                    .and_then(|c| c.teams.teams.iter().find(|t| t.id == match_assignment.target_team_id));
+                    .and_then(|c| c.teams.find(match_assignment.target_team_id));
 
                 let target_team = match target_team {
                     Some(t) => t,
@@ -489,7 +489,7 @@ impl PipelineProcessor {
                     .find(|a| a.id == obs.assignment_id)
                 {
                     if obs.is_new {
-                        let mut new_obs = crate::transfers::pipeline::PlayerObservation::new(
+                        let mut new_obs = PlayerObservation::new(
                             obs.player_id,
                             obs.assessed_ability,
                             obs.assessed_potential,
@@ -624,61 +624,14 @@ impl PipelineProcessor {
     }
 
     pub fn process_scouting(country: &mut Country, foreign_players: &[PlayerSummary], date: NaiveDate) {
-        let price_level = country.settings.pricing.price_level;
         let country_id = country.id;
         let country_reputation = country.reputation;
 
-        // Domestic players
-        let mut all_players: Vec<PlayerSummary> = Vec::new();
-
-        for club in &country.clubs {
-            for team in &club.teams.teams {
-                for player in &team.players.players {
-                    if player.is_on_loan() {
-                        continue;
-                    }
-
-                    let value = PlayerValuationCalculator::calculate_value_with_price_level(
-                        player,
-                        date,
-                        price_level,
-                        0, 0,
-                    );
-                    let statuses = player.statuses.get();
-                    all_players.push(PlayerSummary {
-                        player_id: player.id,
-                        club_id: club.id,
-                        country_id,
-                        continent_id: country.continent_id,
-                        country_code: country.code.clone(),
-                        player_name: player.full_name.to_string(),
-                        club_name: club.name.clone(),
-                        position: player.position(),
-                        position_group: player.position().position_group(),
-                        age: player.age(date),
-                        estimated_value: value.amount,
-                        is_listed: statuses.contains(&PlayerStatusType::Lst),
-                        is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
-                        skill_ability: player.skills.calculate_ability_for_position(player.position()),
-                        average_rating: player.statistics.average_rating,
-                        goals: player.statistics.goals,
-                        assists: player.statistics.assists,
-                        appearances: player.statistics.total_games(),
-                        determination: player.skills.mental.determination,
-                        work_rate: player.skills.mental.work_rate,
-                        composure: player.skills.mental.composure,
-                        anticipation: player.skills.mental.anticipation,
-                        technical_avg: player.skills.technical.average(),
-                        mental_avg: player.skills.mental.average(),
-                        physical_avg: player.skills.physical.average(),
-                        current_reputation: player.player_attributes.current_reputation,
-                        home_reputation: player.player_attributes.home_reputation,
-                        world_reputation: player.player_attributes.world_reputation,
-                        country_reputation,
-                    });
-                }
-            }
-        }
+        // Reuse collect_player_pool for the domestic pool — the body of this
+        // loop used to be a copy-paste of that function, doubling the work
+        // that already runs once per country to build the shared foreign
+        // pool. Now it runs once.
+        let all_players: Vec<PlayerSummary> = Self::collect_player_pool(&*country, date);
 
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
@@ -699,15 +652,19 @@ impl PipelineProcessor {
                     (8, 8)
                 };
 
-                // Get this scout's known regions for cross-country scouting
-                let scout_known_regions: Vec<crate::transfers::ScoutingRegion> = assignment.scout_staff_id
+                // Get this scout's known regions for cross-country scouting.
+                // Borrow the slice instead of cloning the whole Vec — the
+                // scout_id-based lookup walks through teams/staffs, so we
+                // keep the borrow alive via a direct slice.
+                const EMPTY_REGIONS: &[ScoutingRegion] = &[];
+                let scout_known_regions: &[ScoutingRegion] = assignment.scout_staff_id
                     .and_then(|sid| {
-                        club.teams.teams.iter()
-                            .flat_map(|t| &t.staffs.staffs)
+                        club.teams.iter()
+                            .flat_map(|t| t.staffs.iter())
                             .find(|s| s.id == sid)
                     })
-                    .map(|s| s.staff_attributes.knowledge.known_regions.clone())
-                    .unwrap_or_default();
+                    .map(|s| s.staff_attributes.knowledge.known_regions.as_slice())
+                    .unwrap_or(EMPTY_REGIONS);
 
                 let observe_chance = 60 + (judging_ability as i32 / 2);
                 if IntegerUtils::random(0, 100) > observe_chance {
@@ -767,7 +724,7 @@ impl PipelineProcessor {
                             p.country_reputation <= country_reputation
                         })
                         .filter(|p| {
-                            let player_region = crate::transfers::ScoutingRegion::from_country(
+                            let player_region = ScoutingRegion::from_country(
                                 p.continent_id, &p.country_code,
                             );
                             scout_known_regions.contains(&player_region)
@@ -825,7 +782,7 @@ impl PipelineProcessor {
 
                     // Foreign players in unknown regions have +50% assessment error
                     let region_penalty = if target.country_id != country_id {
-                        let target_region = crate::transfers::ScoutingRegion::from_country(
+                        let target_region = ScoutingRegion::from_country(
                             target.continent_id, &target.country_code,
                         );
                         if scout_known_regions.contains(&target_region) {
@@ -970,7 +927,7 @@ impl PipelineProcessor {
                 {
                     if obs.is_new {
                         assignment.observations.push(
-                            crate::transfers::pipeline::PlayerObservation::new(
+                            PlayerObservation::new(
                                 obs.player_id,
                                 obs.assessed_ability,
                                 obs.assessed_potential,

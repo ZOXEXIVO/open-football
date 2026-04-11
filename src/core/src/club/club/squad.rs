@@ -1,4 +1,7 @@
-use crate::{Person, PlayerClubContract, TeamType};
+use crate::{
+    ContractType, Person, Player, PlayerClubContract, PlayerFieldPositionGroup, PlayerStatusType,
+    Team, TeamType,
+};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use super::Club;
@@ -21,7 +24,7 @@ impl Club {
     /// 3. **Squad deficit** — if the main team is still below minimum after
     ///    the above, backfill with the best available youth.
     pub(super) fn rebalance_squads(&mut self, date: NaiveDate) {
-        let main_idx = match self.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.teams.main_index() {
             Some(idx) => idx,
             None => return,
         };
@@ -38,36 +41,39 @@ impl Club {
             reason: &'static str,
         }
 
-        // Ability floor of the main team — average of bottom 3 players.
-        // Youth players above this level belong in the first team.
+        // Ability floor of the main team — average of the three weakest
+        // players. Youth players above this level belong in the first team.
         let main_ability_floor = {
-            let mut abilities: Vec<u8> = self.teams.teams[main_idx]
-                .players.players.iter()
-                .map(|p| p.player_attributes.current_ability)
-                .collect();
-            abilities.sort_unstable();
-            let n = abilities.len().min(3).max(1);
-            (abilities[..n].iter().map(|&a| a as u16).sum::<u16>() / n as u16) as u8
+            // current_abilities_desc returns descending; take the tail for
+            // the bottom three.
+            let cas = self.teams.teams[main_idx].players.current_abilities_desc();
+            if cas.is_empty() {
+                0
+            } else {
+                let n = cas.len().min(3).max(1);
+                let tail = &cas[cas.len() - n..];
+                (tail.iter().map(|&a| a as u16).sum::<u16>() / n as u16) as u8
+            }
         };
 
         let mut moves: Vec<PendingMove> = Vec::new();
 
-        for (ti, team) in self.teams.teams.iter().enumerate() {
+        for (ti, team) in self.teams.iter().enumerate() {
             if ti == main_idx || team.team_type == TeamType::Main {
                 continue;
             }
 
             let max_age = team.team_type.max_age();
 
-            for p in &team.players.players {
+            for p in team.players.iter() {
                 let age = p.age(date);
                 let ca = p.player_attributes.current_ability;
                 let overage = max_age.map_or(false, |limit| age > limit);
 
                 // Never promote players marked for departure
                 let statuses = p.statuses.get();
-                let listed = statuses.contains(&crate::PlayerStatusType::Lst)
-                    || statuses.contains(&crate::PlayerStatusType::Loa);
+                let listed = statuses.contains(&PlayerStatusType::Lst)
+                    || statuses.contains(&PlayerStatusType::Loa);
 
                 // High ability → promote straight to main team
                 if ca >= main_ability_floor && !listed {
@@ -116,8 +122,8 @@ impl Club {
             }
 
             let statuses = p.statuses.get();
-            let listed = statuses.contains(&crate::PlayerStatusType::Lst)
-                || statuses.contains(&crate::PlayerStatusType::Loa);
+            let listed = statuses.contains(&PlayerStatusType::Lst)
+                || statuses.contains(&PlayerStatusType::Loa);
             if listed {
                 continue;
             }
@@ -186,17 +192,17 @@ impl Club {
             let deficit = MIN_MAIN_SQUAD - main_count;
             let mut candidates: Vec<(usize, u32, u8)> = Vec::new();
 
-            for (ti, team) in self.teams.teams.iter().enumerate() {
+            for (ti, team) in self.teams.iter().enumerate() {
                 if ti == main_idx || team.team_type == TeamType::Main {
                     continue;
                 }
-                let available = team.players.players.len().saturating_sub(taken[ti]);
+                let available = team.players.len().saturating_sub(taken[ti]);
                 if available <= MIN_YOUTH_SQUAD && team.team_type.max_age().is_some() {
                     continue;
                 }
-                for p in &team.players.players {
+                for p in team.players.iter() {
                     let st = p.statuses.get();
-                    if st.contains(&crate::PlayerStatusType::Lst) || st.contains(&crate::PlayerStatusType::Loa) {
+                    if st.contains(&PlayerStatusType::Lst) || st.contains(&PlayerStatusType::Loa) {
                         continue;
                     }
                     candidates.push((ti, p.id, p.player_attributes.current_ability));
@@ -231,7 +237,7 @@ impl Club {
                 None => true,
             };
             if age_ok {
-                if let Some(idx) = self.teams.teams.iter().position(|t| t.team_type == *next_type) {
+                if let Some(idx) = self.teams.index_of_type(*next_type) {
                     return Some(idx);
                 }
             }
@@ -253,7 +259,7 @@ impl Club {
 
         for (team_type, max_age) in targets {
             if player_age <= max_age {
-                if let Some(idx) = self.teams.teams.iter().position(|t| t.team_type == team_type) {
+                if let Some(idx) = self.teams.index_of_type(team_type) {
                     return Some(idx);
                 }
             }
@@ -264,14 +270,13 @@ impl Club {
     /// Move players without a contract (loan returnees) from main team to reserve.
     /// Loan returns land on teams[0] (main) — staff then moves them to reserve for assessment.
     pub(super) fn move_loan_returns_to_reserve(&mut self, _date: NaiveDate) {
-        let main_idx = match self.teams.teams.iter().position(|t| t.team_type == TeamType::Main) {
+        let main_idx = match self.teams.main_index() {
             Some(idx) => idx,
             None => return,
         };
 
-        let reserve_idx = self.teams.teams.iter()
-            .position(|t| t.team_type == TeamType::Reserve)
-            .or_else(|| self.teams.teams.iter().position(|t| t.team_type == TeamType::B));
+        let reserve_idx = self.teams.index_of_type(TeamType::Reserve)
+            .or_else(|| self.teams.index_of_type(TeamType::B));
 
         let reserve_idx = match reserve_idx {
             Some(idx) => idx,
@@ -279,7 +284,7 @@ impl Club {
         };
 
         // Find main team players with no contract (returned from loan)
-        let to_move: Vec<u32> = self.teams.teams[main_idx].players.players.iter()
+        let to_move: Vec<u32> = self.teams.teams[main_idx].players.iter()
             .filter(|p| p.contract.is_none())
             .map(|p| p.id)
             .collect();
@@ -295,8 +300,6 @@ impl Club {
 
     /// Release excess players at over-represented positions across all teams.
     pub(super) fn trim_positional_surplus(&mut self, _date: NaiveDate) {
-        use crate::PlayerFieldPositionGroup;
-
         // Positional limits across ALL teams combined
         let limits: [(PlayerFieldPositionGroup, usize); 4] = [
             (PlayerFieldPositionGroup::Goalkeeper, 4),
@@ -308,8 +311,8 @@ impl Club {
         for (group, max_count) in &limits {
             // Collect all players at this position across all teams
             let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new(); // (team_idx, player_id, ability)
-            for (ti, team) in self.teams.teams.iter().enumerate() {
-                for p in &team.players.players {
+            for (ti, team) in self.teams.iter().enumerate() {
+                for p in team.players.iter() {
                     if p.position().position_group() == *group {
                         players_at_pos.push((ti, p.id, p.player_attributes.current_ability));
                     }
@@ -347,12 +350,12 @@ impl Club {
 
 /// Upgrade a youth contract to a full contract when a player is promoted to the main team.
 fn upgrade_contract_if_youth(
-    player: &mut crate::Player,
+    player: &mut Player,
     date: NaiveDate,
-    main_team: &crate::Team,
+    main_team: &Team,
 ) {
     let is_youth = player.contract.as_ref()
-        .map(|c| c.contract_type == crate::ContractType::Youth)
+        .map(|c| c.contract_type == ContractType::Youth)
         .unwrap_or(false);
 
     if is_youth {

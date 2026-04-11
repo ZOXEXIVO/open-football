@@ -44,19 +44,18 @@ impl Club {
 
         // Find the lowest youth team to graduate into (U18 → U19 → U20 → U21 → U23)
         let youth_idx = TeamType::YOUTH_PROGRESSION.iter()
-            .find_map(|tt| self.teams.teams.iter().position(|t| t.team_type == *tt));
+            .find_map(|tt| self.teams.index_of_type(*tt));
 
         // Graduate best academy players BEFORE releasing aged-out ones,
         // so 16+ year olds get a chance to graduate instead of being deleted
         if let Some(idx) = youth_idx {
-            let youth_count = self.teams.teams[idx].players.players.len();
+            let youth_count = self.teams.teams[idx].players.len();
             let target = 25usize;
             let space = target.saturating_sub(youth_count);
             let to_graduate = space.max(8).min(12);
 
             // Main team name for contract registration
-            let main_team_name = self.teams.teams.iter()
-                .find(|t| t.team_type == TeamType::Main)
+            let main_team_name = self.teams.main()
                 .map(|t| t.name.clone())
                 .unwrap_or_else(|| self.name.clone());
 

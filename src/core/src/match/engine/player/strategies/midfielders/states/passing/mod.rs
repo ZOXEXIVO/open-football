@@ -146,7 +146,8 @@ impl MidfielderPassingState {
         let vision_range = vision_skill * 20.0;
         let teammates = ctx.players().teammates();
 
-        let breakthrough_targets = teammates.all()
+        // Fused filter + max_by — no intermediate Vec allocation.
+        teammates.all()
             .filter(|teammate| {
                 let velocity = ctx.tick_context.positions.players.velocity(teammate.id);
                 let is_moving_forward = velocity.magnitude() > 1.0;
@@ -158,9 +159,6 @@ impl MidfielderPassingState {
                 distance < vision_range && is_moving_forward &&
                     is_attacking_player && would_break_lines
             })
-            .collect::<Vec<_>>();
-
-        breakthrough_targets.into_iter()
             .max_by(|a, b| {
                 let a_value = self.calculate_breakthrough_value(ctx, a);
                 let b_value = self.calculate_breakthrough_value(ctx, b);
@@ -216,6 +214,7 @@ impl MidfielderPassingState {
         let pass_direction = (teammate_pos - player_pos).normalize();
         let pass_distance = (teammate_pos - player_pos).magnitude();
 
+        // Count only — no need to materialise a Vec of player refs.
         let opponents_between = ctx.players().opponents().all()
             .filter(|opponent| {
                 let to_opponent = opponent.position - player_pos;
@@ -230,15 +229,15 @@ impl MidfielderPassingState {
 
                 perp_distance < 8.0
             })
-            .collect::<Vec<_>>();
+            .count();
 
-        if opponents_between.len() >= 2 {
+        if opponents_between >= 2 {
             let vision_skill = ctx.player.skills.mental.vision / 20.0;
             let passing_skill = ctx.player.skills.technical.passing / 20.0;
             let skill_factor = (vision_skill + passing_skill) / 2.0;
             let max_opponents = 2.0 + (skill_factor * 2.0);
 
-            return opponents_between.len() as f32 <= max_opponents;
+            return opponents_between as f32 <= max_opponents;
         }
 
         false

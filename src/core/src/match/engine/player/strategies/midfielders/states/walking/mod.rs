@@ -80,21 +80,21 @@ impl StateProcessingHandler for MidfielderWalkingState {
                 }
             }
 
-            let nearby_opponents = ctx.players().opponents().nearby(150.0).collect::<Vec<_>>();
-            if !nearby_opponents.is_empty() {
-                // If there are nearby opponents, assess the situation
-                let ball_distance = ctx.ball().distance();
-
-                let mut closest_opponent_distance = f32::MAX;
-                for opponent in &nearby_opponents {
-                    let distance = ctx.player().distance_to_player(opponent.id);
-                    if distance < closest_opponent_distance {
-                        closest_opponent_distance = distance;
-                    }
+            // Compute the nearest opponent distance in a single pass — no
+            // intermediate Vec.
+            let mut any_nearby = false;
+            let mut closest_opponent_distance = f32::MAX;
+            for opponent in ctx.players().opponents().nearby(150.0) {
+                any_nearby = true;
+                let distance = ctx.player().distance_to_player(opponent.id);
+                if distance < closest_opponent_distance {
+                    closest_opponent_distance = distance;
                 }
+            }
 
+            if any_nearby {
+                let ball_distance = ctx.ball().distance();
                 if ball_distance < 50.0 && closest_opponent_distance < 50.0 {
-                    // If the ball is close and an opponent is very close, transition to Tackling state
                     return Some(StateChangeResult::with_midfielder_state(
                         MidfielderState::Tackling,
                     ));

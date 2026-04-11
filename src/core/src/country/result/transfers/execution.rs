@@ -2,7 +2,8 @@ use chrono::{Datelike, NaiveDate};
 use log::debug;
 use super::types::can_club_accept_player;
 use crate::{
-    Country, Person, Player, PlayerClubContract, PlayerPlan, PlayerStatusType, TeamInfo,
+    Country, Person, Player, PlayerClubContract, PlayerHappiness, PlayerPlan, PlayerStatusType,
+    TeamInfo, TeamType,
 };
 use crate::simulator::SimulatorData;
 
@@ -76,9 +77,7 @@ pub(crate) fn execute_transfer_within_country(
     let mut selling_league_id = None;
 
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        if let Some(main_team) = selling_club.teams.teams.iter()
-            .find(|t| t.team_type == crate::TeamType::Main)
-        {
+        if let Some(main_team) = selling_club.teams.main() {
             selling_league_id = main_team.league_id;
             from_info = Some(TeamInfo {
                 name: selling_club.name.clone(),
@@ -182,9 +181,7 @@ fn execute_loan_within_country(
     let mut from_team_id = 0u32;
 
     if let Some(selling_club) = country.clubs.iter_mut().find(|c| c.id == selling_club_id) {
-        if let Some(main_team) = selling_club.teams.teams.iter()
-            .find(|t| t.team_type == crate::TeamType::Main)
-        {
+        if let Some(main_team) = selling_club.teams.main() {
             selling_league_id = main_team.league_id;
             from_info = Some(TeamInfo {
                 name: selling_club.name.clone(),
@@ -195,16 +192,14 @@ fn execute_loan_within_country(
                             });
         }
 
-        from_team_id = selling_club.teams.teams.iter()
-            .find(|t| t.players.players.iter().any(|p| p.id == player_id))
+        from_team_id = selling_club.teams.find_team_with_player(player_id)
             .map(|t| t.id)
             .unwrap_or(0);
 
         // Move to reserve before loaning
-        let main_idx = selling_club.teams.teams.iter().position(|t| t.team_type == crate::TeamType::Main);
-        let reserve_idx = selling_club.teams.teams.iter()
-            .position(|t| t.team_type == crate::TeamType::Reserve)
-            .or_else(|| selling_club.teams.teams.iter().position(|t| t.team_type == crate::TeamType::B));
+        let main_idx = selling_club.teams.main_index();
+        let reserve_idx = selling_club.teams.index_of_type(TeamType::Reserve)
+            .or_else(|| selling_club.teams.index_of_type(TeamType::B));
 
         if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
             if mi != ri {
@@ -321,12 +316,9 @@ fn take_player_from_selling_country(
 
     let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
 
-    let league_id = selling_club.teams.teams.iter()
-        .find(|t| t.team_type == crate::TeamType::Main)
-        .and_then(|t| t.league_id);
+    let league_id = selling_club.teams.main().and_then(|t| t.league_id);
 
-    let from_info = selling_club.teams.teams.iter()
-        .find(|t| t.team_type == crate::TeamType::Main)
+    let from_info = selling_club.teams.main()
         .map(|main_team| TeamInfo {
             name: selling_club.name.clone(),
             slug: main_team.slug.clone(),
@@ -337,10 +329,9 @@ fn take_player_from_selling_country(
 
     // For loans: move to reserve first
     if is_loan {
-        let main_idx = selling_club.teams.teams.iter().position(|t| t.team_type == crate::TeamType::Main);
-        let reserve_idx = selling_club.teams.teams.iter()
-            .position(|t| t.team_type == crate::TeamType::Reserve)
-            .or_else(|| selling_club.teams.teams.iter().position(|t| t.team_type == crate::TeamType::B));
+        let main_idx = selling_club.teams.main_index();
+        let reserve_idx = selling_club.teams.index_of_type(TeamType::Reserve)
+            .or_else(|| selling_club.teams.index_of_type(TeamType::B));
         if let (Some(mi), Some(ri)) = (main_idx, reserve_idx) {
             if mi != ri {
                 if let Some(p) = selling_club.teams.teams[mi].players.take_player(&player_id) {
@@ -455,7 +446,7 @@ fn execute_loan_across_countries(
     // Get loan end date from selling country's league before taking the player
     let selling_league_id = data.country(selling_country_id)
         .and_then(|c| c.clubs.iter().find(|cl| cl.id == selling_club_id))
-        .and_then(|cl| cl.teams.teams.iter().find(|t| t.team_type == crate::TeamType::Main))
+        .and_then(|cl| cl.teams.main())
         .and_then(|t| t.league_id);
 
     let loan_end = data.country(selling_country_id)
@@ -535,9 +526,7 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
     country.clubs.iter()
         .find(|c| c.id == buying_club_id)
         .and_then(|c| {
-            let main_team = c.teams.teams.iter()
-                .find(|t| t.team_type == crate::TeamType::Main)
-                .or(c.teams.teams.first())?;
+            let main_team = c.teams.main().or(c.teams.teams.first())?;
             let (league_name, league_slug) = main_team.league_id
                 .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
                 .map(|l| (l.name.clone(), l.slug.clone()))
@@ -563,7 +552,7 @@ fn clear_transfer_statuses(player: &mut Player) {
     player.statuses.remove(PlayerStatusType::Wnt);
     player.statuses.remove(PlayerStatusType::Sct);
     player.statuses.remove(PlayerStatusType::Enq);
-    player.happiness = crate::PlayerHappiness::new();
+    player.happiness = PlayerHappiness::new();
 }
 
 fn assign_new_contract(player: &mut Player, fee: f64, date: NaiveDate, _is_loan: bool) {

@@ -1,13 +1,14 @@
 use crate::ai::{Ai, AiBatchProcessor};
 use crate::club::ai::apply_ai_responses;
+use crate::competitions::simulation::GlobalCompetitionSimulator;
+use crate::competitions::GlobalCompetitions;
 use crate::context::{GlobalContext, SimulationContext};
 use crate::continent::{Continent, ContinentResult};
-use crate::competitions::GlobalCompetitions;
-use crate::league::LeagueTable;
+use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
-use crate::{Player, TeamInfo};
+use crate::{Player, TeamInfo, TeamType};
 use chrono::{Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -45,12 +46,13 @@ impl FootballSimulator {
         // own continent and pushes AI requests into the shared (Arc<Mutex>) Ai
         // collector. Continents are independent during this phase.
         let phase_a = Instant::now();
-        let continent_ids: Vec<u32> = data.continents.iter().map(|c| c.id).collect();
         let results: Vec<ContinentResult> = data
             .continents
             .par_iter_mut()
-            .zip(continent_ids.par_iter())
-            .map(|(continent, &cid)| continent.simulate(ctx.with_continent(cid)))
+            .map(|continent| {
+                let cid = continent.id;
+                continent.simulate(ctx.with_continent(cid))
+            })
             .collect();
         let phase_a_ms = phase_a.elapsed().as_millis();
 
@@ -73,7 +75,7 @@ impl FootballSimulator {
 
         // Global competitions (Champions League, World Cup, etc.)
         let phase_g = Instant::now();
-        crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
+        GlobalCompetitionSimulator::simulate(data);
         let phase_g_ms = phase_g.elapsed().as_millis();
 
         // Refresh player indexes only if a transfer actually moved a player
@@ -133,7 +135,7 @@ pub struct SimulatorData {
     pub country_info: HashMap<u32, CountryInfo>,
 
     /// Global match result storage — all match types (league, cup, national team) write here
-    pub match_store: crate::league::MatchStorage,
+    pub match_store: MatchStorage,
 }
 
 impl SimulatorData {
@@ -158,7 +160,7 @@ impl SimulatorData {
             watchlist: Vec::new(),
             global_competitions,
             country_info,
-            match_store: crate::league::MatchStorage::new(),
+            match_store: MatchStorage::new(),
         };
 
         let mut indexes = SimulatorDataIndexes::new();
@@ -228,38 +230,66 @@ impl SimulatorData {
 
         for continent in &mut self.continents {
             for country in &mut continent.countries {
-                let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
-                    .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
-                    .collect();
+                // Lookup by reference to the league's name/slug — avoids
+                // cloning the full HashMap every call.
+                let leagues = &country.leagues.leagues;
+                let league_info = |league_id: u32| -> (&str, &str) {
+                    leagues
+                        .iter()
+                        .find(|l| l.id == league_id)
+                        .map(|l| (l.name.as_str(), l.slug.as_str()))
+                        .unwrap_or(("", ""))
+                };
 
                 for club in &mut country.clubs {
-                    let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
-                        .find(|t| t.team_type == crate::TeamType::Main)
-                        .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
+                    // In the `only_empty` path (steady state) most teams have
+                    // zero players needing seeding — skip the whole club as
+                    // cheaply as possible before we pay any allocation cost.
+                    if only_empty
+                        && !club.teams.iter().any(|t| {
+                            t.players.iter().any(|p| p.statistics_history.is_empty())
+                        })
+                    {
+                        continue;
+                    }
 
-                    let main_team_league = club.teams.teams.iter()
-                        .find(|t| t.team_type == crate::TeamType::Main)
+                    // Resolve the main team's identity once per club.
+                    let main_team = club.teams.main();
+                    let main_name = main_team.map(|t| t.name.clone());
+                    let main_slug = main_team.map(|t| t.slug.clone());
+                    let main_reputation = main_team.map(|t| t.reputation.world);
+                    let (main_league_name, main_league_slug) = main_team
                         .and_then(|t| t.league_id)
-                        .and_then(|lid| league_lookup.get(&lid))
-                        .cloned()
+                        .map(|lid| {
+                            let (n, s) = league_info(lid);
+                            (n.to_owned(), s.to_owned())
+                        })
                         .unwrap_or_default();
 
-                    for team in &mut club.teams.teams {
-                        let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
-                            (crate::TeamType::Main, _) | (_, None) => {
-                                (team.name.clone(), team.slug.clone(), team.reputation.world)
-                            }
-                            (_, Some((name, slug, rep))) => {
-                                (name.clone(), slug.clone(), *rep)
-                            }
-                        };
+                    for team in club.teams.iter_mut() {
+                        // Cheap per-team scan — skip if no seeding needed.
+                        if only_empty
+                            && !team.players.iter().any(|p| p.statistics_history.is_empty())
+                        {
+                            continue;
+                        }
 
-                        let team_info = TeamInfo {
-                            name: team_name,
-                            slug: team_slug,
-                            reputation: team_reputation,
-                            league_name: main_team_league.0.clone(),
-                            league_slug: main_team_league.1.clone(),
+                        let team_info = if team.team_type == TeamType::Main || main_name.is_none() {
+                            TeamInfo {
+                                name: team.name.clone(),
+                                slug: team.slug.clone(),
+                                reputation: team.reputation.world,
+                                league_name: main_league_name.clone(),
+                                league_slug: main_league_slug.clone(),
+                            }
+                        } else {
+                            TeamInfo {
+                                name: main_name.clone().unwrap_or_default(),
+                                slug: main_slug.clone().unwrap_or_default(),
+                                reputation: main_reputation.unwrap_or(0),
+                                league_name: main_league_name.clone(),
+                                league_slug: main_league_slug.clone(),
+                            }
                         };
 
                         for player in &mut team.players.players {

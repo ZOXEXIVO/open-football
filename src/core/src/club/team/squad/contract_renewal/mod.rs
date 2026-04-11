@@ -72,7 +72,7 @@ impl ContractRenewalManager {
             .responsibility
             .contract_renewal
             .handle_first_team_contracts
-            .and_then(|id| team.staffs.staffs.iter().find(|s| s.id == id));
+            .and_then(|id| team.staffs.find(id));
 
         let (negotiation, judging) = match resolver {
             Some(staff) => (
@@ -173,7 +173,7 @@ impl ContractRenewalManager {
         judging_ability: u8,
         date: NaiveDate,
     ) -> Option<(u32, u8)> {
-        let player = team.players.players.iter().find(|p| p.id == player_id)?;
+        let player = team.players.find(player_id)?;
         let contract = player.contract.as_ref()?;
 
         let ability = player.player_attributes.current_ability;

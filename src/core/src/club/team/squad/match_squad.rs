@@ -1,3 +1,4 @@
+use crate::r#match::squad::PlayerSelectionResult;
 use crate::r#match::{MatchPlayer, MatchSquad, SelectionContext, SquadSelector};
 use crate::{Player, Tactics, TacticsSelector, Team};
 
@@ -92,7 +93,7 @@ impl Team {
 
     fn validate_squad_selection(
         &self,
-        squad_result: &crate::r#match::squad::PlayerSelectionResult,
+        squad_result: &PlayerSelectionResult,
         tactics: &Tactics,
     ) {
         let formation_positions = tactics.positions();

@@ -77,7 +77,7 @@ const SK_GK_THROWING: usize = 49;
 // ── Skill category ──────────────────────────────────────────────────────
 
 #[derive(PartialEq, Clone, Copy)]
-enum SkillCategory {
+pub enum SkillCategory {
     Technical,
     Mental,
     Physical,
@@ -528,13 +528,81 @@ fn write_skills_back(player: &mut Player, arr: &[f32; SKILL_COUNT]) {
 // Public API
 // ═══════════════════════════════════════════════════════════════════════
 
+/// Per-category coach training effectiveness, normalized to a multiplier
+/// centered on ~1.0. A bad coach (average attribute 5/20) produces ~0.75;
+/// an elite coach (18/20) produces ~1.35. For players under 23, the club's
+/// best `working_with_youngsters` attribute adds a further +0-15% bonus.
+#[derive(Debug, Clone, Copy)]
+pub struct CoachingEffect {
+    pub technical: f32,
+    pub mental: f32,
+    pub physical: f32,
+    pub goalkeeping: f32,
+    /// Bonus multiplier applied on top of the category multiplier for
+    /// players under 23.
+    pub youth_bonus: f32,
+}
+
+impl CoachingEffect {
+    pub fn neutral() -> Self {
+        Self {
+            technical: 1.0,
+            mental: 1.0,
+            physical: 1.0,
+            goalkeeping: 1.0,
+            youth_bonus: 1.0,
+        }
+    }
+
+    /// Build from the best coach attribute found at the club (0-20 scale)
+    /// and the youth coaching quality (0.0-1.0 normalized).
+    pub fn from_scores(
+        technical: u8,
+        mental: u8,
+        fitness: u8,
+        goalkeeping: u8,
+        youth_quality_0_1: f32,
+    ) -> Self {
+        let m = |attr: u8| -> f32 {
+            // 0 → 0.60, 10 → 1.0, 20 → 1.40 (linear)
+            (0.6 + (attr as f32 / 20.0) * 0.8).clamp(0.55, 1.45)
+        };
+        Self {
+            technical: m(technical),
+            mental: m(mental),
+            physical: m(fitness),
+            goalkeeping: m(goalkeeping),
+            youth_bonus: (1.0 + youth_quality_0_1 * 0.15).clamp(1.0, 1.18),
+        }
+    }
+
+    fn for_category(&self, cat: SkillCategory) -> f32 {
+        match cat {
+            SkillCategory::Technical => self.technical,
+            SkillCategory::Mental => self.mental,
+            SkillCategory::Physical => self.physical,
+            SkillCategory::Goalkeeping => self.goalkeeping,
+        }
+    }
+}
+
 impl Player {
     /// Weekly development tick.
     ///
     /// Key difference from naive approach: each skill has its OWN ceiling and
     /// growth rate based on position weights. A striker's finishing develops fast
     /// toward a high ceiling while their tackling barely moves.
-    pub fn process_development(&mut self, now: NaiveDate, league_reputation: u16) {
+    ///
+    /// `coach` comes from the club's best coaching staff scores — it is
+    /// `neutral()` when no coaching staff is available, and amplified when
+    /// an elite coach (and Head of Youth Development for youngsters) is in
+    /// place. This is what makes investing in coaching staff matter.
+    pub fn process_development(
+        &mut self,
+        now: NaiveDate,
+        league_reputation: u16,
+        coach: &CoachingEffect,
+    ) {
         let age = DateUtils::age(self.birth_date, now);
         let pa = self.player_attributes.potential_ability as f32;
 
@@ -602,14 +670,21 @@ impl Player {
             // Position weight also scales growth rate: key skills develop faster
             let pos_rate_mult = dev_weights[i];
 
+            // Coach effectiveness by category, plus a youth bonus for
+            // players under 23 (using Head of Youth Development attribute).
+            let coach_mult = coach.for_category(cat);
+            let youth_coach_mult = if age < 23 { coach.youth_bonus } else { 1.0 };
+
             let change = if base > 0.0 {
                 // Growth: scale by all positive multipliers + position relevance + competition quality
-                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality
+                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality * coach_mult * youth_coach_mult
             } else {
                 // Decline: position-irrelevant skills decline slightly faster
-                // Key skills are more "maintained" by regular use
+                // Key skills are more "maintained" by regular use.
+                // Great coaches also slow decline a little (they manage load + technique).
                 let decline_pos_mult = (2.0 - dev_weights[i]).clamp(0.5, 1.5);
-                base * decline_prot * decline_pos_mult
+                let decline_coach_protection = ((coach_mult - 1.0) * 0.5 + 1.0).clamp(0.6, 1.0);
+                base * decline_prot * decline_pos_mult * decline_coach_protection
             };
 
             let new_val = skills[i] + change;

@@ -3,12 +3,12 @@ use log::debug;
 use std::collections::HashMap;
 use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::country::result::CountryResult;
-use crate::shared::CurrencyValue;
+use crate::shared::{Currency, CurrencyValue};
+use crate::transfers::{TransferListing, TransferListingType};
 use crate::{
-    Club, Country, Person, PlayerFieldPositionGroup, PlayerPositionType,
+    Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerSquadStatus, PlayerStatusType, ReputationLevel,
 };
-use crate::transfers::{TransferListing, TransferListingType};
 
 enum ListingDecision {
     Keep,
@@ -56,7 +56,7 @@ impl CountryResult {
                 match Self::evaluate_player_listing(player, &squad_analysis, club, date) {
                     ListingDecision::Keep => {}
                     ListingDecision::FreeTransfer => {
-                        let free_price = CurrencyValue { amount: 0.0, currency: crate::shared::Currency::Usd };
+                        let free_price = CurrencyValue { amount: 0.0, currency: Currency::Usd };
                         listings_to_add.push(PendingListing {
                             player_id: player.id,
                             club_id: club.id,
@@ -84,7 +84,7 @@ impl CountryResult {
                             player_id: player.id,
                             club_id: club.id,
                             team_id: main_team.id,
-                            asking_price: CurrencyValue { amount: 0.0, currency: crate::shared::Currency::Usd },
+                            asking_price: CurrencyValue { amount: 0.0, currency: Currency::Usd },
                             listing_type: TransferListingType::Loan,
                             reason,
                             decided_by: decided_by.clone(),
@@ -203,7 +203,7 @@ impl CountryResult {
     }
 
     fn evaluate_player_listing(
-        player: &crate::Player,
+        player: &Player,
         analysis: &SquadAnalysis,
         club: &Club,
         date: NaiveDate,
@@ -359,7 +359,7 @@ impl CountryResult {
 
     /// Decide between Transfer and Loan based on player profile and club context.
     fn decide_listing_type(
-        player: &crate::Player,
+        player: &Player,
         rep_level: &ReputationLevel,
         avg: i16,
         date: NaiveDate,
@@ -412,7 +412,7 @@ impl CountryResult {
     /// Returns true if the player's position group already has enough players.
     fn position_group_has_depth(
         club: &Club,
-        player: &crate::Player,
+        player: &Player,
         _date: NaiveDate,
     ) -> bool {
         let team = match club.teams.teams.first() {
@@ -421,7 +421,7 @@ impl CountryResult {
         };
 
         let group = player.position().position_group();
-        let group_count = team.players.players.iter()
+        let group_count = team.players.iter()
             .filter(|p| p.position().position_group() == group)
             .count();
 
@@ -436,7 +436,7 @@ impl CountryResult {
     }
 
     fn calculate_asking_price(
-        player: &crate::Player,
+        player: &Player,
         club: &Club,
         date: NaiveDate,
         price_level: f32,

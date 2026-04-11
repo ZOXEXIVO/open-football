@@ -4,26 +4,74 @@ use crate::club::{PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
+/// Additional factor tracking recovery acceleration.
+/// Stored transiently — the number of extra days healed this tick.
+pub(crate) struct MedicalStaffQuality {
+    /// 0.0-1.0 physiotherapy quality (best staff member's attribute / 20)
+    pub physio: f32,
+    /// 0.0-1.0 sports science quality (best staff member's attribute / 20)
+    pub sports_science: f32,
+}
+
+impl MedicalStaffQuality {
+    /// Extra days healed this tick on top of the normal one-day decrement.
+    /// Elite physio (1.0) occasionally heals an extra day; mediocre (0.35)
+    /// basically never does.
+    fn bonus_day(&self) -> bool {
+        // Physio 0.35 → 0% chance, 1.0 → 30% chance — smoothly interpolated
+        let chance = (self.physio - 0.3).max(0.0) * 0.45;
+        rand::random::<f32>() < chance
+    }
+
+    /// Multiplier on spontaneous injury risk.
+    /// Elite sports science halves it; mediocre leaves it alone.
+    fn risk_multiplier(&self) -> f32 {
+        // 0.35 → 1.0, 0.5 → ~0.95, 0.8 → ~0.7, 1.0 → ~0.5
+        let bonus = (self.sports_science - 0.35).max(0.0);
+        (1.0 - bonus * 0.77).clamp(0.45, 1.05)
+    }
+
+    /// Multiplier on setback / re-injury risk during recovery phase.
+    /// Sports science matters more here than on the base risk.
+    fn setback_multiplier(&self) -> f32 {
+        let ss_bonus = (self.sports_science - 0.35).max(0.0);
+        let physio_bonus = (self.physio - 0.35).max(0.0);
+        (1.0 - ss_bonus * 0.6 - physio_bonus * 0.3).clamp(0.2, 1.05)
+    }
+}
+
 impl Player {
-    /// Process injury lifecycle: injured → recovery → healthy
-    pub(crate) fn process_injury(&mut self, result: &mut PlayerResult, now: NaiveDate) {
+    /// Process injury lifecycle: injured → recovery → healthy.
+    /// The medical staff quality comes from the parent ClubContext and
+    /// modulates recovery speed + spontaneous injury risk.
+    pub(crate) fn process_injury(
+        &mut self,
+        result: &mut PlayerResult,
+        now: NaiveDate,
+        medical: &MedicalStaffQuality,
+    ) {
         let injury_proneness = self.player_attributes.injury_proneness;
         let proneness_modifier = injury_proneness as f32 / 10.0;
 
         if self.player_attributes.is_injured {
             // Phase 1: Injured — decrement injury days
             let transitioned = self.player_attributes.recover_injury_day();
+            // Elite physio occasionally heals an extra day.
+            if !transitioned && medical.bonus_day() && self.player_attributes.is_injured {
+                let _ = self.player_attributes.recover_injury_day();
+            }
 
-            if transitioned {
+            if self.player_attributes.injury_days_remaining == 0 && !self.player_attributes.is_injured {
                 // Injury countdown hit 0 → transition to recovery phase
                 self.statuses.remove(PlayerStatusType::Inj);
                 self.statuses.add(now, PlayerStatusType::Lmp);
                 result.injury_recovered = true;
             }
         } else if self.player_attributes.is_in_recovery() {
-            // Phase 2: Recovery — post-injury low match fitness phase
-            // Small setback chance (~0.5%) that re-injures the same body part
-            if rand::random::<f32>() < 0.001 * proneness_modifier {
+            // Phase 2: Recovery — post-injury low match fitness phase.
+            // Setback chance reduced by medical staff quality.
+            let setback_chance = 0.001 * proneness_modifier * medical.setback_multiplier();
+            if rand::random::<f32>() < setback_chance {
                 if let Some(body_part) = BodyPart::from_u8(
                     self.player_attributes.last_injury_body_part,
                 ) {
@@ -37,11 +85,13 @@ impl Player {
             }
 
             let fully_fit = self.player_attributes.recover_recovery_day();
-            if fully_fit {
+            // Elite physio can shave extra days off the recovery phase too.
+            if !fully_fit && medical.bonus_day() {
+                let _ = self.player_attributes.recover_recovery_day();
+            }
+            if fully_fit || self.player_attributes.recovery_days_remaining == 0 {
                 // Fully recovered — remove low match fitness status
                 self.statuses.remove(PlayerStatusType::Lmp);
-                // Clear the last injury body part after a delay (keep for recurring risk tracking)
-                // We clear it after full recovery so it doesn't linger forever
                 self.player_attributes.last_injury_body_part = 0;
             }
         } else {
@@ -76,6 +126,10 @@ impl Player {
 
             // Injury proneness multiplier
             injury_chance *= proneness_modifier;
+
+            // Sports science multiplier — elite staff cuts spontaneous
+            // injury risk roughly in half.
+            injury_chance *= medical.risk_multiplier();
 
             if rand::random::<f32>() < injury_chance {
                 let injury = InjuryType::random_spontaneous_injury(injury_proneness);

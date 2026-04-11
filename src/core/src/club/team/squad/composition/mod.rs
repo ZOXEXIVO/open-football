@@ -243,6 +243,6 @@ impl SquadComposition {
         if m.from_team_index == m.to_team_index {
             return false;
         }
-        teams[m.from_team_index].players.players.iter().any(|p| p.id == m.player_id)
+        teams[m.from_team_index].players.contains(m.player_id)
     }
 }

@@ -3,8 +3,8 @@ use crate::club::{BoardResult, ClubFinanceResult};
 use crate::simulator::SimulatorData;
 use crate::transfers::CompletedTransfer;
 use crate::{
-    PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult, PlayerStatusType,
-    SimulationResult, StaffStatus, TeamResult,
+    Player, PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerResult,
+    PlayerSquadStatus, PlayerStatusType, SimulationResult, StaffStatus, TeamResult,
 };
 use crate::utils::DateUtils;
 
@@ -98,7 +98,7 @@ impl ClubResult {
                     let (neg, judge) = club.teams.teams.first()
                         .map(|team| {
                             let staff = team.staffs.responsibility.contract_renewal.handle_first_team_contracts
-                                .and_then(|id| team.staffs.staffs.iter().find(|s| s.id == id));
+                                .and_then(|id| team.staffs.find(id));
                             match staff {
                                 Some(s) => {
                                     let is_active = s.contract.as_ref()
@@ -122,7 +122,7 @@ impl ClubResult {
                         .map(|t| t.wage_budget as u32)
                         .unwrap_or(0);
 
-                    let total_wages: u32 = club.teams.teams.iter()
+                    let total_wages: u32 = club.teams.iter()
                         .map(|t| t.get_annual_salary())
                         .sum();
 
@@ -152,7 +152,7 @@ impl ClubResult {
                 let ability_f = ability as f32;
                 let matches_played = player.statistics.played + player.statistics.played_subs;
                 let is_not_needed = player.contract.as_ref()
-                    .map(|c| matches!(c.squad_status, crate::PlayerSquadStatus::NotNeeded))
+                    .map(|c| matches!(c.squad_status, PlayerSquadStatus::NotNeeded))
                     .unwrap_or(false);
 
                 // Not needed players don't get raises — transfer list or release instead
@@ -232,7 +232,7 @@ impl ClubResult {
         /// - Other club interest (Wnt/Enq/Bid statuses): gives player leverage for longer deals
         /// - Staff negotiation skill: better negotiator → result closer to club's preference
         fn negotiate_contract_years(
-            player: &crate::Player,
+            player: &Player,
             age: u8,
             negotiation_skill: u8,
         ) -> u8 {
@@ -346,16 +346,7 @@ impl ClubResult {
         let decision = {
             let squad_avg = data.club(club_id)
                 .and_then(|club| club.teams.teams.first())
-                .map(|team| {
-                    if team.players.players.is_empty() {
-                        0i16
-                    } else {
-                        let sum: i16 = team.players.players.iter()
-                            .map(|p| p.player_attributes.current_ability as i16)
-                            .sum();
-                        sum / team.players.players.len() as i16
-                    }
-                })
+                .map(|team| team.players.current_ability_avg() as i16)
                 .unwrap_or(0);
 
             let player = match data.player(player_id) {
@@ -374,7 +365,7 @@ impl ClubResult {
             let loyalty = player.attributes.loyalty;
             let is_key = player.contract.as_ref()
                 .map(|c| matches!(c.squad_status,
-                    crate::PlayerSquadStatus::KeyPlayer | crate::PlayerSquadStatus::FirstTeamRegular))
+                    PlayerSquadStatus::KeyPlayer | PlayerSquadStatus::FirstTeamRegular))
                 .unwrap_or(false);
 
             // Key players and first-team regulars: club keeps trying — don't list them

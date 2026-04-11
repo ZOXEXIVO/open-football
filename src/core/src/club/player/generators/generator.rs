@@ -1,3 +1,4 @@
+use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
@@ -781,6 +782,7 @@ impl PlayerGenerator {
             favorite_clubs: Vec::new(),
             sold_from: None,
             traits: Vec::new(), // academy youth start with no traits; grow via training
+            rapport: PlayerRapport::new(),
         }
     }
 

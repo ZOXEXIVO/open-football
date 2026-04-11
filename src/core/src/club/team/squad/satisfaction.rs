@@ -1,5 +1,5 @@
 use crate::club::staff::perception::CoachDecisionState;
-use crate::{PlayerFieldPositionGroup, Team};
+use crate::{Player, PlayerFieldPositionGroup, Team};
 
 /// Computes overall squad satisfaction (0.0–1.0) from four weighted factors:
 ///   - Squad size (25%)
@@ -28,7 +28,7 @@ fn size_satisfaction(squad_size: usize) -> f32 {
 }
 
 /// Based on average match rating of players with 4+ appearances.
-fn performance_satisfaction(players: &[crate::Player]) -> f32 {
+fn performance_satisfaction(players: &[Player]) -> f32 {
     let experienced: Vec<_> = players
         .iter()
         .filter(|p| p.statistics.played + p.statistics.played_subs > 3)
@@ -48,7 +48,7 @@ fn performance_satisfaction(players: &[crate::Player]) -> f32 {
 
 /// Penalises large gaps between best and worst perceived quality.
 fn quality_spread_satisfaction(
-    players: &[crate::Player],
+    players: &[Player],
     state: &CoachDecisionState,
 ) -> f32 {
     let qualities: Vec<f32> = players
@@ -69,7 +69,7 @@ fn quality_spread_satisfaction(
 
 /// Checks minimum position coverage among healthy players:
 /// 1 GK, 3 DEF, 2 MID, 1 FWD.
-fn position_coverage_satisfaction(players: &[crate::Player]) -> f32 {
+fn position_coverage_satisfaction(players: &[Player]) -> f32 {
     let available: Vec<_> = players
         .iter()
         .filter(|p| !p.player_attributes.is_injured)

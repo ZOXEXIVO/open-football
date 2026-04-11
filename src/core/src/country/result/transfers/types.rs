@@ -83,7 +83,7 @@ pub(crate) fn can_club_accept_player(club: &Club) -> bool {
         .unwrap_or(50);
     // Only count main team players for squad cap — youth/reserve teams are separate
     let main_squad = club.teams.teams.first()
-        .map(|t| t.players.players.len())
+        .map(|t| t.players.len())
         .unwrap_or(0);
     main_squad < max_squad
 }
@@ -91,7 +91,7 @@ pub(crate) fn can_club_accept_player(club: &Club) -> bool {
 pub(crate) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&crate::Player> {
     for club in &country.clubs {
         for team in &club.teams.teams {
-            if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+            if let Some(player) = team.players.find(player_id) {
                 return Some(player);
             }
         }

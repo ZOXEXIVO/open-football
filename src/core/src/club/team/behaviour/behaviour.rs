@@ -1,7 +1,11 @@
 use crate::club::team::behaviour::{ManagerTalkResult, ManagerTalkType, PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::{DateUtils, FloatUtils};
-use crate::{ChangeType, Person, PersonBehaviourState, Player, PlayerCollection, PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType, StaffCollection, Staff, StaffPosition};
+use crate::{
+    ChangeType, HappinessEventType, Person, PersonBehaviourState, Player, PlayerCollection,
+    PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType, Staff,
+    StaffCollection, StaffPosition,
+};
 use chrono::Datelike;
 use log::debug;
 
@@ -238,13 +242,12 @@ impl TeamBehaviour {
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
-        use crate::HappinessEventType;
         let sim_date = ctx.simulation.date.date();
 
         // Collect teammate IDs for relationship lookups
-        let teammate_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
+        let teammate_ids: Vec<u32> = players.iter().map(|p| p.id).collect();
 
-        for player in &mut players.players {
+        for player in players.iter_mut() {
             // Integration events for recent transfers (first 90 days)
             let is_recent = player.last_transfer_date
                 .map(|d| (sim_date - d).num_days() < 90)
@@ -942,10 +945,7 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
     ) {
         // Find the manager
-        let manager = staffs.staffs.iter().find(|s| {
-            s.contract.as_ref().map(|c| c.position == StaffPosition::Manager).unwrap_or(false)
-        });
-        let manager = match manager {
+        let manager = match staffs.find_by_position(StaffPosition::Manager) {
             Some(m) => m,
             None => return,
         };
@@ -1014,7 +1014,7 @@ impl TeamBehaviour {
         for i in 0..max_talks {
             let (player_id, talk_type, _) = &talk_candidates[i];
 
-            if let Some(player) = players.players.iter().find(|p| p.id == *player_id) {
+            if let Some(player) = players.find(*player_id) {
                 let talk_result = Self::conduct_manager_talk(manager, player, talk_type.clone());
                 result.manager_talks.push(talk_result);
             }
@@ -1101,13 +1101,7 @@ impl TeamBehaviour {
         result: &mut TeamBehaviourResult,
         ctx: &GlobalContext<'_>,
     ) {
-        let manager = staffs.staffs.iter().find(|s| {
-            s.contract
-                .as_ref()
-                .map(|c| c.position == StaffPosition::Manager)
-                .unwrap_or(false)
-        });
-        let manager = match manager {
+        let manager = match staffs.find_by_position(StaffPosition::Manager) {
             Some(m) => m,
             None => return,
         };
@@ -1220,7 +1214,7 @@ impl TeamBehaviour {
         for i in 0..max_complaints {
             let (player_id, talk_type, _) = &candidates[i];
 
-            if let Some(player) = players.players.iter().find(|p| p.id == *player_id) {
+            if let Some(player) = players.find(*player_id) {
                 let talk_result =
                     Self::conduct_loan_or_playing_time_talk(manager, player, talk_type.clone());
                 result.manager_talks.push(talk_result);

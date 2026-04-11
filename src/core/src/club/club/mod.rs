@@ -11,7 +11,7 @@ use crate::club::facilities::ClubFacilities;
 use crate::club::status::ClubStatus;
 use crate::club::{ClubFinances, ClubResult};
 use crate::context::GlobalContext;
-use crate::shared::Location;
+use crate::shared::{Currency, CurrencyValue, Location};
 use crate::transfers::pipeline::ClubTransferPlan;
 use crate::{ReputationLevel, TeamCollection, TeamType};
 
@@ -70,6 +70,19 @@ pub struct Club {
     pub rivals: Vec<u32>,
 }
 
+/// Aggregated best staff attribute scores across all teams at the club.
+/// Precomputed once per club-tick so per-player systems can read via
+/// ClubContext without walking the staff list.
+pub(crate) struct StaffQualitySnapshot {
+    pub medical: f32,
+    pub sports_science: f32,
+    pub youth: f32,
+    pub coach_technical: u8,
+    pub coach_mental: u8,
+    pub coach_fitness: u8,
+    pub coach_goalkeeping: u8,
+}
+
 impl Club {
     pub fn is_rival(&self, other_club_id: u32) -> bool {
         self.rivals.contains(&other_club_id)
@@ -105,9 +118,62 @@ impl Club {
         }
     }
 
+    fn compute_staff_qualities(&self) -> StaffQualitySnapshot {
+        let mut best_physio: u8 = 0;
+        let mut best_sports_science: u8 = 0;
+        let mut best_wwy: u8 = 0;
+        let mut best_technical: u8 = 0;
+        let mut best_mental: u8 = 0;
+        let mut best_fitness: u8 = 0;
+        let mut best_goalkeeping: u8 = 0;
+
+        for team in self.teams.iter() {
+            for staff in team.staffs.iter() {
+                let medical = &staff.staff_attributes.medical;
+                if medical.physiotherapy > best_physio {
+                    best_physio = medical.physiotherapy;
+                }
+                if medical.sports_science > best_sports_science {
+                    best_sports_science = medical.sports_science;
+                }
+                let coaching = &staff.staff_attributes.coaching;
+                if coaching.working_with_youngsters > best_wwy {
+                    best_wwy = coaching.working_with_youngsters;
+                }
+                if coaching.technical > best_technical {
+                    best_technical = coaching.technical;
+                }
+                if coaching.mental > best_mental {
+                    best_mental = coaching.mental;
+                }
+                if coaching.fitness > best_fitness {
+                    best_fitness = coaching.fitness;
+                }
+                let gk = &staff.staff_attributes.goalkeeping;
+                // Average the 3 GK coaching attributes as a single coach score
+                let gk_avg = ((gk.shot_stopping as u16
+                    + gk.handling as u16
+                    + gk.distribution as u16)
+                    / 3) as u8;
+                if gk_avg > best_goalkeeping {
+                    best_goalkeeping = gk_avg;
+                }
+            }
+        }
+
+        StaffQualitySnapshot {
+            medical: (best_physio as f32 / 20.0).clamp(0.0, 1.0),
+            sports_science: (best_sports_science as f32 / 20.0).clamp(0.0, 1.0),
+            youth: (best_wwy as f32 / 20.0).clamp(0.0, 1.0),
+            coach_technical: best_technical,
+            coach_mental: best_mental,
+            coach_fitness: best_fitness,
+            coach_goalkeeping: best_goalkeeping,
+        }
+    }
+
     fn determine_philosophy(teams: &TeamCollection) -> ClubPhilosophy {
-        let rep_level = teams.teams.iter()
-            .find(|t| t.team_type == TeamType::Main)
+        let rep_level = teams.main()
             .map(|t| t.reputation.level())
             .unwrap_or(ReputationLevel::Amateur);
 
@@ -138,17 +204,30 @@ impl Club {
         board_ctx.league_size = league_sz;
         board_ctx.total_matches = total_matches;
 
-        // Build club context with facility data for training/academy
+        // Build club context with facility data for training/academy + best
+        // staff attribute scores so per-player systems can consult them
+        // without walking the whole staff list each call.
+        let staff_q = self.compute_staff_qualities();
+
         let club_ctx = ctx.with_club(self.id, &self.name);
         let club_ctx = {
             let mut c = club_ctx;
             if let Some(ref mut cc) = c.club {
-                *cc = cc.clone().with_facilities(
-                    self.facilities.training.multiplier(),
-                    self.facilities.youth.multiplier(),
-                    self.facilities.academy.multiplier(),
-                    self.facilities.recruitment.multiplier(),
-                );
+                *cc = cc
+                    .clone()
+                    .with_facilities(
+                        self.facilities.training.multiplier(),
+                        self.facilities.youth.multiplier(),
+                        self.facilities.academy.multiplier(),
+                        self.facilities.recruitment.multiplier(),
+                    )
+                    .with_staff_quality(staff_q.medical, staff_q.sports_science, staff_q.youth)
+                    .with_coach_scores(
+                        staff_q.coach_technical,
+                        staff_q.coach_mental,
+                        staff_q.coach_fitness,
+                        staff_q.coach_goalkeeping,
+                    );
             }
             c
         };
@@ -194,13 +273,13 @@ impl Club {
         if ctx.simulation.is_season_start(&season) {
             // Sync budgets from board targets to finance system
             if let Some(targets) = &self.board.season_targets {
-                self.finance.transfer_budget = Some(crate::shared::CurrencyValue {
+                self.finance.transfer_budget = Some(CurrencyValue {
                     amount: targets.transfer_budget as f64,
-                    currency: crate::shared::Currency::Usd,
+                    currency: Currency::Usd,
                 });
-                self.finance.wage_budget = Some(crate::shared::CurrencyValue {
+                self.finance.wage_budget = Some(CurrencyValue {
                     amount: targets.wage_budget as f64,
-                    currency: crate::shared::Currency::Usd,
+                    currency: Currency::Usd,
                 });
             }
 
@@ -214,16 +293,16 @@ impl Club {
     }
 
     fn build_board_context(&self, country_economic_factor: f32, country_price_level: f32) -> BoardContext {
-        let main_team = self.teams.teams.iter().find(|t| t.team_type == TeamType::Main);
+        let main_team = self.teams.main();
 
-        let main_squad_size = main_team.map(|t| t.players.players.len()).unwrap_or(0);
+        let main_squad_size = main_team.map(|t| t.players.len()).unwrap_or(0);
 
-        let reserve_squad_size: usize = self.teams.teams.iter()
+        let reserve_squad_size: usize = self.teams.iter()
             .filter(|t| t.team_type != TeamType::Main)
-            .map(|t| t.players.players.len())
+            .map(|t| t.players.len())
             .sum();
 
-        let total_annual_wages: u32 = self.teams.teams.iter()
+        let total_annual_wages: u32 = self.teams.iter()
             .map(|t| t.get_annual_salary())
             .sum();
 
@@ -247,13 +326,7 @@ impl Club {
 
         // Average squad ability
         let avg_squad_ability = main_team
-            .map(|t| {
-                if t.players.players.is_empty() { return 0u8; }
-                let sum: u32 = t.players.players.iter()
-                    .map(|p| p.player_attributes.current_ability as u32)
-                    .sum();
-                (sum / t.players.players.len() as u32) as u8
-            })
+            .map(|t| t.players.current_ability_avg())
             .unwrap_or(0);
 
         BoardContext {

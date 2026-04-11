@@ -43,7 +43,13 @@ impl PlayerTraining {
         };
 
         // Base effectiveness factors
-        let coach_quality = Self::calculate_coach_effectiveness(coach, &session.session_type);
+        let base_coach_quality = Self::calculate_coach_effectiveness(coach, &session.session_type);
+        // Coach specialization: a coach who has spent hundreds of sessions
+        // with this player's position group extracts better gains than a
+        // generalist. Scales from 1.0 to 1.40.
+        let player_group = player.position().position_group();
+        let specialization_bonus = coach.specialization_bonus(player_group);
+        let coach_quality = base_coach_quality * specialization_bonus;
         let player_receptiveness = Self::calculate_player_receptiveness(player, coach, date.date());
         let age_factor = Self::calculate_age_training_factor(player.age(date.date()));
         let potential_factor = Self::calculate_potential_development_factor(player, date.date());
@@ -298,6 +304,13 @@ impl PlayerTraining {
             0.0
         };
 
+        // Rapport: tracked explicitly per (coach, player) and persisted
+        // across seasons. Broken rapport (≤ -30) severely blunts training,
+        // while strong rapport (≥ +60) amplifies it. This is the key
+        // "beyond FM" lever for long-term coach-player relationships.
+        let rapport_mult = player.rapport.training_multiplier(coach.id);
+        let rapport_delta = rapport_mult - 1.0; // -0.15..+0.20
+
         // Age affects receptiveness (younger players learn faster)
         let age_bonus = match player.age(sim_date) {
             16..=20 => 0.3,
@@ -307,7 +320,7 @@ impl PlayerTraining {
             _ => -0.1,
         };
 
-        (base + relationship_bonus + age_bonus).clamp(0.1, 1.5)
+        (base + relationship_bonus + age_bonus + rapport_delta).clamp(0.1, 1.6)
     }
 
     fn calculate_age_training_factor(age: u8) -> f32 {

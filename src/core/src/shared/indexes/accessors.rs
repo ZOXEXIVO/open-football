@@ -169,7 +169,7 @@ impl SimulatorData {
                             .find(|country| country.id == team_country_id)
                     })
                     .and_then(|country| country.clubs.iter().find(|club| club.id == team_club_id))
-                    .and_then(|club| club.teams.teams.iter().find(|team| team.id == id))
+                    .and_then(|club| club.teams.find(id))
             })
     }
 
@@ -191,7 +191,7 @@ impl SimulatorData {
                             .iter_mut()
                             .find(|club| club.id == team_club_id)
                     })
-                    .and_then(|club| club.teams.teams.iter_mut().find(|team| team.id == id))
+                    .and_then(|club| club.teams.find_mut(id))
             })
     }
 
@@ -215,7 +215,7 @@ impl SimulatorData {
                         .iter()
                         .find(|team| team.id == player_team_id)
                 })
-                .and_then(|team| team.players.players.iter().find(|c| c.id == id));
+                .and_then(|team| team.players.find(id));
 
             if found.is_some() {
                 return found;
@@ -235,9 +235,9 @@ impl SimulatorData {
                 .continent(continent_id)
                 .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
                 .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
-                .and_then(|cl| cl.teams.teams.iter().find(|t| t.id == team_id))
+                .and_then(|cl| cl.teams.find(team_id))
                 .and_then(|team| {
-                    team.players.players.iter().find(|p| p.id == player_id).map(|p| (p, team))
+                    team.players.find(player_id).map(|p| (p, team))
                 });
 
             if result.is_some() {
@@ -250,7 +250,7 @@ impl SimulatorData {
             for country in &continent.countries {
                 for club in &country.clubs {
                     for team in &club.teams.teams {
-                        if let Some(player) = team.players.players.iter().find(|p| p.id == player_id) {
+                        if let Some(player) = team.players.find(player_id) {
                             return Some((player, team));
                         }
                     }
@@ -265,7 +265,7 @@ impl SimulatorData {
             for country in &continent.countries {
                 for club in &country.clubs {
                     for team in &club.teams.teams {
-                        if let Some(player) = team.players.players.iter().find(|p| p.id == id) {
+                        if let Some(player) = team.players.find(id) {
                             return Some(player);
                         }
                     }
@@ -302,7 +302,7 @@ impl SimulatorData {
         // Phase 2: mutable access at known position
         let (ci, coi, cli, ti) = pos?;
         self.continents[ci].countries[coi].clubs[cli]
-            .teams.teams[ti].players.players.iter_mut().find(|p| p.id == id)
+            .teams.teams[ti].players.find_mut(id)
     }
 
     pub fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {
@@ -316,9 +316,9 @@ impl SimulatorData {
                     if country.id != pco { continue; }
                     for (cli, club) in country.clubs.iter().enumerate() {
                         if club.id != pcl { continue; }
-                        for (ti, team) in club.teams.teams.iter().enumerate() {
+                        for (ti, team) in club.teams.iter().enumerate() {
                             if team.id != pt { continue; }
-                            if team.players.players.iter().any(|p| p.id == id) {
+                            if team.players.contains(id) {
                                 return Some((ci, coi, cli, ti));
                             }
                         }
@@ -331,8 +331,8 @@ impl SimulatorData {
         for (ci, continent) in self.continents.iter().enumerate() {
             for (coi, country) in continent.countries.iter().enumerate() {
                 for (cli, club) in country.clubs.iter().enumerate() {
-                    for (ti, team) in club.teams.teams.iter().enumerate() {
-                        if team.players.players.iter().any(|p| p.id == id) {
+                    for (ti, team) in club.teams.iter().enumerate() {
+                        if team.players.contains(id) {
                             return Some((ci, coi, cli, ti));
                         }
                     }
@@ -348,10 +348,7 @@ impl SimulatorData {
             for (coi, country) in continent.countries.iter().enumerate() {
                 for (cli, club) in country.clubs.iter().enumerate() {
                     if club.id == club_id {
-                        // Find the main team (first team, or index 0 as fallback)
-                        let ti = club.teams.teams.iter().position(|t| {
-                            t.team_type == crate::TeamType::Main
-                        }).unwrap_or(0);
+                        let ti = club.teams.main_index().unwrap_or(0);
                         return Some((ci, coi, cli, ti));
                     }
                 }
@@ -377,9 +374,9 @@ impl SimulatorData {
                 .continent(continent_id)
                 .and_then(|c| c.countries.iter().find(|co| co.id == country_id))
                 .and_then(|co| co.clubs.iter().find(|cl| cl.id == club_id))
-                .and_then(|cl| cl.teams.teams.iter().find(|t| t.id == team_id))
+                .and_then(|cl| cl.teams.find(team_id))
                 .and_then(|team| {
-                    team.staffs.staffs.iter().find(|s| s.id == staff_id).map(|s| (s, team))
+                    team.staffs.find(staff_id).map(|s| (s, team))
                 });
 
             if result.is_some() {
@@ -391,8 +388,8 @@ impl SimulatorData {
         for continent in &self.continents {
             for country in &continent.countries {
                 for club in &country.clubs {
-                    for team in &club.teams.teams {
-                        if let Some(staff) = team.staffs.staffs.iter().find(|s| s.id == staff_id) {
+                    for team in club.teams.iter() {
+                        if let Some(staff) = team.staffs.find(staff_id) {
                             return Some((staff, team));
                         }
                     }

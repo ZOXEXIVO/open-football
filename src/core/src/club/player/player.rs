@@ -1,3 +1,10 @@
+use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::development::CoachingEffect;
+use crate::club::player::injury::processing::MedicalStaffQuality;
+use crate::club::player::language::PlayerLanguage;
+use crate::club::player::plan::PlayerPlan;
+use crate::club::player::rapport::PlayerRapport;
+use crate::club::player::traits::PlayerTrait;
 use crate::club::player::utils::PlayerUtils;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
@@ -14,7 +21,6 @@ use crate::{
 };
 use chrono::NaiveDate;
 use std::fmt::{Display, Formatter, Result};
-use crate::club::player::builder::PlayerBuilder;
 
 #[derive(Debug, Clone)]
 pub struct Player {
@@ -47,7 +53,7 @@ pub struct Player {
     pub decision_history: PlayerDecisionHistory,
 
     /// Languages the player speaks, with proficiency levels.
-    pub languages: Vec<crate::club::player::language::PlayerLanguage>,
+    pub languages: Vec<PlayerLanguage>,
 
     /// Set when a player transfers/loans to a new club. Used by season snapshot
     /// to detect recently transferred players and avoid phantom history entries.
@@ -56,7 +62,7 @@ pub struct Player {
     /// The club's strategic intent for this signing.
     /// Set when a player is permanently transferred. Protects the player from
     /// being sold before the club has given them a fair evaluation.
-    pub plan: Option<crate::club::player::plan::PlayerPlan>,
+    pub plan: Option<PlayerPlan>,
 
     /// Clubs this player supports or has an affinity for (like FM's "Favoured Clubs").
     /// Affects willingness to join, morale when playing for them, etc.
@@ -68,7 +74,10 @@ pub struct Player {
     pub sold_from: Option<(u32, f64)>, // (club_id, fee_paid)
 
     /// Signature moves — trained traits that bias in-match decisions.
-    pub traits: Vec<crate::club::player::traits::PlayerTrait>,
+    pub traits: Vec<PlayerTrait>,
+
+    /// Rapport with the coaches who have trained this player.
+    pub rapport: PlayerRapport,
 }
 
 impl Player {
@@ -111,8 +120,13 @@ impl Player {
             self.behaviour.try_increase();
         }
 
-        // Injury recovery (daily)
-        self.process_injury(&mut result, now.date());
+        // Injury recovery (daily) — driven by the parent club's medical
+        // staff quality (physiotherapy + sports science).
+        let medical = MedicalStaffQuality {
+            physio: ctx.club_medical_quality(),
+            sports_science: ctx.club_sports_science_quality(),
+        };
+        self.process_injury(&mut result, now.date(), &medical);
 
         // Natural condition recovery for non-injured players
         self.process_condition_recovery(now.date());
@@ -124,9 +138,21 @@ impl Player {
         let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
         if ctx.simulation.is_week_beginning() {
             self.process_happiness(&mut result, now.date(), team_reputation);
-            // Natural skill development (weekly)
+            // Natural skill development (weekly). Build the coaching effect
+            // once per player from the club's best coach scores.
             let league_reputation = ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0);
-            self.process_development(now.date(), league_reputation);
+            let coach_effect = ctx
+                .club
+                .as_ref()
+                .map(|c| CoachingEffect::from_scores(
+                    c.coach_best_technical,
+                    c.coach_best_mental,
+                    c.coach_best_fitness,
+                    c.coach_best_goalkeeping,
+                    c.youth_coaching_quality,
+                ))
+                .unwrap_or_else(CoachingEffect::neutral);
+            self.process_development(now.date(), league_reputation, &coach_effect);
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);
@@ -198,7 +224,7 @@ impl Player {
     /// Weekly language learning: if the player is in a country whose language
     /// they don't speak natively, they gradually learn it.
     fn process_language_learning(&mut self, now: NaiveDate, country_code: &str) {
-        use crate::club::player::language::{Language, PlayerLanguage, weekly_language_progress};
+        use crate::club::player::language::{weekly_language_progress, Language};
 
         if country_code.is_empty() {
             return;
@@ -209,7 +235,7 @@ impl Player {
             return;
         }
 
-        let age = crate::utils::DateUtils::age(self.birth_date, now);
+        let age = DateUtils::age(self.birth_date, now);
 
         for target_lang in &country_languages {
             // Check if player already speaks this language natively

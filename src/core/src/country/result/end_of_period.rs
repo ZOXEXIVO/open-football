@@ -2,7 +2,9 @@ use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use super::CountryResult;
 use crate::utils::IntegerUtils;
-use crate::{ClubResult, Country, Person, PlayerStatusType, TeamInfo};
+use crate::{
+    ClubResult, Country, Person, Player, PlayerHappiness, PlayerStatusType, TeamInfo, TeamType,
+};
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
 
@@ -66,7 +68,7 @@ impl CountryResult {
         let team_to_club: HashMap<u32, usize> = country.clubs.iter()
             .enumerate()
             .flat_map(|(ci, club)| {
-                club.teams.teams.iter().map(move |t| (t.id, ci))
+                club.teams.iter().map(move |t| (t.id, ci))
             })
             .collect();
 
@@ -171,35 +173,62 @@ impl CountryResult {
             None => return Vec::new(),
         };
 
-        let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
-            .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
-            .collect();
+        let leagues = &country.leagues.leagues;
+        let league_info = |lid: u32| -> (&str, &str) {
+            leagues
+                .iter()
+                .find(|l| l.id == lid)
+                .map(|l| (l.name.as_str(), l.slug.as_str()))
+                .unwrap_or(("", ""))
+        };
 
         let mut events = Vec::new();
 
         for club in &country.clubs {
-            let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
-                .find(|t| t.team_type == crate::TeamType::Main)
-                .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
+            // Cheap short-circuit: most days most clubs have zero expiring
+            // loans, and we'd otherwise clone the main team + league strings
+            // unconditionally. Scan first, then allocate.
+            let has_expiring = club.teams.iter().any(|team| {
+                team.players.iter().any(|player| {
+                    player
+                        .contract_loan
+                        .as_ref()
+                        .map(|lc| lc.expiration <= date && lc.loan_from_club_id.is_some())
+                        .unwrap_or(false)
+                })
+            });
+            if !has_expiring {
+                continue;
+            }
 
-            let main_team_league = club.teams.teams.iter()
-                .find(|t| t.team_type == crate::TeamType::Main)
+            // Build the main-team / league strings once per club, not once
+            // per player that needs returning.
+            let main_team = club.teams.main();
+            let main_name = main_team.map(|t| t.name.clone());
+            let main_slug = main_team.map(|t| t.slug.clone());
+            let main_reputation = main_team.map(|t| t.reputation.world);
+            let (main_league_name, main_league_slug) = main_team
                 .and_then(|t| t.league_id)
-                .and_then(|lid| league_lookup.get(&lid))
-                .cloned()
+                .map(|lid| {
+                    let (n, s) = league_info(lid);
+                    (n.to_owned(), s.to_owned())
+                })
                 .unwrap_or_default();
 
-            for team in &club.teams.teams {
-                let (team_name, team_slug, team_reputation) = match (&team.team_type, &main_team_info) {
-                    (crate::TeamType::Main, _) | (_, None) => {
-                        (team.name.clone(), team.slug.clone(), team.reputation.world)
-                    }
-                    (_, Some((name, slug, rep))) => {
-                        (name.clone(), slug.clone(), *rep)
-                    }
+            for team in club.teams.iter() {
+                let (team_name, team_slug, team_reputation) = if team.team_type == TeamType::Main
+                    || main_name.is_none()
+                {
+                    (team.name.clone(), team.slug.clone(), team.reputation.world)
+                } else {
+                    (
+                        main_name.clone().unwrap_or_default(),
+                        main_slug.clone().unwrap_or_default(),
+                        main_reputation.unwrap_or(0),
+                    )
                 };
 
-                for player in &team.players.players {
+                for player in team.players.iter() {
                     if let Some(ref loan_contract) = player.contract_loan {
                         if loan_contract.expiration <= date {
                             if let Some(parent_club_id) = loan_contract.loan_from_club_id {
@@ -211,8 +240,8 @@ impl CountryResult {
                                         name: team_name.clone(),
                                         slug: team_slug.clone(),
                                         reputation: team_reputation,
-                                        league_name: main_team_league.0.clone(),
-                                        league_slug: main_team_league.1.clone(),
+                                        league_name: main_league_name.clone(),
+                                        league_slug: main_league_slug.clone(),
                                     },
                                 });
                             }
@@ -276,7 +305,7 @@ impl CountryResult {
 
         player.on_loan_return(&event.borrowing_info, &parent_info, date);
         player.contract_loan = None;
-        player.happiness = crate::PlayerHappiness::new();
+        player.happiness = PlayerHappiness::new();
         player.statuses.statuses.clear();
 
         // Place at parent club
@@ -293,8 +322,8 @@ impl CountryResult {
         let mut to_retire: Vec<(usize, usize, u32)> = Vec::new();
 
         for (club_idx, club) in country.clubs.iter().enumerate() {
-            for (team_idx, team) in club.teams.teams.iter().enumerate() {
-                for player in &team.players.players {
+            for (team_idx, team) in club.teams.iter().enumerate() {
+                for player in team.players.iter() {
                     if Self::must_retire(player, date) {
                         to_retire.push((club_idx, team_idx, player.id));
                     }
@@ -317,7 +346,7 @@ impl CountryResult {
     /// Deterministic retirement: only for players past absolute max age or with Ret status.
     /// Players still getting games are given a +1 year grace period.
     /// Uses the same CA/position/jitter logic as should_retire for consistency.
-    fn must_retire(player: &crate::Player, date: NaiveDate) -> bool {
+    fn must_retire(player: &Player, date: NaiveDate) -> bool {
         if player.statuses.get().contains(&PlayerStatusType::Ret) {
             return true;
         }
@@ -374,8 +403,8 @@ impl CountryResult {
         let mut to_retire: Vec<(usize, usize, u32)> = Vec::new();
 
         for (club_idx, club) in country.clubs.iter().enumerate() {
-            for (team_idx, team) in club.teams.teams.iter().enumerate() {
-                for player in &team.players.players {
+            for (team_idx, team) in club.teams.iter().enumerate() {
+                for player in team.players.iter() {
                     if Self::should_retire(player, date) {
                         to_retire.push((club_idx, team_idx, player.id));
                     }
@@ -396,7 +425,7 @@ impl CountryResult {
         }
     }
 
-    fn should_retire(player: &crate::Player, date: NaiveDate) -> bool {
+    fn should_retire(player: &Player, date: NaiveDate) -> bool {
         let age = player.age(date);
         let ca = player.player_attributes.current_ability;
 
@@ -606,13 +635,13 @@ impl CountryResult {
                 // Move sub-teams to the matching youth league of the new main league
                 if let Some(new_league_id) = new_main_league_id {
                     for team in &mut club.teams.teams {
-                        if team.team_type != crate::TeamType::Main {
+                        if team.team_type != TeamType::Main {
                             let type_offset = match team.team_type {
-                                crate::TeamType::U18 => 100000,
-                                crate::TeamType::U19 => 110000,
-                                crate::TeamType::U20 => 120000,
-                                crate::TeamType::U21 => 130000,
-                                crate::TeamType::U23 => 140000,
+                                TeamType::U18 => 100000,
+                                TeamType::U19 => 110000,
+                                TeamType::U20 => 120000,
+                                TeamType::U21 => 130000,
+                                TeamType::U23 => 140000,
                                 _ => 200000, // B/Reserve teams use generic friendly league
                             };
                             team.league_id = Some(new_league_id + type_offset);

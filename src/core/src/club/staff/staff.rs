@@ -6,7 +6,11 @@ use crate::club::{
 use crate::context::GlobalContext;
 use crate::shared::fullname::FullName;
 use crate::utils::DateUtils;
-use crate::{CoachFocus, Logging, PersonAttributes, PersonBehaviourState, Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub, TeamType, TrainingIntensity, TrainingType};
+use crate::{
+    CoachFocus, Logging, PersonAttributes, PersonBehaviourState, PlayerFieldPositionGroup,
+    Relations, StaffAttributes, StaffCollectionResult, StaffResponsibility, StaffResult, StaffStub,
+    TeamType, TrainingIntensity, TrainingType,
+};
 use chrono::{Datelike, NaiveDate, NaiveDateTime, Timelike};
 
 #[derive(Debug, Clone)]
@@ -54,6 +58,14 @@ pub struct Staff {
     pub coaching_style: CoachingStyle,
     pub training_schedule: Vec<StaffTrainingSession>,
     pub recent_events: Vec<StaffEvent>,
+
+    /// Cumulative specialization days per position group (GK/DEF/MID/FWD).
+    /// A coach who spends most sessions training midfielders will eventually
+    /// become a "midfield specialist" — they extract extra gains from that
+    /// group compared to generalist coaching. Grows over time; never resets.
+    ///
+    /// Indices match `PlayerFieldPositionGroup` discriminants.
+    pub specialization_days: [u32; 4],
 }
 
 #[derive(Debug, Clone)]
@@ -148,6 +160,102 @@ impl StaffCollection {
         self.get_by_id(staff_id.unwrap())
     }
 
+    /// Borrow a staff member by id.
+    pub fn find(&self, staff_id: u32) -> Option<&Staff> {
+        self.staffs.iter().find(|s| s.id == staff_id)
+    }
+
+    /// Mutable variant of `find`.
+    pub fn find_mut(&mut self, staff_id: u32) -> Option<&mut Staff> {
+        self.staffs.iter_mut().find(|s| s.id == staff_id)
+    }
+
+    /// Is this id on the staff?
+    pub fn contains(&self, staff_id: u32) -> bool {
+        self.staffs.iter().any(|s| s.id == staff_id)
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Staff> {
+        self.staffs.iter()
+    }
+
+    pub fn iter_mut(&mut self) -> std::slice::IterMut<'_, Staff> {
+        self.staffs.iter_mut()
+    }
+
+    pub fn len(&self) -> usize {
+        self.staffs.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.staffs.is_empty()
+    }
+
+    /// Sum of annual salaries across every staff member with a contract.
+    /// Mirrors `PlayerCollection::get_annual_salary` so the club finance
+    /// tick doesn't have to open-code the iter + filter_map + map + sum
+    /// pipeline.
+    pub fn get_annual_salary(&self) -> u32 {
+        self.staffs
+            .iter()
+            .filter_map(|s| s.contract.as_ref())
+            .map(|c| c.salary)
+            .sum()
+    }
+
+    /// Borrow the staff member currently holding `position`, if any.
+    /// Unlike `get_by_position`, this does NOT fall back to the stub.
+    pub fn find_by_position(&self, position: StaffPosition) -> Option<&Staff> {
+        self.staffs.iter().find(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position == position)
+                .unwrap_or(false)
+        })
+    }
+
+    /// Best `working_with_youngsters` attribute among staff assigned to
+    /// youth-development roles (Head of Youth Development, Youth Coach).
+    /// Returns `fallback` when no such staff member is on the books —
+    /// used by the mentorship pass to scale transfer rates.
+    pub fn best_youth_development_wwy(&self, fallback: u8) -> u8 {
+        self.staffs
+            .iter()
+            .filter(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| {
+                        matches!(
+                            c.position,
+                            StaffPosition::HeadOfYouthDevelopment | StaffPosition::YouthCoach
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|s| s.staff_attributes.coaching.working_with_youngsters)
+            .max()
+            .unwrap_or(fallback)
+    }
+
+    /// Best `sports_science` attribute across the whole medical department.
+    /// Drives preventive-rest eligibility and injury-risk reductions.
+    pub fn best_sports_science(&self) -> u8 {
+        self.staffs
+            .iter()
+            .map(|s| s.staff_attributes.medical.sports_science)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Best `physiotherapy` attribute across the whole medical department.
+    pub fn best_physiotherapy(&self) -> u8 {
+        self.staffs
+            .iter()
+            .map(|s| s.staff_attributes.medical.physiotherapy)
+            .max()
+            .unwrap_or(0)
+    }
+
     fn get_by_position(&self, position: StaffPosition) -> &Staff {
         let staffs: Vec<&Staff> = self
             .staffs
@@ -219,7 +327,41 @@ impl Staff {
             coaching_style: CoachingStyle::default(),
             training_schedule: Vec::new(),
             recent_events: Vec::new(),
+            specialization_days: [0; 4],
         }
+    }
+
+    fn position_group_index(group: PlayerFieldPositionGroup) -> usize {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => 0,
+            PlayerFieldPositionGroup::Defender => 1,
+            PlayerFieldPositionGroup::Midfielder => 2,
+            PlayerFieldPositionGroup::Forward => 3,
+        }
+    }
+
+    /// Training-gain bonus multiplier for a given position group based on
+    /// accumulated specialization days. Returns 1.0 for untrained groups
+    /// and up to 1.40 for deeply specialized ones (~1500+ days).
+    pub fn specialization_bonus(&self, group: PlayerFieldPositionGroup) -> f32 {
+        let idx = Self::position_group_index(group);
+        let days = self.specialization_days[idx] as f32;
+        if days < 200.0 {
+            1.0
+        } else if days < 600.0 {
+            1.0 + (days - 200.0) / 400.0 * 0.12
+        } else if days < 1500.0 {
+            1.12 + (days - 600.0) / 900.0 * 0.16
+        } else {
+            (1.28 + (days - 1500.0) / 2000.0 * 0.12).min(1.40)
+        }
+    }
+
+    /// Record a training day for this coach focused on `group`.
+    /// Called from the team training tick.
+    pub fn accrue_specialization(&mut self, group: PlayerFieldPositionGroup, days: u32) {
+        let idx = Self::position_group_index(group);
+        self.specialization_days[idx] = self.specialization_days[idx].saturating_add(days);
     }
 
     pub fn add_event(&mut self, event_type: StaffEventType) {
