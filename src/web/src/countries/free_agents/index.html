@@ -15,11 +15,9 @@
                 <tr>
                     <th>{{ i18n.t("position") }}</th>
                     <th class="sq-name">{{ i18n.t("name") }}</th>
-                    <th>{{ i18n.t("club") }}</th>
                     <th class="sq-age">{{ i18n.t("age") }}</th>
                     <th class="sq-ability">{{ i18n.t("ability") }}</th>
                     <th class="sq-potential">{{ i18n.t("potential") }}</th>
-                    <th>{{ i18n.t("contract") }}</th>
                 </tr>
             </thead>
             <tbody>
@@ -31,7 +29,6 @@
                             {% if !player.first_name.is_empty() %}{{ player.first_name }}&nbsp;{% endif %}{{ player.last_name }}
                         </a>
                     </td>
-                    <td>{{ player.club_name }}</td>
                     <td class="sq-age">{{ player.age }}</td>
                     <td>
                         <div class="fm-stars">
@@ -43,7 +40,6 @@
                             {% for _ in 0..player.potential_ability %}<span class="star on"></span>{% endfor %}{% for _ in 0..(5 - player.potential_ability) %}<span class="star"></span>{% endfor %}
                         </div>
                     </td>
-                    <td>{% if player.contract_days_left <= 0 %}{{ i18n.t("free") }}{% else %}{{ player.contract_days_left }}d{% endif %}</td>
                 </tr>
                 {% endfor %}
             </tbody>

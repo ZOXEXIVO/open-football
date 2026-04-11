@@ -302,6 +302,14 @@ impl TransferListManager {
                 continue;
             }
 
+            // Guard: valuable players cannot be listed unless they've
+            // actively signalled they want out (REQ) or are unhappy (UNH).
+            // Protects against LLM hallucinations like "contract expiring" on
+            // a key striker with years left on his deal.
+            if is_protected_from_listing(teams, team_indices, decision.player_id) {
+                continue;
+            }
+
             // Guard: skip listing main team players when budget exhausted
             let is_main_team_player = teams[main_idx].players.players.iter().any(|p| p.id == decision.player_id);
             if is_main_team_player && *listing_budget == 0 {
@@ -484,6 +492,33 @@ fn is_on_loan(
     for &(idx, _) in indices {
         if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
             return p.is_on_loan();
+        }
+    }
+    false
+}
+
+fn is_protected_from_listing(
+    teams: &[Team],
+    indices: &[(usize, &str)],
+    player_id: u32,
+) -> bool {
+    use crate::PlayerSquadStatus;
+
+    for &(idx, _) in indices {
+        if let Some(p) = teams[idx].players.players.iter().find(|p| p.id == player_id) {
+            let wants_out = p.statuses.get().iter().any(|s| {
+                matches!(s, PlayerStatusType::Req | PlayerStatusType::Unh)
+            });
+            if wants_out {
+                return false;
+            }
+            let squad_status = p.contract.as_ref().map(|c| c.squad_status.clone());
+            return matches!(
+                squad_status,
+                Some(PlayerSquadStatus::KeyPlayer)
+                    | Some(PlayerSquadStatus::FirstTeamRegular)
+                    | Some(PlayerSquadStatus::HotProspectForTheFuture)
+            );
         }
     }
     false

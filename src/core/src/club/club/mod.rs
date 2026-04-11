@@ -176,6 +176,8 @@ impl Club {
 
         if ctx.simulation.is_month_beginning() {
             self.teams.ensure_coach_state(date);
+            // Offer proactive renewals before the listing AI sees the squad
+            self.teams.run_contract_renewals(date);
             for req in self.teams.prepare_ai_requests(date, self.id) {
                 ctx.ai.push(req);
             }

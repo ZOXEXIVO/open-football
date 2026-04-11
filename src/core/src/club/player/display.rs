@@ -49,6 +49,9 @@ struct PlayerLlm {
     jadedness: String,
     morale: String,
     status: String,
+    contract_months_left: Option<i64>,
+    annual_wage: Option<String>,
+    squad_status: Option<String>,
     reputation: PlayerReputationLlm,
     technical: PlayerTechnicalLlm,
     mental: PlayerMentalLlm,
@@ -186,6 +189,17 @@ impl Player {
 
         let attr = &self.player_attributes;
 
+        let (contract_months_left, annual_wage, squad_status) = match &self.contract {
+            Some(c) => {
+                let days = (c.expiration - sim_date).num_days();
+                let months = if days <= 0 { Some(0) } else { Some(days / 30) };
+                let wage = Some(format!("${}", c.salary));
+                let status = Some(format!("{:?}", c.squad_status));
+                (months, wage, status)
+            }
+            None => (None, None, None),
+        };
+
         let player = PlayerLlm {
             id: self.id,
             age,
@@ -199,6 +213,9 @@ impl Player {
             jadedness: format!("{}%", (attr.jadedness as f32 / 10000.0 * 100.0).round() as u32),
             morale: format!("{}%", morale),
             status,
+            contract_months_left,
+            annual_wage,
+            squad_status,
             reputation: PlayerReputationLlm {
                 current: format!("{}%", (self.player_attributes.current_reputation as f32 / 10000.0 * 100.0).round() as u32),
                 home: format!("{}%", (self.player_attributes.home_reputation as f32 / 10000.0 * 100.0).round() as u32),

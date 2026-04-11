@@ -1,9 +1,11 @@
 mod composition;
+mod contract_renewal;
 mod match_squad;
 mod satisfaction;
 mod transfer_listing;
 
 pub use composition::SquadComposition;
+pub use contract_renewal::ContractRenewalManager;
 pub use satisfaction::compute_squad_satisfaction;
 pub use transfer_listing::TransferListManager;
 

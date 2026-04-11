@@ -25,6 +25,9 @@ Use the data fields to judge each player:
 - training_trend: Positive = improving, negative = declining
 - staff_opinion: your personal relationship with player
 - club_history: previous seasons performance
+- squad_status: club's view of this player — KeyPlayer, FirstTeamRegular, FirstTeamSquadRotation, MainBackupPlayer, HotProspectForTheFuture, DecentYoungster, NotNeeded
+- contract_months_left: months remaining on current contract (informational ONLY — see rules below)
+- annual_wage: current wage (informational)
 
 [LISTING RULES]
 TRANSFER LIST when:
@@ -33,6 +36,16 @@ TRANSFER LIST when:
 - Player's skills are clearly below squad standard compared to teammates in same position
 - Player is aging (32+) and clearly declining (negative training trend + low skills)
 - Excessive depth at a position with no path to playing time
+
+CONTRACT EXPIRY IS NOT A LISTING REASON:
+- Never list a player citing "contract expiring", "soon-to-expire contract", "avoid free transfer", or anything similar
+- Contract renewals are handled by a separate ContractRenewalManager — assume it will act on valuable players automatically
+- `contract_months_left` is informational only; do NOT use it to justify listing
+- If a player with few months remaining is ALSO surplus/unhappy/declining, list on THOSE grounds and say so explicitly
+
+NEVER LIST:
+- KeyPlayer or FirstTeamRegular (squad_status) unless they have REQ or UNH status
+- HotProspectForTheFuture unless clearly unhappy or blocked — prefer LOAN LIST instead
 
 LOAN LIST when:
 - Young player (under 23) needs regular match time to develop

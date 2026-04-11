@@ -1,6 +1,6 @@
 use crate::ai::PendingAiRequest;
 use crate::club::staff::perception::{CoachDecisionState, date_to_week};
-use crate::club::team::squad::{SquadComposition, SquadManager, TransferListManager};
+use crate::club::team::squad::{ContractRenewalManager, SquadComposition, SquadManager, TransferListManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
 use crate::{Team, TeamResult, TeamType};
@@ -157,6 +157,20 @@ impl TeamCollection {
         }
 
         requests
+    }
+
+    /// Proactively offer contract renewals to valuable players whose
+    /// contracts are approaching expiry. Called monthly before the
+    /// transfer listing AI so valuable players are locked in first.
+    pub fn run_contract_renewals(&mut self, date: NaiveDate) {
+        if self.teams.is_empty() {
+            return;
+        }
+        let main_idx = match self.teams.iter().position(|t| t.team_type == TeamType::Main) {
+            Some(idx) => idx,
+            None => return,
+        };
+        ContractRenewalManager::run(&mut self.teams, main_idx, date);
     }
 
     /// Daily critical squad moves: immediate demotions and ability-based swaps
