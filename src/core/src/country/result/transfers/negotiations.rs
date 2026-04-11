@@ -229,7 +229,18 @@ impl CountryResult {
         date: NaiveDate,
     ) {
 
-        let mut chance: f32 = 60.0;
+        let is_foreign = neg_data.selling_country_id.is_some();
+
+        // Foreign loans start lower: unfamiliar country, language, likely
+        // wage cut. Players don't jump across borders for a bit-part role
+        // as readily as they change clubs within their own league.
+        let mut chance: f32 = if is_foreign && neg_data.is_loan {
+            45.0
+        } else if is_foreign {
+            50.0
+        } else {
+            60.0
+        };
 
         if neg_data.is_listed {
             chance += 10.0;
@@ -387,16 +398,23 @@ impl CountryResult {
                 let prestige_drop = sell_prestige - buy_prestige;
 
                 if prestige_drop > 0.0 {
-                    // Moving to less prestigious region — players resist this
-                    let base_penalty = prestige_drop * 60.0;
+                    // Moving to less prestigious region — players resist this.
+                    // Previously 60× was too soft: a 0.55 drop (W.Europe→S.America)
+                    // only cost −33, leaving ~27% acceptance for prime-age players.
+                    let base_penalty = prestige_drop * 110.0;
 
                     // Ambitious players resist prestige drops more
                     let ambition_factor = if neg_data.player_ambition > 0.7 { 1.5 }
                         else if neg_data.player_ambition > 0.5 { 1.0 }
                         else { 0.7 };
 
-                    // Older players (30+) more willing to accept for money/playing time
-                    let age_factor = if neg_data.player_age >= 32 { 0.3 }
+                    // Veterans (30+) accept drops more easily for money/playing time,
+                    // but a very large drop still stings regardless of age.
+                    let age_factor = if prestige_drop > 0.4 {
+                        if neg_data.player_age >= 32 { 0.7 }
+                        else if neg_data.player_age >= 30 { 0.85 }
+                        else { 1.0 }
+                    } else if neg_data.player_age >= 32 { 0.3 }
                         else if neg_data.player_age >= 30 { 0.5 }
                         else { 1.0 };
 

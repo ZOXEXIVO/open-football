@@ -1140,8 +1140,8 @@ impl Ball {
     }
 
     /// Ball crossed the endline (x <= 0 or x >= field_width) but OUTSIDE the goal posts.
-    /// In real football this is a goal kick (or corner kick).
-    /// Simplified as goal kick: ball given to defending goalkeeper.
+    /// In real football this is a goal kick OR a corner kick — depending on
+    /// which team last touched the ball.
     fn check_wide_of_goal(
         &mut self,
         context: &MatchContext,
@@ -1180,12 +1180,78 @@ impl Ball {
             None => return,
         };
 
-        // Goal kick: give ball to defending goalkeeper
         let defending_side = match side {
             GoalSide::Home => PlayerSide::Left,
             GoalSide::Away => PlayerSide::Right,
         };
+        let attacking_side = match defending_side {
+            PlayerSide::Left => PlayerSide::Right,
+            PlayerSide::Right => PlayerSide::Left,
+        };
 
+        // Decide corner vs goal kick from the last player who touched the
+        // ball. If the defending team put it out, it's a corner for the
+        // attacking team. Unknown last-touch defaults to goal kick.
+        let last_toucher_side: Option<PlayerSide> = self
+            .previous_owner
+            .or(self.current_owner)
+            .and_then(|pid| players.iter().find(|p| p.id == pid))
+            .and_then(|p| p.side);
+
+        let is_corner = last_toucher_side == Some(defending_side);
+
+        if is_corner {
+            // Attacking team gets a corner. Place ball at the nearest corner
+            // flag and hand it to the attacking team's best corner taker.
+            let corner_x = match side {
+                GoalSide::Home => 2.0,
+                GoalSide::Away => field_width - 2.0,
+            };
+            let field_height = context.field_size.height as f32;
+            // Pick the near corner based on where the ball went out
+            let near_top = self.position.y < field_height * 0.5;
+            let corner_y = if near_top { 2.0 } else { field_height - 2.0 };
+
+            // Find the attacking team's designated corner taker — score by
+            // (crossing, technique, corners) like SetPieceSetup::choose, but
+            // restricted to players currently on the pitch.
+            let taker = players
+                .iter()
+                .filter(|p| {
+                    p.side == Some(attacking_side)
+                        && !p.tactical_position.current_position.is_goalkeeper()
+                })
+                .max_by(|a, b| {
+                    let sa = a.skills.technical.crossing * 0.6
+                        + a.skills.technical.technique * 0.3
+                        + a.skills.technical.corners * 0.1;
+                    let sb = b.skills.technical.crossing * 0.6
+                        + b.skills.technical.technique * 0.3
+                        + b.skills.technical.corners * 0.1;
+                    sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+            if let Some(taker) = taker {
+                self.position.x = corner_x;
+                self.position.y = corner_y;
+                self.position.z = 0.0;
+                self.velocity = Vector3::zeros();
+
+                self.current_owner = Some(taker.id);
+                self.previous_owner = None;
+                self.ownership_duration = 0;
+                self.claim_cooldown = 30;
+                self.flags.in_flight_state = 30;
+                self.pass_target_player_id = None;
+                self.recent_passers.clear();
+
+                events.add_ball_event(BallEvent::Claimed(taker.id));
+                return;
+            }
+            // If no eligible outfielder was found, fall through to goal kick
+        }
+
+        // Goal kick: give ball to defending goalkeeper
         if let Some(gk) = players.iter().find(|p| {
             p.side == Some(defending_side)
                 && p.tactical_position.current_position.is_goalkeeper()

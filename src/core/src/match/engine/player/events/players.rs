@@ -1155,7 +1155,30 @@ impl PlayerEventDispatcher {
         // Record shot in player memory
         let on_target = clamped_y_target >= goal_left_post && clamped_y_target <= goal_right_post;
         if let Some(shooter) = field.get_player_mut(shoot_event_model.from_player_id) {
+            // Quick xG from distance + finishing skill. Full-context xG with
+            // pressure/angle lives in ShotQualityEvaluator (player strategy
+            // layer) — that's the right place to compute a richer value when
+            // plumbing exposes the state context here.
+            let xg = {
+                let d = horizontal_distance;
+                let distance_factor = if d <= 10.0 {
+                    0.80
+                } else if d <= 30.0 {
+                    0.80 - (d - 10.0) / 20.0 * 0.35
+                } else if d <= 60.0 {
+                    0.45 - (d - 30.0) / 30.0 * 0.30
+                } else if d <= 120.0 {
+                    0.15 - (d - 60.0) / 60.0 * 0.11
+                } else {
+                    0.04
+                };
+                let finishing = (shooter.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
+                let skill_mult = 0.6 + finishing * 0.8; // 0.6 .. 1.4
+                let target_mult = if on_target { 1.0 } else { 0.6 };
+                (distance_factor * skill_mult * target_mult).clamp(0.0, 0.95)
+            };
             shooter.memory.record_shot(shoot_event_model.tick, on_target);
+            shooter.memory.record_shot_xg(shoot_event_model.tick, xg);
         }
 
         field.ball.previous_owner = Some(shoot_event_model.from_player_id);

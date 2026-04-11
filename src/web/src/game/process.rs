@@ -60,12 +60,8 @@ pub async fn game_process_action(
             }
 
             let result = handle.block_on(FootballSimulator::simulate(&mut simulator_data));
-            if result.has_match_results() {
-                if core::is_match_recordings_mode() {
-                    handle.block_on(write_match_results(result));
-                }
-
-                simulator_data.match_played = true;
+            if result.has_match_results() && core::is_match_recordings_mode() {
+                handle.block_on(write_match_results(result));
             }
         }
 

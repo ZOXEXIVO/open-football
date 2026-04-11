@@ -2,6 +2,7 @@ use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
     PlayerSkills, PlayerTraining,
 };
+use crate::club::player::traits::{generate_player_traits, PlayerTrait};
 use crate::shared::fullname::FullName;
 use crate::{PersonAttributes, Player, PlayerDecisionHistory, PlayerHappiness, PlayerPositions, PlayerPreferredFoot, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus, PlayerTrainingHistory, Relations};
 use chrono::NaiveDate;
@@ -34,6 +35,7 @@ pub struct PlayerBuilder {
     decision_history: Option<PlayerDecisionHistory>,
     languages: Option<Vec<crate::club::player::language::PlayerLanguage>>,
     favorite_clubs: Option<Vec<u32>>,
+    traits: Option<Vec<PlayerTrait>>,
 }
 
 impl PlayerBuilder {
@@ -156,7 +158,22 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn traits(mut self, traits: Vec<PlayerTrait>) -> Self {
+        self.traits = Some(traits);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
+        let skills = self.skills.ok_or("skills is required")?;
+        let positions = self.positions.ok_or("positions is required")?;
+        let player_attributes = self.player_attributes.ok_or("player_attributes is required")?;
+        let traits = self.traits.unwrap_or_else(|| {
+            generate_player_traits(
+                &skills,
+                &positions.positions,
+                player_attributes.current_ability,
+            )
+        });
         Ok(Player {
             id: self.id.ok_or("id is required")?,
             full_name: self.full_name.ok_or("full_name is required")?,
@@ -166,12 +183,12 @@ impl PlayerBuilder {
             attributes: self.attributes.ok_or("attributes is required")?,
             happiness: self.happiness.unwrap_or_else(PlayerHappiness::new),
             statuses: self.statuses.unwrap_or_else(PlayerStatus::new),
-            skills: self.skills.ok_or("skills is required")?,
+            skills,
             contract: self.contract.unwrap_or(None),
             contract_loan: self.contract_loan.unwrap_or(None),
-            positions: self.positions.ok_or("positions is required")?,
+            positions,
             preferred_foot: self.preferred_foot.unwrap_or(PlayerPreferredFoot::Right),
-            player_attributes: self.player_attributes.ok_or("player_attributes is required")?,
+            player_attributes,
             mailbox: self.mailbox.unwrap_or_else(PlayerMailbox::new),
             training: self.training.unwrap_or_else(PlayerTraining::new),
             training_history: self.training_history.unwrap_or_else(PlayerTrainingHistory::new),
@@ -186,6 +203,7 @@ impl PlayerBuilder {
             plan: None,
             favorite_clubs: self.favorite_clubs.unwrap_or_default(),
             sold_from: None,
+            traits,
         })
     }
 }

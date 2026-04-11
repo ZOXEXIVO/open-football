@@ -66,6 +66,9 @@ pub struct Player {
     /// Prevents unrealistic buy-back scenarios where a club sells a player
     /// cheaply and then buys them back at a huge markup one season later.
     pub sold_from: Option<(u32, f64)>, // (club_id, fee_paid)
+
+    /// Signature moves — trained traits that bias in-match decisions.
+    pub traits: Vec<crate::club::player::traits::PlayerTrait>,
 }
 
 impl Player {

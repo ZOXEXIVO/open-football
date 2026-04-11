@@ -74,6 +74,9 @@ impl StaffGenerator {
             professionalism: FloatUtils::random(0.0, 20.0),
             sportsmanship: FloatUtils::random(0.0, 20.0),
             temperament: FloatUtils::random(0.0, 20.0),
+            consistency: FloatUtils::random(4.0, 18.0),
+            important_matches: FloatUtils::random(4.0, 18.0),
+            dirtiness: FloatUtils::random(0.0, 20.0),
         }
     }
 
@@ -129,6 +132,7 @@ impl StaffGenerator {
                 judging_player_potential: IntegerUtils::random(attr_min, attr_max) as u8,
                 tactical_knowledge: IntegerUtils::random(attr_min, attr_max) as u8,
                 known_regions: Vec::new(), // populated after creation based on scout nationality/assignment
+                region_familiarity: Vec::new(),
             },
             data_analysis: StaffDataAnalysis {
                 judging_player_data: IntegerUtils::random(attr_min, attr_max) as u8,

@@ -1,3 +1,4 @@
+use crate::club::player::traits::PlayerTrait;
 use crate::r#match::{MatchPlayer, MatchPlayerLite, PlayerSide, StateProcessingContext};
 
 /// Comprehensive pass evaluation result
@@ -70,8 +71,17 @@ impl PassEvaluator {
         // Calculate expected value considering success probability and tactical value
         let expected_value = success_probability * tactical_value;
 
-        // Determine if pass is recommended based on thresholds
-        let is_recommended = success_probability > 0.6 && risk_level < 0.7;
+        // Determine if pass is recommended based on thresholds. Players with
+        // killer-ball / playmaker PPMs are willing to attempt riskier passes
+        // because they value the through ball / chance-creation upside.
+        let risk_tolerant = passer.has_trait(PlayerTrait::TriesThroughBalls)
+            || passer.has_trait(PlayerTrait::KillerBallOften)
+            || passer.has_trait(PlayerTrait::Playmaker);
+        let is_recommended = if risk_tolerant {
+            success_probability > 0.5 && risk_level < 0.82
+        } else {
+            success_probability > 0.6 && risk_level < 0.7
+        };
 
         PassEvaluation {
             success_probability,
@@ -505,7 +515,7 @@ impl PassEvaluator {
         };
 
         // Weighted combination - includes width and switching bonuses
-        let tactical_value =
+        let mut tactical_value =
             forward_value * 0.32 +         // Forward progression (reduced to make room for width)
             distance_value * 0.10 +        // Pass distance quality
             position_value * 0.08 +        // Receiver's tactical position (forwards > defenders)
@@ -514,6 +524,33 @@ impl PassEvaluator {
             switch_play_bonus * 0.22 +     // Reward switching play (major boost)
             overload_penalty +             // Penalize crowded side
             sideways_penalty;              // Penalize pure sideways passes
+
+        // PPM biases. Players with killer-ball / playmaker traits love the
+        // forward pass and should see it as more valuable even when risky.
+        let passer = ctx.player;
+        let forward_trait_bias = passer.has_trait(PlayerTrait::TriesThroughBalls)
+            || passer.has_trait(PlayerTrait::KillerBallOften);
+        if forward_trait_bias && forward_value > 0.0 {
+            tactical_value += forward_value * 0.25;
+        }
+        if passer.has_trait(PlayerTrait::Playmaker) {
+            // Playmakers universally elevate forward/progressive passes
+            if forward_value > 0.0 {
+                tactical_value += forward_value * 0.20;
+            }
+            // ...and they love big switches
+            tactical_value += switch_play_bonus * 0.10;
+        }
+        if passer.has_trait(PlayerTrait::LikesToSwitchPlay) {
+            tactical_value += switch_play_bonus * 0.15;
+        }
+        if passer.has_trait(PlayerTrait::PlaysShortPasses) {
+            // Short-pass addicts devalue long balls
+            tactical_value -= long_pass_bonus * 0.20;
+        }
+        if passer.has_trait(PlayerTrait::PlaysLongPasses) {
+            tactical_value += long_pass_bonus * 0.15;
+        }
 
         // Allow negative tactical values for backward passes
         tactical_value.clamp(-0.5, 1.8)

@@ -18,16 +18,38 @@ pub trait Person {
     fn relations(&self) -> &Relations;
 }
 
+/// Hidden personality attributes, FM-style, all on a 0.0–20.0 scale.
+/// These drive contract renewal, transfer acceptance, training progression,
+/// big-match performance, discipline, and performance variance. They are
+/// not shown in match events directly but modulate nearly every player-side
+/// decision point in the simulator.
 #[derive(Debug, Copy, Clone, Default)]
 pub struct PersonAttributes {
+    /// How quickly a player settles in a new club/country.
     pub adaptability: f32,
+    /// Drives upward moves; resists downward moves.
     pub ambition: f32,
+    /// Off-pitch flashpoints with teammates / media.
     pub controversy: f32,
+    /// Resistance to leaving the club.
     pub loyalty: f32,
+    /// How the player copes with big moments.
     pub pressure: f32,
+    /// How hard the player trains — the #1 development driver.
     pub professionalism: f32,
+    /// Fair-play bias — low = dives, shirt pulls, dark arts.
     pub sportsmanship: f32,
+    /// Short fuse → more cards, fouls, red-card risk.
     pub temperament: f32,
+
+    /// Match-to-match performance stability (1–20).
+    /// High consistency = narrow rating variance; low = flaky.
+    pub consistency: f32,
+    /// Steps up (or shrinks) in cup finals, derbies, CL nights.
+    pub important_matches: f32,
+    /// Aggression on tackles / late challenges. Not the same as
+    /// Temperament: a dirty player can be calm about it.
+    pub dirtiness: f32,
 }
 
 #[derive(Debug, Clone, Default)]

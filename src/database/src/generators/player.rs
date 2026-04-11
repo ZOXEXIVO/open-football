@@ -1006,6 +1006,9 @@ impl PlayerGenerator {
             professionalism: FloatUtils::random(0.0f32, 20.0f32),
             sportsmanship: FloatUtils::random(0.0f32, 20.0f32),
             temperament: FloatUtils::random(0.0f32, 20.0f32),
+            consistency: FloatUtils::random(4.0f32, 18.0f32),
+            important_matches: FloatUtils::random(4.0f32, 18.0f32),
+            dirtiness: FloatUtils::random(0.0f32, 20.0f32),
         }
     }
 

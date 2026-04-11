@@ -42,9 +42,16 @@ impl GlobalCompetitionSimulator {
             let away_country_id = fixture.away_country_id;
 
             let penalty_winner = if fixture.phase.is_knockout() && home_score == away_score {
-                let home_rep = Self::country_reputation(&data.continents, home_country_id);
-                let away_rep = Self::country_reputation(&data.continents, away_country_id);
-                if home_rep >= away_rep {
+                // Weighted random: reputation nudges the baseline a little, but
+                // shootouts are coin-flippy in reality. Rep bias capped at ±0.15
+                // (so 35/65 in the most lopsided matchup) and then rolled.
+                let home_rep = Self::country_reputation(&data.continents, home_country_id) as f32;
+                let away_rep = Self::country_reputation(&data.continents, away_country_id) as f32;
+                let total_rep = (home_rep + away_rep).max(1.0);
+                let rep_share = home_rep / total_rep; // 0..1
+                let home_chance = (0.5 + (rep_share - 0.5) * 0.30).clamp(0.35, 0.65);
+                let roll = crate::utils::FloatUtils::random(0.0, 1.0);
+                if roll < home_chance {
                     Some(home_country_id)
                 } else {
                     Some(away_country_id)

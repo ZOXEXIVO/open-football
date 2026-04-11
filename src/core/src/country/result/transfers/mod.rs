@@ -34,6 +34,10 @@ impl CountryResult {
             Vec::new()
         };
 
+        // Snapshot completed count so we can detect any free-agent / negotiation
+        // signings that bypass the deferred execution path below.
+        let completed_before = summary.completed_transfers;
+
         // Phase 1: Negotiations & pipeline (per-country)
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
             // Resolve pending negotiations — returns all completed transfers for deferred execution
@@ -81,6 +85,12 @@ impl CountryResult {
             Vec::new()
         };
 
+        // Free-agent / in-country signings already mutated club rosters
+        // while the country borrow was active — flag the index as dirty.
+        if summary.completed_transfers > completed_before {
+            data.dirty_player_index = true;
+        }
+
         // Phase 2: Execute all completed transfers (domestic + foreign) via unified path
         for transfer in deferred_transfers {
             let success = execution::execute_transfer(
@@ -94,6 +104,10 @@ impl CountryResult {
                 transfer.is_loan,
                 current_date,
             );
+
+            if success {
+                data.dirty_player_index = true;
+            }
 
             // Remove phantom transfer record if execution failed
             // (e.g. player already moved via another negotiation)

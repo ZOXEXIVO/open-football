@@ -9,6 +9,7 @@ use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
 use crate::{Player, TeamInfo};
 use chrono::{Duration, NaiveDateTime};
+use rayon::prelude::*;
 use std::collections::HashMap;
 use std::time::Instant;
 
@@ -28,43 +29,83 @@ impl FootballSimulator {
     pub async fn simulate(data: &mut SimulatorData) -> SimulationResult {
         let mut result = SimulationResult::new();
 
-        let current_data = data.date;
-        let now = Instant::now();
+        let current_date = data.date;
+        let tick_start = Instant::now();
 
         let ctx = GlobalContext::new(SimulationContext::new(data.date), Ai::new());
 
-        // Phase A: Simulate (AI requests built, not executed)
+        // Phase ordering note:
+        // A simulates continents and emits AI requests as FnOnce closures that
+        // capture stable IDs (club_id, player_id, …). B executes those requests
+        // against the freshly-mutated data. C then drains the ContinentResults
+        // collected in A. The results reference the same stable IDs, so Phase B
+        // mutations (contracts, morale, etc.) are safely visible to Phase C.
+
+        // Phase A: simulate all continents in parallel. Each call mutates its
+        // own continent and pushes AI requests into the shared (Arc<Mutex>) Ai
+        // collector. Continents are independent during this phase.
+        let phase_a = Instant::now();
+        let continent_ids: Vec<u32> = data.continents.iter().map(|c| c.id).collect();
         let results: Vec<ContinentResult> = data
             .continents
-            .iter_mut()
-            .map(|continent| continent.simulate(ctx.with_continent(continent.id)))
+            .par_iter_mut()
+            .zip(continent_ids.par_iter())
+            .map(|(continent, &cid)| continent.simulate(ctx.with_continent(cid)))
             .collect();
+        let phase_a_ms = phase_a.elapsed().as_millis();
 
-        // Phase B: Collect & batch-execute all AI requests
+        // Phase B: collect and batch-execute all AI requests
+        let phase_b = Instant::now();
         let all_requests = ctx.ai.drain();
-
+        let ai_count = all_requests.len();
         if !all_requests.is_empty() {
             let completed = AiBatchProcessor::execute(all_requests).await;
             apply_ai_responses(completed, data);
         }
+        let phase_b_ms = phase_b.elapsed().as_millis();
 
-        // Phase C: Process results
+        // Phase C: process the collected results against post-AI data
+        let phase_c = Instant::now();
         for continent_result in results {
             continent_result.process(data, &mut result);
         }
+        let phase_c_ms = phase_c.elapsed().as_millis();
 
-        // Global competitions
-        //crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
+        // Global competitions (Champions League, World Cup, etc.)
+        let phase_g = Instant::now();
+        crate::competitions::simulation::GlobalCompetitionSimulator::simulate(data);
+        let phase_g_ms = phase_g.elapsed().as_millis();
 
-        // Refresh player indexes after transfers may have moved players between clubs
-        if let Some(mut indexes) = data.indexes.take() {
-            indexes.refresh_player_indexes(data);
-            data.indexes = Some(indexes);
+        // Refresh player indexes only if a transfer actually moved a player
+        // between clubs today. Walking the world every day is wasteful.
+        let refresh = Instant::now();
+        let mut refresh_ms = 0u128;
+        if data.dirty_player_index {
+            if let Some(mut indexes) = data.indexes.take() {
+                indexes.refresh_player_indexes(data);
+                data.indexes = Some(indexes);
+            }
+            data.dirty_player_index = false;
+            refresh_ms = refresh.elapsed().as_millis();
         }
+
+        // Seed history for any players created today that haven't been seeded
+        // (youth intake, regens, new clubs) — catches them within one tick.
+        data.seed_missing_player_histories();
 
         data.next_date();
 
-        log::info!("simulate date {}, {}ms", current_data, now.elapsed().as_millis());
+        log::info!(
+            "simulate {} total={}ms (A={}ms, B={}ms [{} reqs], C={}ms, global={}ms, idx={}ms)",
+            current_date,
+            tick_start.elapsed().as_millis(),
+            phase_a_ms,
+            phase_b_ms,
+            ai_count,
+            phase_c_ms,
+            phase_g_ms,
+            refresh_ms,
+        );
 
         result
     }
@@ -80,7 +121,9 @@ pub struct SimulatorData {
 
     pub indexes: Option<SimulatorDataIndexes>,
 
-    pub match_played: bool,
+    /// Set to true whenever a transfer moves a player between clubs. Checked
+    /// by the simulator to decide whether to rebuild player location indexes.
+    pub dirty_player_index: bool,
 
     pub watchlist: Vec<u32>,
 
@@ -111,7 +154,7 @@ impl SimulatorData {
             date,
             transfer_pool: TransferPool::new(),
             indexes: None,
-            match_played: false,
+            dirty_player_index: false,
             watchlist: Vec::new(),
             global_competitions,
             country_info,
@@ -136,7 +179,16 @@ impl SimulatorData {
         self.country_info.entry(id).or_insert(CountryInfo { id, code, slug, name });
     }
 
-    /// Initialize all league tables with their teams so tables are populated from the start.
+    /// Remove a country from the nationality lookup map.
+    pub fn remove_country_info(&mut self, id: u32) {
+        self.country_info.remove(&id);
+    }
+
+    /// Initial population of league tables at construction time.
+    /// Per-season rebuilds happen inside `League::simulate` when a new
+    /// schedule is generated — see `league/league.rs:119`. The skip-if-
+    /// non-empty guard below is therefore intentional: it only prevents
+    /// the initial seed from clobbering an already-populated table.
     fn init_league_tables(&mut self) {
         for continent in &mut self.continents {
             for country in &mut continent.countries {
@@ -160,19 +212,27 @@ impl SimulatorData {
         }
     }
 
-    /// Seed statistics history for all players that have no history yet.
+    /// Seed statistics history for every player (called on construction).
     fn seed_player_histories(&mut self) {
+        self.seed_player_histories_inner(false);
+    }
+
+    /// Seed any players whose history is still empty — catches youth intake,
+    /// regens, and newly-generated clubs within one simulated tick.
+    pub fn seed_missing_player_histories(&mut self) {
+        self.seed_player_histories_inner(true);
+    }
+
+    fn seed_player_histories_inner(&mut self, only_empty: bool) {
         let date = self.date.date();
 
         for continent in &mut self.continents {
             for country in &mut continent.countries {
-                // Build league lookup: league_id -> (name, slug)
                 let league_lookup: HashMap<u32, (String, String)> = country.leagues.leagues.iter()
                     .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
                     .collect();
 
                 for club in &mut country.clubs {
-                    // Get main team info — used for all teams in player history
                     let main_team_info: Option<(String, String, u16)> = club.teams.teams.iter()
                         .find(|t| t.team_type == crate::TeamType::Main)
                         .map(|t| (t.name.clone(), t.slug.clone(), t.reputation.world));
@@ -203,6 +263,9 @@ impl SimulatorData {
                         };
 
                         for player in &mut team.players.players {
+                            if only_empty && !player.statistics_history.is_empty() {
+                                continue;
+                            }
                             player.statistics_history.seed_initial_team(&team_info, date);
                         }
                     }

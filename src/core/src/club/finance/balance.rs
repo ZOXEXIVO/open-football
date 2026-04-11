@@ -125,11 +125,21 @@ pub struct ClubFinancialBalance {
     pub income_sponsorship: i64,
     pub income_merchandising: i64,
     pub income_prize_money: i64,
+    /// Placement-based TV bonus layered on top of the reputation TV base.
+    pub income_tv_placement: i64,
+    /// Domestic cup prize money earned this period.
+    pub income_cup_prize: i64,
+    /// Continental (UCL/UEL) prize money earned this period.
+    pub income_continental_prize: i64,
 
     // Expense categories
     pub expense_player_wages: i64,
     pub expense_staff_wages: i64,
     pub expense_facilities: i64,
+    /// Amortized portion of player transfer fees charged this period.
+    pub expense_amortization: i64,
+    /// Interest charged on a negative balance this period.
+    pub expense_debt_interest: i64,
 
     // Loan match fee tracking
     pub income_loan_fees: i64,
@@ -147,9 +157,14 @@ impl ClubFinancialBalance {
             income_sponsorship: 0,
             income_merchandising: 0,
             income_prize_money: 0,
+            income_tv_placement: 0,
+            income_cup_prize: 0,
+            income_continental_prize: 0,
             expense_player_wages: 0,
             expense_staff_wages: 0,
             expense_facilities: 0,
+            expense_amortization: 0,
+            expense_debt_interest: 0,
             income_loan_fees: 0,
             expense_loan_fees: 0,
         }
@@ -191,6 +206,38 @@ impl ClubFinancialBalance {
         self.push_income(amount);
     }
 
+    /// Placement bonus layered on top of the reputation-based TV base.
+    pub fn push_income_tv_placement(&mut self, amount: i64) {
+        self.income_tv_placement += amount;
+        self.push_income(amount);
+    }
+
+    /// Domestic cup prize money — per round.
+    pub fn push_income_cup_prize(&mut self, amount: i64) {
+        self.income_cup_prize += amount;
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    /// Continental (UCL/UEL) prize money — per round.
+    pub fn push_income_continental_prize(&mut self, amount: i64) {
+        self.income_continental_prize += amount;
+        self.income_prize_money += amount;
+        self.push_income(amount);
+    }
+
+    /// Amortized slice of a transfer fee this month.
+    pub fn push_expense_amortization(&mut self, amount: i64) {
+        self.expense_amortization += amount;
+        self.push_outcome(amount);
+    }
+
+    /// Interest cost on a negative balance.
+    pub fn push_expense_debt_interest(&mut self, amount: i64) {
+        self.expense_debt_interest += amount;
+        self.push_outcome(amount);
+    }
+
     // Categorized expense methods
     pub fn push_expense_player_wages(&mut self, amount: i64) {
         self.expense_player_wages += amount;
@@ -226,9 +273,14 @@ impl ClubFinancialBalance {
         self.income_sponsorship = 0;
         self.income_merchandising = 0;
         self.income_prize_money = 0;
+        self.income_tv_placement = 0;
+        self.income_cup_prize = 0;
+        self.income_continental_prize = 0;
         self.expense_player_wages = 0;
         self.expense_staff_wages = 0;
         self.expense_facilities = 0;
+        self.expense_amortization = 0;
+        self.expense_debt_interest = 0;
         self.income_loan_fees = 0;
         self.expense_loan_fees = 0;
     }

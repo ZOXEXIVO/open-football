@@ -2,6 +2,77 @@ use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClu
 use crate::context::{GlobalContext, SimulationContext};
 use log::debug;
 
+/// Long-term club vision — the direction the board wants the manager to
+/// take the club. Drives expectations, recruitment preferences, and
+/// manager-board friction. Each item is advisory: the manager can ignore
+/// it but the board will judge them against it at season's end.
+#[derive(Debug, Clone, Default)]
+pub struct ClubVision {
+    pub playing_style: VisionPlayingStyle,
+    pub youth_focus: VisionYouthFocus,
+    pub signing_preference: SigningPreference,
+    pub financial_stance: FinancialStance,
+    pub long_term_goal: Option<LongTermGoal>,
+    /// Seasons allotted for the manager to reach `long_term_goal`.
+    pub long_term_horizon_seasons: u8,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VisionPlayingStyle {
+    #[default]
+    Balanced,
+    AttackingFootball,
+    Possession,
+    HighPressing,
+    DefensiveSolid,
+    CounterAttack,
+    DirectPlay,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VisionYouthFocus {
+    #[default]
+    Balanced,
+    /// Promote youth aggressively, prefer home-grown signings.
+    DevelopYouth,
+    /// Proven quality only; youth serves as backup.
+    SignExperienced,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SigningPreference {
+    #[default]
+    Anyone,
+    /// Prefer home-nation or home-continent signings.
+    Domestic,
+    /// Actively scout cheaper regions for value gems.
+    ValueHunter,
+    /// Top-tier names only.
+    Marquee,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FinancialStance {
+    #[default]
+    Balanced,
+    /// Spend now, worry later.
+    Ambitious,
+    /// Live within wage budget; no loans.
+    Conservative,
+    /// Cost-cutting mode — sell high, minimise outgoings.
+    Austerity,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongTermGoal {
+    WinLeague,
+    WinDomesticCup,
+    WinContinental,
+    PromotionToTopFlight,
+    EstablishTopHalf,
+    Survive,
+}
+
 #[derive(Debug, Clone)]
 pub struct SeasonTargets {
     pub transfer_budget: i32,
@@ -37,6 +108,9 @@ pub struct ClubBoard {
     pub season_targets: Option<SeasonTargets>,
     /// Consecutive months the board has been in Poor mood
     pub poor_mood_months: u8,
+    /// Long-term vision — the "contract" the board expects the manager
+    /// to honour across multiple seasons.
+    pub vision: ClubVision,
 }
 
 impl ClubBoard {
@@ -48,6 +122,7 @@ impl ClubBoard {
             sport_director: None,
             season_targets: None,
             poor_mood_months: 0,
+            vision: ClubVision::default(),
         }
     }
 

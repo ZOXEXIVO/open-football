@@ -143,6 +143,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 goals,
                 assists,
                 match_rating,
+                xg: player.memory.xg_total,
             });
         }
 

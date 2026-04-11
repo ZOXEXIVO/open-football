@@ -73,7 +73,19 @@ impl Club {
             // Matchday revenue (dynamic attendance × ticket price scaled by country economy)
             let price_level = get_price_level(&ctx);
             let base_attendance = self.facilities.average_attendance as f64;
-            let dynamic_attendance = (base_attendance * attendance_factor as f64) as i64;
+
+            // Form + table position modifier. Reads recent stats from the
+            // main team: wins over the last few games and current position.
+            let (recent_wins_ratio, league_pos, total_teams) =
+                self.compute_team_form_and_position(&ctx);
+            let form_mult = self.facilities.dynamic_attendance_multiplier(
+                recent_wins_ratio,
+                league_pos,
+                total_teams,
+            ) as f64;
+
+            let dynamic_attendance =
+                (base_attendance * attendance_factor as f64 * form_mult) as i64;
             let ticket_base: f64 = match team.reputation.level() {
                 crate::ReputationLevel::Elite => 55.0,
                 crate::ReputationLevel::Continental => 40.0,
@@ -129,5 +141,17 @@ impl Club {
             };
             self.finance.balance.push_expense_facilities(balance_overhead + tier_overhead);
         }
+    }
+
+    /// Returns (recent_wins_ratio, league_position, total_teams) for the
+    /// club's main team. Currently returns a neutral placeholder — the
+    /// hook exists so that once team-level recent-form tracking and a
+    /// league-table accessor are plumbed through `GlobalContext`, they can
+    /// drop in here with zero change at the call site.
+    fn compute_team_form_and_position(
+        &self,
+        _ctx: &GlobalContext<'_>,
+    ) -> (f32, u16, u16) {
+        (0.5, 10, 20)
     }
 }

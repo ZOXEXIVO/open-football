@@ -112,4 +112,42 @@ impl ClubFacilities {
     pub fn recruitment_multiplier(&self) -> f32 {
         self.recruitment.multiplier()
     }
+
+    /// Dynamic attendance multiplier: responds to form and league position.
+    ///
+    /// - `recent_wins_ratio` is the club's win rate over the last ~5 games (0.0–1.0)
+    /// - `league_position` is the current league position (1-indexed)
+    /// - `total_teams` is the number of teams in the league
+    ///
+    /// Returns a multiplier around 1.0 — happy fans show up (1.1–1.25),
+    /// disillusioned fans stay home (0.7–0.9). Cup runs, top-of-table,
+    /// or relegation-battle drama all push attendance higher.
+    pub fn dynamic_attendance_multiplier(
+        &self,
+        recent_wins_ratio: f32,
+        league_position: u16,
+        total_teams: u16,
+    ) -> f32 {
+        // Form component: −0.20 at zero wins, +0.20 at all-win streak.
+        let form = (recent_wins_ratio - 0.5) * 0.4;
+
+        // Position component — spectators love top-half runs and relegation
+        // six-pointers; mid-table apathy drops attendance.
+        let tt = total_teams.max(1) as f32;
+        let pos = league_position.max(1) as f32;
+        let rel_pos = pos / tt; // 0.0 top, 1.0 bottom
+        let position = if rel_pos < 0.1 {
+            0.20 // Title race
+        } else if rel_pos < 0.25 {
+            0.10 // European places
+        } else if rel_pos > 0.85 {
+            0.10 // Relegation drama
+        } else if rel_pos > 0.7 {
+            0.03
+        } else {
+            -0.05 // Mid-table apathy
+        };
+
+        (1.0 + form + position).clamp(0.65, 1.30)
+    }
 }

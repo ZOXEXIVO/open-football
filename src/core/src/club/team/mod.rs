@@ -8,6 +8,7 @@ pub mod result;
 pub mod squad;
 pub mod tactics;
 pub mod team;
+pub mod team_talks;
 pub mod training;
 pub mod transfers;
 
@@ -21,5 +22,6 @@ pub use result::*;
 pub use squad::*;
 pub use tactics::*;
 pub use team::*;
+pub use team_talks::*;
 pub use training::*;
 pub use transfers::*;

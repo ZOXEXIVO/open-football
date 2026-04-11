@@ -9,6 +9,7 @@ use crate::r#match::player::state::{PlayerMatchState, PlayerState};
 use crate::r#match::player::statistics::MatchPlayerStatistics;
 use crate::r#match::player::waypoints::WaypointManager;
 use crate::r#match::{GameTickContext, MatchContext, StateProcessingContext};
+use crate::club::player::traits::PlayerTrait;
 use crate::{
     PersonAttributes, Player, PlayerAttributes, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerSkills,
@@ -45,6 +46,17 @@ pub struct MatchPlayer {
 
     /// Cached waypoint vectors (only changes on substitution/half-time swap)
     cached_waypoints: Vec<Vector3<f32>>,
+
+    /// Signature moves (PPMs) — read by decision helpers to bias behaviour.
+    pub traits: Vec<PlayerTrait>,
+}
+
+impl MatchPlayer {
+    /// Fast trait lookup used inside hot decision paths.
+    #[inline]
+    pub fn has_trait(&self, t: PlayerTrait) -> bool {
+        self.traits.iter().any(|x| *x == t)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -79,6 +91,7 @@ impl MatchPlayer {
             memory: PlayerMemory::new(),
             fatigue_accumulator: 0.0,
             cached_waypoints: Vec::new(),
+            traits: player.traits.clone(),
         }
     }
 

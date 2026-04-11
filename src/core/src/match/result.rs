@@ -190,6 +190,58 @@ impl ResultMatchPositionData {
         }
     }
 
+    /// Build a coarse heatmap (bucket-count grid) for a single player from
+    /// their recorded position samples. The output is a `rows x cols` grid,
+    /// row-major, where each cell holds the number of position samples that
+    /// fell into it. Caller supplies the field dimensions used when the
+    /// match was simulated.
+    ///
+    /// Typical usage: 10×14 or 12×16 buckets is enough to render a readable
+    /// FM-style player heatmap in the UI.
+    pub fn player_heatmap(
+        &self,
+        player_id: u32,
+        field_width: f32,
+        field_height: f32,
+        cols: usize,
+        rows: usize,
+    ) -> Vec<u32> {
+        let mut grid = vec![0u32; cols * rows];
+        let positions = match self.players.get(&player_id) {
+            Some(p) if !p.is_empty() => p,
+            _ => return grid,
+        };
+
+        let cw = field_width / cols as f32;
+        let ch = field_height / rows as f32;
+        if cw <= 0.0 || ch <= 0.0 {
+            return grid;
+        }
+        for item in positions {
+            let cx = (item.position.x / cw).floor() as isize;
+            let cy = (item.position.y / ch).floor() as isize;
+            if cx < 0 || cy < 0 { continue; }
+            let cx = (cx as usize).min(cols - 1);
+            let cy = (cy as usize).min(rows - 1);
+            grid[cy * cols + cx] = grid[cy * cols + cx].saturating_add(1);
+        }
+        grid
+    }
+
+    /// Average position across all samples for a player, or None if no
+    /// samples. Useful as the anchor point for an FM-style formation map.
+    pub fn player_average_position(&self, player_id: u32) -> Option<(f32, f32)> {
+        let positions = self.players.get(&player_id)?;
+        if positions.is_empty() {
+            return None;
+        }
+        let (sx, sy) = positions.iter().fold((0.0f32, 0.0f32), |(ax, ay), p| {
+            (ax + p.position.x, ay + p.position.y)
+        });
+        let n = positions.len() as f32;
+        Some((sx / n, sy / n))
+    }
+
     /// Split the data into chunks based on time ranges
     /// Returns a vector of chunks, each containing data for a specific time window
     pub fn split_into_chunks(&self, chunk_duration_ms: u64) -> Vec<ResultMatchPositionData> {

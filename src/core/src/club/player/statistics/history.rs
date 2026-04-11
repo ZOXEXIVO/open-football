@@ -58,6 +58,10 @@ impl PlayerStatisticsHistory {
         }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty() && self.current.is_empty()
+    }
+
     fn next_seq(&mut self) -> u32 {
         let s = self.next_seq;
         self.next_seq += 1;

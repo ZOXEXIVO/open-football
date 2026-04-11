@@ -46,6 +46,53 @@ pub struct StaffKnowledge {
     /// Scouting in known regions has normal accuracy; unknown regions have
     /// increased error and fewer observations per day.
     pub known_regions: Vec<crate::transfers::ScoutingRegion>,
+    /// Per-region familiarity score (0-100). Grows over time as the scout
+    /// spends assignment days in a region, boosting report accuracy and
+    /// expanding the effective player pool they consider.
+    pub region_familiarity: Vec<RegionFamiliarity>,
+}
+
+#[derive(Debug, Clone)]
+pub struct RegionFamiliarity {
+    pub region: crate::transfers::ScoutingRegion,
+    pub level: u8,
+    /// Total days spent scouting in the region over the scout's career.
+    pub days_scouted: u32,
+}
+
+impl StaffKnowledge {
+    /// Advance this scout's familiarity with a given region by one day.
+    /// Returns the new familiarity level. Cap at 100.
+    pub fn accrue_region_day(&mut self, region: crate::transfers::ScoutingRegion) -> u8 {
+        if let Some(entry) = self
+            .region_familiarity
+            .iter_mut()
+            .find(|r| r.region == region)
+        {
+            entry.days_scouted = entry.days_scouted.saturating_add(1);
+            // Logarithmic growth: each +100 days yields roughly one extra point
+            // at the start, then slows toward the cap.
+            let days = entry.days_scouted as f32;
+            entry.level = ((days.sqrt() * 2.0) as u8).min(100);
+            entry.level
+        } else {
+            self.region_familiarity.push(RegionFamiliarity {
+                region,
+                level: 1,
+                days_scouted: 1,
+            });
+            1
+        }
+    }
+
+    /// Familiarity score (0-100) for a region. Returns 0 if never scouted.
+    pub fn familiarity_for(&self, region: crate::transfers::ScoutingRegion) -> u8 {
+        self.region_familiarity
+            .iter()
+            .find(|r| r.region == region)
+            .map(|r| r.level)
+            .unwrap_or(0)
+    }
 }
 
 #[derive(Debug, Clone)]

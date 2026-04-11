@@ -48,6 +48,8 @@ impl CountryResult {
         if any_new_season {
             Self::snapshot_player_season_statistics(data, self.country_id);
             Self::process_loan_returns(data, country_id, current_date);
+            // Retirement already runs inside process_end_of_period above,
+            // via Self::process_player_retirements when the season ends.
         }
 
         // Phase 2: Process club results (morale, training use post-match state)

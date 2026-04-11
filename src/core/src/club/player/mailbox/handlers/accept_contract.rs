@@ -27,6 +27,11 @@ impl AcceptContractHandler {
             loan_from_team_id: None,
             loan_to_club_id: None,
             loan_match_fee: None,
+            loan_wage_contribution_pct: None,
+            loan_future_fee: None,
+            loan_future_fee_obligation: false,
+            loan_recall_available_after: None,
+            loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
         });

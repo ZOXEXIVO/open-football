@@ -1,3 +1,4 @@
+use crate::club::player::traits::PlayerTrait;
 use crate::r#match::{StateProcessingContext};
 
 /// Operations for shooting decision-making
@@ -106,22 +107,36 @@ impl<'p> ShootingOperationsImpl<'p> {
             return false;
         }
 
+        // Signature moves (PPMs): two hard-override traits that reshape the
+        // whole decision tree. Only apply in realistic ranges so a 100m
+        // "shoots from distance" shot still gets filtered out.
+        let player = self.ctx.player;
+        let prefers_shot = player.has_trait(PlayerTrait::ShootsFromDistance);
+        let prefers_pass = player.has_trait(PlayerTrait::LooksForPassRatherThanAttemptShot);
+
         // Single scan: count opponents within 8 units (reused below)
         let opponents_within_8 = self.ctx.tick_context.grid
             .opponents(self.ctx.player.id, 8.0).count();
 
         // Check if heavily marked — prefer pass if 2+ opponents very close
-        if opponents_within_8 >= 2 && distance > VERY_CLOSE_RANGE_DISTANCE {
+        // (a pass-first trait makes players even less willing to shoot here)
+        let heavy_marking_threshold = if prefers_pass { 1 } else { 2 };
+        if opponents_within_8 >= heavy_marking_threshold && distance > VERY_CLOSE_RANGE_DISTANCE {
             return false;
         }
 
-        // Very close range - almost always shoot
+        // Very close range - almost always shoot (even pass-first players)
         if distance <= VERY_CLOSE_RANGE_DISTANCE {
             return true;
         }
 
+        // Pass-first players need an extra-clean opportunity before shooting
+        // anywhere outside the box.
+        let finishing_close_threshold = if prefers_pass { 0.55 } else { 0.4 };
+        let finishing_medium_threshold = if prefers_pass { 0.65 } else { 0.5 };
+
         // Close range - shoot if any finishing ability
-        if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && finishing > 0.4 {
+        if distance <= SHOOT_OVER_PASS_CLOSE_THRESHOLD && finishing > finishing_close_threshold {
             return true;
         }
 
@@ -137,13 +152,17 @@ impl<'p> ShootingOperationsImpl<'p> {
                 t_dist < distance * TEAMMATE_ADVANTAGE_RATIO
             });
 
-        // High teamwork players defer to better-positioned teammates
-        if better_positioned_teammate && teamwork > 0.6 {
-            return false;
+        // High teamwork players defer to better-positioned teammates.
+        // "Looks for pass" reinforces this; "Shoots from distance" ignores it.
+        if better_positioned_teammate && !prefers_shot {
+            let deference_threshold = if prefers_pass { 0.45 } else { 0.6 };
+            if teamwork > deference_threshold {
+                return false;
+            }
         }
 
         // Medium range - shoot if decent skills
-        if distance <= SHOOT_OVER_PASS_MEDIUM_THRESHOLD && finishing > 0.5 {
+        if distance <= SHOOT_OVER_PASS_MEDIUM_THRESHOLD && finishing > finishing_medium_threshold {
             return true;
         }
 
@@ -154,10 +173,24 @@ impl<'p> ShootingOperationsImpl<'p> {
             return true;
         }
 
-        // Medium-long range with good long shot skills and no heavy pressure
+        // Medium-long range with good long shot skills and no heavy pressure.
+        // "Shoots from distance" players lower the long-shot bar significantly
+        // and accept a bit more pressure — this is where the PPM most changes
+        // match feel (Robben, Lampard, Steven Gerrard-style hits).
         if distance <= MEDIUM_RANGE_DISTANCE
-            && long_shots > 0.5
-            && finishing > 0.45
+            && (
+                (prefers_shot && long_shots > 0.35 && finishing > 0.35 && opponents_within_8 <= 1)
+                || (long_shots > 0.5 && finishing > 0.45 && opponents_within_8 == 0)
+            )
+        {
+            return true;
+        }
+
+        // "Shoots from distance" opens the door for genuine long-range attempts
+        // in the 80-100 unit bracket if the player has real ability.
+        if prefers_shot
+            && distance <= MAX_SHOOTING_DISTANCE
+            && long_shots > 0.6
             && opponents_within_8 == 0
         {
             return true;
@@ -191,7 +224,22 @@ impl<'p> ShootingOperationsImpl<'p> {
         // Combine factors
         let skill_factor = finishing * 0.5 + composure * 0.3 + technique * 0.2;
 
-        (skill_factor * distance_factor * pressure_factor).clamp(0.0, 1.0)
+        let base = (skill_factor * distance_factor * pressure_factor).clamp(0.0, 1.0);
+
+        // Trait-flavoured final adjustments
+        let player = self.ctx.player;
+        let distance = self.ctx.ball().distance_to_opponent_goal();
+        let mut adjusted = base;
+        if player.has_trait(PlayerTrait::PlacesShots) && distance <= OPTIMAL_SHOOTING_DISTANCE {
+            adjusted += 0.05;
+        }
+        if player.has_trait(PlayerTrait::PowersShots) {
+            adjusted += 0.03;
+        }
+        if player.has_trait(PlayerTrait::ShootsFromDistance) && distance > OPTIMAL_SHOOTING_DISTANCE {
+            adjusted += 0.08;
+        }
+        adjusted.clamp(0.0, 1.0)
     }
 
     /// Get distance factor for shooting confidence (1.0 = optimal, 0.0 = too far/close)

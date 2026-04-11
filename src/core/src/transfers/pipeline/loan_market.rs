@@ -401,12 +401,33 @@ impl PipelineProcessor {
 
         let is_january = Self::is_january_window(date);
 
+        // The scanning country's own region — used to block loans from
+        // clearly more prestigious regions (Paraguay can't loan from England).
+        let club_region = crate::transfers::ScoutingRegion::from_country(
+            country.continent_id,
+            &country.code,
+        );
+        let club_region_prestige = club_region.league_prestige();
+
         // Collect loan-listed foreign players
-        // Only consider players from countries with equal or lower reputation
+        // Only consider players from countries with equal or lower reputation,
+        // and whose home region isn't far above the scanning club's region.
         let country_rep = country.reputation;
         let foreign_loans: Vec<&PlayerSummary> = foreign_players
             .iter()
-            .filter(|p| p.is_loan_listed && p.country_reputation <= country_rep)
+            .filter(|p| {
+                if !p.is_loan_listed || p.country_reputation > country_rep {
+                    return false;
+                }
+                let player_region = crate::transfers::ScoutingRegion::from_country(
+                    p.continent_id,
+                    &p.country_code,
+                );
+                // Block cross-region loans where the player's home region is
+                // significantly more prestigious. Real players don't loan down
+                // into a clearly smaller football ecosystem for a bit-part role.
+                player_region.league_prestige() <= club_region_prestige + 0.20
+            })
             .collect();
 
         if foreign_loans.is_empty() {

@@ -79,6 +79,8 @@ fn position_to_i18n_key(position: &StaffPosition) -> &'static str {
         StaffPosition::GeneralManager => "staff_general_manager",
         StaffPosition::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
         StaffPosition::MediaPundit => "staff_media_pundit",
+        StaffPosition::DataAnalyst => "staff_data_analyst",
+        StaffPosition::HeadOfRecruitment => "staff_head_of_recruitment",
         StaffPosition::Free => "staff_free",
     }
 }
@@ -98,7 +100,9 @@ fn position_to_group_key(position: &StaffPosition) -> &'static str {
         | StaffPosition::U19Manager => "staff_group_coaching",
 
         StaffPosition::Scout
-        | StaffPosition::ChiefScout => "staff_group_scouting",
+        | StaffPosition::ChiefScout
+        | StaffPosition::HeadOfRecruitment
+        | StaffPosition::DataAnalyst => "staff_group_scouting",
 
         StaffPosition::Physio
         | StaffPosition::HeadOfPhysio => "staff_group_medical",

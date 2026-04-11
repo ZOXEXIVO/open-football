@@ -49,6 +49,8 @@ pub struct PlayerMemory {
 
     pub last_xg: f32,
     pub last_xg_tick: u64,
+    /// Sum of expected-goals across every shot the player took this match.
+    pub xg_total: f32,
 }
 
 impl PlayerMemory {
@@ -64,6 +66,7 @@ impl PlayerMemory {
             pass_streak: 0,
             last_xg: 0.0,
             last_xg_tick: 0,
+            xg_total: 0.0,
         }
     }
 
@@ -143,6 +146,12 @@ impl PlayerMemory {
             self.confidence = (self.confidence - 0.03).max(0.0);
         }
         self.record_event(MemoryEventType::ShotTaken);
+    }
+
+    pub fn record_shot_xg(&mut self, tick: u64, xg: f32) {
+        self.last_xg = xg;
+        self.last_xg_tick = tick;
+        self.xg_total += xg;
     }
 
     pub fn decay(&mut self, _current_tick: u64) {

@@ -25,6 +25,60 @@ pub enum StaffPosition {
     FirstTeamCoach,
     HeadOfYouthDevelopment,
     CaretakerManager,
+    /// Modern analytics role — reads match data, informs tactical prep
+    /// and recruitment shortlists.
+    DataAnalyst,
+    /// Regulator of the player recruitment pipeline.
+    HeadOfRecruitment,
+}
+
+impl StaffPosition {
+    /// Is this role involved in day-to-day player coaching?
+    pub fn is_coaching(&self) -> bool {
+        matches!(
+            self,
+            Self::Coach
+                | Self::FirstTeamCoach
+                | Self::YouthCoach
+                | Self::GoalkeeperCoach
+                | Self::FitnessCoach
+                | Self::AssistantManager
+                | Self::Manager
+        )
+    }
+
+    /// Medical roles — govern injury recovery speed and training risk.
+    pub fn is_medical(&self) -> bool {
+        matches!(self, Self::Physio | Self::HeadOfPhysio)
+    }
+
+    /// Scouting roles — govern player report accuracy and pool expansion.
+    pub fn is_scouting(&self) -> bool {
+        matches!(
+            self,
+            Self::Scout | Self::ChiefScout | Self::HeadOfRecruitment | Self::DataAnalyst
+        )
+    }
+
+    /// Executive roles — non-coaching decision makers above the manager.
+    pub fn is_executive(&self) -> bool {
+        matches!(
+            self,
+            Self::Chairman
+                | Self::Director
+                | Self::ManagingDirector
+                | Self::DirectorOfFootball
+                | Self::GeneralManager
+        )
+    }
+
+    /// Youth pipeline roles — academy development and intake.
+    pub fn is_youth(&self) -> bool {
+        matches!(
+            self,
+            Self::HeadOfYouthDevelopment | Self::YouthCoach | Self::U19Manager | Self::U21Manager
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]

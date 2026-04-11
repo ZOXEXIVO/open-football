@@ -115,6 +115,8 @@ fn position_to_i18n_key(position: &StaffPosition) -> &'static str {
         StaffPosition::GeneralManager => "staff_general_manager",
         StaffPosition::HeadOfYouthDevelopment => "staff_head_of_youth_dev",
         StaffPosition::MediaPundit => "staff_media_pundit",
+        StaffPosition::DataAnalyst => "staff_data_analyst",
+        StaffPosition::HeadOfRecruitment => "staff_head_of_recruitment",
         StaffPosition::Free => "staff_free",
     }
 }

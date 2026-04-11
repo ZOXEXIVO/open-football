@@ -22,6 +22,8 @@ pub struct PlayerMatchEndStats {
     pub goals: u16,
     pub assists: u16,
     pub match_rating: f32,
+    /// Sum of expected goals from this player's shots in this match.
+    pub xg: f32,
 }
 
 #[derive(Debug)]

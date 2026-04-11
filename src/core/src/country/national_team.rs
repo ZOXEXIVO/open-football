@@ -910,6 +910,9 @@ impl NationalTeam {
                 professionalism: base_skill,
                 sportsmanship: base_skill,
                 temperament: base_skill,
+                consistency: base_skill,
+                important_matches: base_skill,
+                dirtiness: 5.0,
             },
             happiness: PlayerHappiness::new(),
             statuses: PlayerStatus { statuses: vec![] },
@@ -1008,6 +1011,7 @@ impl NationalTeam {
             plan: None,
             favorite_clubs: Vec::new(),
             sold_from: None,
+            traits: Vec::new(),
         }
     }
 

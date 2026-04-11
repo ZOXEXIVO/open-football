@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
+use crate::club::player::contract::ContractBonusType;
 use crate::r#match::engine::result::MatchResultRaw;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::MatchResult;
@@ -158,7 +160,15 @@ impl LeagueResult {
         // The parent club pays the borrowing club for each appearance.
         if !is_friendly {
             Self::process_loan_match_fees(details, data);
+            // Contract clause payouts (appearance / goal / clean-sheet bonuses)
+            Self::process_contract_bonuses(result, details, data);
         }
+
+        // Post-match full-time team talks. Choose tone based on match
+        // outcome vs pre-match expectations (rep gap), then apply a
+        // DressingRoomSpeech event to every player who featured. Uses the
+        // real-Player objects via player_mut() so morale actually moves.
+        Self::apply_full_time_team_talks(result, details, data);
 
         // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
@@ -223,6 +233,198 @@ impl LeagueResult {
     /// Process loan match fees: parent club pays borrowing club per official appearance.
     /// Collects (parent_club_id, borrowing_club_id, fee) for all loan players who appeared,
     /// then applies the financial transactions.
+    /// Pay out per-match contract clause triggers:
+    ///   AppearanceFee  → flat bonus per player who played
+    ///   GoalFee        → flat bonus × goals scored in this match
+    ///   CleanSheetFee  → flat bonus for GK on a clean sheet
+    ///
+    /// Bonuses are charged to the employing club as a player-wage expense.
+    fn process_contract_bonuses(
+        result: &MatchResult,
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+    ) {
+        // Count this match's goals per player.
+        let mut goals_per_player: HashMap<u32, u8> = HashMap::new();
+        for detail in &result.score.details {
+            if detail.stat_type == MatchStatisticType::Goal {
+                *goals_per_player.entry(detail.player_id).or_insert(0) += 1;
+            }
+        }
+
+        // Everyone who featured in the match (main + used subs).
+        let mut appearance_ids: Vec<u32> = Vec::new();
+        appearance_ids.extend(details.left_team_players.main.iter().copied());
+        appearance_ids.extend(details.left_team_players.substitutes_used.iter().copied());
+        appearance_ids.extend(details.right_team_players.main.iter().copied());
+        appearance_ids.extend(details.right_team_players.substitutes_used.iter().copied());
+
+        // Which GKs started on which team + did they keep a clean sheet?
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+        let home_team_id = result.score.home_team.team_id;
+        let left_team_id = details.left_team_players.team_id;
+        let left_conceded = if left_team_id == home_team_id { away_goals } else { home_goals };
+        let right_conceded = if left_team_id == home_team_id { home_goals } else { away_goals };
+
+        // Pass 1 (read): compute (club_id, total_payout) aggregates without holding
+        // a mutable borrow of a club while reading another player.
+        let mut club_totals: HashMap<u32, i64> = HashMap::new();
+        for pid in &appearance_ids {
+            if let Some(player) = data.player(*pid) {
+                // Player's current club comes from the player index (updated by
+                // the simulator whenever a transfer moves someone).
+                let club_id = match data
+                    .indexes
+                    .as_ref()
+                    .and_then(|i| i.get_player_location(*pid))
+                {
+                    Some((_, _, club_id, _)) => club_id,
+                    None => continue,
+                };
+                let contract = match player.contract.as_ref() {
+                    Some(c) => c,
+                    None => continue,
+                };
+
+                // Determine clean sheet eligibility for a GK
+                let is_gk = player.position().is_goalkeeper();
+                let on_left = details.left_team_players.main.contains(pid);
+                let on_right = details.right_team_players.main.contains(pid);
+                let gk_clean_sheet = is_gk && (
+                    (on_left && left_conceded == 0) ||
+                    (on_right && right_conceded == 0)
+                );
+
+                let goals = goals_per_player.get(pid).copied().unwrap_or(0) as i64;
+
+                let mut payout: i64 = 0;
+                for bonus in &contract.bonuses {
+                    let v = bonus.value as i64;
+                    if v <= 0 { continue; }
+                    match bonus.bonus_type {
+                        ContractBonusType::AppearanceFee => payout += v,
+                        ContractBonusType::GoalFee => payout += v * goals,
+                        ContractBonusType::CleanSheetFee if gk_clean_sheet => payout += v,
+                        _ => {}
+                    }
+                }
+                if payout > 0 {
+                    *club_totals.entry(club_id).or_insert(0) += payout;
+                }
+            }
+        }
+
+        // Pass 2 (write): charge each club once.
+        for (club_id, amount) in club_totals {
+            if let Some(club) = data.club_mut(club_id) {
+                club.finance.balance.push_expense_player_wages(amount);
+            }
+        }
+    }
+
+    /// Apply a post-match full-time team talk to both sides. Tone is picked
+    /// from the score outcome; the head coach's Man Management / Motivating
+    /// attributes drive effectiveness. The actual magnitude-per-player uses
+    /// personality (pressure, temperament, important_matches) via
+    /// `club::team::team_talks::apply_team_talk`.
+    fn apply_full_time_team_talks(
+        result: &MatchResult,
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+    ) {
+        use crate::club::team::team_talks::{
+            apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone,
+        };
+
+        let score = &result.score;
+        let home_goals = score.home_team.get() as i8;
+        let away_goals = score.away_team.get() as i8;
+        let home_team_id = score.home_team.team_id;
+        let left_team_id = details.left_team_players.team_id;
+
+        // Map "left" / "right" match slots to score deltas.
+        let left_delta: i8 = if left_team_id == home_team_id {
+            home_goals - away_goals
+        } else {
+            away_goals - home_goals
+        };
+        let right_delta: i8 = -left_delta;
+
+        let tone_for = |delta: i8| -> TeamTalkTone {
+            match delta {
+                d if d >= 2 => TeamTalkTone::Praise,
+                1 => TeamTalkTone::Encourage,
+                0 => TeamTalkTone::Encourage,
+                -1 => TeamTalkTone::Criticise,
+                _ => TeamTalkTone::Passionate,
+            }
+        };
+
+        // Collect each side's player ids + club id once.
+        struct SideTalk {
+            club_id: u32,
+            player_ids: Vec<u32>,
+            delta: i8,
+        }
+
+        let mut sides: Vec<SideTalk> = Vec::with_capacity(2);
+        for (slot, delta) in [
+            (&details.left_team_players, left_delta),
+            (&details.right_team_players, right_delta),
+        ] {
+            let mut pids: Vec<u32> = Vec::new();
+            pids.extend(slot.main.iter().copied());
+            pids.extend(slot.substitutes_used.iter().copied());
+            if pids.is_empty() {
+                continue;
+            }
+            // Resolve club id from the first player's index entry.
+            let club_id = data
+                .indexes
+                .as_ref()
+                .and_then(|i| i.get_player_location(*pids.first().unwrap()))
+                .map(|(_, _, c, _)| c)
+                .unwrap_or(0);
+            sides.push(SideTalk { club_id, player_ids: pids, delta });
+        }
+
+        for side in sides {
+            // Find the head coach (Manager) for this club.
+            let manager_ref = data.club(side.club_id).and_then(|club| {
+                club.teams
+                    .teams
+                    .iter()
+                    .flat_map(|t| t.staffs.staffs.iter())
+                    .find(|s| {
+                        s.contract
+                            .as_ref()
+                            .map(|c| c.position == crate::club::StaffPosition::Manager)
+                            .unwrap_or(false)
+                    })
+            });
+            let manager_clone = manager_ref.cloned();
+
+            let tone = tone_for(side.delta);
+            let ctx = TeamTalkContext {
+                phase: MatchPhase::FullTime,
+                score_delta: side.delta,
+                big_match: false, // cup/derby detection would slot in here
+            };
+
+            // Borrow each player mutably one at a time; apply_team_talk
+            // needs &mut Player so we route through player_mut.
+            for pid in &side.player_ids {
+                if let Some(player) = data.player_mut(*pid) {
+                    // apply_team_talk takes an iterator of &mut Player; use a
+                    // single-element array for the per-player loop.
+                    let single = std::slice::from_mut(player);
+                    apply_team_talk(single.iter_mut(), manager_clone.as_ref(), tone, ctx);
+                }
+            }
+        }
+    }
+
     fn process_loan_match_fees(details: &MatchResultRaw, data: &mut SimulatorData) {
         // Collect fee transfers: (parent_club_id, borrowing_club_id, fee)
         let mut fee_transfers: Vec<(u32, u32, u32)> = Vec::new();

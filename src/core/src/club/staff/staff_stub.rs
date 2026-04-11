@@ -34,6 +34,9 @@ impl StaffStub {
                 professionalism: 1.0f32,
                 sportsmanship: 1.0f32,
                 temperament: 1.0f32,
+                consistency: 1.0f32,
+                important_matches: 1.0f32,
+                dirtiness: 1.0f32,
             },
             staff_attributes: StaffAttributes {
                 coaching: StaffCoaching {
@@ -62,6 +65,7 @@ impl StaffStub {
                     judging_player_potential: 1,
                     tactical_knowledge: 1,
                     known_regions: Vec::new(),
+                    region_familiarity: Vec::new(),
                 },
                 data_analysis: StaffDataAnalysis {
                     judging_player_data: 1,

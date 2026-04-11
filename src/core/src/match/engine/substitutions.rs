@@ -158,6 +158,7 @@ fn execute_substitution(
             goals,
             assists,
             match_rating: 0.0,
+            xg: player_out.memory.xg_total,
         }));
     }
 

@@ -729,6 +729,9 @@ impl PlayerGenerator {
                 professionalism: rand::random::<f32>() * 20.0,
                 sportsmanship: rand::random::<f32>() * 20.0,
                 temperament: rand::random::<f32>() * 20.0,
+                consistency: 4.0 + rand::random::<f32>() * 14.0,
+                important_matches: 4.0 + rand::random::<f32>() * 14.0,
+                dirtiness: rand::random::<f32>() * 20.0,
             },
             happiness: PlayerHappiness::new(),
             statuses: PlayerStatus { statuses: vec![] },
@@ -777,6 +780,7 @@ impl PlayerGenerator {
             plan: None,
             favorite_clubs: Vec::new(),
             sold_from: None,
+            traits: Vec::new(), // academy youth start with no traits; grow via training
         }
     }
 

@@ -98,6 +98,21 @@ pub struct PlayerClubContract {
     /// Incentivises the borrowing club to give the player minutes.
     pub loan_match_fee: Option<u32>,
 
+    /// Percentage (0-100) of the player's wage the BORROWING club covers.
+    /// The remainder is paid by the parent club. Defaults to 100 (full
+    /// wage paid by borrower) when omitted.
+    pub loan_wage_contribution_pct: Option<u8>,
+    /// Optional future fee agreed at loan signing (obligation or option).
+    /// Triggered at loan end via a separate transfer record.
+    pub loan_future_fee: Option<u32>,
+    /// Whether the `loan_future_fee` is an obligation (true) or an option (false).
+    pub loan_future_fee_obligation: bool,
+    /// Parent club may recall the loan at any time after this date.
+    pub loan_recall_available_after: Option<NaiveDate>,
+    /// Minimum number of official matches the borrowing club has to give
+    /// the player; breaching it allows recall and/or waives the match fee.
+    pub loan_min_appearances: Option<u16>,
+
     pub bonuses: Vec<ContractBonus>,
     pub clauses: Vec<ContractClause>,
 }
@@ -117,6 +132,11 @@ impl PlayerClubContract {
             loan_from_team_id: None,
             loan_to_club_id: None,
             loan_match_fee: None,
+            loan_wage_contribution_pct: None,
+            loan_future_fee: None,
+            loan_future_fee_obligation: false,
+            loan_recall_available_after: None,
+            loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
         }
@@ -136,6 +156,11 @@ impl PlayerClubContract {
             loan_from_team_id: None,
             loan_to_club_id: None,
             loan_match_fee: None,
+            loan_wage_contribution_pct: None,
+            loan_future_fee: None,
+            loan_future_fee_obligation: false,
+            loan_recall_available_after: None,
+            loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
         }
@@ -155,6 +180,11 @@ impl PlayerClubContract {
             loan_from_team_id: Some(from_team_id),
             loan_to_club_id: Some(to_club_id),
             loan_match_fee: None,
+            loan_wage_contribution_pct: None,
+            loan_future_fee: None,
+            loan_future_fee_obligation: false,
+            loan_recall_available_after: None,
+            loan_min_appearances: None,
             bonuses: vec![],
             clauses: vec![],
         }
@@ -163,6 +193,32 @@ impl PlayerClubContract {
     pub fn with_loan_match_fee(mut self, fee: u32) -> Self {
         self.loan_match_fee = Some(fee);
         self
+    }
+
+    pub fn with_loan_wage_contribution(mut self, pct: u8) -> Self {
+        self.loan_wage_contribution_pct = Some(pct.min(100));
+        self
+    }
+
+    pub fn with_loan_future_fee(mut self, fee: u32, obligation: bool) -> Self {
+        self.loan_future_fee = Some(fee);
+        self.loan_future_fee_obligation = obligation;
+        self
+    }
+
+    pub fn with_loan_recall(mut self, after: NaiveDate) -> Self {
+        self.loan_recall_available_after = Some(after);
+        self
+    }
+
+    pub fn with_loan_min_appearances(mut self, min: u16) -> Self {
+        self.loan_min_appearances = Some(min);
+        self
+    }
+
+    /// Share of the player's wage the parent club still pays (0-100).
+    pub fn parent_wage_share_pct(&self) -> u8 {
+        100u8.saturating_sub(self.loan_wage_contribution_pct.unwrap_or(100))
     }
 
     pub fn is_expired(&self, now: NaiveDateTime) -> bool {
