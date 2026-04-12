@@ -86,15 +86,23 @@ impl Player {
     }
 
     /// Is this player protected from being targeted by other clubs?
-    /// A player is protected if they were recently signed (< 120 days) or
-    /// their club has an active signing plan that hasn't been evaluated yet.
-    /// This prevents unrealistic transfer chains where a player bounces
-    /// between multiple clubs in the same season.
-    pub fn is_transfer_protected(&self, date: NaiveDate) -> bool {
-        // Recently transferred — settling-in period
-        if let Some(transfer_date) = self.last_transfer_date {
-            let days_since = (date - transfer_date).num_days();
-            if days_since < 120 {
+    ///
+    /// A player signed during the currently open transfer window cannot be
+    /// sold in that same window. Between windows, the pipeline gate already
+    /// blocks transfers. The `PlayerPlan` then governs the next window.
+    ///
+    /// `current_window` is `Some((start, end))` when a transfer window is
+    /// open, `None` otherwise.
+    pub fn is_transfer_protected(
+        &self,
+        date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
+    ) -> bool {
+        // Same-window protection: signed during this open window → protected
+        if let (Some(transfer_date), Some((window_start, window_end))) =
+            (self.last_transfer_date, current_window)
+        {
+            if transfer_date >= window_start && transfer_date <= window_end {
                 return true;
             }
         }

@@ -8,6 +8,7 @@ use crate::transfers::pipeline::{
 use crate::transfers::pipeline::processor::PipelineProcessor;
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::transfers::window::PlayerValuationCalculator;
+use crate::transfers::TransferWindowManager;
 use crate::utils::IntegerUtils;
 use crate::{
     Country, Person, PlayerFieldPositionGroup, PlayerPositionType, PlayerStatusType,
@@ -23,6 +24,8 @@ impl PipelineProcessor {
 
         let is_january = Self::is_january_window(date);
         let price_level = country.settings.pricing.price_level;
+        let window_mgr = TransferWindowManager::new();
+        let current_window = window_mgr.current_window_dates(country.id, date);
 
         // Pass 1: Build player snapshots across all clubs
         #[allow(dead_code)]
@@ -101,7 +104,7 @@ impl PipelineProcessor {
                         is_loan_listed: statuses.contains(&PlayerStatusType::Loa),
                         average_rating: player.statistics.average_rating,
                         appearances: player.statistics.total_games(),
-                        is_transfer_protected: player.is_transfer_protected(date),
+                        is_transfer_protected: player.is_transfer_protected(date, current_window),
                     });
                 }
             }

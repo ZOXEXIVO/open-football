@@ -5,6 +5,7 @@ use super::types::{SquadAnalysis, TransferActivitySummary};
 use crate::country::result::CountryResult;
 use crate::shared::{Currency, CurrencyValue};
 use crate::transfers::{TransferListing, TransferListingType};
+use crate::transfers::TransferWindowManager;
 use crate::{
     Club, Country, Person, Player, PlayerFieldPositionGroup, PlayerPositionType,
     PlayerSquadStatus, PlayerStatusType, ReputationLevel,
@@ -36,6 +37,8 @@ impl CountryResult {
     ) {
         let mut listings_to_add: Vec<PendingListing> = Vec::new();
         let price_level = country.settings.pricing.price_level;
+        let window_mgr = TransferWindowManager::new();
+        let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
             let squad_analysis = Self::analyze_squad_needs(club, date);
@@ -53,7 +56,7 @@ impl CountryResult {
             let decided_by = main_team.staffs.head_coach().full_name.to_string();
 
             for player in &main_team.players.players {
-                match Self::evaluate_player_listing(player, &squad_analysis, club, date) {
+                match Self::evaluate_player_listing(player, &squad_analysis, club, date, current_window) {
                     ListingDecision::Keep => {}
                     ListingDecision::FreeTransfer => {
                         let free_price = CurrencyValue { amount: 0.0, currency: Currency::Usd };
@@ -207,16 +210,18 @@ impl CountryResult {
         analysis: &SquadAnalysis,
         club: &Club,
         date: NaiveDate,
+        current_window: Option<(NaiveDate, NaiveDate)>,
     ) -> ListingDecision {
         // Loan players belong to another club — cannot be listed by the loan club
         if player.is_on_loan() {
             return ListingDecision::Keep;
         }
 
-        // Recently transferred players get a settling-in period
-        if let Some(transfer_date) = player.last_transfer_date {
-            let days_since = (date - transfer_date).num_days();
-            if days_since < 120 {
+        // Same-window protection: signed during this open window → can't be listed
+        if let (Some(transfer_date), Some((window_start, window_end))) =
+            (player.last_transfer_date, current_window)
+        {
+            if transfer_date >= window_start && transfer_date <= window_end {
                 return ListingDecision::Keep;
             }
         }

@@ -12,6 +12,7 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::staff_resolver::StaffResolver;
 use crate::utils::FormattingUtils;
+use crate::transfers::TransferWindowManager;
 use crate::{
     ClubPhilosophy, ClubTransferStrategy, Country, Person, ReputationLevel,
 };
@@ -34,6 +35,8 @@ impl PipelineProcessor {
     pub fn initiate_negotiations(country: &mut Country, date: NaiveDate) {
         let mut actions: Vec<NegotiationAction> = Vec::new();
         let price_level = country.settings.pricing.price_level;
+        let window_mgr = TransferWindowManager::new();
+        let current_window = window_mgr.current_window_dates(country.id, date);
 
         for club in &country.clubs {
             let plan = &club.transfer_plan;
@@ -122,7 +125,7 @@ impl PipelineProcessor {
                 // Skip players on loan contracts — they belong to another club
                 // Skip recently signed players — their club has a plan for them
                 let (is_on_loan, is_protected) = Self::find_player_in_country(country, player_id)
-                    .map(|p| (p.is_on_loan(), p.is_transfer_protected(date)))
+                    .map(|p| (p.is_on_loan(), p.is_transfer_protected(date, current_window)))
                     .unwrap_or((false, false));
                 if is_on_loan || is_protected {
                     continue;
@@ -714,7 +717,8 @@ impl PipelineProcessor {
             let sell_country = match data.country(sell_country_id) { Some(c) => c, None => continue };
             let player = match Self::find_player_in_country(sell_country, cand.player_id) { Some(p) => p, None => continue };
             if player.is_on_loan() { continue; }
-            if player.is_transfer_protected(date) { continue; }
+            let sell_window = TransferWindowManager::new().current_window_dates(sell_country_id, date);
+            if player.is_transfer_protected(date, sell_window) { continue; }
 
             let sell_club = match sell_country.clubs.iter().find(|c| c.id == sell_club_id) { Some(c) => c, None => continue };
             let asking_price = Self::calculate_asking_price(player, sell_club, date, sell_price_level);

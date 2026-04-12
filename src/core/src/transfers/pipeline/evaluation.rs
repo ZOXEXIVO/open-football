@@ -8,6 +8,7 @@ use crate::transfers::pipeline::{
     TransferRequestStatus,
 };
 use crate::transfers::pipeline::processor::{PipelineProcessor, SquadPlayerInfo};
+use crate::transfers::TransferWindowManager;
 use crate::{
     Club, ClubPhilosophy, Country, MatchTacticType, Person, Player,
     PlayerFieldPositionGroup, PlayerPlanRole, PlayerPositionType, ReputationLevel,
@@ -30,6 +31,8 @@ impl PipelineProcessor {
     pub fn evaluate_squads(country: &mut Country, date: NaiveDate) {
         let is_window_start = Self::is_window_start(date);
         let should_evaluate = is_window_start || Self::should_evaluate(date);
+        let window_mgr = TransferWindowManager::new();
+        let current_window = window_mgr.current_window_dates(country.id, date);
 
         // Pass 1: Collect evaluations (immutable reads)
         let mut evaluations: Vec<SquadEvaluation> = Vec::new();
@@ -43,7 +46,7 @@ impl PipelineProcessor {
                 continue;
             }
 
-            let eval = Self::evaluate_single_club(club, date);
+            let eval = Self::evaluate_single_club(club, date, current_window);
             evaluations.push(eval);
         }
 
@@ -114,7 +117,7 @@ impl PipelineProcessor {
 
     /// Core squad evaluation: the head coach analyzes the squad based on their preferred
     /// formation and identifies tactical gaps.
-    fn evaluate_single_club(club: &Club, date: NaiveDate) -> SquadEvaluation {
+    fn evaluate_single_club(club: &Club, date: NaiveDate, current_window: Option<(NaiveDate, NaiveDate)>) -> SquadEvaluation {
         let mut requests = Vec::new();
         let mut loan_outs = Vec::new();
         let mut next_id = club.transfer_plan.next_request_id;
@@ -685,6 +688,7 @@ impl PipelineProcessor {
             &mut loan_outs,
             &club.philosophy,
             formation_positions,
+            current_window,
         );
 
         SquadEvaluation {
@@ -715,6 +719,7 @@ impl PipelineProcessor {
         loan_outs: &mut Vec<LoanOutCandidate>,
         philosophy: &ClubPhilosophy,
         formation_positions: &[PlayerPositionType; 11],
+        current_window: Option<(NaiveDate, NaiveDate)>,
     ) {
         let is_january = Self::is_january_window(date);
 
@@ -758,11 +763,11 @@ impl PipelineProcessor {
                 continue;
             }
 
-            // Recently signed players get a settling-in period — prevents
-            // unrealistic chains where a player is bought and immediately loaned out
-            if let Some(transfer_date) = player.last_transfer_date {
-                let days_since = (date - transfer_date).num_days();
-                if days_since < 120 {
+            // Same-window protection: signed during this open window → can't be loaned out
+            if let (Some(transfer_date), Some((window_start, window_end))) =
+                (player.last_transfer_date, current_window)
+            {
+                if transfer_date >= window_start && transfer_date <= window_end {
                     continue;
                 }
             }

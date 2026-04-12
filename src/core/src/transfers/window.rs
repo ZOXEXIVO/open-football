@@ -27,9 +27,14 @@ impl TransferWindowManager {
     }
 
     pub fn is_window_open(&self, country_id: u32, date: NaiveDate) -> bool {
-        if let Some(window) = self.windows.get(&country_id) {
-            self.is_date_in_window(date, &window.summer_window) ||
-                self.is_date_in_window(date, &window.winter_window)
+        self.current_window_dates(country_id, date).is_some()
+    }
+
+    /// Returns the (start, end) dates of the currently open transfer window,
+    /// or None if no window is currently open for this country.
+    pub fn current_window_dates(&self, country_id: u32, date: NaiveDate) -> Option<(NaiveDate, NaiveDate)> {
+        let (summer, winter) = if let Some(window) = self.windows.get(&country_id) {
+            (window.summer_window, window.winter_window)
         } else {
             // Default to European standard windows if country-specific not defined
             let year = date.year();
@@ -37,9 +42,15 @@ impl TransferWindowManager {
             let summer_end = NaiveDate::from_ymd_opt(year, 8, 31).unwrap_or(date);
             let winter_start = NaiveDate::from_ymd_opt(year, 1, 1).unwrap_or(date);
             let winter_end = NaiveDate::from_ymd_opt(year, 1, 31).unwrap_or(date);
+            ((summer_start, summer_end), (winter_start, winter_end))
+        };
 
-            self.is_date_in_window(date, &(summer_start, summer_end)) ||
-                self.is_date_in_window(date, &(winter_start, winter_end))
+        if self.is_date_in_window(date, &summer) {
+            Some(summer)
+        } else if self.is_date_in_window(date, &winter) {
+            Some(winter)
+        } else {
+            None
         }
     }
 

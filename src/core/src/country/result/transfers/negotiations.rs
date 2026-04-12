@@ -6,6 +6,7 @@ use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::TransferListingStatus;
 use crate::utils::{FloatUtils, FormattingUtils};
+use crate::transfers::TransferWindowManager;
 use crate::{Country, PlayerSquadStatus, PlayerStatusType};
 
 impl CountryResult {
@@ -91,8 +92,10 @@ impl CountryResult {
         // they bought this player with a plan and won't sell immediately.
         // Check domestic players only (foreign players aren't in this country).
         if neg_data.selling_country_id.is_none() {
+            let window_mgr = TransferWindowManager::new();
+            let current_window = window_mgr.current_window_dates(country.id, date);
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
-                if player.is_transfer_protected(date) {
+                if player.is_transfer_protected(date, current_window) {
                     if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                         negotiation.reject_with_reason(NegotiationRejectionReason::PlayerTooImportant);
                     }
