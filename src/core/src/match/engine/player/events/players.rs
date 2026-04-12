@@ -1191,6 +1191,18 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_caught_ball_event(player_id: u32, field: &mut MatchField) {
+        // Detect saves: ball was moving and came from an opponent
+        let ball_was_moving = field.ball.velocity.norm_squared() > 0.25;
+        let last_owner_team = field.ball.previous_owner
+            .and_then(|prev_id| field.players.iter().find(|p| p.id == prev_id).map(|p| p.team_id));
+        let gk_team = field.players.iter().find(|p| p.id == player_id).map(|p| p.team_id);
+
+        if ball_was_moving && last_owner_team.is_some() && last_owner_team != gk_team {
+            if let Some(player) = field.get_player_mut(player_id) {
+                player.statistics.saves += 1;
+            }
+        }
+
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         // Ball must stop when caught — prevent it from continuing into the goal

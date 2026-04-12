@@ -410,7 +410,7 @@ impl Ball {
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;
                 self.velocity *= 0.3; // Ball slows down on interception
-                events.add_ball_event(BallEvent::Claimed(interceptor_id));
+                events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
     }

@@ -1,6 +1,7 @@
 ﻿use crate::league::LeagueMatch;
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::{MatchSquad, ResultMatchPositionData};
+use crate::PlayerFieldPositionGroup;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -19,11 +20,15 @@ pub struct PlayerMatchEndStats {
     pub passes_attempted: u16,
     pub passes_completed: u16,
     pub tackles: u16,
+    pub interceptions: u16,
+    pub saves: u16,
     pub goals: u16,
     pub assists: u16,
     pub match_rating: f32,
     /// Sum of expected goals from this player's shots in this match.
     pub xg: f32,
+    /// Player's position group for position-aware rating calculation.
+    pub position_group: PlayerFieldPositionGroup,
 }
 
 #[derive(Debug)]

@@ -155,10 +155,13 @@ fn execute_substitution(
             passes_attempted: player_out.statistics.passes_attempted,
             passes_completed: player_out.statistics.passes_completed,
             tackles: player_out.statistics.tackles,
+            interceptions: player_out.statistics.interceptions,
+            saves: player_out.statistics.saves,
             goals,
             assists,
             match_rating: 0.0,
             xg: player_out.memory.xg_total,
+            position_group: player_out.tactical_position.current_position.position_group(),
         }));
     }
 

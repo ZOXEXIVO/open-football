@@ -7,6 +7,8 @@ use log::debug;
 pub enum BallEvent {
     Goal(BallGoalEventMetadata),
     Claimed(u32),
+    /// Pass intercepted by opponent: (interceptor_id, passer_id)
+    Intercepted(u32, Option<u32>),
     Gained(u32),
     TakeMe(u32),
 }
@@ -38,6 +40,9 @@ impl BallEventDispatcher {
         if context.logging_enabled {
             match event {
                 BallEvent::TakeMe(_) | BallEvent::Claimed(_) => {},
+                BallEvent::Intercepted(pid, _) => {
+                    debug!("Ball event: Intercepted by player {}", pid);
+                },
                 _ => debug!("Ball event: {:?}", event)
             }
         }
@@ -79,6 +84,20 @@ impl BallEventDispatcher {
             }
             BallEvent::Claimed(player_id) => {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
+            }
+            BallEvent::Intercepted(interceptor_id, passer_id) => {
+                // Credit the interceptor
+                if let Some(player) = field.get_player_mut(interceptor_id) {
+                    player.statistics.interceptions += 1;
+                }
+                // Correct the passer's inflated pass completion count
+                if let Some(pid) = passer_id {
+                    if let Some(passer) = field.get_player_mut(pid) {
+                        passer.statistics.passes_completed =
+                            passer.statistics.passes_completed.saturating_sub(1);
+                    }
+                }
+                remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
             }
             BallEvent::Gained(player_id) => {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::GainBall(player_id)));

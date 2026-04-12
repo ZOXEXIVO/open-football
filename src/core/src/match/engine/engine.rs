@@ -7,7 +7,7 @@ use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
-use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
+use crate::{PlayerPositionType, Tactics};
 use rand::RngExt;
 use std::collections::HashMap;
 
@@ -114,6 +114,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         for player in &field.players {
             let goals = player.statistics.goals_count();
             let assists = player.statistics.assists_count();
+            let position_group = player.tactical_position.current_position.position_group();
 
             let (player_team_goals, opponent_goals) = if player.team_id == home_team_id {
                 (home_goals, away_goals)
@@ -121,30 +122,25 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 (away_goals, home_goals)
             };
 
-            let match_rating = calculate_match_rating(
-                goals,
-                assists,
-                player.statistics.passes_attempted,
-                player.statistics.passes_completed,
-                player.memory.shots_on_target as u16,
-                player.memory.shots_taken as u16,
-                player.statistics.tackles,
-                player_team_goals,
-                opponent_goals,
-                player.tactical_position.current_position.position_group(),
-            );
-
-            result.player_stats.insert(player.id, PlayerMatchEndStats {
+            let mut stats = PlayerMatchEndStats {
                 shots_on_target: player.memory.shots_on_target as u16,
                 shots_total: player.memory.shots_taken as u16,
                 passes_attempted: player.statistics.passes_attempted,
                 passes_completed: player.statistics.passes_completed,
                 tackles: player.statistics.tackles,
+                interceptions: player.statistics.interceptions,
+                saves: player.statistics.saves,
                 goals,
                 assists,
-                match_rating,
+                match_rating: 0.0,
                 xg: player.memory.xg_total,
-            });
+                position_group,
+            };
+            stats.match_rating = calculate_match_rating(
+                &stats, player_team_goals, opponent_goals,
+            );
+
+            result.player_stats.insert(player.id, stats);
         }
 
         // Include stats from substituted-out players
@@ -160,16 +156,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             };
 
             stats.match_rating = calculate_match_rating(
-                stats.goals,
-                stats.assists,
-                stats.passes_attempted,
-                stats.passes_completed,
-                stats.shots_on_target,
-                stats.shots_total,
-                stats.tackles,
-                player_team_goals,
-                opponent_goals,
-                PlayerFieldPositionGroup::Midfielder,
+                &stats, player_team_goals, opponent_goals,
             );
 
             result.player_stats.insert(player_id, stats);
