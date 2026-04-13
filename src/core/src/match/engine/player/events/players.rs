@@ -1161,21 +1161,23 @@ impl PlayerEventDispatcher {
             // plumbing exposes the state context here.
             let xg = {
                 let d = horizontal_distance;
+                // Calibrated to real-world xG curves: ~0.55 at 6yd, ~0.08 at 20yd
                 let distance_factor = if d <= 10.0 {
-                    0.80
+                    0.55
                 } else if d <= 30.0 {
-                    0.80 - (d - 10.0) / 20.0 * 0.35
+                    0.55 - (d - 10.0) / 20.0 * 0.30
                 } else if d <= 60.0 {
-                    0.45 - (d - 30.0) / 30.0 * 0.30
+                    0.25 - (d - 30.0) / 30.0 * 0.18
                 } else if d <= 120.0 {
-                    0.15 - (d - 60.0) / 60.0 * 0.11
+                    0.07 - (d - 60.0) / 60.0 * 0.05
                 } else {
-                    0.04
+                    0.02
                 };
                 let finishing = (shooter.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
-                let skill_mult = 0.6 + finishing * 0.8; // 0.6 .. 1.4
-                let target_mult = if on_target { 1.0 } else { 0.6 };
-                (distance_factor * skill_mult * target_mult).clamp(0.0, 0.95)
+                let skill_mult = 0.7 + finishing * 0.6; // 0.7 .. 1.3
+                // Off-target shots are misses — don't credit xG
+                let target_mult = if on_target { 1.0 } else { 0.15 };
+                (distance_factor * skill_mult * target_mult).clamp(0.0, 0.90)
             };
             shooter.memory.record_shot(shoot_event_model.tick, on_target);
             shooter.memory.record_shot_xg(shoot_event_model.tick, xg);

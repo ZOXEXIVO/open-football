@@ -6,7 +6,16 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-const PENALTY_SAVE_PROBABILITY: f32 = 0.3; // Probability of saving a penalty
+// Real-world penalty save rate is ~20-25%; we derive it from keeper skills.
+const PENALTY_SAVE_BASE: f32 = 0.10;
+
+fn penalty_save_probability(ctx: &StateProcessingContext) -> f32 {
+    let reflexes = (ctx.player.skills.goalkeeping.reflexes - 1.0) / 19.0;
+    let one_on_ones = (ctx.player.skills.goalkeeping.one_on_ones - 1.0) / 19.0;
+    let anticipation = (ctx.player.skills.mental.anticipation - 1.0) / 19.0;
+    let skill = reflexes * 0.5 + one_on_ones * 0.3 + anticipation * 0.2;
+    (PENALTY_SAVE_BASE + skill * 0.22).clamp(0.08, 0.35)
+}
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperPenaltyState {}
@@ -24,7 +33,7 @@ impl StateProcessingHandler for GoalkeeperPenaltyState {
         }
 
         // 2. Attempt to save the penalty
-        let save_success = rand::random::<f32>() < PENALTY_SAVE_PROBABILITY;
+        let save_success = rand::random::<f32>() < penalty_save_probability(ctx);
         if save_success {
             // Penalty save is successful
             let mut state_change =
@@ -51,7 +60,7 @@ impl StateProcessingHandler for GoalkeeperPenaltyState {
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Determine the velocity based on the penalty save attempt
-        let save_success = rand::random::<f32>() < PENALTY_SAVE_PROBABILITY;
+        let save_success = rand::random::<f32>() < penalty_save_probability(ctx);
         if save_success {
             // Move towards the predicted ball position
             let predicted_ball_position = Self::predict_ball_position(ctx);

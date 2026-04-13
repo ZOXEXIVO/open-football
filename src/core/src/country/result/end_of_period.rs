@@ -46,8 +46,20 @@ impl CountryResult {
             }
         }
 
-        // Promotion/relegation: runs on the 1st of the month after season end
-        let promo_month = if season.end_month == 12 { 1u8 } else { season.end_month + 1 };
+        // Promotion/relegation: runs on the 1st of the month AFTER the latest
+        // non-friendly league in the country has finished its season. Using
+        // the tier-1 end date alone can fire before lower tiers are done,
+        // leaving their final_table empty and silently skipping the swap.
+        let latest_end_month = data.country(country_id)
+            .map(|c| {
+                c.leagues.leagues.iter()
+                    .filter(|l| !l.friendly)
+                    .map(|l| l.settings.season_ending_half.to_month)
+                    .max()
+                    .unwrap_or(season.end_month)
+            })
+            .unwrap_or(season.end_month);
+        let promo_month = if latest_end_month == 12 { 1u8 } else { latest_end_month + 1 };
         if date.day() == 1 && date.month() as u8 == promo_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_promotion_relegation(country);
@@ -585,34 +597,45 @@ impl CountryResult {
                 None => continue,
             };
 
-            let swap_count = relegation_spots.min(promotion_spots) as usize;
+            let nominal_swap = relegation_spots.min(promotion_spots) as usize;
 
             // Read final tables
-            let relegated_team_ids: Vec<u32> = country
+            let relegated_candidates: Vec<u32> = country
                 .leagues
                 .leagues
                 .iter()
                 .find(|l| l.id == tier1_id)
                 .and_then(|l| l.final_table.as_ref())
                 .map(|table| {
-                    table.iter().rev().take(swap_count).map(|r| r.team_id).collect()
+                    table.iter().rev().take(nominal_swap).map(|r| r.team_id).collect()
                 })
                 .unwrap_or_default();
 
-            let promoted_team_ids: Vec<u32> = country
+            let promoted_candidates: Vec<u32> = country
                 .leagues
                 .leagues
                 .iter()
                 .find(|l| l.id == tier2_id)
                 .and_then(|l| l.final_table.as_ref())
                 .map(|table| {
-                    table.iter().take(swap_count).map(|r| r.team_id).collect()
+                    table.iter().take(nominal_swap).map(|r| r.team_id).collect()
                 })
                 .unwrap_or_default();
 
-            if relegated_team_ids.is_empty() || promoted_team_ids.is_empty() {
+            // Must balance: never relegate more than we promote (or vice versa)
+            // or the top league silently shrinks each season.
+            let swap_count = relegated_candidates.len().min(promoted_candidates.len());
+            if swap_count == 0 {
                 continue;
             }
+            if swap_count < nominal_swap {
+                info!(
+                    "⚠️ Promotion/relegation pair {}→{} truncated: wanted {}, got {} (missing final_table entries)",
+                    tier1_id, tier2_id, nominal_swap, swap_count
+                );
+            }
+            let relegated_team_ids: Vec<u32> = relegated_candidates.into_iter().take(swap_count).collect();
+            let promoted_team_ids: Vec<u32> = promoted_candidates.into_iter().take(swap_count).collect();
 
             // Swap league_ids on teams and move sub-teams to matching friendly league
             for club in &mut country.clubs {

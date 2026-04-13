@@ -299,18 +299,18 @@ impl<'p> PlayerOperationsImpl<'p> {
             shot_skill * 0.3 + technique * 0.25 + strength * 0.25 + composure * 0.2
         );
 
-        // Distance factor: longer shots need more power (1.0 close, up to 1.6 far)
+        // Distance factor: longer shots need more power (1.0 close, up to 1.4 far)
         let distance_ratio = (goal_distance / max_field_distance).clamp(0.0, 1.0);
-        let distance_factor = 1.0 + distance_ratio * 0.6;
+        let distance_factor = 1.0 + distance_ratio * 0.4;
 
         // Condition: slight power loss when exhausted (0.90 exhausted to 1.0 fresh)
         let condition = self.ctx.player.player_attributes.condition as f32 / 10000.0;
         let condition_factor = 0.90 + condition * 0.10;
 
-        let base_power = 2.45;
+        let base_power = 2.2;
         let shooting_power = base_power * skill_multiplier * distance_factor * condition_factor;
 
-        shooting_power.clamp(1.75, 4.2) as f64
+        shooting_power.clamp(1.4, 3.8) as f64
     }
 
     pub fn distance_to_player(&self, player_id: u32) -> f32 {

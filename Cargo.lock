@@ -423,7 +423,7 @@ checksum = "75984efb6ed102a0d42db99afb6c1948f0380d1d91808d5529916e6c08b49d8d"
 
 [[package]]
 name = "core"
-version = "0.9.17"
+version = "0.9.18"
 dependencies = [
  "chrono",
  "itertools",
@@ -515,7 +515,7 @@ dependencies = [
 
 [[package]]
 name = "database"
-version = "0.9.17"
+version = "0.9.18"
 dependencies = [
  "chrono",
  "core",
@@ -1496,7 +1496,7 @@ checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
 
 [[package]]
 name = "open_football"
-version = "0.9.17"
+version = "0.9.18"
 dependencies = [
  "color-eyre",
  "core",
@@ -2673,7 +2673,7 @@ dependencies = [
 
 [[package]]
 name = "web"
-version = "0.9.17"
+version = "0.9.18"
 dependencies = [
  "askama",
  "askama_web",

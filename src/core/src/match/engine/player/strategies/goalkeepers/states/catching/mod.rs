@@ -176,14 +176,12 @@ impl GoalkeeperCatchingState {
             catch_probability -= 0.10;
         }
 
-        // Elite keeper bonus — top GKs make extraordinary saves
-        if base_skill > 0.8 {
-            catch_probability += 0.10;
-        } else if base_skill > 0.65 {
-            catch_probability += 0.05;
+        // Elite keeper bonus — scales smoothly above 0.65 rather than flat steps
+        if base_skill > 0.65 {
+            catch_probability += (base_skill - 0.65) * 0.15; // up to +0.053 for elite
         }
 
-        let clamped_catch_probability = catch_probability.clamp(0.08, 0.97);
+        let clamped_catch_probability = catch_probability.clamp(0.04, 0.95);
 
         rand::random::<f32>() < clamped_catch_probability
     }

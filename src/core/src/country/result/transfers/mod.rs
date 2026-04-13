@@ -40,6 +40,10 @@ impl CountryResult {
 
         // Phase 1: Negotiations & pipeline (per-country)
         let deferred_transfers = if let Some(country) = data.country_mut(country_id) {
+            // Sync market's window flag. On open→closed transitions this cancels
+            // any stranded listings and expires pending negotiations.
+            country.transfer_market.check_transfer_window(window_open);
+
             // Resolve pending negotiations — returns all completed transfers for deferred execution
             let deferred = Self::resolve_pending_negotiations(country, current_date, &mut summary);
 
