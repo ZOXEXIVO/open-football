@@ -32,8 +32,8 @@ impl CoachInstruction {
         match self {
             CoachInstruction::Normal => 0.0,
             CoachInstruction::SlowDown => 0.3,
-            CoachInstruction::PushForward => -0.1, // slightly encourages
-            CoachInstruction::AllOutAttack => -0.2,
+            CoachInstruction::PushForward => -0.25, // meaningful shooting boost
+            CoachInstruction::AllOutAttack => -0.45, // shoot from anything
             CoachInstruction::WasteTime => 0.6,
             CoachInstruction::ParkTheBus => 0.4,
         }
@@ -139,19 +139,18 @@ impl MatchCoach {
                 if is_very_late {
                     CoachInstruction::WasteTime
                 } else if is_late_game {
-                    CoachInstruction::ParkTheBus
-                } else if team_tired {
                     CoachInstruction::SlowDown
                 } else {
-                    CoachInstruction::SlowDown
+                    CoachInstruction::Normal
                 }
             }
-            // Leading by 1 goal
+            // Leading by 1 goal — don't fully park the bus until the final 10min.
+            // Parking too early creates 1-0 lock-ins that equalizers turn into draws.
             1 => {
                 if is_very_late {
-                    CoachInstruction::WasteTime
-                } else if is_late_game {
                     CoachInstruction::ParkTheBus
+                } else if is_late_game {
+                    CoachInstruction::SlowDown
                 } else if is_first_half_end {
                     CoachInstruction::SlowDown
                 } else if team_tired {
@@ -160,10 +159,11 @@ impl MatchCoach {
                     CoachInstruction::Normal
                 }
             }
-            // Drawing
+            // Drawing — push for a winner from the 60th minute, all-out in final 10min
             0 => {
                 if is_very_late {
-                    // Late draw - push for winner
+                    CoachInstruction::AllOutAttack
+                } else if is_late_game {
                     CoachInstruction::PushForward
                 } else if team_tired {
                     CoachInstruction::SlowDown
@@ -171,11 +171,13 @@ impl MatchCoach {
                     CoachInstruction::Normal
                 }
             }
-            // Losing by 1
+            // Losing by 1 — start pushing earlier to reduce draw lock-ins
             -1 => {
                 if is_very_late {
                     CoachInstruction::AllOutAttack
                 } else if is_late_game {
+                    CoachInstruction::AllOutAttack
+                } else if match_progress > 0.55 {
                     CoachInstruction::PushForward
                 } else {
                     CoachInstruction::Normal
