@@ -114,6 +114,16 @@ impl TeamBehaviour {
         // Squad integration events — settled in or feeling isolated
         Self::process_squad_integration(players, &ctx);
 
+        // Captain's mood propagates: happy captain lifts the squad, a
+        // demoralised captain drags it. Runs before manager talks so the
+        // manager-talk picker sees the updated morale distribution.
+        Self::process_captain_morale_propagation(players);
+
+        // Contract jealousy — a teammate's new big deal unsettles the
+        // lower-paid players around them, especially ones who weren't
+        // already on good terms with the signer.
+        Self::process_contract_jealousy(players, &ctx);
+
         // Manager-player talks (weekly during full update)
         Self::process_manager_player_talks(players, staffs, &mut result);
 
@@ -518,6 +528,139 @@ impl TeamBehaviour {
                         });
                 }
             }
+        }
+    }
+
+    /// When a teammate signs a notably bigger deal and this player earns
+    /// meaningfully less, morale takes a hit — unless they're close friends.
+    /// Fires at most once per player per signing window (the signer's
+    /// `last_salary_negotiation` timestamp gates it). Gap threshold ≥25%.
+    fn process_contract_jealousy(players: &mut PlayerCollection, ctx: &GlobalContext<'_>) {
+        let today = ctx.simulation.date.date();
+        // Cutoff: teammate's raise within the last 14 days counts as fresh news.
+        let freshness_days = 14;
+
+        // Collect fresh signers first (id, salary, last_negotiation) so we
+        // don't clash borrows while mutating other players below.
+        let signers: Vec<(u32, u32)> = players
+            .players
+            .iter()
+            .filter_map(|p| {
+                let last = p.happiness.last_salary_negotiation?;
+                let age_days = (today - last).num_days();
+                if age_days >= 0 && age_days <= freshness_days {
+                    p.contract.as_ref().map(|c| (p.id, c.salary))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        if signers.is_empty() {
+            return;
+        }
+
+        for (signer_id, signer_salary) in signers {
+            if signer_salary == 0 {
+                continue;
+            }
+            for player in players.players.iter_mut() {
+                if player.id == signer_id {
+                    continue;
+                }
+                let own_salary = match player.contract.as_ref() {
+                    Some(c) if c.salary > 0 => c.salary,
+                    _ => continue,
+                };
+                // Only noticed when the gap is ≥25%.
+                let ratio = own_salary as f32 / signer_salary as f32;
+                if ratio >= 0.75 {
+                    continue;
+                }
+
+                // Close friends shrug it off.
+                let friendship = player
+                    .relations
+                    .get_player(signer_id)
+                    .map(|r| r.friendship)
+                    .unwrap_or(30.0);
+                if friendship >= 40.0 {
+                    continue;
+                }
+
+                // Don't double-fire: skip if we already noticed this signer
+                // in the last 14 days (check most recent matching event).
+                let already_noticed = player
+                    .happiness
+                    .recent_events
+                    .iter()
+                    .any(|e| e.event_type == HappinessEventType::SalaryGapNoticed
+                        && e.days_ago <= freshness_days as u16);
+                if already_noticed {
+                    continue;
+                }
+
+                // Magnitude scales with the gap: 25% gap → -1.5, 50% gap → -3.5, cap at -5.
+                let gap = (1.0 - ratio).clamp(0.25, 0.9);
+                let magnitude = -((gap - 0.25) * 6.0 + 1.5).min(5.0);
+                player.happiness.add_event(HappinessEventType::SalaryGapNoticed, magnitude);
+            }
+        }
+    }
+
+    /// Captain = highest `leadership + influence` on the squad. Their
+    /// mood leaks out to teammates: ~±2 morale points/week based on how
+    /// happy the captain is relative to neutral 50. Sits on top of the
+    /// existing `process_leadership_influence` pass (which only moves
+    /// relationship numbers, not morale).
+    fn process_captain_morale_propagation(players: &mut PlayerCollection) {
+        // Pick the captain by compound score. Don't fall back to anyone
+        // with <10 leadership — a weak captain shouldn't propagate.
+        let captain_id_opt = players
+            .players
+            .iter()
+            .filter(|p| p.skills.mental.leadership >= 10.0)
+            .max_by(|a, b| {
+                let sa = a.skills.mental.leadership * 1.0
+                    + a.attributes.loyalty * 0.5
+                    + a.player_attributes.current_reputation as f32 / 2000.0;
+                let sb = b.skills.mental.leadership * 1.0
+                    + b.attributes.loyalty * 0.5
+                    + b.player_attributes.current_reputation as f32 / 2000.0;
+                sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| p.id);
+
+        let captain_id = match captain_id_opt {
+            Some(id) => id,
+            None => return,
+        };
+
+        let captain_morale = match players.find(captain_id) {
+            Some(c) => c.happiness.morale,
+            None => return,
+        };
+
+        // Delta: captain at 50 morale → 0 effect. At 80 → +0.6, at 20 → -0.6.
+        // Leadership scales the magnitude (a 20-leadership captain hits 2x
+        // a 10-leadership captain).
+        let captain_leadership = players
+            .find(captain_id)
+            .map(|c| c.skills.mental.leadership)
+            .unwrap_or(10.0);
+        let leadership_scale = (captain_leadership / 20.0).clamp(0.0, 1.0);
+        let base_delta = (captain_morale - 50.0) * 0.02;  // -1..1
+        let delta = base_delta * leadership_scale;        // -1..1 scaled
+
+        if delta.abs() < 0.05 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            if player.id == captain_id {
+                continue;
+            }
+            player.happiness.adjust_morale(delta);
         }
     }
 

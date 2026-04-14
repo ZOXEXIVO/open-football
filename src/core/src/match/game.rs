@@ -10,6 +10,9 @@ pub struct Match {
     pub home_squad: MatchSquad,
     pub away_squad: MatchSquad,
     pub is_friendly: bool,
+    /// Knockout-format match — if level after 90 min, play extra time;
+    /// if still level, resolve on penalties.
+    pub is_knockout: bool,
 }
 
 impl Match {
@@ -28,6 +31,25 @@ impl Match {
             home_squad,
             away_squad,
             is_friendly,
+            is_knockout: false,
+        }
+    }
+
+    pub fn make_knockout(
+        id: String,
+        league_id: u32,
+        league_slug: &str,
+        home_squad: MatchSquad,
+        away_squad: MatchSquad,
+    ) -> Self {
+        Match {
+            id,
+            league_id,
+            league_slug: String::from(league_slug),
+            home_squad,
+            away_squad,
+            is_friendly: false,
+            is_knockout: true,
         }
     }
 
@@ -39,17 +61,35 @@ impl Match {
         let away_team_name = String::from(&self.away_squad.team_name);
 
         let match_recordings = crate::is_match_recordings_mode() && !self.is_friendly;
-        let match_result = FootballEngine::<840, 545>::play(self.home_squad, self.away_squad, match_recordings, self.is_friendly);
+        let match_result = FootballEngine::<840, 545>::play(
+            self.home_squad,
+            self.away_squad,
+            match_recordings,
+            self.is_friendly,
+            self.is_knockout,
+        );
 
         let score = match_result.score.as_ref().expect("no score");
 
-        debug!(
-            "match played: {} {}:{} {}",
-            home_team_name,
-            score.home_team.get(),
-            away_team_name,
-            score.away_team.get(),
-        );
+        if score.had_shootout() {
+            debug!(
+                "match played: {} {}:{} {} ({}:{} pens)",
+                home_team_name,
+                score.home_team.get(),
+                away_team_name,
+                score.away_team.get(),
+                score.home_shootout,
+                score.away_shootout,
+            );
+        } else {
+            debug!(
+                "match played: {} {}:{} {}",
+                home_team_name,
+                score.home_team.get(),
+                away_team_name,
+                score.away_team.get(),
+            );
+        }
 
         MatchResult {
             id: self.id,

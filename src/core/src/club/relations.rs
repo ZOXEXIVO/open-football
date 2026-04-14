@@ -218,27 +218,38 @@ impl Relations {
         InfluenceLevel::from_value(base_influence + group_bonus)
     }
 
-    /// Check for potential conflicts
-    pub fn get_potential_conflicts(&self) -> Vec<ConflictInfo> {
+    /// Conflicts this entity has with others — strained or openly hostile
+    /// relations. Each entry is the subject's relation with `target_id`.
+    /// Caller supplies `subject_id` because a `Relations` instance doesn't
+    /// know who owns it.
+    pub fn get_potential_conflicts(&self, subject_id: u32) -> Vec<ConflictInfo> {
         let mut conflicts = Vec::new();
 
-        // Check for rivalries
-        for (id1, rel1) in self.players.iter() {
-            for (id2, rel2) in self.players.iter() {
-                if id1 < id2 && rel1.rivalry_with.contains(&id2) {
-                    conflicts.push(ConflictInfo {
-                        party_a: *id1,
-                        party_b: *id2,
-                        conflict_type: ConflictType::PersonalRivalry,
-                        severity: ConflictSeverity::from_relationship_levels(rel1.level, rel2.level),
-                    });
-                }
+        for (target_id, rel) in self.players.iter() {
+            // A relation is a conflict if it's rivalry-flagged or disliked.
+            let is_rivalry = !rel.rivalry_with.is_empty();
+            if !is_rivalry && !rel.is_disliked() {
+                continue;
             }
+
+            let conflict_type = if is_rivalry {
+                ConflictType::PersonalRivalry
+            } else if rel.level <= -50.0 {
+                ConflictType::PersonalRivalry
+            } else {
+                // Disliked-but-not-hostile — default to rivalry type.
+                ConflictType::PersonalRivalry
+            };
+
+            conflicts.push(ConflictInfo {
+                party_a: subject_id,
+                party_b: *target_id,
+                conflict_type,
+                severity: ConflictSeverity::from_relationship_level(rel.level),
+            });
         }
 
-        // Check for group conflicts
         conflicts.extend(self.groups.get_group_conflicts());
-
         conflicts
     }
 
@@ -270,34 +281,6 @@ impl Relations {
         self.chemistry.recalculate(&self.players, &self.staffs);
     }
 
-    /// Simulate relationship interactions during training
-    pub fn simulate_training_interactions(
-        &mut self,
-        participants: &[u32],
-        training_quality: f32,
-        date: NaiveDate,
-    ) {
-        // Players training together build relationships
-        for i in 0..participants.len() {
-            for j in i + 1..participants.len() {
-                let change = if training_quality > 0.7 {
-                    RelationshipChange::positive(
-                        ChangeType::TrainingBonding,
-                        0.02 * training_quality,
-                    )
-                } else if training_quality < 0.3 {
-                    RelationshipChange::negative(
-                        ChangeType::TrainingFriction,
-                        0.01,
-                    )
-                } else {
-                    continue;
-                };
-
-                self.update_player_relationship(participants[j], change, date);
-            }
-        }
-    }
 }
 
 /// Store for relationships of a specific type
@@ -627,9 +610,61 @@ impl GroupDynamics {
         }
     }
 
-    fn update_from_relationship(&mut self, _entity_id: u32, _relationship_level: f32) {
-        // Logic to form/update groups based on relationships
-        // Simplified for brevity
+    /// Track the owning player's "inner circle" — members they have a
+    /// strong bond with (level ≥ 60). Single Social group per subject.
+    /// A hostile relationship (level ≤ -50) removes the other party
+    /// from the circle. Cohesion = average bond across members / 100.
+    ///
+    /// Per-player scope means the Group is effectively "the subject's
+    /// perceived clique": who they trust, feel close to, would back up.
+    /// `get_leadership_bonus` consumes the cohesion number as a proxy
+    /// for dressing-room standing.
+    fn update_from_relationship(&mut self, entity_id: u32, relationship_level: f32) {
+        const INNER_CIRCLE_GROUP: GroupId = 1; // well-known id for the subject's own social group
+        const JOIN_THRESHOLD: f32 = 60.0;
+        const LEAVE_THRESHOLD: f32 = 40.0;
+
+        // Find or seed the inner-circle group for this subject.
+        let group = self.groups.entry(INNER_CIRCLE_GROUP).or_insert_with(|| Group {
+            id: INNER_CIRCLE_GROUP,
+            members: HashSet::new(),
+            leader_id: None,      // subject-owned: leader = the subject, but we don't know their id here
+            cohesion: 0.0,
+            group_type: GroupType::Social,
+            rival_group: None,
+        });
+
+        let was_member = group.members.contains(&entity_id);
+
+        if relationship_level >= JOIN_THRESHOLD {
+            group.members.insert(entity_id);
+        } else if relationship_level < LEAVE_THRESHOLD || relationship_level <= -50.0 {
+            // Bond cooled or turned hostile — drop them.
+            group.members.remove(&entity_id);
+        }
+
+        // Cohesion is the normalised mean bond level across members,
+        // scaled [0..1]. Empty groups → 0 so decay eventually dissolves them.
+        if group.members.is_empty() {
+            group.cohesion = 0.0;
+        } else {
+            // We only have this one data point per call; use a cheap
+            // exponential moving average so repeated updates converge on
+            // the actual mean without iterating every member.
+            let bond_unit = (relationship_level / 100.0).clamp(0.0, 1.0);
+            if was_member {
+                group.cohesion = group.cohesion * 0.9 + bond_unit * 0.1;
+            } else {
+                // New member — give their bond a stronger weight.
+                group.cohesion = group.cohesion * 0.7 + bond_unit * 0.3;
+            }
+        }
+
+        // Reverse index so get_entity_groups works.
+        self.entity_groups
+            .entry(entity_id)
+            .or_default()
+            .insert(INNER_CIRCLE_GROUP);
     }
 
     fn get_entity_groups(&self, entity_id: u32) -> Vec<GroupId> {
@@ -943,9 +978,8 @@ pub enum ConflictSeverity {
 }
 
 impl ConflictSeverity {
-    fn from_relationship_levels(level_a: f32, level_b: f32) -> Self {
-        let avg = (level_a + level_b) / 2.0;
-        match avg {
+    pub fn from_relationship_level(level: f32) -> Self {
+        match level {
             v if v <= -75.0 => ConflictSeverity::Critical,
             v if v <= -50.0 => ConflictSeverity::Serious,
             v if v <= -25.0 => ConflictSeverity::Medium,

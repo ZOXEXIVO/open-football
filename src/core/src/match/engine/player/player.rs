@@ -49,6 +49,13 @@ pub struct MatchPlayer {
 
     /// Signature moves (PPMs) — read by decision helpers to bias behaviour.
     pub traits: Vec<PlayerTrait>,
+
+    /// Yellow cards accumulated in this match. 2 → red.
+    pub yellow_cards: u8,
+    /// Fouls committed in this match. Feeds end-of-match stats.
+    pub fouls_committed: u8,
+    /// Player has been sent off — skip state processing, treat as off field.
+    pub is_sent_off: bool,
 }
 
 impl MatchPlayer {
@@ -92,6 +99,9 @@ impl MatchPlayer {
             fatigue_accumulator: 0.0,
             cached_waypoints: Vec::new(),
             traits: player.traits.clone(),
+            yellow_cards: 0,
+            fouls_committed: 0,
+            is_sent_off: false,
         }
     }
 

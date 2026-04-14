@@ -78,6 +78,30 @@ pub struct Player {
 
     /// Rapport with the coaches who have trained this player.
     pub rapport: PlayerRapport,
+
+    /// Promises the manager has made to this player (playing time etc.).
+    /// Verified weekly — kept promises reinforce the manager relationship,
+    /// broken ones erode it and tank morale.
+    pub promises: Vec<ManagerPromise>,
+}
+
+/// What the manager committed to. Deliberately narrow — each new variant
+/// must define what "kept" means in `Player::verify_promises`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ManagerPromiseKind {
+    /// "You'll play more" — kept if the player logged at least N
+    /// appearances between made_on and deadline.
+    PlayingTime,
+}
+
+#[derive(Debug, Clone)]
+pub struct ManagerPromise {
+    pub kind: ManagerPromiseKind,
+    pub made_on: NaiveDate,
+    pub deadline: NaiveDate,
+    /// Snapshot of the player's `statistics.played + played_subs` at the
+    /// time the promise was made. Used to compute "games since promise".
+    pub baseline_apps: u16,
 }
 
 impl Player {
@@ -118,6 +142,60 @@ impl Player {
         false
     }
 
+    /// Record a new manager promise. Deduped — only the freshest promise
+    /// of any given kind is tracked (a new promise supersedes an unresolved
+    /// earlier one of the same kind).
+    pub fn record_promise(&mut self, kind: ManagerPromiseKind, made_on: NaiveDate, horizon_days: i64) {
+        let deadline = made_on + chrono::Duration::days(horizon_days);
+        let baseline_apps = self.statistics.played + self.statistics.played_subs;
+        self.promises.retain(|p| p.kind != kind);
+        self.promises.push(ManagerPromise { kind, made_on, deadline, baseline_apps });
+    }
+
+    /// Evaluate every promise whose deadline has passed. Kept → small
+    /// positive event and trust bump; broken → large negative event,
+    /// salary/playing-time frustration already covers the rest.
+    pub fn verify_promises(&mut self, now: NaiveDate) {
+        if self.promises.is_empty() {
+            return;
+        }
+        let current_apps = self.statistics.played + self.statistics.played_subs;
+        let mut kept_count = 0;
+        let mut broken_count = 0;
+
+        self.promises.retain(|p| {
+            if now < p.deadline {
+                return true; // still pending
+            }
+            let delta_apps = current_apps.saturating_sub(p.baseline_apps);
+            let days = (p.deadline - p.made_on).num_days().max(1) as u16;
+            let kept = match p.kind {
+                ManagerPromiseKind::PlayingTime => {
+                    // Kept if the player got at least one appearance every
+                    // ~10 days of the promise window. 30-day window → 3 apps.
+                    let required = (days / 10).max(1);
+                    delta_apps >= required
+                }
+            };
+            if kept { kept_count += 1; } else { broken_count += 1; }
+            false // remove resolved
+        });
+
+        if kept_count > 0 {
+            self.happiness.add_event(crate::HappinessEventType::PromiseKept, 4.0 * kept_count as f32);
+            // Directly reinforce the manager-relationship factor too.
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship + 2.0 * kept_count as f32).clamp(-15.0, 15.0);
+        }
+        if broken_count > 0 {
+            self.happiness.add_event(crate::HappinessEventType::PromiseBroken, -6.0 * broken_count as f32);
+            self.happiness.factors.manager_relationship =
+                (self.happiness.factors.manager_relationship - 4.0 * broken_count as f32).clamp(-15.0, 15.0);
+            // Broken playing-time promise often becomes a transfer request eventually.
+            // Feed unhappy status via existing factor path — status is still decided by process_happiness.
+        }
+    }
+
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> PlayerResult {
         let now = ctx.simulation.date;
 
@@ -145,6 +223,9 @@ impl Player {
         // Player happiness & morale evaluation (weekly)
         let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
         if ctx.simulation.is_week_beginning() {
+            // Verify promises before happiness so kept/broken events feed
+            // into the same weekly morale recalculation.
+            self.verify_promises(now.date());
             self.process_happiness(&mut result, now.date(), team_reputation);
             // Natural skill development (weekly). Build the coaching effect
             // once per player from the club's best coach scores.

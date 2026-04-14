@@ -10,7 +10,6 @@ pub struct PlayerMessage {
 
 #[derive(Debug, Clone)]
 pub enum PlayerMessageType {
-    Greeting,
     ContractProposal(PlayerContractProposal),
 }
 
@@ -44,7 +43,6 @@ impl PlayerMailbox {
         let messages: Vec<PlayerMessage> = player.mailbox.messages.drain(..).collect();
         for message in messages {
             match message.message_type {
-                PlayerMessageType::Greeting => {}
                 PlayerMessageType::ContractProposal(proposal) => {
                     ProcessContractHandler::process(player, proposal, now, player_result);
                 }

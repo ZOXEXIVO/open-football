@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderCondition};
 use crate::r#match::midfielders::states::MidfielderState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -58,7 +58,8 @@ impl StateProcessingHandler for MidfielderTacklingState {
         if let Some(opponent) = opponents_with_ball.next() {
             let opponent_distance = ctx.tick_context.grid.get(ctx.player.id, opponent.id);
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
-                let (tackle_success, committed_foul) = self.attempt_tackle(ctx, &opponent);
+                let (tackle_success, committed_foul, foul_severity) =
+                    self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
                     // Double-check ball is not in flight before claiming
                     if !ctx.ball().is_in_flight() {
@@ -70,7 +71,10 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 } else if committed_foul {
                     return Some(StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul),
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            foul_severity,
+                        )),
                     ));
                 }
             }
@@ -119,7 +123,7 @@ impl MidfielderTacklingState {
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
@@ -128,33 +132,35 @@ impl MidfielderTacklingState {
 
         let overall_skill = (tackling_skill + composure) / 2.0;
 
-        // Calculate opponent's dribbling and agility skills
         let opponent_dribbling = ctx.player().skills(opponent.id).technical.dribbling / 20.0;
         let opponent_agility = ctx.player().skills(opponent.id).physical.agility / 20.0;
 
-        // Calculate the relative skill difference between the tackler and the opponent
         let skill_difference = overall_skill - (opponent_dribbling + opponent_agility) / 2.0;
 
-        // Calculate success chance based on the skill difference
         let success_chance = 0.55 + skill_difference * 0.35;
         let clamped_success_chance = success_chance.clamp(0.15, 0.92);
 
-        // Simulate tackle success
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
-        // Calculate foul chance
         let foul_chance = if tackle_success {
-            // Lower foul chance for successful tackles
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
         } else {
-            // Higher foul chance for unsuccessful tackles
             (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
         };
 
-        // Simulate foul
         let committed_foul = rng.random::<f32>() < foul_chance;
 
-        (tackle_success, committed_foul)
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if aggression > 0.75 && !tackle_success && rng.random::<f32>() < 0.10 {
+            FoulSeverity::Violent
+        } else if !tackle_success && aggression > 0.55 {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        };
+
+        (tackle_success, committed_foul, severity)
     }
 
     fn can_intercept_ball(&self, ctx: &StateProcessingContext) -> bool {

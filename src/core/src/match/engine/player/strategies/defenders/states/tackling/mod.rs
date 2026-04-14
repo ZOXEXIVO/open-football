@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -53,7 +53,8 @@ impl StateProcessingHandler for DefenderTacklingState {
             }
 
             // We're close enough to tackle!
-            let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
+            let (tackle_success, committed_foul, foul_severity) =
+                self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
                 Some(StateChangeResult::with_defender_state_and_event(
@@ -63,7 +64,7 @@ impl StateProcessingHandler for DefenderTacklingState {
             } else if committed_foul {
                 Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::CommitFoul),
+                    Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
                 ))
             } else {
                 None
@@ -178,7 +179,7 @@ impl DefenderTacklingState {
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
         let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
@@ -208,7 +209,20 @@ impl DefenderTacklingState {
 
         let committed_foul = rng.random::<f32>() < foul_chance;
 
-        (tackle_success, committed_foul)
+        // Classify the foul. Missed tackles by aggressive players are
+        // reckless; clean-skilled tackles that still trip up an opponent
+        // are normal. Rare violent = very late + high-aggression.
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if aggression > 0.75 && !tackle_success && rng.random::<f32>() < 0.12 {
+            FoulSeverity::Violent
+        } else if !tackle_success && aggression > 0.55 {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        };
+
+        (tackle_success, committed_foul, severity)
     }
 
     fn exists_nearby(&self, ctx: &StateProcessingContext) -> bool {

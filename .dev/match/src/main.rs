@@ -142,7 +142,7 @@ fn main() {
     println!("Play match...");
     let start = std::time::Instant::now();
 
-    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, true, false);
+    let result = FootballEngine::<840, 545>::play(home_squad, away_squad, true, false, false);
 
     let elapsed = start.elapsed();
 

@@ -69,13 +69,21 @@ impl TeamTraining {
         let mut results = Vec::with_capacity(participants.len());
 
         for player in participants {
-            results.push(PlayerTraining::train(
+            let mut r = PlayerTraining::train(
                 player,
                 coach,
                 session,
                 date,
                 facility_quality,
-            ));
+            );
+            // Chemistry multiplier: a player happy in the dressing room
+            // gets 10% more out of a session; one in a toxic one gets 10%
+            // less. Narrow band so chemistry is meaningful without being
+            // decisive — coach quality and intensity still dominate.
+            let chem = player.relations.get_team_chemistry() / 100.0; // 0..1
+            let factor = 0.90 + chem * 0.20;
+            r.effects.scale_gains(factor);
+            results.push(r);
         }
 
         results
@@ -601,6 +609,24 @@ pub struct TrainingEffects {
     pub fatigue_change: f32,
     pub injury_risk: f32,
     pub morale_change: f32,
+}
+
+impl TrainingEffects {
+    /// Multiply all skill gains by `factor`. Fatigue / injury_risk /
+    /// morale are left alone — they're driven by intensity & session
+    /// type, not dressing-room chemistry.
+    pub fn scale_gains(&mut self, factor: f32) {
+        let f = factor.max(0.0);
+        let p = &mut self.physical_gains;
+        p.stamina *= f; p.strength *= f; p.pace *= f; p.agility *= f;
+        p.balance *= f; p.jumping *= f; p.natural_fitness *= f;
+        let t = &mut self.technical_gains;
+        t.first_touch *= f; t.passing *= f; t.crossing *= f; t.dribbling *= f;
+        t.finishing *= f; t.heading *= f; t.tackling *= f; t.technique *= f;
+        let m = &mut self.mental_gains;
+        m.concentration *= f; m.decisions *= f; m.positioning *= f;
+        m.teamwork *= f; m.vision *= f; m.work_rate *= f; m.leadership *= f;
+    }
 }
 
 #[derive(Debug, Clone, Default)]

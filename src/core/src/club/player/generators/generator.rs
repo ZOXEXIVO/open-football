@@ -783,6 +783,7 @@ impl PlayerGenerator {
             sold_from: None,
             traits: Vec::new(), // academy youth start with no traits; grow via training
             rapport: PlayerRapport::new(),
+            promises: Vec::new(),
         }
     }
 

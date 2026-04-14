@@ -227,6 +227,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let item2 = ScheduleItem {
@@ -243,6 +245,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let mut items_with_results = Vec::new();
@@ -294,6 +298,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let item2 = ScheduleItem {
@@ -310,6 +316,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let schedule_tour = ScheduleTour {
@@ -335,6 +343,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let item2 = ScheduleItem {
@@ -350,6 +360,8 @@ mod tests {
                 home_team: TeamScore::new_with_score(0, 0),
                 away_team: TeamScore::new_with_score(0, 0),
                 details: Vec::new(),
+                home_shootout: 0,
+                away_shootout: 0,
             }),
         };
         let schedule_tour = ScheduleTour {

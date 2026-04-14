@@ -57,6 +57,14 @@ pub enum HappinessEventType {
     DressingRoomSpeech,
     SettledIntoSquad,
     FeelingIsolated,
+    /// Teammate signed a meaningfully bigger deal and this player noticed —
+    /// drags salary_satisfaction. Typically only fires if the friendship
+    /// with the newly-signed teammate is low.
+    SalaryGapNoticed,
+    /// Manager kept a concrete promise (e.g. more playing time).
+    PromiseKept,
+    /// Manager broke a concrete promise. Big morale hit, erodes trust.
+    PromiseBroken,
 }
 
 impl PlayerHappiness {

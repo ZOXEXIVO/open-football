@@ -1,5 +1,5 @@
 use nalgebra::Vector3;
-use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_HALF_TIME_MS};
+use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS};
 use crate::r#match::engine::result::PlayerMatchEndStats;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
@@ -42,10 +42,14 @@ pub struct MatchContext {
     /// Coach state for each team (home = left initially, away = right initially)
     pub coach_home: MatchCoach,
     pub coach_away: MatchCoach,
+
+    /// Knockout-format match — enables extra time + penalty shootout when
+    /// the score is level at the end of regulation.
+    pub is_knockout: bool,
 }
 
 impl MatchContext {
-    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score, is_friendly: bool) -> Self {
+    pub fn new(field: &MatchField, players: MatchPlayerCollection, score: Score, is_friendly: bool, is_knockout: bool) -> Self {
         MatchContext {
             state: GameState::new(),
             time: MatchTime::new(),
@@ -59,11 +63,14 @@ impl MatchContext {
             logging_enabled: false,
             total_match_time: 0,
             substitutions: Vec::new(),
+            // Knockout ties get one extra substitution once ET begins (FIFA rule).
+            // Represented here as a flat limit; ET bonus applied on entry.
             max_substitutions_per_team: if is_friendly { usize::MAX } else { 5 },
             last_goal_tick: 0,
             substituted_out_stats: Vec::new(),
             coach_home: MatchCoach::new(),
             coach_away: MatchCoach::new(),
+            is_knockout,
         }
     }
 
@@ -75,7 +82,10 @@ impl MatchContext {
         match self.state.match_state {
             MatchState::FirstHalf | MatchState::SecondHalf => {
                 new_time < MATCH_HALF_TIME_MS
-            },
+            }
+            MatchState::ExtraTime => {
+                new_time < MATCH_EXTRA_TIME_MS
+            }
             _ => false
         }
     }

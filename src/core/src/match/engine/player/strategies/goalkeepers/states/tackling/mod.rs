@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -34,7 +34,7 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
             }
 
             // 4. Attempt the tackle
-            let (tackle_success, committed_foul) = self.attempt_tackle(ctx);
+            let (tackle_success, committed_foul, foul_severity) = self.attempt_tackle(ctx);
 
             if tackle_success {
                 // Tackle is successful
@@ -59,10 +59,14 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
                 let mut state_change =
                     StateChangeResult::with_goalkeeper_state(GoalkeeperState::Standing);
 
-                // Generate a foul event
+                // Generate a foul event — keeper fouls are typically
+                // denial-of-goal and go straight to Violent / red card.
                 state_change
                     .events
-                    .add_player_event(PlayerEvent::CommitFoul);
+                    .add_player_event(PlayerEvent::CommitFoul(
+                        ctx.player.id,
+                        foul_severity,
+                    ));
 
                 // Transition to appropriate state (e.g., ReactingToFoul)
                 // You may need to define additional states for handling fouls
@@ -113,28 +117,30 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
 
 impl GoalkeeperTacklingState {
     /// Attempts a tackle and returns whether it was successful and if a foul was committed.
-    fn attempt_tackle(&self, ctx: &StateProcessingContext) -> (bool, bool) {
+    fn attempt_tackle(&self, ctx: &StateProcessingContext) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
-        // Get goalkeeper's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0; // Normalize to [0,1]
+        let tackling_skill = ctx.player.skills.technical.tackling as f32 / 20.0;
         let aggression = ctx.player.skills.mental.aggression as f32 / 20.0;
         let composure = ctx.player.skills.mental.composure as f32 / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
-
-        // Calculate success chance
         let success_chance = overall_skill * TACKLE_SUCCESS_BASE_CHANCE;
-
-        // Simulate tackle success
         let tackle_success = rng.random::<f32>() < success_chance;
 
-        // Calculate foul chance
         let foul_chance = (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05;
-
-        // Simulate foul
         let committed_foul = !tackle_success && rng.random::<f32>() < foul_chance;
 
-        (tackle_success, committed_foul)
+        // A keeper tackling outside the area nearly always means a
+        // last-man challenge — classify most fouls as Violent (straight red).
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if rng.random::<f32>() < 0.65 {
+            FoulSeverity::Violent
+        } else {
+            FoulSeverity::Reckless
+        };
+
+        (tackle_success, committed_foul, severity)
     }
 }

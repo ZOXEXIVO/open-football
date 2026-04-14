@@ -1,7 +1,7 @@
 use crate::r#match::events::Event;
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -39,12 +39,16 @@ impl StateProcessingHandler for ForwardTacklingState {
 
             // Immediate tackle if very close
             if opponent_distance <= CLOSE_TACKLE_DISTANCE {
-                let (tackle_success, committed_foul) = self.attempt_tackle(ctx, opponent);
+                let (tackle_success, committed_foul, foul_severity) =
+                    self.attempt_tackle(ctx, opponent);
 
                 if committed_foul {
                     return Some(StateChangeResult::with_forward_state_and_event(
                         ForwardState::Standing,
-                        Event::PlayerEvent(PlayerEvent::CommitFoul),
+                        Event::PlayerEvent(PlayerEvent::CommitFoul(
+                            ctx.player.id,
+                            foul_severity,
+                        )),
                     ));
                 }
 
@@ -66,12 +70,16 @@ impl StateProcessingHandler for ForwardTacklingState {
             if opponent_distance <= TACKLE_DISTANCE_THRESHOLD {
                 // Wait for better opportunity or attempt tackle based on situation
                 if self.should_attempt_tackle_now(ctx, opponent) {
-                    let (tackle_success, committed_foul) = self.attempt_tackle(ctx, opponent);
+                    let (tackle_success, committed_foul, foul_severity) =
+                        self.attempt_tackle(ctx, opponent);
 
                     if committed_foul {
                         return Some(StateChangeResult::with_forward_state_and_event(
                             ForwardState::Standing,
-                            Event::PlayerEvent(PlayerEvent::CommitFoul),
+                            Event::PlayerEvent(PlayerEvent::CommitFoul(
+                                ctx.player.id,
+                                foul_severity,
+                            )),
                         ));
                     }
 
@@ -220,7 +228,7 @@ impl ForwardTacklingState {
         &self,
         ctx: &StateProcessingContext,
         opponent: &MatchPlayerLite,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
         // Player skills
@@ -294,7 +302,20 @@ impl ForwardTacklingState {
         let foul_chance = foul_chance.clamp(0.0, 0.4); // Cap maximum foul chance
         let committed_foul = rng.random::<f32>() < foul_chance;
 
-        (tackle_success, committed_foul)
+        // Forwards rarely go studs-up; tackling-from-behind (low angle factor)
+        // or desperation-late-in-match pushes severity up.
+        let behind_tackle = tackle_angle_factor < 0.3;
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if behind_tackle && aggression > 0.7 && rng.random::<f32>() < 0.10 {
+            FoulSeverity::Violent
+        } else if !tackle_success && (behind_tackle || aggression > 0.55) {
+            FoulSeverity::Reckless
+        } else {
+            FoulSeverity::Normal
+        };
+
+        (tackle_success, committed_foul, severity)
     }
 
     /// Check if player can intercept a loose ball

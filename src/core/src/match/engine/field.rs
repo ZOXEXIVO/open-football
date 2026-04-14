@@ -64,6 +64,46 @@ impl MatchField {
 
     }
 
+    /// Compact the remaining players of `team_id` after a red card.
+    /// Squeezes each player's `start_position` ~15% toward the team's
+    /// own-goal line and narrows them laterally by ~10%. This is a
+    /// cheap proxy for dropping from 4-4-2 to 4-4-1 / 4-3-2: players
+    /// hold a lower, tighter shape. New positions apply from the
+    /// next reset/kickoff and feed the state machines' "return to
+    /// starting line" heuristics.
+    pub fn compact_after_dismissal(&mut self, team_id: u32) {
+        let field_width = self.size.width as f32;
+        let field_height = self.size.height as f32;
+        let mid_y = field_height * 0.5;
+
+        // Decide which goal line this team defends by averaging
+        // non-sent-off teammates' X. The closer to 0, the left goal.
+        let (sum_x, count) = self.players.iter().fold((0.0f32, 0u32), |acc, p| {
+            if p.team_id == team_id && !p.is_sent_off {
+                (acc.0 + p.start_position.x, acc.1 + 1)
+            } else {
+                acc
+            }
+        });
+        if count == 0 {
+            return;
+        }
+        let avg_x = sum_x / count as f32;
+        let own_goal_x = if avg_x < field_width * 0.5 { 0.0 } else { field_width };
+
+        for p in self.players.iter_mut() {
+            if p.team_id != team_id || p.is_sent_off {
+                continue;
+            }
+            // Move start_position 15% of the way toward own goal X,
+            // and 10% toward the vertical center.
+            let new_x = p.start_position.x + (own_goal_x - p.start_position.x) * 0.15;
+            let new_y = p.start_position.y + (mid_y - p.start_position.y) * 0.10;
+            p.start_position.x = new_x;
+            p.start_position.y = new_y;
+        }
+    }
+
     pub fn swap_squads(&mut self) {
         std::mem::swap(&mut self.left_side_players, &mut self.right_side_players);
         std::mem::swap(&mut self.left_team_tactics, &mut self.right_team_tactics);

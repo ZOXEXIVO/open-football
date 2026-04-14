@@ -191,11 +191,16 @@ impl Player {
         factor.clamp(-15.0, 15.0)
     }
 
-    fn calculate_manager_relationship_factor(&self) -> f32 {
-        // This factor is primarily driven by manager talks (Area 3)
-        // which update it via happiness.factors.manager_relationship directly.
-        // Return the current stored value.
-        self.happiness.factors.manager_relationship
+    fn calculate_manager_relationship_factor(&mut self) -> f32 {
+        // Driven by manager talks which write directly to the factor, but
+        // without decay a single good (or bad) chat anchored a player's
+        // morale forever. Drift the stored factor 12% toward zero every
+        // week so the effect of any single talk fades over ~2 months.
+        let decayed = self.happiness.factors.manager_relationship * 0.88;
+        // Snap tiny residues to 0 so they don't drift forever.
+        let decayed = if decayed.abs() < 0.1 { 0.0 } else { decayed };
+        self.happiness.factors.manager_relationship = decayed;
+        decayed
     }
 
     fn calculate_injury_frustration(&self) -> f32 {

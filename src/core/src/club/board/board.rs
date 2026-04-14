@@ -1,5 +1,6 @@
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
+use chrono::NaiveDate;
 use log::debug;
 
 /// Long-term club vision — the direction the board wants the manager to
@@ -87,7 +88,7 @@ pub struct SeasonTargets {
 
 /// Board confidence in the current management (0-100).
 /// Drops when results are poor, recovers when exceeding expectations.
-/// At 0: board sacks the manager (not yet implemented — future).
+/// At 0 — or after sustained Poor mood — the manager is sacked.
 #[derive(Debug, Clone)]
 pub struct BoardConfidence {
     pub level: i32,
@@ -111,6 +112,10 @@ pub struct ClubBoard {
     /// Long-term vision — the "contract" the board expects the manager
     /// to honour across multiple seasons.
     pub vision: ClubVision,
+    /// Date the last manager was dismissed — drives the search timer.
+    /// `None` when the manager seat is filled (either permanently, or
+    /// an interim has been confirmed as permanent).
+    pub manager_search_since: Option<NaiveDate>,
 }
 
 impl ClubBoard {
@@ -123,6 +128,7 @@ impl ClubBoard {
             season_targets: None,
             poor_mood_months: 0,
             vision: ClubVision::default(),
+            manager_search_since: None,
         }
     }
 
@@ -157,6 +163,19 @@ impl ClubBoard {
         if ctx.simulation.is_month_beginning() {
             if let Some(board_ctx) = &ctx.board {
                 self.evaluate_performance(board_ctx, &mut result);
+            }
+        }
+
+        // Manager search: if we sacked someone ≥30 days ago, it's time to
+        // confirm a permanent appointment. Most real searches either
+        // promote the caretaker or hire externally after a few weeks;
+        // here we just signal "confirm the current caretaker" and let
+        // the result stage apply it.
+        if let Some(since) = self.manager_search_since {
+            let today = ctx.simulation.date.date();
+            let days = (today - since).num_days();
+            if days >= 30 {
+                result.confirm_new_manager = true;
             }
         }
 
@@ -349,6 +368,32 @@ impl ClubBoard {
                 board_ctx.league_size,
                 targets.expected_position
             );
+        }
+
+        // ── Sacking gate ──
+        // Three independent triggers, any one fires:
+        //   1. Confidence collapsed to zero (extreme, rare)
+        //   2. Poor mood ≥4 consecutive months AND underperforming at the table
+        //   3. Poor mood ≥6 consecutive months regardless (patience exhausted)
+        // Early-season grace: need at least 10 matches played so a bad August
+        // doesn't cost a job. Re-hires are out of scope here — the transfer
+        // pipeline / staff search will offer a replacement next tick.
+        let enough_data = board_ctx.matches_played >= 10;
+        let zero_confidence = self.confidence.level <= 0;
+        let sustained_poor_with_underperformance =
+            self.poor_mood_months >= 4 && result.underperforming;
+        let sustained_poor_absolute = self.poor_mood_months >= 6;
+
+        if enough_data
+            && (zero_confidence
+                || sustained_poor_with_underperformance
+                || sustained_poor_absolute)
+        {
+            result.manager_sacked = true;
+            // Reset confidence so the successor starts from a neutral base
+            // when the next board tick runs; avoids immediate re-sack.
+            self.confidence.level = 50;
+            self.poor_mood_months = 0;
         }
     }
 

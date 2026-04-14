@@ -34,7 +34,7 @@ impl MatchPlayEnginePool {
             matches
                 .into_par_iter()
                 .map(|(idx, home, away)| {
-                    let result = FootballEngine::<840, 545>::play(home, away, false, false);
+                    let result = FootballEngine::<840, 545>::play(home, away, false, false, false);
                     (idx, result)
                 })
                 .collect()

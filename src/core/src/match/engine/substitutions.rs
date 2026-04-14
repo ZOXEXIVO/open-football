@@ -162,6 +162,9 @@ fn execute_substitution(
             match_rating: 0.0,
             xg: player_out.memory.xg_total,
             position_group: player_out.tactical_position.current_position.position_group(),
+            fouls: player_out.fouls_committed as u16,
+            yellow_cards: player_out.statistics.yellow_cards_count(),
+            red_cards: player_out.statistics.red_cards_count(),
         }));
     }
 

@@ -111,29 +111,9 @@ impl StaffCollection {
         }
     }
 
-    fn manager(&self) -> Option<&Staff> {
-        let manager = self
-            .staffs
-            .iter()
-            .filter(|staff| staff.contract.is_some())
-            .find(|staff| {
-                staff
-                    .contract
-                    .as_ref()
-                    .expect("no staff contract found")
-                    .position
-                    == StaffPosition::Manager
-            });
-
-        match manager {
-            Some(_) => manager,
-            None => None,
-        }
-    }
-
     pub fn head_coach(&self) -> &Staff {
         match self.manager() {
-            Some(ref head_coach) => head_coach,
+            Some(head_coach) => head_coach,
             None => self.get_by_position(StaffPosition::AssistantManager),
         }
     }
@@ -212,6 +192,92 @@ impl StaffCollection {
                 .map(|c| c.position == position)
                 .unwrap_or(false)
         })
+    }
+
+    /// Mutable counterpart of `find_by_position`.
+    pub fn find_mut_by_position(&mut self, position: StaffPosition) -> Option<&mut Staff> {
+        self.staffs.iter_mut().find(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position == position)
+                .unwrap_or(false)
+        })
+    }
+
+    /// Any contracted staff matching one of the supplied positions.
+    /// Useful for "find any current coach" or similar role queries.
+    pub fn find_by_any_position(&self, positions: &[StaffPosition]) -> Option<&Staff> {
+        self.staffs.iter().find(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| positions.contains(&c.position))
+                .unwrap_or(false)
+        })
+    }
+
+    /// The head coach slot — permanent manager OR interim caretaker.
+    /// Returns `None` if neither seat is filled.
+    pub fn manager(&self) -> Option<&Staff> {
+        self.find_by_any_position(&[
+            StaffPosition::Manager,
+            StaffPosition::CaretakerManager,
+        ])
+    }
+
+    /// Mutable counterpart of `manager`.
+    pub fn manager_mut(&mut self) -> Option<&mut Staff> {
+        self.staffs.iter_mut().find(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| matches!(
+                    c.position,
+                    StaffPosition::Manager | StaffPosition::CaretakerManager
+                ))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Iterate contracted coaching staff (Manager, assistants, coaches, GK/fitness/youth coaches).
+    pub fn coaches(&self) -> impl Iterator<Item = &Staff> {
+        self.staffs.iter().filter(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position.is_coaching())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Iterate contracted medical staff (Physio, Head of Physio).
+    pub fn medical(&self) -> impl Iterator<Item = &Staff> {
+        self.staffs.iter().filter(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position.is_medical())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Iterate contracted scouting staff.
+    pub fn scouts(&self) -> impl Iterator<Item = &Staff> {
+        self.staffs.iter().filter(|s| {
+            s.contract
+                .as_ref()
+                .map(|c| c.position.is_scouting())
+                .unwrap_or(false)
+        })
+    }
+
+    /// Pick the coaching-staff member that maximises `score_fn`. Used to
+    /// choose a caretaker when the manager seat opens up. Returns id
+    /// rather than a borrow so callers can then take a mutable borrow
+    /// to update the contract without overlapping borrows.
+    pub fn best_coach_id<F>(&self, mut score_fn: F) -> Option<u32>
+    where
+        F: FnMut(&Staff) -> u32,
+    {
+        self.coaches()
+            .max_by_key(|s| score_fn(s))
+            .map(|s| s.id)
     }
 
     /// Best `working_with_youngsters` attribute among staff assigned to

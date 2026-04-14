@@ -216,6 +216,9 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::DressingRoomSpeech => "event_dressing_room_speech",
         HappinessEventType::SettledIntoSquad => "event_settled_into_squad",
         HappinessEventType::FeelingIsolated => "event_feeling_isolated",
+        HappinessEventType::SalaryGapNoticed => "event_salary_gap_noticed",
+        HappinessEventType::PromiseKept => "event_promise_kept",
+        HappinessEventType::PromiseBroken => "event_promise_broken",
     }
 }
 

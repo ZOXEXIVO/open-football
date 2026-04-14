@@ -72,6 +72,11 @@ impl LeagueResult {
                         stats!(player).assists += 1;
                     }
                 }
+                // Cards and fouls are tracked on per-player match statistics,
+                // not in score details — ignored here.
+                MatchStatisticType::YellowCard
+                | MatchStatisticType::RedCard
+                | MatchStatisticType::Foul => {}
             }
         }
 
@@ -94,6 +99,10 @@ impl LeagueResult {
                         s.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
                     }
                 }
+
+                // Cards accumulate onto the season stat (saturating — u8).
+                s.yellow_cards = s.yellow_cards.saturating_add(stats_data.yellow_cards as u8);
+                s.red_cards = s.red_cards.saturating_add(stats_data.red_cards as u8);
 
                 // Update running average rating
                 let games = s.played + s.played_subs;
@@ -171,6 +180,13 @@ impl LeagueResult {
         // DressingRoomSpeech event to every player who featured. Uses the
         // real-Player objects via player_mut() so morale actually moves.
         Self::apply_full_time_team_talks(result, details, data);
+
+        // Individual debriefs driven by match rating. <6.3 → criticism,
+        // >=7.5 → encouragement. Skips friendlies (low-stakes) and
+        // substitutes who barely featured.
+        if !is_friendly {
+            Self::apply_post_match_debriefs(details, data);
+        }
 
         // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
@@ -330,6 +346,38 @@ impl LeagueResult {
     /// attributes drive effectiveness. The actual magnitude-per-player uses
     /// personality (pressure, temperament, important_matches) via
     /// `club::team::team_talks::apply_team_talk`.
+    /// After each competitive match, rate-based individual debriefs. Bad
+    /// individual performances (rating <6.3) pick up a `ManagerCriticism`
+    /// event; standout performances (>=7.5) pick up `ManagerEncouragement`.
+    /// Already-ticking happiness-event machinery handles decay + morale
+    /// ripple — we just feed the events in.
+    fn apply_post_match_debriefs(
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+    ) {
+        use crate::HappinessEventType;
+        for (player_id, stats) in &details.player_stats {
+            // Ignore barely-featured players (unreliable ratings). Match
+            // rating is on a 1..10 scale; 0.0 means "no stats recorded".
+            if stats.match_rating < 1.0 {
+                continue;
+            }
+
+            if stats.match_rating < 6.3 {
+                if let Some(player) = data.player_mut(*player_id) {
+                    // Magnitude scales with how bad it was (6.3 → -2.0, 4.0 → -4.3).
+                    let mag = -(2.0 + (6.3 - stats.match_rating).clamp(0.0, 3.0));
+                    player.happiness.add_event(HappinessEventType::ManagerCriticism, mag);
+                }
+            } else if stats.match_rating >= 7.5 {
+                if let Some(player) = data.player_mut(*player_id) {
+                    let mag = 1.5 + (stats.match_rating - 7.5).clamp(0.0, 2.5);
+                    player.happiness.add_event(HappinessEventType::ManagerEncouragement, mag);
+                }
+            }
+        }
+    }
+
     fn apply_full_time_team_talks(
         result: &MatchResult,
         details: &MatchResultRaw,

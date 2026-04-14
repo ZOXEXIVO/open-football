@@ -165,7 +165,7 @@ pub async fn team_staff_action(
     let mut groups_map: std::collections::HashMap<&str, Vec<StaffMember>> =
         std::collections::HashMap::new();
 
-    for staff in &team.staffs.staffs {
+    for staff in team.staffs.iter() {
         let contract = match &staff.contract {
             Some(c) => c,
             None => continue,

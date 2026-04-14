@@ -490,7 +490,7 @@ impl PipelineProcessor {
                 .teams
                 .teams
                 .iter()
-                .flat_map(|t| &t.staffs.staffs)
+                .flat_map(|t| t.staffs.iter())
                 .flat_map(|s| s.staff_attributes.knowledge.known_regions.iter().copied())
                 .collect();
 

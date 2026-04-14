@@ -53,6 +53,42 @@ impl MatchPlayerStatistics {
             is_auto_goal: false,
         })
     }
+
+    pub fn add_foul(&mut self, match_second: u64) {
+        self.items.push(MatchPlayerStatisticsItem {
+            stat_type: MatchStatisticType::Foul,
+            match_second,
+            is_auto_goal: false,
+        })
+    }
+
+    pub fn add_yellow_card(&mut self, match_second: u64) {
+        self.items.push(MatchPlayerStatisticsItem {
+            stat_type: MatchStatisticType::YellowCard,
+            match_second,
+            is_auto_goal: false,
+        })
+    }
+
+    pub fn add_red_card(&mut self, match_second: u64) {
+        self.items.push(MatchPlayerStatisticsItem {
+            stat_type: MatchStatisticType::RedCard,
+            match_second,
+            is_auto_goal: false,
+        })
+    }
+
+    pub fn yellow_cards_count(&self) -> u16 {
+        self.items.iter()
+            .filter(|i| i.stat_type == MatchStatisticType::YellowCard)
+            .count() as u16
+    }
+
+    pub fn red_cards_count(&self) -> u16 {
+        self.items.iter()
+            .filter(|i| i.stat_type == MatchStatisticType::RedCard)
+            .count() as u16
+    }
 }
 
 impl Default for MatchPlayerStatistics {
@@ -72,6 +108,9 @@ pub struct MatchPlayerStatisticsItem {
 pub enum MatchStatisticType {
     Goal,
     Assist,
+    YellowCard,
+    RedCard,
+    Foul,
 }
 
 #[cfg(test)]

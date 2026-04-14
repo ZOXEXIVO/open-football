@@ -553,7 +553,7 @@ impl PipelineProcessor {
         for (club_id, staff_id, event_type) in staff_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
                 for team in &mut club.teams.teams {
-                    if let Some(staff) = team.staffs.staffs.iter_mut().find(|s| s.id == staff_id) {
+                    if let Some(staff) = team.staffs.find_mut(staff_id) {
                         staff.add_event(event_type);
                         break;
                     }
@@ -983,7 +983,7 @@ impl PipelineProcessor {
         for (club_id, staff_id, event_type) in staff_events {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
                 for team in &mut club.teams.teams {
-                    if let Some(staff) = team.staffs.staffs.iter_mut().find(|s| s.id == staff_id) {
+                    if let Some(staff) = team.staffs.find_mut(staff_id) {
                         staff.add_event(event_type);
                         break;
                     }

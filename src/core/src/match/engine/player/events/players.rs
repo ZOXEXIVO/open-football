@@ -91,6 +91,17 @@ enum TrajectoryType {
     Chip,
 }
 
+/// How dirty was the foul — drives card probabilities.
+/// `Normal`: shirt pull, mistimed challenge → occasional yellow.
+/// `Reckless`: studs-up, late, from behind → high yellow, sometimes red.
+/// `Violent`: denial of goalscoring opportunity or violent conduct → direct red.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FoulSeverity {
+    Normal,
+    Reckless,
+    Violent,
+}
+
 #[derive(Debug, Clone)]
 pub enum PlayerEvent {
     Goal(u32, bool),
@@ -110,7 +121,8 @@ pub enum PlayerEvent {
     ClaimBall(u32),
     GainBall(u32),
     CaughtBall(u32),
-    CommitFoul,
+    /// Foul committed by (fouler_id, severity). Dispatcher decides cards.
+    CommitFoul(u32, FoulSeverity),
     Offside(u32, Vector3<f32>),  // (offside_player_id, position_for_free_kick)
     RequestHeading(u32, Vector3<f32>),
     RequestShot(u32, Vector3<f32>),
@@ -219,8 +231,8 @@ impl PlayerEventDispatcher {
             PlayerEvent::RequestBallReceive(player_id) => {
                 Self::handle_request_ball_receive(player_id, field);
             }
-            PlayerEvent::CommitFoul => {
-                Self::handle_commit_foul_event(field);
+            PlayerEvent::CommitFoul(fouler_id, severity) => {
+                Self::handle_commit_foul_event(fouler_id, severity, field, context);
             }
             PlayerEvent::Offside(player_id, position) => {
                 Self::handle_offside_event(player_id, position, field);
@@ -956,17 +968,31 @@ impl PlayerEventDispatcher {
             return;
         }
 
-        // Calculate overall shooting accuracy (0.0 to 1.0)
-        // Composure always dampens accuracy — even great finishers miss under pressure
+        // Calculate overall shooting accuracy (0.0 to 1.0).
+        // Squared skill terms steepen the curve so mediocre finishers (skill 6-9)
+        // are genuinely inaccurate even at close range. Without this, a fast
+        // striker with Finishing 8 converts at ~elite rates simply by getting
+        // into position — linear weighting flattens the skill gap too much.
         let base_accuracy = if horizontal_distance > 100.0 {
             // Long shots depend more on long_shot skill and technique
-            (long_shot_skill * 0.5 + technique_skill * 0.3 + finishing_skill * 0.2) * composure_skill * 0.85
+            (long_shot_skill.powi(2) * 0.5
+                + technique_skill.powi(2) * 0.3
+                + finishing_skill.powi(2) * 0.2)
+                * composure_skill
+                * 0.85
         } else if horizontal_distance > 50.0 {
             // Medium range - balanced
-            (finishing_skill * 0.4 + technique_skill * 0.3 + long_shot_skill * 0.3) * composure_skill * 0.90
+            (finishing_skill.powi(2) * 0.4
+                + technique_skill.powi(2) * 0.3
+                + long_shot_skill.powi(2) * 0.3)
+                * composure_skill
+                * 0.90
         } else {
             // Close range - finishing is key, but still imperfect
-            (finishing_skill * 0.55 + technique_skill * 0.2 + composure_skill * 0.25) * 0.92
+            (finishing_skill.powi(2) * 0.55
+                + technique_skill.powi(2) * 0.2
+                + composure_skill.powi(2) * 0.25)
+                * 0.92
         };
 
         // Calculate target point within goal (aim for corners/areas based on skill)
@@ -1257,13 +1283,138 @@ impl PlayerEventDispatcher {
         }
     }
 
-    fn handle_commit_foul_event(field: &mut MatchField) {
-        // When a foul is committed, the current ball owner (victim) gets protected possession
-        // This simulates a free kick - the victim gets time to act without being challenged
+    fn handle_commit_foul_event(
+        fouler_id: u32,
+        severity: FoulSeverity,
+        field: &mut MatchField,
+        context: &mut MatchContext,
+    ) {
+        // Free-kick protection: the victim gets time without being challenged.
         if field.ball.current_owner.is_some() {
-            field.ball.claim_cooldown = 150; // ~2.5 seconds of protection (free kick setup)
-            field.ball.flags.in_flight_state = 150; // Prevent ClaimBall events from tackling states
-            field.ball.contested_claim_count = 0; // Reset contested counter
+            field.ball.claim_cooldown = 150; // ~2.5 seconds of protection
+            field.ball.flags.in_flight_state = 150;
+            field.ball.contested_claim_count = 0;
+        }
+
+        let match_second = context.total_match_time;
+
+        // Card decision — probability scales with severity and the fouler's
+        // aggression/dirtiness. Composure reduces the chance a little
+        // (cool-headed players get the benefit of the doubt).
+        let (card_yellow_prob, card_red_prob) = {
+            let player = match field.get_player_mut(fouler_id) {
+                Some(p) => p,
+                None => return,
+            };
+
+            // Count the foul itself whether or not it draws a card.
+            player.fouls_committed = player.fouls_committed.saturating_add(1);
+            player.statistics.add_foul(match_second);
+
+            let aggression = player.skills.mental.aggression / 20.0;
+            let composure = player.skills.mental.composure / 20.0;
+            let teamwork = player.skills.mental.teamwork / 20.0;
+
+            // Persistent fouler escalation — 3+ fouls = next one much more likely booked.
+            let persistent = if player.fouls_committed >= 3 { 0.15 } else { 0.0 };
+
+            // High-aggression, low-composure, low-teamwork = "dirty" player.
+            let aggressor_factor =
+                (aggression * 0.45 - composure * 0.15 - teamwork * 0.10).clamp(-0.20, 0.60);
+
+            match severity {
+                FoulSeverity::Normal => (
+                    (0.12 + aggressor_factor * 0.20 + persistent).clamp(0.02, 0.55),
+                    0.0_f32,
+                ),
+                FoulSeverity::Reckless => (
+                    (0.55 + aggressor_factor * 0.25 + persistent).clamp(0.20, 0.92),
+                    (0.08 + aggressor_factor * 0.15).clamp(0.01, 0.40),
+                ),
+                FoulSeverity::Violent => (0.0_f32, 1.0_f32),
+            }
+        };
+
+        let mut rng = rand::rng();
+        let roll_red = rng.random::<f32>();
+        let roll_yellow = rng.random::<f32>();
+
+        let direct_red = roll_red < card_red_prob;
+        let got_yellow = !direct_red && roll_yellow < card_yellow_prob;
+
+        if !direct_red && !got_yellow {
+            return;
+        }
+
+        let (second_yellow, ends_with_red) = {
+            let player = match field.get_player_mut(fouler_id) {
+                Some(p) => p,
+                None => return,
+            };
+            if direct_red {
+                player.statistics.add_red_card(match_second);
+                player.is_sent_off = true;
+                (false, true)
+            } else {
+                // Yellow — check for second caution.
+                player.yellow_cards = player.yellow_cards.saturating_add(1);
+                player.statistics.add_yellow_card(match_second);
+                if player.yellow_cards >= 2 {
+                    player.statistics.add_red_card(match_second);
+                    player.is_sent_off = true;
+                    (true, true)
+                } else {
+                    (false, false)
+                }
+            }
+        };
+
+        if ends_with_red {
+            // Transfer ball ownership back to a neutral state so the
+            // opposing side can restart. Zero the fouler's velocity and
+            // park them off the pitch so distance / collision checks stop
+            // treating them as an active participant.
+            if field.ball.current_owner == Some(fouler_id) {
+                field.ball.previous_owner = field.ball.current_owner;
+                field.ball.current_owner = None;
+                field.ball.pass_target_player_id = None;
+            }
+
+            // Capture team id before we stash the player off-pitch so we
+            // can reshape teammates afterwards.
+            let team_id = field
+                .get_player_mut(fouler_id)
+                .map(|p| p.team_id);
+
+            if let Some(player) = field.get_player_mut(fouler_id) {
+                player.velocity = Vector3::zeros();
+                // Stash them well beyond the sideline. Physics updates
+                // still run but no one is close enough to interact.
+                player.position = Vector3::new(-500.0, -500.0, 0.0);
+            }
+
+            // Compact the surviving team's shape — surviving players drop
+            // deeper and narrower to cover the numerical disadvantage.
+            if let Some(tid) = team_id {
+                field.compact_after_dismissal(tid);
+            }
+
+            if second_yellow {
+                debug!(
+                    "Second yellow → red: player {} at {}s (severity {:?})",
+                    fouler_id, match_second, severity
+                );
+            } else {
+                debug!(
+                    "Direct red: player {} at {}s (severity {:?})",
+                    fouler_id, match_second, severity
+                );
+            }
+        } else {
+            debug!(
+                "Yellow card: player {} at {}s (severity {:?})",
+                fouler_id, match_second, severity
+            );
         }
     }
 

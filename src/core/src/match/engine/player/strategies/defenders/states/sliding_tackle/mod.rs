@@ -1,7 +1,7 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
-use crate::r#match::player::events::PlayerEvent;
+use crate::r#match::player::events::{FoulSeverity, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 use nalgebra::Vector3;
 use rand::RngExt;
@@ -46,7 +46,8 @@ impl StateProcessingHandler for DefenderSlidingTackleState {
             }
 
             // 4. Attempt the sliding tackle
-            let (tackle_success, committed_foul) = self.attempt_sliding_tackle(ctx, &opponent);
+            let (tackle_success, committed_foul, foul_severity) =
+                self.attempt_sliding_tackle(ctx, &opponent);
 
             if tackle_success {
                 // Tackle is successful
@@ -71,10 +72,13 @@ impl StateProcessingHandler for DefenderSlidingTackleState {
                 let mut state_change =
                     StateChangeResult::with_defender_state(DefenderState::Standing);
 
-                // Generate a foul event
+                // Generate a foul event — sliding tackles skew more reckless.
                 state_change
                     .events
-                    .add(Event::PlayerEvent(PlayerEvent::CommitFoul));
+                    .add(Event::PlayerEvent(PlayerEvent::CommitFoul(
+                        ctx.player.id,
+                        foul_severity,
+                    )));
 
                 // Transition to appropriate state (e.g., ReactingToFoul)
                 // You may need to define additional states for handling fouls
@@ -130,28 +134,30 @@ impl DefenderSlidingTackleState {
         &self,
         ctx: &StateProcessingContext,
         _opponent: &MatchPlayerLite,
-    ) -> (bool, bool) {
+    ) -> (bool, bool, FoulSeverity) {
         let mut rng = rand::rng();
 
-        // Get defender's tackling-related skills
-        let tackling_skill = ctx.player.skills.technical.tackling  / 20.0; // Normalize to [0,1]
-        let aggression = ctx.player.skills.mental.aggression  / 20.0;
-        let composure = ctx.player.skills.mental.composure  / 20.0;
+        let tackling_skill = ctx.player.skills.technical.tackling / 20.0;
+        let aggression = ctx.player.skills.mental.aggression / 20.0;
+        let composure = ctx.player.skills.mental.composure / 20.0;
 
         let overall_skill = (tackling_skill + composure) / 2.0;
-
-        // Calculate success chance
         let success_chance = overall_skill * TACKLE_SUCCESS_BASE_CHANCE;
-
-        // Simulate tackle success
         let tackle_success = rng.random::<f32>() < success_chance;
 
-        // Calculate foul chance
         let foul_chance = (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.1;
-
-        // Simulate foul
         let committed_foul = !tackle_success && rng.random::<f32>() < foul_chance;
 
-        (tackle_success, committed_foul)
+        // Slide tackles that miss are typically reckless. Violent studs-up
+        // challenges are rare but possible for very aggressive players.
+        let severity = if !committed_foul {
+            FoulSeverity::Normal
+        } else if aggression > 0.78 && rng.random::<f32>() < 0.14 {
+            FoulSeverity::Violent
+        } else {
+            FoulSeverity::Reckless
+        };
+
+        (tackle_success, committed_foul, severity)
     }
 }

@@ -1,3 +1,4 @@
+use crate::club::player::ManagerPromiseKind;
 use crate::{ChangeType, HappinessEventType, PlayerStatusType, RelationshipChange, SimulatorData};
 
 pub struct TeamBehaviourResult {
@@ -74,6 +75,15 @@ impl TeamBehaviourResult {
                     match talk.talk_type {
                         ManagerTalkType::PlayingTimeTalk | ManagerTalkType::MoraleTalk => {
                             player.statuses.remove(PlayerStatusType::Unh);
+                            // A successful playing-time chat is a concrete
+                            // promise. 30-day horizon; verified weekly.
+                            if talk.talk_type == ManagerTalkType::PlayingTimeTalk {
+                                player.record_promise(
+                                    ManagerPromiseKind::PlayingTime,
+                                    sim_date,
+                                    30,
+                                );
+                            }
                         }
                         ManagerTalkType::TransferDiscussion => {
                             player.statuses.remove(PlayerStatusType::Req);

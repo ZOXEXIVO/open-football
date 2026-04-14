@@ -156,6 +156,9 @@ mod tests {
             match_rating: 0.0,
             xg,
             position_group,
+            fouls: 0,
+            yellow_cards: 0,
+            red_cards: 0,
         }
     }
 

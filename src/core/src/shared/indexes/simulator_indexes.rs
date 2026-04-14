@@ -65,7 +65,7 @@ impl SimulatorDataIndexes {
                             );
                         }
 
-                        for staff in &team.staffs.staffs {
+                        for staff in team.staffs.iter() {
                             self.add_staff_location(
                                 staff.id,
                                 continent.id,

@@ -1014,6 +1014,7 @@ impl NationalTeam {
             sold_from: None,
             traits: Vec::new(),
             rapport: PlayerRapport::new(),
+            promises: Vec::new(),
         }
     }
 

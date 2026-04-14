@@ -1,4 +1,4 @@
-use crate::r#match::MatchResult;
+use crate::r#match::{MatchResultOutcome, MatchResult};
 use crate::league::LeagueTable;
 use log::debug;
 use std::collections::HashMap;
@@ -37,27 +37,26 @@ impl LeagueDynamics {
         away_id: u32,
         result: &MatchResult,
     ) {
-        let home_won = result.score.home_team.get() > result.score.away_team.get();
-        let draw = result.score.home_team.get() == result.score.away_team.get();
+        // Use true outcome (including shootouts) so knockout ties that end
+        // on penalties push momentum toward the actual winner, not a draw.
+        let outcome = result.score.outcome();
 
         let home_val = *self.team_momentum.entry(home_id).or_insert(0.5);
         let away_val = *self.team_momentum.entry(away_id).or_insert(0.5);
 
-        let (new_home, new_away) = if home_won {
-            (
+        let (new_home, new_away) = match outcome {
+            MatchResultOutcome::HomeWin => (
                 (home_val * 0.8 + 0.3).min(1.0),
                 (away_val * 0.8 - 0.1).max(0.0),
-            )
-        } else if draw {
-            (
+            ),
+            MatchResultOutcome::Draw => (
                 (home_val * 0.9 + 0.05).min(1.0),
                 (away_val * 0.9 + 0.05).min(1.0),
-            )
-        } else {
-            (
+            ),
+            MatchResultOutcome::AwayWin => (
                 (home_val * 0.8 - 0.1).max(0.0),
                 (away_val * 0.8 + 0.3).min(1.0),
-            )
+            ),
         };
 
         self.team_momentum.insert(home_id, new_home);
@@ -65,37 +64,44 @@ impl LeagueDynamics {
     }
 
     pub fn update_team_streaks(&mut self, home_id: u32, away_id: u32, score: &crate::r#match::Score) {
-        let home_won = score.home_team.get() > score.away_team.get();
-        let draw = score.home_team.get() == score.away_team.get();
+        let outcome = score.outcome();
 
         let home_streak = self.team_streaks.entry(home_id).or_insert(TeamStreak::default());
-        if home_won {
-            home_streak.winning_streak += 1;
-            home_streak.unbeaten_streak += 1;
-            home_streak.losing_streak = 0;
-        } else if draw {
-            home_streak.unbeaten_streak += 1;
-            home_streak.winning_streak = 0;
-            home_streak.losing_streak = 0;
-        } else {
-            home_streak.losing_streak += 1;
-            home_streak.winning_streak = 0;
-            home_streak.unbeaten_streak = 0;
+        match outcome {
+            MatchResultOutcome::HomeWin => {
+                home_streak.winning_streak += 1;
+                home_streak.unbeaten_streak += 1;
+                home_streak.losing_streak = 0;
+            }
+            MatchResultOutcome::Draw => {
+                home_streak.unbeaten_streak += 1;
+                home_streak.winning_streak = 0;
+                home_streak.losing_streak = 0;
+            }
+            MatchResultOutcome::AwayWin => {
+                home_streak.losing_streak += 1;
+                home_streak.winning_streak = 0;
+                home_streak.unbeaten_streak = 0;
+            }
         }
 
         let away_streak = self.team_streaks.entry(away_id).or_insert(TeamStreak::default());
-        if !home_won && !draw {
-            away_streak.winning_streak += 1;
-            away_streak.unbeaten_streak += 1;
-            away_streak.losing_streak = 0;
-        } else if draw {
-            away_streak.unbeaten_streak += 1;
-            away_streak.winning_streak = 0;
-            away_streak.losing_streak = 0;
-        } else {
-            away_streak.losing_streak += 1;
-            away_streak.winning_streak = 0;
-            away_streak.unbeaten_streak = 0;
+        match outcome {
+            MatchResultOutcome::AwayWin => {
+                away_streak.winning_streak += 1;
+                away_streak.unbeaten_streak += 1;
+                away_streak.losing_streak = 0;
+            }
+            MatchResultOutcome::Draw => {
+                away_streak.unbeaten_streak += 1;
+                away_streak.winning_streak = 0;
+                away_streak.losing_streak = 0;
+            }
+            MatchResultOutcome::HomeWin => {
+                away_streak.losing_streak += 1;
+                away_streak.winning_streak = 0;
+                away_streak.unbeaten_streak = 0;
+            }
         }
     }
 

@@ -211,6 +211,7 @@ impl PlayerBuilder {
             sold_from: None,
             traits,
             rapport: PlayerRapport::new(),
+            promises: Vec::new(),
         })
     }
 }

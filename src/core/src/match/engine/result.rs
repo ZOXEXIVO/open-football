@@ -29,6 +29,12 @@ pub struct PlayerMatchEndStats {
     pub xg: f32,
     /// Player's position group for position-aware rating calculation.
     pub position_group: PlayerFieldPositionGroup,
+    /// Fouls committed by the player in this match.
+    pub fouls: u16,
+    /// Yellow cards received (0, 1, or 2).
+    pub yellow_cards: u16,
+    /// 1 if the player was sent off (either two yellows or direct red).
+    pub red_cards: u16,
 }
 
 #[derive(Debug)]
@@ -149,6 +155,59 @@ pub struct Score {
     pub away_team: TeamScore,
 
     pub details: Vec<GoalDetail>,
+
+    /// Penalty-shootout tally (0 if no shootout took place).
+    pub home_shootout: u8,
+    pub away_shootout: u8,
+}
+
+/// Outcome of a match from the home team's perspective, considering
+/// both the regulation (+ extra time) score and the shootout tally.
+/// Distinct from `club::MatchOutcome`, which is team-relative (Win/Draw/Loss).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MatchResultOutcome {
+    HomeWin,
+    AwayWin,
+    Draw,
+}
+
+impl Score {
+    /// True if the regulation + extra-time score is level.
+    pub fn is_tied(&self) -> bool {
+        self.home_team.get() == self.away_team.get()
+    }
+
+    /// Did a shootout take place? (Either side has shootout goals recorded.)
+    pub fn had_shootout(&self) -> bool {
+        self.home_shootout > 0 || self.away_shootout > 0
+    }
+
+    /// True outcome — accounts for penalty shootout tiebreak in knockouts.
+    /// Regulation-only consumers (league table, points) should use
+    /// `home_team.get()` / `away_team.get()` directly; those stay as-is.
+    pub fn outcome(&self) -> MatchResultOutcome {
+        let h = self.home_team.get();
+        let a = self.away_team.get();
+        if h > a {
+            return MatchResultOutcome::HomeWin;
+        }
+        if a > h {
+            return MatchResultOutcome::AwayWin;
+        }
+        // Regulation tied — use shootout if any kick was taken.
+        if self.had_shootout() {
+            if self.home_shootout > self.away_shootout {
+                MatchResultOutcome::HomeWin
+            } else if self.away_shootout > self.home_shootout {
+                MatchResultOutcome::AwayWin
+            } else {
+                // Shootout technically can't end tied, but belt-and-braces.
+                MatchResultOutcome::Draw
+            }
+        } else {
+            MatchResultOutcome::Draw
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -220,6 +279,8 @@ impl Score {
             home_team: TeamScore::new(home_team_id),
             away_team: TeamScore::new(away_team_id),
             details: Vec::new(),
+            home_shootout: 0,
+            away_shootout: 0,
         }
     }
 
