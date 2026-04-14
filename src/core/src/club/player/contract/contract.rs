@@ -233,6 +233,31 @@ impl PlayerClubContract {
     pub fn simulate(&mut self, context: &mut SimulationContext) {
         if context.check_contract_expiration() && self.is_expired(context.date) {}
     }
+
+    /// Severance the club must pay to tear this contract up today — the
+    /// cost of a mutual termination. Mirrors FM: cheap to exit youth and
+    /// part-time deals, fraction of the remaining wages for a full
+    /// professional deal (player accepts a haircut in exchange for
+    /// immediate freedom), zero for anything already expired.
+    ///
+    /// Returns 0 for loan contracts — those are recalled, not terminated.
+    pub fn termination_cost(&self, date: NaiveDate) -> u32 {
+        let days_remaining = (self.expiration - date).num_days();
+        if days_remaining <= 0 {
+            return 0;
+        }
+
+        let settlement_factor = match self.contract_type {
+            ContractType::Loan | ContractType::Amateur | ContractType::NonContract => return 0,
+            ContractType::Youth => 0.25,
+            ContractType::PartTime => 0.35,
+            ContractType::FullTime => 0.5,
+        };
+
+        let months_remaining = (days_remaining as f32 / 30.0).min(18.0);
+        let monthly_wage = self.salary as f32 / 12.0;
+        (months_remaining * monthly_wage * settlement_factor).max(0.0) as u32
+    }
 }
 
 // Bonuses

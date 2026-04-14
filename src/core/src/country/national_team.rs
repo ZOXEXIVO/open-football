@@ -1015,6 +1015,7 @@ impl NationalTeam {
             traits: Vec::new(),
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            pending_signing: None,
         }
     }
 

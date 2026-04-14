@@ -602,6 +602,7 @@ impl Player {
         now: NaiveDate,
         league_reputation: u16,
         coach: &CoachingEffect,
+        club_rep_0_to_1: f32,
     ) {
         let age = DateUtils::age(self.birth_date, now);
         let pa = self.player_attributes.potential_ability as f32;
@@ -644,6 +645,9 @@ impl Player {
 
         let comp_quality = competition_quality_multiplier(league_reputation);
 
+        // Extra boost while the player catches up to a clearly better club.
+        let step_up_mult = self.step_up_development_multiplier(now, club_rep_0_to_1);
+
         // ── Process each skill ────────────────────────────────────────
 
         let mut skills = skills_to_array(self);
@@ -677,7 +681,7 @@ impl Player {
 
             let change = if base > 0.0 {
                 // Growth: scale by all positive multipliers + position relevance + competition quality
-                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality * coach_mult * youth_coach_mult
+                base * personality * match_exp * official_bonus * rating_mult * gap * pos_rate_mult * comp_quality * coach_mult * youth_coach_mult * step_up_mult
             } else {
                 // Decline: position-irrelevant skills decline slightly faster
                 // Key skills are more "maintained" by regular use.

@@ -1,10 +1,8 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 use super::types::can_club_accept_player;
-use crate::{
-    Country, Person, Player, PlayerClubContract, PlayerHappiness, PlayerPlan, PlayerStatusType,
-    TeamInfo, TeamType,
-};
+use crate::club::player::events::{LoanCompletion, TransferCompletion};
+use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use crate::simulator::SimulatorData;
 
 /// Unified transfer execution — handles both domestic and cross-country.
@@ -140,12 +138,13 @@ pub(crate) fn execute_transfer_within_country(
             name: String::new(), slug: String::new(), reputation: 0,
             league_name: String::new(), league_slug: String::new(),
         });
-        player.on_transfer(&from, &to, fee, date);
-        player.sold_from = Some((selling_club_id, fee));
-
-        clear_transfer_statuses(&mut player);
-        assign_new_contract(&mut player, fee, date, false);
-        assign_signing_plan(&mut player, fee, date);
+        player.complete_transfer(TransferCompletion {
+            from: &from,
+            to: &to,
+            fee,
+            date,
+            selling_club_id,
+        });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.spend_from_transfer_budget(fee);
@@ -236,10 +235,7 @@ fn execute_loan_within_country(
 
         let loan_end = compute_loan_end(selling_league_id, country, date);
 
-        // Ensure parent contract doesn't expire during the loan.
-        // Extend it to at least loan_end + 1 year so the parent club
-        // has time to evaluate and renew after the player returns.
-        ensure_parent_contract_covers_loan(&mut player, loan_end);
+        player.ensure_contract_covers_loan_end(loan_end);
 
         // Check squad capacity BEFORE recording history — otherwise a rejected
         // loan creates a phantom career entry with no matching transfer record
@@ -267,19 +263,16 @@ fn execute_loan_within_country(
             name: String::new(), slug: String::new(), reputation: 0,
             league_name: String::new(), league_slug: String::new(),
         });
-        player.on_loan(&from, &to, loan_fee, date);
-
-        clear_transfer_statuses(&mut player);
+        let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, from_team_id, buying_club_id);
+        player.complete_loan(LoanCompletion {
+            from: &from,
+            to: &to,
+            loan_fee,
+            date,
+            loan_contract,
+        });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-            let salary = (loan_fee / 50.0).max(200.0) as u32;
-            // Match fee: parent club pays ~2% of the loan fee per appearance, min 500
-            let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
-            player.contract_loan = Some(
-                PlayerClubContract::new_loan(salary, loan_end, selling_club_id, from_team_id, buying_club_id)
-                    .with_loan_match_fee(match_fee)
-            );
-
             buying_club.finance.spend_from_transfer_budget(loan_fee);
             if !buying_club.teams.teams.is_empty() {
                 buying_club.teams.teams[0].players.add(player);
@@ -415,12 +408,13 @@ fn execute_transfer_across_countries(
         name: String::new(), slug: String::new(), reputation: 0,
         league_name: String::new(), league_slug: String::new(),
     });
-    player.on_transfer(&from_info, &to, fee, date);
-    player.sold_from = Some((selling_club_id, fee));
-
-    clear_transfer_statuses(&mut player);
-    assign_new_contract(&mut player, fee, date, false);
-    assign_signing_plan(&mut player, fee, date);
+    player.complete_transfer(TransferCompletion {
+        from: &from_info,
+        to: &to,
+        fee,
+        date,
+        selling_club_id,
+    });
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
         buying_club.finance.spend_from_transfer_budget(fee);
@@ -466,8 +460,7 @@ fn execute_loan_across_countries(
         }
     };
 
-    // Ensure parent contract doesn't expire during the loan.
-    ensure_parent_contract_covers_loan(&mut player, loan_end);
+    player.ensure_contract_covers_loan_end(loan_end);
 
     let buying_country = match data.country_mut(buying_country_id) {
         Some(c) => c,
@@ -496,18 +489,16 @@ fn execute_loan_across_countries(
         name: String::new(), slug: String::new(), reputation: 0,
         league_name: String::new(), league_slug: String::new(),
     });
-    player.on_loan(&from_info, &to, loan_fee, date);
-
-    clear_transfer_statuses(&mut player);
+    let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, 0, buying_club_id);
+    player.complete_loan(LoanCompletion {
+        from: &from_info,
+        to: &to,
+        loan_fee,
+        date,
+        loan_contract,
+    });
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
-        let salary = (loan_fee / 50.0).max(200.0) as u32;
-        let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
-        player.contract_loan = Some(
-            PlayerClubContract::new_loan(salary, loan_end, selling_club_id, 0, buying_club_id)
-                .with_loan_match_fee(match_fee)
-        );
-
         buying_club.finance.spend_from_transfer_budget(loan_fee);
         if !buying_club.teams.teams.is_empty() {
             buying_club.teams.teams[0].players.add(player);
@@ -541,62 +532,17 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
         })
 }
 
-fn clear_transfer_statuses(player: &mut Player) {
-    player.statuses.remove(PlayerStatusType::Lst);
-    player.statuses.remove(PlayerStatusType::Loa);
-    player.statuses.remove(PlayerStatusType::Frt);
-    player.statuses.remove(PlayerStatusType::Req);
-    player.statuses.remove(PlayerStatusType::Unh);
-    player.statuses.remove(PlayerStatusType::Trn);
-    player.statuses.remove(PlayerStatusType::Bid);
-    player.statuses.remove(PlayerStatusType::Wnt);
-    player.statuses.remove(PlayerStatusType::Sct);
-    player.statuses.remove(PlayerStatusType::Enq);
-    player.happiness = PlayerHappiness::new();
-}
-
-fn assign_new_contract(player: &mut Player, fee: f64, date: NaiveDate, _is_loan: bool) {
-    let contract_years = if player.age(date) < 24 { 5 }
-    else if player.age(date) < 28 { 4 }
-    else if player.age(date) < 32 { 3 }
-    else { 2 };
-    let expiry = date.checked_add_signed(chrono::Duration::days(contract_years * 365))
-        .unwrap_or(date);
-    // Salary proportional to fee: ~5% of transfer fee as annual wage, min 500
-    // A 10M transfer → 500K/year, a 100K transfer → 5K/year
-    let salary = (fee * 0.05).max(500.0) as u32;
-    player.contract = Some(PlayerClubContract::new(salary, expiry));
-    player.contract_loan = None;
-}
-
-/// Assign a signing plan to a permanently transferred player.
-/// The plan captures the club's intent: the player gets a fair evaluation
-/// window (time + minimum appearances) before they can be listed for sale.
-/// Loans don't get plans — they're temporary by nature.
-fn assign_signing_plan(player: &mut Player, fee: f64, date: NaiveDate) {
-    let age = player.age(date);
-    player.plan = Some(PlayerPlan::from_signing(age, fee, date));
-}
-
-/// Extend the player's parent contract so it doesn't expire during the loan.
-/// If the contract would expire before `loan_end + 1 year`, push it out.
-/// Safety net: the parent club will attempt a proper renewal while the player
-/// is on loan, but if the player rejects, this ensures the contract still
-/// covers the loan period.
-fn ensure_parent_contract_covers_loan(player: &mut Player, loan_end: NaiveDate) {
-    let min_expiry = loan_end
-        .checked_add_signed(chrono::Duration::days(365))
-        .unwrap_or(loan_end);
-
-    if let Some(ref mut contract) = player.contract {
-        if contract.expiration < min_expiry {
-            debug!(
-                "Extending parent contract for player {} from {} to {} (loan ends {})",
-                player.id, contract.expiration, min_expiry, loan_end
-            );
-            contract.expiration = min_expiry;
-        }
-    }
+fn build_loan_contract(
+    loan_fee: f64,
+    loan_end: NaiveDate,
+    parent_club_id: u32,
+    parent_team_id: u32,
+    buying_club_id: u32,
+) -> PlayerClubContract {
+    let salary = (loan_fee / 50.0).max(200.0) as u32;
+    let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
+    PlayerClubContract::new_loan(salary, loan_end, parent_club_id, parent_team_id, buying_club_id)
+        .with_loan_match_fee(match_fee)
 }
 
 fn compute_loan_end(league_id: Option<u32>, country: &Country, date: NaiveDate) -> NaiveDate {

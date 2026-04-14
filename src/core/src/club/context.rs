@@ -12,6 +12,8 @@ pub struct ClubContext<'c> {
     pub league_size: u8,
     /// Total matches in a full season (for season progress calculation)
     pub total_league_matches: u8,
+    /// League matches the main team has actually played this season.
+    pub league_matches_played: u8,
     /// Best physiotherapy score on the club staff (0.0-1.0).
     /// Drives injury recovery speedup and preventive rest.
     pub medical_quality: f32,
@@ -43,6 +45,7 @@ impl<'c> ClubContext<'c> {
             league_position: 0,
             league_size: 0,
             total_league_matches: 0,
+            league_matches_played: 0,
             medical_quality: 0.35,
             sports_science_quality: 0.35,
             youth_coaching_quality: 0.35,
@@ -61,10 +64,17 @@ impl<'c> ClubContext<'c> {
         self
     }
 
-    pub fn with_league_position(mut self, position: u8, league_size: u8, total_matches: u8) -> Self {
+    pub fn with_league_position(
+        mut self,
+        position: u8,
+        league_size: u8,
+        total_matches: u8,
+        matches_played: u8,
+    ) -> Self {
         self.league_position = position;
         self.league_size = league_size;
         self.total_league_matches = total_matches;
+        self.league_matches_played = matches_played;
         self
     }
 

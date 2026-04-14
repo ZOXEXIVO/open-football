@@ -1,12 +1,12 @@
-use crate::club::team::behaviour::{ManagerTalkResult, ManagerTalkType, PlayerRelationshipChangeResult, TeamBehaviourResult};
+use crate::club::team::behaviour::{ContractTermination, ManagerTalkResult, ManagerTalkType, PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::{DateUtils, FloatUtils};
 use crate::{
-    ChangeType, HappinessEventType, Person, PersonBehaviourState, Player, PlayerCollection,
-    PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType, Staff,
-    StaffCollection, StaffPosition,
+    ChangeType, ContractType, HappinessEventType, Person, PersonBehaviourState, Player,
+    PlayerCollection, PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType,
+    Staff, StaffCollection, StaffPosition,
 };
-use chrono::Datelike;
+use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 #[derive(Debug, Clone)]
@@ -129,6 +129,10 @@ impl TeamBehaviour {
 
         // Playing time complaints (player-initiated requests)
         Self::process_playing_time_complaints(players, staffs, &mut result, &ctx);
+
+        // Head-coach-driven squad cleanup: terminate contracts of players
+        // the manager has given up on, provided the payout is acceptable.
+        Self::process_coach_contract_terminations(players, staffs, &mut result, &ctx);
 
         debug!(
             "Full team behaviour update complete - {} relationship changes, {} manager talks",
@@ -1362,6 +1366,107 @@ impl TeamBehaviour {
                     Self::conduct_loan_or_playing_time_talk(manager, player, talk_type.clone());
                 result.manager_talks.push(talk_result);
             }
+        }
+    }
+
+    // ========== COACH-DRIVEN CONTRACT TERMINATION ==========
+
+    /// Head coach reviews the squad for unwanted players whose contracts
+    /// can be torn up cheaply. Fires when the three FM-style criteria line
+    /// up: the player is structurally surplus (NotNeeded or a deadwood
+    /// youth), they're not a developing prospect, and the payout is small
+    /// enough that the club would rather eat it than keep paying wages.
+    fn process_coach_contract_terminations(
+        players: &PlayerCollection,
+        staffs: &StaffCollection,
+        result: &mut TeamBehaviourResult,
+        ctx: &GlobalContext<'_>,
+    ) {
+        if staffs.find_by_position(StaffPosition::Manager).is_none() {
+            return;
+        }
+
+        let date = ctx.simulation.date.date();
+
+        // Use one month of the squad's total wage bill as the cap for a
+        // cheap termination — clubs tolerate a payout of that size to free
+        // a squad slot. Scales naturally with club size/wealth.
+        let monthly_wage_bill: u64 = players
+            .players
+            .iter()
+            .filter(|p| !p.is_on_loan())
+            .filter_map(|p| p.contract.as_ref().map(|c| c.salary as u64 / 12))
+            .sum();
+        let payout_cap = (monthly_wage_bill / 2).max(5_000) as u32;
+
+        const MAX_TERMINATIONS_PER_WEEK: usize = 2;
+        let mut emitted = 0;
+
+        for player in &players.players {
+            if emitted >= MAX_TERMINATIONS_PER_WEEK {
+                break;
+            }
+            if let Some((payout, reason)) = Self::evaluate_termination(player, date, payout_cap) {
+                result.contract_terminations.push(ContractTermination {
+                    player_id: player.id,
+                    payout,
+                    reason,
+                });
+                emitted += 1;
+            }
+        }
+    }
+
+    /// Decide whether this player's contract should be terminated today.
+    /// Returns the payout and a short reason code; None means keep.
+    fn evaluate_termination(
+        player: &Player,
+        date: NaiveDate,
+        payout_cap: u32,
+    ) -> Option<(u32, &'static str)> {
+        if player.is_on_loan() {
+            return None;
+        }
+        let contract = player.contract.as_ref()?;
+
+        // Don't tear up an existing sale — they're leaving anyway.
+        if contract.is_transfer_listed {
+            // Listed but still sitting around after a while? Let the market
+            // finish its job; termination is a last resort, not the first.
+        }
+
+        // Promising youngsters stay even when squad-status says NotNeeded.
+        let age = DateUtils::age(player.birth_date, date);
+        let ca = player.player_attributes.current_ability;
+        let pa = player.player_attributes.potential_ability;
+        let is_prospect = age <= 23 && pa > ca + 15;
+        if is_prospect {
+            return None;
+        }
+
+        // Any player the squad really needs stays.
+        let unneeded = matches!(
+            contract.squad_status,
+            PlayerSquadStatus::NotNeeded | PlayerSquadStatus::NotYetSet
+        );
+        if !unneeded {
+            return None;
+        }
+
+        let payout = contract.termination_cost(date);
+
+        // Free release (youth / amateur / non-contract / expiring): always
+        // fine. Paid buyouts only if below the club's comfort threshold.
+        let reason = match contract.contract_type {
+            ContractType::Youth => "term_reason_youth_surplus",
+            ContractType::Amateur | ContractType::NonContract => "term_reason_free_release",
+            _ => "term_reason_surplus_squad",
+        };
+
+        if payout == 0 || payout <= payout_cap {
+            Some((payout, reason))
+        } else {
+            None
         }
     }
 

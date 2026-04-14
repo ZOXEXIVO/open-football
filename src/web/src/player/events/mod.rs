@@ -189,6 +189,13 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::DressingRoomSpeech
             | HappinessEventType::SettledIntoSquad
             | HappinessEventType::FeelingIsolated
+            | HappinessEventType::AmbitionShock
+            | HappinessEventType::SalaryShock
+            | HappinessEventType::RoleMismatch
+            | HappinessEventType::DreamMove
+            | HappinessEventType::SalaryBoost
+            | HappinessEventType::JoiningElite
+            | HappinessEventType::ContractTerminated
     )
 }
 
@@ -219,6 +226,13 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::SalaryGapNoticed => "event_salary_gap_noticed",
         HappinessEventType::PromiseKept => "event_promise_kept",
         HappinessEventType::PromiseBroken => "event_promise_broken",
+        HappinessEventType::AmbitionShock => "event_ambition_shock",
+        HappinessEventType::SalaryShock => "event_salary_shock",
+        HappinessEventType::RoleMismatch => "event_role_mismatch",
+        HappinessEventType::DreamMove => "event_dream_move",
+        HappinessEventType::SalaryBoost => "event_salary_boost",
+        HappinessEventType::JoiningElite => "event_joining_elite",
+        HappinessEventType::ContractTerminated => "event_contract_terminated",
     }
 }
 

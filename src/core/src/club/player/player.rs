@@ -1,4 +1,6 @@
+use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::builder::PlayerBuilder;
+use crate::club::player::happiness::TeamSeasonState;
 use crate::club::player::development::CoachingEffect;
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::language::PlayerLanguage;
@@ -6,6 +8,7 @@ use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::utils::PlayerUtils;
+use crate::HappinessEventType;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
     PlayerResult, PlayerSkills, PlayerTraining,
@@ -83,6 +86,12 @@ pub struct Player {
     /// Verified weekly — kept promises reinforce the manager relationship,
     /// broken ones erode it and tank morale.
     pub promises: Vec<ManagerPromise>,
+
+    /// Transient transfer context — set by the transfer pipeline when this
+    /// player moves to a new club, consumed by the player's own weekly
+    /// processing to emit shock events, check role fit, and record an
+    /// implicit playing-time promise. Cleared once consumed.
+    pub pending_signing: Option<PendingSigning>,
 }
 
 /// What the manager committed to. Deliberately narrow — each new variant
@@ -182,13 +191,13 @@ impl Player {
         });
 
         if kept_count > 0 {
-            self.happiness.add_event(crate::HappinessEventType::PromiseKept, 4.0 * kept_count as f32);
+            self.happiness.add_event(HappinessEventType::PromiseKept, 4.0 * kept_count as f32);
             // Directly reinforce the manager-relationship factor too.
             self.happiness.factors.manager_relationship =
                 (self.happiness.factors.manager_relationship + 2.0 * kept_count as f32).clamp(-15.0, 15.0);
         }
         if broken_count > 0 {
-            self.happiness.add_event(crate::HappinessEventType::PromiseBroken, -6.0 * broken_count as f32);
+            self.happiness.add_event(HappinessEventType::PromiseBroken, -6.0 * broken_count as f32);
             self.happiness.factors.manager_relationship =
                 (self.happiness.factors.manager_relationship - 4.0 * broken_count as f32).clamp(-15.0, 15.0);
             // Broken playing-time promise often becomes a transfer request eventually.
@@ -204,6 +213,21 @@ impl Player {
         // Birthday
         if DateUtils::is_birthday(self.birth_date, now.date()) {
             self.behaviour.try_increase();
+        }
+
+        // First tick after a transfer: react to the new club — ambition /
+        // salary shocks, role fit, implicit playing-time promise. No-op if
+        // nothing is pending.
+        if self.pending_signing.is_some() {
+            let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
+            let club_rep = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);
+            let formation = ctx.team.as_ref().and_then(|t| t.formation);
+            self.process_transfer_shock(
+                now.date(),
+                club_rep,
+                country_code,
+                formation.as_ref(),
+            );
         }
 
         // Injury recovery (daily) — driven by the parent club's medical
@@ -226,7 +250,18 @@ impl Player {
             // Verify promises before happiness so kept/broken events feed
             // into the same weekly morale recalculation.
             self.verify_promises(now.date());
-            self.process_happiness(&mut result, now.date(), team_reputation);
+            let season_state = TeamSeasonState {
+                league_position: ctx.club.as_ref().map(|c| c.league_position).unwrap_or(0),
+                league_size: ctx.club.as_ref().map(|c| c.league_size).unwrap_or(0),
+                season_progress: ctx.club.as_ref()
+                    .map(|c| if c.total_league_matches > 0 {
+                        c.league_matches_played as f32 / c.total_league_matches as f32
+                    } else { 0.0 })
+                    .unwrap_or(0.0)
+                    .clamp(0.0, 1.0),
+                league_reputation: ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0),
+            };
+            self.process_happiness(&mut result, now.date(), team_reputation, season_state);
             // Natural skill development (weekly). Build the coaching effect
             // once per player from the club's best coach scores.
             let league_reputation = ctx.league.as_ref().map(|l| l.reputation).unwrap_or(0);
@@ -241,10 +276,13 @@ impl Player {
                     c.youth_coaching_quality,
                 ))
                 .unwrap_or_else(CoachingEffect::neutral);
-            self.process_development(now.date(), league_reputation, &coach_effect);
+            self.process_development(now.date(), league_reputation, &coach_effect, team_reputation);
             // Language learning when playing abroad
             let country_code = ctx.country.as_ref().map(|c| c.code.as_str()).unwrap_or("");
             self.process_language_learning(now.date(), country_code);
+            // Post-transfer integration: bonding / isolation events for the
+            // first ~24 weeks at a new club.
+            self.process_integration(now.date(), country_code);
         }
 
         // Contract processing

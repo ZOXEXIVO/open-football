@@ -71,8 +71,17 @@ impl Team {
             );
         }
 
-        // Pass team reputation to players via context
-        let player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
+        // Pick (or keep) the team tactic before simulating players so the
+        // player context carries the right formation for role-fit checks.
+        if self.tactics.is_none() {
+            self.tactics = Some(TacticsSelector::select(self, self.staffs.head_coach()));
+        };
+
+        let mut player_ctx = ctx.with_team_reputation(self.id, self.reputation.overall_score());
+        if let (Some(team_ctx), Some(tac)) = (player_ctx.team.as_mut(), self.tactics.as_ref()) {
+            team_ctx.formation = Some(*tac.positions());
+        }
+
         let result = TeamResult::new(
             self.id,
             self.players.simulate(player_ctx.with_player(None)),
@@ -81,10 +90,6 @@ impl Team {
                 .simulate(&mut self.players, &mut self.staffs, ctx.with_team(self.id)),
             TeamTraining::train(self, ctx.simulation.date, ctx.club_facilities_training()),
         );
-
-        if self.tactics.is_none() {
-            self.tactics = Some(TacticsSelector::select(self, self.staffs.head_coach()));
-        };
 
         if self.training_schedule.is_default {
             //let coach = self.staffs.head_coach();

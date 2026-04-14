@@ -784,6 +784,7 @@ impl PlayerGenerator {
             traits: Vec::new(), // academy youth start with no traits; grow via training
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            pending_signing: None,
         }
     }
 

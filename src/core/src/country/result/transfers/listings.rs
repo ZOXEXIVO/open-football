@@ -324,11 +324,17 @@ impl CountryResult {
             }
         }
 
-        // Aging players past their prime
-        if age >= 32 && ca_i < avg + 5 {
-            return ListingDecision::Transfer {
-                reason: "dec_reason_aging_declining".to_string(),
-            };
+        // Aging players past their prime — only top clubs cycle aging
+        // squad-average players out. Smaller clubs keep them to the end of
+        // their careers: loyalty, shorter shopping lists, a 35-year-old
+        // stalwart at a regional club is a feature, not a problem.
+        if rep_level.cycles_aging_squad() {
+            let aging_threshold = aging_listing_threshold(player.position().position_group());
+            if age >= aging_threshold && ca_i < avg + 5 {
+                return ListingDecision::Transfer {
+                    reason: "dec_reason_aging_declining".to_string(),
+                };
+            }
         }
 
         // Below-average players in large squads — wealth-aware threshold
@@ -396,8 +402,10 @@ impl CountryResult {
             };
         }
 
-        // Aging or peaked → transfer
-        if age >= 30 || pa <= ca {
+        // Aging or peaked → transfer. "Aging" scales with position group so
+        // a 30-year-old GK isn't treated the same as a 30-year-old winger.
+        let peaked_age = aging_listing_threshold(player.position().position_group()).saturating_sub(2);
+        if age >= peaked_age || pa <= ca {
             return ListingDecision::Transfer {
                 reason: "dec_reason_peaked_declining".to_string(),
             };
@@ -462,5 +470,18 @@ impl CountryResult {
             amount: base_value.amount * multiplier,
             currency: base_value.currency,
         }
+    }
+}
+
+/// Age at which a mid-tier player at or below squad average is considered
+/// "past his prime" for transfer-listing purposes. Mirrors real-world
+/// career lengths: keepers last longest, forwards (speed-dependent)
+/// decline first, defenders and holding midfielders sit in between.
+fn aging_listing_threshold(group: PlayerFieldPositionGroup) -> u8 {
+    match group {
+        PlayerFieldPositionGroup::Goalkeeper => 37,
+        PlayerFieldPositionGroup::Defender => 34,
+        PlayerFieldPositionGroup::Midfielder => 33,
+        PlayerFieldPositionGroup::Forward => 32,
     }
 }

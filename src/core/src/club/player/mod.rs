@@ -24,6 +24,8 @@ pub mod utils;
 pub mod builder;
 pub mod language;
 pub mod plan;
+pub mod adaptation;
+pub mod events;
 mod display;
 
 pub use attributes::*;

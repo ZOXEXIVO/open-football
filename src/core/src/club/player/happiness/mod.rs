@@ -1,4 +1,5 @@
 mod types;
-mod processing;
+pub(crate) mod processing;
 
+pub use processing::TeamSeasonState;
 pub use types::*;

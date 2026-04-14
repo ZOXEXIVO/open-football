@@ -4,6 +4,16 @@ use crate::{ChangeType, HappinessEventType, PlayerStatusType, RelationshipChange
 pub struct TeamBehaviourResult {
     pub players: PlayerBehaviourResult,
     pub manager_talks: Vec<ManagerTalkResult>,
+    /// Head-coach-approved mutual contract terminations pending finance
+    /// and player-state commit. Applied in `process()`.
+    pub contract_terminations: Vec<ContractTermination>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ContractTermination {
+    pub player_id: u32,
+    pub payout: u32,
+    pub reason: &'static str,
 }
 
 impl Default for TeamBehaviourResult {
@@ -17,12 +27,40 @@ impl TeamBehaviourResult {
         TeamBehaviourResult {
             players: PlayerBehaviourResult::new(),
             manager_talks: Vec::new(),
+            contract_terminations: Vec::new(),
         }
     }
 
     pub fn process(&self, data: &mut SimulatorData) {
         self.players.process(data);
         self.process_manager_talks(data);
+        self.process_contract_terminations(data);
+    }
+
+    fn process_contract_terminations(&self, data: &mut SimulatorData) {
+        let date = data.date.date();
+        for termination in &self.contract_terminations {
+            let club_id = match data
+                .indexes
+                .as_ref()
+                .and_then(|i| i.get_player_location(termination.player_id))
+            {
+                Some((_, _, club_id, _)) => club_id,
+                None => continue,
+            };
+            if let Some(player) = data.player_mut(termination.player_id) {
+                player.on_contract_terminated(date);
+            }
+            if termination.payout > 0 {
+                if let Some(club) = data.club_mut(club_id) {
+                    club.finance.balance.push_expense_player_wages(termination.payout as i64);
+                }
+            }
+            log::debug!(
+                "Contract terminated: player {} by club {} — payout {} ({})",
+                termination.player_id, club_id, termination.payout, termination.reason
+            );
+        }
     }
 
     fn process_manager_talks(&self, data: &mut SimulatorData) {

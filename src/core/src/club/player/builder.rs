@@ -212,6 +212,7 @@ impl PlayerBuilder {
             traits,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
+            pending_signing: None,
         })
     }
 }

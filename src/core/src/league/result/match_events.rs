@@ -1,13 +1,13 @@
 use std::collections::HashMap;
 use crate::club::player::contract::ContractBonusType;
+use crate::club::player::events::{MatchOutcome, MatchParticipation};
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone};
 use crate::club::StaffPosition;
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
-use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
-use crate::HappinessEventType;
 use super::LeagueResult;
 
 impl LeagueResult {
@@ -17,8 +17,6 @@ impl LeagueResult {
             None => return,
         };
 
-        // Look up match type flags before mutable borrows
-        // Continental cup matches (CL/EL/etc.) use a reserved ID range starting at 900_000_000
         let is_cup = result.league_id >= 900_000_000;
         let is_friendly = if is_cup {
             false
@@ -28,221 +26,44 @@ impl LeagueResult {
                 .unwrap_or(false)
         };
 
-        // Helper macro to select the correct statistics field
-        macro_rules! stats {
-            ($player:expr) => {
-                if is_cup { &mut $player.cup_statistics }
-                else if is_friendly { &mut $player.friendly_statistics }
-                else { &mut $player.statistics }
-            };
-        }
+        // Players inside their post-transfer settlement window play at a
+        // reduced level. Dampened rating feeds into season averages, POM
+        // selection, debriefs, and reputation.
+        let now_date = data.date.date();
+        let effective_ratings = compute_effective_ratings(details, data, now_date);
+        let best_player_id = pick_player_of_the_match(details, &effective_ratings);
 
-        // Mark players as played (main squad) or played_subs (substitutes)
-        for player_id in &details.left_team_players.main {
-            if let Some(player) = data.player_mut(*player_id) {
-                stats!(player).played += 1;
-            }
-        }
-        for player_id in &details.left_team_players.substitutes_used {
-            if let Some(player) = data.player_mut(*player_id) {
-                stats!(player).played_subs += 1;
-            }
-        }
-        for player_id in &details.right_team_players.main {
-            if let Some(player) = data.player_mut(*player_id) {
-                stats!(player).played += 1;
-            }
-        }
-        for player_id in &details.right_team_players.substitutes_used {
-            if let Some(player) = data.player_mut(*player_id) {
-                stats!(player).played_subs += 1;
-            }
-        }
+        let (league_weight, world_weight) = reputation_weights(result, is_cup, data);
 
-        // Goals and assists from score details
-        for detail in &result.score.details {
-            match detail.stat_type {
-                MatchStatisticType::Goal => {
-                    if let Some(player) = data.player_mut(detail.player_id) {
-                        stats!(player).goals += 1;
-                    }
-                }
-                MatchStatisticType::Assist => {
-                    if let Some(player) = data.player_mut(detail.player_id) {
-                        stats!(player).assists += 1;
-                    }
-                }
-                // Cards and fouls are tracked on per-player match statistics,
-                // not in score details — ignored here.
-                MatchStatisticType::YellowCard
-                | MatchStatisticType::RedCard
-                | MatchStatisticType::Foul => {}
-            }
-        }
-
-        // Per-player stats (shots, passes, tackles, rating)
-        let mut best_rating: f32 = 0.0;
-        let mut best_player_id: Option<u32> = None;
-
-        for (player_id, stats_data) in &details.player_stats {
-            if let Some(player) = data.player_mut(*player_id) {
-                let s = stats!(player);
-                s.shots_on_target += stats_data.shots_on_target as f32;
-                s.tackling += stats_data.tackles as f32;
-                if stats_data.passes_attempted > 0 {
-                    let match_pct = (stats_data.passes_completed as f32 / stats_data.passes_attempted as f32 * 100.0) as u8;
-                    let games = s.played + s.played_subs;
-                    if games <= 1 {
-                        s.passes = match_pct;
-                    } else {
-                        let prev = s.passes as f32;
-                        s.passes = ((prev * (games - 1) as f32 + match_pct as f32) / games as f32) as u8;
-                    }
-                }
-
-                // Cards accumulate onto the season stat (saturating — u8).
-                s.yellow_cards = s.yellow_cards.saturating_add(stats_data.yellow_cards as u8);
-                s.red_cards = s.red_cards.saturating_add(stats_data.red_cards as u8);
-
-                // Update running average rating
-                let games = s.played + s.played_subs;
-                if games <= 1 {
-                    s.average_rating = stats_data.match_rating;
-                } else {
-                    let prev = s.average_rating;
-                    s.average_rating =
-                        (prev * (games - 1) as f32 + stats_data.match_rating) / games as f32;
-                }
-
-                // Track best rating for player of the match
-                if stats_data.match_rating > best_rating {
-                    best_rating = stats_data.match_rating;
-                    best_player_id = Some(*player_id);
-                }
-            }
-        }
-
-        // Award player of the match
-        if let Some(motm_id) = best_player_id {
-            if let Some(player) = data.player_mut(motm_id) {
-                stats!(player).player_of_the_match += 1;
-                player.happiness.add_event(HappinessEventType::PlayerOfTheMatch, 4.0);
-            }
-        }
-
-        // Goalkeeper stats: conceded goals and clean sheets
         let home_goals = result.score.home_team.get();
         let away_goals = result.score.away_team.get();
         let home_team_id = result.score.home_team.team_id;
 
-        // Find starting goalkeepers by checking main squad players' positions
-        for &gk_id in details.left_team_players.main.iter() {
-            if let Some(player) = data.player_mut(gk_id) {
-                if player.position().is_goalkeeper() {
-                    let goals_against = if details.left_team_players.team_id == home_team_id {
-                        away_goals
-                    } else {
-                        home_goals
-                    };
-                    stats!(player).conceded += goals_against as u16;
-                    if goals_against == 0 {
-                        stats!(player).clean_sheets += 1;
-                    }
-                }
-            }
-        }
-        for &gk_id in details.right_team_players.main.iter() {
-            if let Some(player) = data.player_mut(gk_id) {
-                if player.position().is_goalkeeper() {
-                    let goals_against = if details.right_team_players.team_id == home_team_id {
-                        away_goals
-                    } else {
-                        home_goals
-                    };
-                    stats!(player).conceded += goals_against as u16;
-                    if goals_against == 0 {
-                        stats!(player).clean_sheets += 1;
-                    }
-                }
-            }
+        // Per-player match reaction — Player owns all bookkeeping.
+        for side in [&details.left_team_players, &details.right_team_players] {
+            let conceded = if side.team_id == home_team_id { away_goals } else { home_goals };
+            dispatch_match_outcomes(
+                side,
+                conceded,
+                details,
+                data,
+                &effective_ratings,
+                best_player_id,
+                is_friendly,
+                is_cup,
+                league_weight,
+                world_weight,
+            );
         }
 
-        // Process loan match fees for official matches.
-        // The parent club pays the borrowing club for each appearance.
         if !is_friendly {
             Self::process_loan_match_fees(details, data);
-            // Contract clause payouts (appearance / goal / clean-sheet bonuses)
             Self::process_contract_bonuses(result, details, data);
         }
 
-        // Post-match full-time team talks. Choose tone based on match
-        // outcome vs pre-match expectations (rep gap), then apply a
-        // DressingRoomSpeech event to every player who featured. Uses the
-        // real-Player objects via player_mut() so morale actually moves.
         Self::apply_full_time_team_talks(result, details, data);
-
-        // Individual debriefs driven by match rating. <6.3 → criticism,
-        // >=7.5 → encouragement. Skips friendlies (low-stakes) and
-        // substitutes who barely featured.
-        if !is_friendly {
-            Self::apply_post_match_debriefs(details, data);
-        }
-
-        // Apply physical effects from match participation (always, regardless of friendly flag)
         Self::apply_post_match_physical_effects(details, data);
 
-        // Update player reputations based on match performance
-        //
-        // Continental competitions (CL/EL/Conference) use reserved league_id >= 900_000_000:
-        //   Champions League:    900_000_001
-        //   Europa League:       900_000_002
-        //   Conference League:   900_000_003
-        //
-        // These get special reputation weights — especially for world reputation,
-        // since playing in European competition is the primary driver of global recognition.
-        let (league_weight, world_weight) = if result.league_id == CHAMPIONS_LEAGUE_ID {
-            // Champions League: highest prestige, massive world reputation boost
-            (1.5, 1.2)
-        } else if result.league_id == EUROPA_LEAGUE_ID {
-            // Europa League: high prestige
-            (1.3, 0.8)
-        } else if result.league_id == CONFERENCE_LEAGUE_ID {
-            // Conference League: moderate prestige
-            (1.1, 0.5)
-        } else if is_cup {
-            // Other cup competitions
-            (1.0, 0.3)
-        } else {
-            let league_reputation = data.league(result.league_id)
-                .map(|l| l.reputation)
-                .unwrap_or(500) as f32;
-            let w = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
-            (w, 0.2)
-        };
-
-        for (player_id, stats_data) in &details.player_stats {
-            let rating_delta = (stats_data.match_rating - 6.0) * 20.0;
-            let goal_bonus = stats_data.goals.min(3) as f32 * 15.0;
-            let assist_bonus = stats_data.assists.min(3) as f32 * 8.0;
-            let motm_bonus = if best_player_id == Some(*player_id) { 25.0 } else { 0.0 };
-            let raw_delta = rating_delta + goal_bonus + assist_bonus + motm_bonus;
-
-            if is_friendly {
-                let home_delta = (raw_delta * 0.4 * league_weight) as i16;
-                if let Some(player) = data.player_mut(*player_id) {
-                    player.player_attributes.update_reputation(0, home_delta, 0);
-                }
-            } else {
-                let current_delta = (raw_delta * league_weight) as i16;
-                let home_delta = (raw_delta * 0.6 * league_weight) as i16;
-                let world_delta = (raw_delta * world_weight * league_weight) as i16;
-                if let Some(player) = data.player_mut(*player_id) {
-                    player.player_attributes.update_reputation(current_delta, home_delta, world_delta);
-                }
-            }
-        }
-
-        // Save PoM to match result
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
         }
@@ -346,38 +167,6 @@ impl LeagueResult {
     /// attributes drive effectiveness. The actual magnitude-per-player uses
     /// personality (pressure, temperament, important_matches) via
     /// `club::team::team_talks::apply_team_talk`.
-    /// After each competitive match, rate-based individual debriefs. Bad
-    /// individual performances (rating <6.3) pick up a `ManagerCriticism`
-    /// event; standout performances (>=7.5) pick up `ManagerEncouragement`.
-    /// Already-ticking happiness-event machinery handles decay + morale
-    /// ripple — we just feed the events in.
-    fn apply_post_match_debriefs(
-        details: &MatchResultRaw,
-        data: &mut SimulatorData,
-    ) {
-        use crate::HappinessEventType;
-        for (player_id, stats) in &details.player_stats {
-            // Ignore barely-featured players (unreliable ratings). Match
-            // rating is on a 1..10 scale; 0.0 means "no stats recorded".
-            if stats.match_rating < 1.0 {
-                continue;
-            }
-
-            if stats.match_rating < 6.3 {
-                if let Some(player) = data.player_mut(*player_id) {
-                    // Magnitude scales with how bad it was (6.3 → -2.0, 4.0 → -4.3).
-                    let mag = -(2.0 + (6.3 - stats.match_rating).clamp(0.0, 3.0));
-                    player.happiness.add_event(HappinessEventType::ManagerCriticism, mag);
-                }
-            } else if stats.match_rating >= 7.5 {
-                if let Some(player) = data.player_mut(*player_id) {
-                    let mag = 1.5 + (stats.match_rating - 7.5).clamp(0.0, 2.5);
-                    player.happiness.add_event(HappinessEventType::ManagerEncouragement, mag);
-                }
-            }
-        }
-    }
-
     fn apply_full_time_team_talks(
         result: &MatchResult,
         details: &MatchResultRaw,
@@ -498,6 +287,129 @@ impl LeagueResult {
             }
             if let Some(borrowing_club) = data.club_mut(borrowing_club_id) {
                 borrowing_club.finance.balance.push_income_loan_fees(amount);
+            }
+        }
+    }
+}
+
+fn compute_effective_ratings(
+    details: &MatchResultRaw,
+    data: &SimulatorData,
+    now: chrono::NaiveDate,
+) -> HashMap<u32, f32> {
+    let mut out = HashMap::with_capacity(details.player_stats.len());
+    for (player_id, stats) in &details.player_stats {
+        let location = data
+            .indexes
+            .as_ref()
+            .and_then(|i| i.get_player_location(*player_id));
+        let country_code = location
+            .and_then(|(_, country_id, _, _)| data.country_info.get(&country_id))
+            .map(|ci| ci.code.clone())
+            .unwrap_or_default();
+        let club_rep = location
+            .and_then(|(_, _, _, team_id)| data.team(team_id))
+            .map(|t| t.reputation.overall_score())
+            .unwrap_or(0.0);
+        let mult = data
+            .player(*player_id)
+            .map(|p| p.settlement_form_multiplier(now, &country_code, club_rep))
+            .unwrap_or(1.0);
+        out.insert(*player_id, stats.match_rating * mult);
+    }
+    out
+}
+
+fn pick_player_of_the_match(
+    details: &MatchResultRaw,
+    effective_ratings: &HashMap<u32, f32>,
+) -> Option<u32> {
+    let mut best_rating = 0.0_f32;
+    let mut best = None;
+    for (player_id, stats) in &details.player_stats {
+        let r = *effective_ratings.get(player_id).unwrap_or(&stats.match_rating);
+        if r > best_rating {
+            best_rating = r;
+            best = Some(*player_id);
+        }
+    }
+    best
+}
+
+fn reputation_weights(
+    result: &MatchResult,
+    is_cup: bool,
+    data: &SimulatorData,
+) -> (f32, f32) {
+    if result.league_id == CHAMPIONS_LEAGUE_ID {
+        (1.5, 1.2)
+    } else if result.league_id == EUROPA_LEAGUE_ID {
+        (1.3, 0.8)
+    } else if result.league_id == CONFERENCE_LEAGUE_ID {
+        (1.1, 0.5)
+    } else if is_cup {
+        (1.0, 0.3)
+    } else {
+        let league_reputation = data
+            .league(result.league_id)
+            .map(|l| l.reputation)
+            .unwrap_or(500) as f32;
+        let w = (league_reputation / 1000.0 + 0.5).clamp(0.5, 1.5);
+        (w, 0.2)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn dispatch_match_outcomes(
+    side: &crate::r#match::FieldSquad,
+    team_conceded: u8,
+    details: &MatchResultRaw,
+    data: &mut SimulatorData,
+    effective_ratings: &HashMap<u32, f32>,
+    best_player_id: Option<u32>,
+    is_friendly: bool,
+    is_cup: bool,
+    league_weight: f32,
+    world_weight: f32,
+) {
+    let starter_ids: Vec<u32> = side.main.iter().copied().collect();
+    let sub_ids: Vec<u32> = side.substitutes_used.iter().copied().collect();
+    let all_ids: Vec<(u32, MatchParticipation)> = starter_ids
+        .iter()
+        .map(|id| (*id, MatchParticipation::Starter))
+        .chain(sub_ids.iter().map(|id| (*id, MatchParticipation::Substitute)))
+        .collect();
+
+    for (pid, participation) in all_ids {
+        let stats = match details.player_stats.get(&pid) {
+            Some(s) => s,
+            None => continue,
+        };
+        let effective = *effective_ratings.get(&pid).unwrap_or(&stats.match_rating);
+        let is_motm = best_player_id == Some(pid);
+        let team_goals_against = matches!(participation, MatchParticipation::Starter)
+            .then_some(team_conceded);
+        if let Some(player) = data.player_mut(pid) {
+            player.on_match_played(&MatchOutcome {
+                stats,
+                effective_rating: effective,
+                participation,
+                is_friendly,
+                is_cup,
+                is_motm,
+                team_goals_against,
+                league_weight,
+                world_weight,
+            });
+        }
+    }
+
+    // Unused substitutes feel the snub as well, even though they didn't
+    // feature in player_stats.
+    for &pid in &side.substitutes {
+        if !side.substitutes_used.contains(&pid) {
+            if let Some(player) = data.player_mut(pid) {
+                player.on_match_dropped();
             }
         }
     }

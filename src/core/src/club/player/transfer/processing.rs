@@ -35,19 +35,39 @@ impl Player {
             return;
         }
 
+        // Honeymoon: newly-transferred players don't fire off a request in
+        // the first 21 days regardless of shock events — they need a fair
+        // look first (unless behaviour is already broken).
+        let recently_transferred = self
+            .days_since_transfer(now)
+            .map(|d| d >= 0 && d < 21)
+            .unwrap_or(false);
+
         let mut wants_transfer = false;
 
-        // Poor behaviour
+        // Poor behaviour (overrides the honeymoon — character issues surface fast)
         if self.behaviour.is_poor() {
             wants_transfer = true;
         }
 
-        // Unhappy for extended period (Unh status > 30 days)
-        let has_unh = self.statuses.statuses.iter().any(|s| {
+        // Unhappy for extended period (Unh status > 30 days, default path)
+        let has_unh_long = self.statuses.statuses.iter().any(|s| {
             s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 30
         });
-        if has_unh {
+        if has_unh_long {
             wants_transfer = true;
+        }
+
+        // Structural unhappiness: a big ambition mismatch (Messi → Floriana)
+        // is a permanent feature of the club, not a bad week. Fire a request
+        // sooner — 14 days of Unh is enough once ambition_fit is badly red.
+        if !recently_transferred && self.happiness.factors.ambition_fit <= -7.0 {
+            let has_unh_short = self.statuses.statuses.iter().any(|s| {
+                s.status == PlayerStatusType::Unh && (now - s.start_date).num_days() > 14
+            });
+            if has_unh_short {
+                wants_transfer = true;
+            }
         }
 
         // Salary unhappy for a long time with no resolution → wants to leave
@@ -57,6 +77,10 @@ impl Player {
             if days > 540 && days <= 730 && self.happiness.factors.salary_satisfaction <= -5.0 {
                 wants_transfer = true;
             }
+        }
+
+        if recently_transferred && !self.behaviour.is_poor() {
+            wants_transfer = false;
         }
 
         if wants_transfer {

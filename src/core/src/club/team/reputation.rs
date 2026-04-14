@@ -399,6 +399,16 @@ pub enum ReputationLevel {
     Elite,
 }
 
+impl ReputationLevel {
+    /// True if this club tier actively cycles aging players out of the
+    /// squad. Elite and Continental clubs chase progress and can't afford
+    /// to carry past-prime squad-average players; everyone below that
+    /// keeps loyal veterans through the end of their careers.
+    pub fn cycles_aging_squad(&self) -> bool {
+        matches!(self, ReputationLevel::Elite | ReputationLevel::Continental)
+    }
+}
+
 /// Reputation trend
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReputationTrend {

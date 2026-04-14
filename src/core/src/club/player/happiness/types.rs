@@ -65,6 +65,28 @@ pub enum HappinessEventType {
     PromiseKept,
     /// Manager broke a concrete promise. Big morale hit, erodes trust.
     PromiseBroken,
+    /// Fresh transfer landed the player at a club whose reputation sits well
+    /// below what his ambition expects. Lingers while the gap exists.
+    AmbitionShock,
+    /// New contract is dramatically worse than the pre-transfer salary —
+    /// e.g. Messi moving to a Maltese club on a 1/100th deal.
+    SalaryShock,
+    /// Team's primary formation has no slot for the player's preferred
+    /// position. Degrades ambition_fit until a compatible role opens.
+    RoleMismatch,
+    /// Signed for a club well above the player's expectations — an
+    /// unambiguous step up (small-club talent joining Barça / Madrid).
+    DreamMove,
+    /// New contract pays materially more than the previous deal — the
+    /// positive counterpart to SalaryShock.
+    SalaryBoost,
+    /// Joined a genuinely elite club (top-tier reputation). Fires only
+    /// when the move is also a step up relative to the player's own
+    /// reputation, to avoid stacking with DreamMove at mid-table moves.
+    JoiningElite,
+    /// Club bought the player out of his contract — a mild blow to pride
+    /// softened by the severance payout. Emitted on mutual termination.
+    ContractTerminated,
 }
 
 impl PlayerHappiness {
