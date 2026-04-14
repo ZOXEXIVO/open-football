@@ -42,6 +42,7 @@ pub struct PlayerBuilder {
     languages: Option<Vec<PlayerLanguage>>,
     favorite_clubs: Option<Vec<u32>>,
     traits: Option<Vec<PlayerTrait>>,
+    generated: Option<bool>,
 }
 
 impl PlayerBuilder {
@@ -169,6 +170,11 @@ impl PlayerBuilder {
         self
     }
 
+    pub fn generated(mut self, generated: bool) -> Self {
+        self.generated = Some(generated);
+        self
+    }
+
     pub fn build(self) -> Result<Player, String> {
         let skills = self.skills.ok_or("skills is required")?;
         let positions = self.positions.ok_or("positions is required")?;
@@ -213,6 +219,7 @@ impl PlayerBuilder {
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
             pending_signing: None,
+            generated: self.generated.unwrap_or(false),
         })
     }
 }

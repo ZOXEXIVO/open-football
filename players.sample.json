@@ -1,0 +1,179 @@
+{
+  "version": "0.01",
+  "players": [
+    {
+      "id": 48042432,
+      "first_name": "Timothy",
+      "last_name": "Weah",
+      "birth_date": "2000-02-22",
+      "country_id": 390,
+      "club_id": 1139,
+      "positions": [
+        { "code": "DR",  "level": 18 },
+        { "code": "WBR", "level": 17 },
+        { "code": "AML", "level": 15 },
+        { "code": "AMR", "level": 15 }
+      ],
+      "preferred_foot": "Right",
+      "height": 185,
+      "weight": 76,
+      "current_ability": 135,
+      "potential_ability": 140,
+      "value": 13000000,
+      "reputation": { "home": 7000, "world": 5500, "current": 6200 },
+      "contract": {
+        "salary": 2236000,
+        "expiration": "2028-06-30",
+        "started": "2025-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 22
+      },
+      "loan": {
+        "to_club_id": 866,
+        "expiration": "2026-06-30",
+        "salary": 2236000,
+        "wage_contribution_pct": 100,
+        "future_fee": 12000000,
+        "future_fee_obligation": true
+      }
+    },
+
+    {
+      "id": 70000001,
+      "first_name": "Federico",
+      "last_name": "Chiesa",
+      "birth_date": "1997-10-25",
+      "country_id": 776,
+      "club_id": 1139,
+      "positions": [
+        { "code": "AML", "level": 19 },
+        { "code": "AMR", "level": 18 },
+        { "code": "ST",  "level": 14 }
+      ],
+      "preferred_foot": "Left",
+      "height": 175,
+      "weight": 70,
+      "current_ability": 162,
+      "potential_ability": 168,
+      "value": 38000000,
+      "reputation": { "home": 8500, "world": 7200, "current": 7800 },
+      "contract": {
+        "salary": 5200000,
+        "expiration": "2027-06-30",
+        "started": "2022-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 7,
+        "squad_status": "KeyPlayer"
+      }
+    },
+
+    {
+      "id": 70000002,
+      "first_name": "Wojciech",
+      "last_name": "Szczesny",
+      "birth_date": "1990-04-18",
+      "country_id": 776,
+      "club_id": 1139,
+      "positions": [
+        { "code": "GK", "level": 20 }
+      ],
+      "preferred_foot": "Right",
+      "height": 196,
+      "weight": 90,
+      "current_ability": 158,
+      "potential_ability": 158,
+      "value": 6000000,
+      "reputation": { "home": 8200, "world": 7500, "current": 7600 },
+      "contract": {
+        "salary": 6500000,
+        "expiration": "2026-06-30",
+        "started": "2017-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 1
+      }
+    },
+
+    {
+      "id": 70000003,
+      "first_name": "Kenan",
+      "last_name": "Yildiz",
+      "birth_date": "2005-05-04",
+      "country_id": 776,
+      "club_id": 1139,
+      "positions": [
+        { "code": "AMC", "level": 18 },
+        { "code": "AML", "level": 17 },
+        { "code": "ST",  "level": 14 }
+      ],
+      "preferred_foot": "Right",
+      "height": 185,
+      "weight": 75,
+      "current_ability": 128,
+      "potential_ability": 175,
+      "value": 28000000,
+      "reputation": { "home": 5400, "world": 3800, "current": 4500 },
+      "contract": {
+        "salary": 1300000,
+        "expiration": "2029-06-30",
+        "started": "2024-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 10
+      }
+    },
+
+    {
+      "id": 80000001,
+      "first_name": "Pierre-Emerick",
+      "last_name": "Aubameyang",
+      "birth_date": "1989-06-18",
+      "country_id": 769,
+      "club_id": 866,
+      "positions": [
+        { "code": "ST", "level": 19 },
+        { "code": "AML", "level": 14 }
+      ],
+      "preferred_foot": "Right",
+      "height": 187,
+      "weight": 80,
+      "current_ability": 138,
+      "potential_ability": 138,
+      "value": 4500000,
+      "reputation": { "home": 8000, "world": 7200, "current": 6800 },
+      "contract": {
+        "salary": 4500000,
+        "expiration": "2026-06-30",
+        "started": "2024-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 9
+      }
+    },
+
+    {
+      "id": 80000002,
+      "first_name": "Bilal",
+      "last_name": "Nadir",
+      "birth_date": "2004-02-15",
+      "country_id": 769,
+      "club_id": 866,
+      "positions": [
+        { "code": "MC",  "level": 17 },
+        { "code": "AMC", "level": 15 }
+      ],
+      "preferred_foot": "Right",
+      "height": 180,
+      "weight": 72,
+      "current_ability": 112,
+      "potential_ability": 158,
+      "value": 6500000,
+      "reputation": { "home": 4200, "world": 2800, "current": 3500 },
+      "contract": {
+        "salary": 600000,
+        "expiration": "2027-06-30",
+        "started": "2023-07-01",
+        "contract_type": "FullTime",
+        "shirt_number": 27,
+        "squad_status": "HotProspectForTheFuture"
+      }
+    }
+  ]
+}

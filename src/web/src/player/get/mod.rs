@@ -71,6 +71,7 @@ pub struct PlayerViewModel {
     pub position_map: PositionMapDto,
     pub loan_status: Option<PlayerLoanDto>,
     pub injury_days: Option<u16>,
+    pub generated: bool,
 }
 
 pub struct PlayerLoanDto {
@@ -296,6 +297,7 @@ pub async fn player_get_action(
             } else {
                 None
             },
+            generated: player.generated,
         };
 
         let is_goalkeeper = player.position().is_goalkeeper();
@@ -367,6 +369,7 @@ pub async fn player_get_action(
             position_map: get_position_map(player),
             loan_status: None,
             injury_days: None,
+            generated: player.generated,
         };
 
         let is_goalkeeper = player.position().is_goalkeeper();

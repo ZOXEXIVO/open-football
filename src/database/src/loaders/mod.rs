@@ -5,6 +5,7 @@ mod continent;
 mod data_tree;
 mod names;
 pub mod national_competition;
+pub mod players_odb;
 
 pub use country::*;
 pub use league::*;
@@ -13,3 +14,4 @@ pub use continent::*;
 pub use data_tree::*;
 pub use names::*;
 pub use national_competition::*;
+pub use players_odb::{OdbContract, OdbFile, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb};

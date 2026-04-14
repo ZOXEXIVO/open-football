@@ -785,6 +785,7 @@ impl PlayerGenerator {
             rapport: PlayerRapport::new(),
             promises: Vec::new(),
             pending_signing: None,
+            generated: true,
         }
     }
 

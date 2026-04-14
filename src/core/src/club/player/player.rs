@@ -92,6 +92,11 @@ pub struct Player {
     /// processing to emit shock events, check role fit, and record an
     /// implicit playing-time promise. Cleared once consumed.
     pub pending_signing: Option<PendingSigning>,
+
+    /// True if this player was produced by a runtime generator (random squad
+    /// fill, youth intake, synthetic national-team filler). False when loaded
+    /// from the source database. Useful for filtering, telemetry, and UI hints.
+    pub generated: bool,
 }
 
 /// What the manager committed to. Deliberately narrow — each new variant

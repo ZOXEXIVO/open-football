@@ -204,7 +204,7 @@ fn apply_preventive_rest(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TeamType {
     Main = 0,
     B = 1,

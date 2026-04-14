@@ -1,10 +1,11 @@
+use crate::loaders::{OdbPlayer, OdbPosition};
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
 use core::{
-    Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
+    ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
-    PlayerSkills, Technical,
+    PlayerPreferredFoot, PlayerSkills, Technical,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
@@ -534,6 +535,7 @@ impl PlayerGenerator {
             .contract(Some(contract))
             .positions(positions)
             .languages(native_languages)
+            .generated(true)
             .build()
             .expect("Failed to build Player")
     }
@@ -1154,6 +1156,361 @@ impl PlayerGenerator {
         let idx = IntegerUtils::random(0, names.len() as i32 - 1) as usize;
         names[idx].to_owned()
     }
+
+    // ── ODB hydration ───────────────────────────────────────────────────
+    //
+    // Build a `Player` from an `OdbPlayer` record loaded from `players.odb`.
+    // CA/PA from the record are authoritative; per-skill values are generated
+    // through the same PA-anchored pipeline and then uniformly rescaled so the
+    // resulting position-weighted CA matches the target.
+    pub fn generate_from_odb(record: &OdbPlayer, continent_id: u32, country_code: &str) -> Player {
+        let now = Utc::now().date_naive();
+        let age = age_in_years(record.birth_date, now);
+
+        let positions = positions_from_odb(&record.positions);
+        let primary = positions
+            .positions
+            .first()
+            .map(|p| p.position)
+            .unwrap_or(PlayerPositionType::MidfielderCenter);
+        let pos_type = position_type_from_player_position(primary);
+
+        // Drive the skill generator off the recorded CA so the spread is
+        // appropriate (cheap reuse of the existing pipeline).
+        let rep_factor = (record.current_ability as f32 / 200.0).clamp(0.05, 1.0);
+        let mut skills = Self::generate_skills(
+            &pos_type,
+            age,
+            rep_factor,
+            record.potential_ability,
+            continent_id,
+            country_code,
+        );
+        rescale_skills_to_target_ca(&mut skills, primary, record.current_ability);
+
+        let full_name = build_full_name(record);
+        let preferred_foot = parse_preferred_foot(record.preferred_foot.as_deref());
+
+        let contract = build_main_contract(record);
+        let contract_loan = build_loan_contract(record);
+
+        let player_attributes = build_player_attributes(record, age, primary, &skills);
+
+        let native_languages: Vec<core::PlayerLanguage> =
+            core::Language::from_country_code(country_code)
+                .into_iter()
+                .map(core::PlayerLanguage::native)
+                .collect();
+
+        Player::builder()
+            .id(record.id)
+            .full_name(full_name)
+            .birth_date(record.birth_date)
+            .country_id(record.country_id)
+            .skills(skills)
+            .attributes(Self::generate_person_attributes())
+            .player_attributes(player_attributes)
+            .contract(contract)
+            .contract_loan(contract_loan)
+            .preferred_foot(preferred_foot)
+            .positions(positions)
+            .languages(native_languages)
+            .build()
+            .expect("Failed to build Player from ODB record")
+    }
+}
+
+fn age_in_years(dob: NaiveDate, now: NaiveDate) -> u32 {
+    let mut years = now.year() - dob.year();
+    if (now.month(), now.day()) < (dob.month(), dob.day()) {
+        years -= 1;
+    }
+    years.max(0) as u32
+}
+
+fn position_type_from_player_position(p: PlayerPositionType) -> PositionType {
+    match p {
+        PlayerPositionType::Goalkeeper => PositionType::Goalkeeper,
+        PlayerPositionType::Sweeper
+        | PlayerPositionType::DefenderLeft
+        | PlayerPositionType::DefenderCenterLeft
+        | PlayerPositionType::DefenderCenter
+        | PlayerPositionType::DefenderCenterRight
+        | PlayerPositionType::DefenderRight => PositionType::Defender,
+        PlayerPositionType::DefensiveMidfielder
+        | PlayerPositionType::MidfielderLeft
+        | PlayerPositionType::MidfielderCenterLeft
+        | PlayerPositionType::MidfielderCenter
+        | PlayerPositionType::MidfielderCenterRight
+        | PlayerPositionType::MidfielderRight
+        | PlayerPositionType::WingbackLeft
+        | PlayerPositionType::WingbackRight => PositionType::Midfielder,
+        PlayerPositionType::AttackingMidfielderLeft
+        | PlayerPositionType::AttackingMidfielderCenter
+        | PlayerPositionType::AttackingMidfielderRight
+        | PlayerPositionType::ForwardLeft
+        | PlayerPositionType::ForwardCenter
+        | PlayerPositionType::ForwardRight
+        | PlayerPositionType::Striker => PositionType::Striker,
+    }
+}
+
+fn parse_position_code(code: &str) -> Option<PlayerPositionType> {
+    Some(match code.to_ascii_uppercase().as_str() {
+        "GK" => PlayerPositionType::Goalkeeper,
+        "SW" => PlayerPositionType::Sweeper,
+        "DL" => PlayerPositionType::DefenderLeft,
+        "DCL" => PlayerPositionType::DefenderCenterLeft,
+        "DC" => PlayerPositionType::DefenderCenter,
+        "DCR" => PlayerPositionType::DefenderCenterRight,
+        "DR" => PlayerPositionType::DefenderRight,
+        "DM" => PlayerPositionType::DefensiveMidfielder,
+        "ML" => PlayerPositionType::MidfielderLeft,
+        "MCL" => PlayerPositionType::MidfielderCenterLeft,
+        "MC" => PlayerPositionType::MidfielderCenter,
+        "MCR" => PlayerPositionType::MidfielderCenterRight,
+        "MR" => PlayerPositionType::MidfielderRight,
+        "AML" => PlayerPositionType::AttackingMidfielderLeft,
+        "AMC" => PlayerPositionType::AttackingMidfielderCenter,
+        "AMR" => PlayerPositionType::AttackingMidfielderRight,
+        "WBL" => PlayerPositionType::WingbackLeft,
+        "WBR" => PlayerPositionType::WingbackRight,
+        "ST" => PlayerPositionType::Striker,
+        "FL" => PlayerPositionType::ForwardLeft,
+        "FC" => PlayerPositionType::ForwardCenter,
+        "FR" => PlayerPositionType::ForwardRight,
+        _ => return None,
+    })
+}
+
+fn positions_from_odb(odb_positions: &[OdbPosition]) -> PlayerPositions {
+    let mut positions: Vec<PlayerPosition> = odb_positions
+        .iter()
+        .filter_map(|p| {
+            parse_position_code(&p.code).map(|pt| PlayerPosition {
+                position: pt,
+                level: p.level.clamp(1, 20),
+            })
+        })
+        .collect();
+    if positions.is_empty() {
+        positions.push(PlayerPosition {
+            position: PlayerPositionType::MidfielderCenter,
+            level: 20,
+        });
+    }
+    PlayerPositions { positions }
+}
+
+fn parse_preferred_foot(s: Option<&str>) -> PlayerPreferredFoot {
+    match s.map(|v| v.to_ascii_lowercase()).as_deref() {
+        Some("left") => PlayerPreferredFoot::Left,
+        Some("both") | Some("either") => PlayerPreferredFoot::Both,
+        _ => PlayerPreferredFoot::Right,
+    }
+}
+
+fn parse_contract_type(s: Option<&str>) -> ContractType {
+    match s.map(|v| v.to_ascii_lowercase()).as_deref() {
+        Some("parttime") | Some("part-time") | Some("part_time") => ContractType::PartTime,
+        Some("youth") => ContractType::Youth,
+        Some("amateur") => ContractType::Amateur,
+        Some("noncontract") | Some("non-contract") | Some("non_contract") => {
+            ContractType::NonContract
+        }
+        Some("loan") => ContractType::Loan,
+        _ => ContractType::FullTime,
+    }
+}
+
+fn build_full_name(record: &OdbPlayer) -> FullName {
+    let first = record.first_name.clone();
+    let last = record.last_name.clone();
+    match (record.middle_name.as_ref(), record.nickname.as_ref()) {
+        (None, Some(nick)) => FullName::with_nickname(first, last, nick.clone()),
+        _ => FullName::new(first, last),
+    }
+}
+
+fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
+    let mut c = PlayerClubContract {
+        shirt_number: record.contract.shirt_number,
+        salary: record.contract.salary,
+        contract_type: parse_contract_type(record.contract.contract_type.as_deref()),
+        squad_status: core::PlayerSquadStatus::NotYetSet,
+        is_transfer_listed: false,
+        transfer_status: None,
+        started: record.contract.started,
+        expiration: record.contract.expiration,
+        loan_from_club_id: None,
+        loan_from_team_id: None,
+        loan_to_club_id: None,
+        loan_match_fee: None,
+        loan_wage_contribution_pct: None,
+        loan_future_fee: None,
+        loan_future_fee_obligation: false,
+        loan_recall_available_after: None,
+        loan_min_appearances: None,
+        bonuses: vec![],
+        clauses: vec![],
+    };
+    // If currently loaned out, the main contract retains parent terms but
+    // records the borrower via loan_to_club_id so the value/wage code knows.
+    if let Some(ref loan) = record.loan {
+        c.loan_to_club_id = Some(loan.to_club_id);
+    }
+    Some(c)
+}
+
+fn build_loan_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
+    let loan = record.loan.as_ref()?;
+    Some(PlayerClubContract {
+        shirt_number: None,
+        salary: loan.salary,
+        contract_type: ContractType::Loan,
+        squad_status: core::PlayerSquadStatus::NotYetSet,
+        is_transfer_listed: false,
+        transfer_status: None,
+        started: None,
+        expiration: loan.expiration,
+        loan_from_club_id: Some(record.club_id),
+        loan_from_team_id: None,
+        loan_to_club_id: Some(loan.to_club_id),
+        loan_match_fee: loan.match_fee,
+        loan_wage_contribution_pct: loan.wage_contribution_pct,
+        loan_future_fee: loan.future_fee,
+        loan_future_fee_obligation: loan.future_fee_obligation,
+        loan_recall_available_after: None,
+        loan_min_appearances: loan.min_appearances,
+        bonuses: vec![],
+        clauses: vec![],
+    })
+}
+
+fn build_player_attributes(
+    record: &OdbPlayer,
+    age: u32,
+    primary: PlayerPositionType,
+    skills: &PlayerSkills,
+) -> PlayerAttributes {
+    // Reputation: use record values when present, otherwise scale by CA.
+    let rep_base = (record.current_ability as i32 * 45).min(10000);
+    let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
+        Some(r) => (
+            r.current.unwrap_or((rep_base as f32 * 0.7) as i16),
+            r.home,
+            r.world,
+        ),
+        None => (
+            (rep_base as f32 * 0.7) as i16,
+            (rep_base as f32 * 0.85) as i16,
+            (rep_base as f32 * 0.40) as i16,
+        ),
+    };
+
+    // Scaled CA can drift a couple of points off target after rescaling;
+    // pull the recorded value back in so downstream code (squad status,
+    // value calc) sees what the ODB intended.
+    let derived_ca = skills.calculate_ability_for_position(primary);
+    let current_ability = if (derived_ca as i32 - record.current_ability as i32).abs() <= 6 {
+        record.current_ability
+    } else {
+        derived_ca
+    };
+    let potential_ability = record.potential_ability.max(current_ability);
+
+    PlayerAttributes {
+        is_banned: false,
+        is_injured: false,
+        condition: IntegerUtils::random(7000, 9500) as i16,
+        fitness: IntegerUtils::random(6000, 9500) as i16,
+        jadedness: 0,
+        weight: record
+            .weight
+            .unwrap_or_else(|| IntegerUtils::random(65, 90) as u8),
+        height: record
+            .height
+            .unwrap_or_else(|| default_height_for_position(primary)),
+        value: record.value.unwrap_or(0),
+        current_reputation: current_rep,
+        home_reputation: home_rep,
+        world_reputation: world_rep,
+        current_ability,
+        potential_ability,
+        international_apps: 0,
+        international_goals: 0,
+        under_21_international_apps: 0,
+        under_21_international_goals: if age <= 23 { 0 } else { 0 },
+        injury_days_remaining: 0,
+        injury_type: None,
+        injury_proneness: (IntegerUtils::random(1, 10) + IntegerUtils::random(1, 10)) as u8,
+        recovery_days_remaining: 0,
+        last_injury_body_part: 0,
+        injury_count: 0,
+        days_since_last_match: 0,
+    }
+}
+
+fn default_height_for_position(primary: PlayerPositionType) -> u8 {
+    match primary {
+        PlayerPositionType::Goalkeeper => 188,
+        PlayerPositionType::DefenderCenter
+        | PlayerPositionType::DefenderCenterLeft
+        | PlayerPositionType::DefenderCenterRight => 186,
+        PlayerPositionType::Striker | PlayerPositionType::ForwardCenter => 183,
+        _ => 180,
+    }
+}
+
+/// Uniformly scale all 1-20 skills toward a target CA. One pass is sufficient
+/// because `calculate_ability_for_position` is roughly linear in the skill
+/// average for non-extreme inputs.
+fn rescale_skills_to_target_ca(
+    skills: &mut PlayerSkills,
+    primary: PlayerPositionType,
+    target_ca: u8,
+) {
+    if target_ca == 0 {
+        return;
+    }
+    let current = skills.calculate_ability_for_position(primary).max(1);
+    let factor = (target_ca as f32 / current as f32).clamp(0.40, 2.50);
+    if (factor - 1.0).abs() < 0.02 {
+        return;
+    }
+    scale_in_place(skills, factor);
+    // Second pass to tighten.
+    let after = skills.calculate_ability_for_position(primary).max(1);
+    let f2 = (target_ca as f32 / after as f32).clamp(0.85, 1.15);
+    if (f2 - 1.0).abs() > 0.01 {
+        scale_in_place(skills, f2);
+    }
+}
+
+fn scale_in_place(skills: &mut PlayerSkills, factor: f32) {
+    macro_rules! s {
+        ($v:expr) => {
+            $v = ($v * factor).clamp(1.0, 20.0)
+        };
+    }
+    let t = &mut skills.technical;
+    s!(t.corners); s!(t.crossing); s!(t.dribbling); s!(t.finishing);
+    s!(t.first_touch); s!(t.free_kicks); s!(t.heading); s!(t.long_shots);
+    s!(t.long_throws); s!(t.marking); s!(t.passing); s!(t.penalty_taking);
+    s!(t.tackling); s!(t.technique);
+    let m = &mut skills.mental;
+    s!(m.aggression); s!(m.anticipation); s!(m.bravery); s!(m.composure);
+    s!(m.concentration); s!(m.decisions); s!(m.determination); s!(m.flair);
+    s!(m.leadership); s!(m.off_the_ball); s!(m.positioning); s!(m.teamwork);
+    s!(m.vision); s!(m.work_rate);
+    let p = &mut skills.physical;
+    s!(p.acceleration); s!(p.agility); s!(p.balance); s!(p.jumping);
+    s!(p.natural_fitness); s!(p.pace); s!(p.stamina); s!(p.strength);
+    let g = &mut skills.goalkeeping;
+    s!(g.aerial_reach); s!(g.command_of_area); s!(g.communication);
+    s!(g.eccentricity); s!(g.first_touch); s!(g.handling); s!(g.kicking);
+    s!(g.one_on_ones); s!(g.passing); s!(g.punching); s!(g.reflexes);
+    s!(g.rushing_out); s!(g.throwing);
 }
 
 /// Natural adjacent positions that most players at a given position can also play.
