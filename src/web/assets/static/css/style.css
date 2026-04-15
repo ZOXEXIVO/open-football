@@ -1791,8 +1791,8 @@ a:link, a:visited, a:hover, a:active {
 }
 
 .fm-ph-photo-frame {
-    width: 80px;
-    height: 95px;
+    width: 95px;
+    height: 110px;
     border-radius: 4px;
     background: linear-gradient(145deg, #1e2e38, #162028);
     border: 2px solid #344a58;
