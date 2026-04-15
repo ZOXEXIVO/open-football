@@ -4,7 +4,7 @@
 //! ```json
 //! { "version": "0.01", "players": [ ... ] }
 //! ```
-//! placed next to the binary. When present and parseable, every club referenced
+//! embedded at compile time from `src/data/players.odb`. Every club referenced
 //! by at least one ODB player is populated from this file instead of via the
 //! procedural generator. Academy/youth (U18/U19) generation is left untouched.
 
@@ -12,12 +12,12 @@ use chrono::NaiveDate;
 use log::{info, warn};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::fs::File;
 use std::io::Read;
-use std::path::PathBuf;
 
 pub const ODB_SUPPORTED_VERSION: &str = "0.01";
-pub const ODB_FILENAME: &str = "players.odb";
+
+/// Embedded gzip-compressed ODB payload.
+static ODB_BYTES: &[u8] = include_bytes!("../data/players.odb");
 
 #[derive(Debug, Deserialize)]
 pub struct OdbFile {
@@ -136,36 +136,32 @@ pub struct PlayersOdb {
 }
 
 impl PlayersOdb {
-    /// Try to load `players.odb` from the binary's working directory, then from
-    /// the executable's directory, then from the project root. Returns `None`
-    /// if no file is found, the file is unreadable, or the format is invalid.
+    /// Decode the embedded `players.odb` payload. Returns `None` if the
+    /// bundled file is empty, malformed, or carries an unsupported version.
     pub fn load() -> Option<Self> {
-        let path = locate_odb_file()?;
-        match Self::load_from(&path) {
+        if ODB_BYTES.is_empty() {
+            return None;
+        }
+        match Self::load_from_bytes(ODB_BYTES) {
             Ok(odb) => {
                 let total: usize = odb.by_current_club.values().map(|v| v.len()).sum();
                 info!(
-                    "players.odb loaded: {} players across {} clubs from {}",
+                    "players.odb loaded: {} players across {} clubs (embedded, {} bytes)",
                     total,
                     odb.by_current_club.len(),
-                    path.display()
+                    ODB_BYTES.len()
                 );
                 Some(odb)
             }
             Err(e) => {
-                warn!("players.odb at {} ignored: {}", path.display(), e);
+                warn!("embedded players.odb ignored: {}", e);
                 None
             }
         }
     }
 
-    pub fn load_from(path: &PathBuf) -> Result<Self, String> {
-        let mut file = File::open(path).map_err(|e| format!("open: {e}"))?;
-        let mut compressed = Vec::new();
-        file.read_to_end(&mut compressed)
-            .map_err(|e| format!("read: {e}"))?;
-
-        let mut decoder = flate2::read::GzDecoder::new(compressed.as_slice());
+    pub fn load_from_bytes(compressed: &[u8]) -> Result<Self, String> {
+        let mut decoder = flate2::read::GzDecoder::new(compressed);
         let mut json = String::new();
         decoder
             .read_to_string(&mut json)
@@ -201,21 +197,16 @@ impl PlayersOdb {
     pub fn has_club(&self, club_id: u32) -> bool {
         self.by_current_club.contains_key(&club_id)
     }
-}
 
-fn locate_odb_file() -> Option<PathBuf> {
-    let mut candidates: Vec<PathBuf> = Vec::new();
-
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(ODB_FILENAME));
+    /// Highest player id present in the index, or `None` when empty.
+    /// Used to seed the procedural id sequence so generated players never
+    /// collide with ODB-supplied ids.
+    pub fn max_player_id(&self) -> Option<u32> {
+        self.by_current_club
+            .values()
+            .flat_map(|v| v.iter().map(|p| p.id))
+            .max()
     }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(ODB_FILENAME));
-        }
-    }
-
-    candidates.into_iter().find(|p| p.exists())
 }
 
 #[cfg(test)]
@@ -225,24 +216,15 @@ mod tests {
     use flate2::Compression;
     use std::io::Write;
 
-    fn write_gz(tag: &str, json: &str) -> PathBuf {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        let nanos = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let path = std::env::temp_dir()
-            .join(format!("players-odb-{}-{}-{}.odb", tag, std::process::id(), nanos));
-        let file = File::create(&path).unwrap();
-        let mut enc = GzEncoder::new(file, Compression::default());
+    fn gz(json: &str) -> Vec<u8> {
+        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
         enc.write_all(json.as_bytes()).unwrap();
-        enc.finish().unwrap();
-        path
+        enc.finish().unwrap()
     }
 
     #[test]
     fn loads_minimal_record() {
-        let json = r#"{
+        let bytes = gz(r#"{
             "version": "0.01",
             "players": [{
                 "id": 1,
@@ -256,17 +238,15 @@ mod tests {
                 "potential_ability": 130,
                 "contract": {"salary": 100000, "expiration": "2027-06-30"}
             }]
-        }"#;
-        let path = write_gz("minimal", json);
-        let odb = PlayersOdb::load_from(&path).unwrap();
+        }"#);
+        let odb = PlayersOdb::load_from_bytes(&bytes).unwrap();
         assert!(odb.has_club(1139));
         assert_eq!(odb.for_club(1139).unwrap().len(), 1);
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn loaned_player_indexed_under_borrower() {
-        let json = r#"{
+        let bytes = gz(r#"{
             "version": "0.01",
             "players": [{
                 "id": 2,
@@ -285,35 +265,23 @@ mod tests {
                     "salary": 200000
                 }
             }]
-        }"#;
-        let path = write_gz("loan", json);
-        let odb = PlayersOdb::load_from(&path).unwrap();
+        }"#);
+        let odb = PlayersOdb::load_from_bytes(&bytes).unwrap();
         assert!(!odb.has_club(1139), "parent club must NOT have the loaned player");
         assert!(odb.has_club(866), "borrower must own the loaned player");
-        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn rejects_unknown_version() {
-        let path = write_gz("badver", r#"{"version": "9.99", "players": []}"#);
-        assert!(PlayersOdb::load_from(&path).is_err());
-        let _ = std::fs::remove_file(&path);
+        let bytes = gz(r#"{"version": "9.99", "players": []}"#);
+        assert!(PlayersOdb::load_from_bytes(&bytes).is_err());
     }
 
-    /// Sanity check that the bundled sample at the repo root is a valid ODB.
-    /// Skipped silently when run from a context where the file isn't visible
-    /// (e.g. a published crate test) so it never produces a false negative.
+    /// Sanity check that the embedded sample is a valid ODB and contains
+    /// the expected Juventus (1139) and OM (866) buckets.
     #[test]
     fn bundled_sample_loads() {
-        let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        path.pop(); path.pop(); // src/database -> repo root
-        path.push("players.odb");
-        if !path.exists() {
-            eprintln!("(skipped) {} not present", path.display());
-            return;
-        }
-        let odb = PlayersOdb::load_from(&path).expect("repo-root players.odb is malformed");
-        // Sample contains Juventus (1139) and OM (866) records.
+        let odb = PlayersOdb::load().expect("embedded players.odb is malformed");
         assert!(odb.has_club(1139), "sample missing Juventus bucket");
         assert!(odb.has_club(866), "sample missing OM bucket");
     }

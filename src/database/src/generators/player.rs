@@ -12,6 +12,26 @@ use std::sync::LazyLock;
 
 static PLAYER_ID_SEQUENCE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(1));
 
+/// Bump the procedural id sequence so the next generated player gets an id
+/// strictly greater than `min_exclusive`. No-op if the counter is already
+/// past it. Called before generation so generated players cannot collide
+/// with ids supplied by `players.odb`.
+pub fn seed_player_id_sequence(min_exclusive: u32) {
+    let target = min_exclusive.saturating_add(1);
+    let mut current = PLAYER_ID_SEQUENCE.load(Ordering::SeqCst);
+    while current < target {
+        match PLAYER_ID_SEQUENCE.compare_exchange(
+            current,
+            target,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 // ── Skill index constants (flat array order) ────────────────────────────
 // Technical (0..14)
 const SK_CORNERS: usize = 0;

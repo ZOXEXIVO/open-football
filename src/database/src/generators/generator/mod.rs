@@ -13,11 +13,19 @@ use core::{
 };
 use crate::DatabaseEntity;
 use crate::generators::convert::convert_national_competition;
+use crate::generators::player::seed_player_id_sequence;
 
 pub struct DatabaseGenerator;
 
 impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
+        // Seed the procedural id sequence past every ODB-supplied player id
+        // so generated players for non-ODB clubs cannot collide with the
+        // hand-curated records in `players.odb`.
+        if let Some(max_odb_id) = data.players_odb.as_ref().and_then(|o| o.max_player_id()) {
+            seed_player_id_sequence(max_odb_id);
+        }
+
         let current_date = NaiveDateTime::new(
             NaiveDate::from_ymd_opt(Local::now().year(), 8, 1).unwrap(),
             NaiveTime::default(),
