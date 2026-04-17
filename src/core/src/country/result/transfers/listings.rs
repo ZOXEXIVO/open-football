@@ -389,6 +389,14 @@ impl CountryResult {
             return ListingDecision::Transfer { reason: "dec_reason_player_unhappy".to_string() };
         }
 
+        // Squad members the club wouldn't move on pure maths. Runs after
+        // explicit decisions (NotNeeded / club-listed / REQ / UNH) so those
+        // still dictate, but before numeric triggers so a club captain with
+        // a few rating points below the squad mean isn't auto-sold.
+        if Self::is_squad_protected(player, date) {
+            return ListingDecision::Keep;
+        }
+
         let is_promising_youth = age <= 23 && pa > ca + 10;
 
         // Wealth-aware quality gap threshold
@@ -451,10 +459,14 @@ impl CountryResult {
                 "dec_reason_squad_oversized".to_string());
         }
 
-        // Contract expiring within 12 months
+        // Contract expiring within 6 months. ContractRenewalManager runs
+        // monthly and targets players 12-18 months out, so only pull this
+        // trigger after that system has had a chance — and failed — to
+        // lock the player down. Earlier than 6 months and we pre-empt the
+        // renewal flow on players the club actually wants to keep.
         if let Some(ref contract) = player.contract {
             let days_remaining = (contract.expiration - date).num_days();
-            if days_remaining < 365 && days_remaining > 0 {
+            if days_remaining < 180 && days_remaining > 0 {
                 return ListingDecision::Transfer {
                     reason: "dec_reason_contract_expiring".to_string(),
                 };
@@ -498,10 +510,13 @@ impl CountryResult {
             };
         }
 
-        // Aging or peaked → transfer. "Aging" scales with position group so
-        // a 30-year-old GK isn't treated the same as a 30-year-old winger.
+        // Aging AND peaked → transfer. "Aging" scales with position group
+        // so a 30-year-old GK isn't treated the same as a 30-year-old
+        // winger. Requires both conditions — the previous OR labelled any
+        // 27-year-old who'd reached his potential as "peaked or declining",
+        // which is simply a mature player, not a selling point.
         let peaked_age = aging_listing_threshold(player.position().position_group()).saturating_sub(2);
-        if age >= peaked_age || pa <= ca {
+        if age >= peaked_age && pa <= ca {
             return ListingDecision::Transfer {
                 reason: "dec_reason_peaked_declining".to_string(),
             };
@@ -516,6 +531,62 @@ impl CountryResult {
 
         // Default: transfer
         ListingDecision::Transfer { reason: base_reason }
+    }
+
+    /// Is this a player the club would keep on non-numeric grounds?
+    ///
+    /// Real-world squad management keeps players whose value isn't
+    /// captured by a CA/PA spreadsheet: formal squad-core designation,
+    /// dressing-room leadership, and long-serving pros still contributing
+    /// on the pitch. Player-initiated departures (REQ/UNH) and explicit
+    /// club decisions (NotNeeded, club-listed) are evaluated earlier and
+    /// bypass this — the club can still sell, the player can still ask
+    /// out, but routine below-average/surplus/aging sweeps don't touch
+    /// this tier.
+    fn is_squad_protected(player: &Player, date: NaiveDate) -> bool {
+        // Club has formally labelled the player as core to the project.
+        if let Some(ref c) = player.contract {
+            if matches!(
+                c.squad_status,
+                PlayerSquadStatus::KeyPlayer
+                    | PlayerSquadStatus::FirstTeamRegular
+                    | PlayerSquadStatus::HotProspectForTheFuture
+            ) {
+                return true;
+            }
+        }
+
+        let age = player.age(date);
+
+        // Dressing-room leader — strong leadership attribute + seasoned.
+        // Skills are on the 1-20 scale; >=15 is genuine locker-room
+        // authority, not just any veteran.
+        if age >= 26 && player.skills.mental.leadership >= 15.0 {
+            return true;
+        }
+
+        // Long-serving pro still delivering: tenure AND last-season form.
+        // Without the form gate this would shield every ageing squad
+        // filler who's been on the books forever.
+        let tenure_years = player
+            .contract
+            .as_ref()
+            .and_then(|c| c.started)
+            .map(|start| (date - start).num_days() / 365)
+            .unwrap_or(0);
+
+        let last_rating = player
+            .statistics_history
+            .items
+            .last()
+            .map(|h| h.statistics.average_rating)
+            .unwrap_or(0.0);
+
+        if tenure_years >= 4 && last_rating >= 6.9 {
+            return true;
+        }
+
+        false
     }
 
     /// Returns true if the player's position group already has enough players.
