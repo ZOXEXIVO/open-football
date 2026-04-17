@@ -1,3 +1,4 @@
+mod compiled;
 pub mod country;
 mod league;
 mod club;
@@ -14,4 +15,4 @@ pub use continent::*;
 pub use data_tree::*;
 pub use names::*;
 pub use national_competition::*;
-pub use players::{OdbContract, OdbFile, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb};
+pub use players::{OdbContract, OdbLoan, OdbPlayer, OdbPosition, OdbReputation, PlayersOdb};

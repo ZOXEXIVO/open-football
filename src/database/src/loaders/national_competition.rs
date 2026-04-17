@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-const STATIC_NATIONAL_COMPETITIONS_JSON: &str = include_str!("../data/national_competitions.json");
+use super::compiled::compiled;
 
 #[derive(Deserialize, Debug, Clone)]
 pub struct NationalCompetitionEntity {
@@ -59,6 +59,6 @@ pub struct NationalCompetitionLoader;
 
 impl NationalCompetitionLoader {
     pub fn load() -> Vec<NationalCompetitionEntity> {
-        serde_json::from_str(STATIC_NATIONAL_COMPETITIONS_JSON).unwrap()
+        compiled().national_competitions.clone()
     }
 }

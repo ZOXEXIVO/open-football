@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use database::CountryLoader;
 use std::sync::OnceLock;
 
 // ── Skin color distribution ───────────────────────────────────
@@ -16,33 +16,20 @@ impl Default for SkinDist {
     }
 }
 
-#[derive(Deserialize)]
-struct CountryJson {
-    code: String,
-    #[serde(default)]
-    skin_colors: Option<SkinColorsJson>,
-}
-
-#[derive(Deserialize)]
-struct SkinColorsJson {
-    white: u8,
-    black: u8,
-    metis: u8,
-}
-
 static SKIN_MAP: OnceLock<Vec<(String, SkinDist)>> = OnceLock::new();
 
 fn load_skin_map() -> Vec<(String, SkinDist)> {
-    let json_str = include_str!("../../../database/src/data/countries.json");
-    let countries: Vec<CountryJson> = serde_json::from_str(json_str).unwrap_or_default();
-    countries.into_iter().map(|c| {
-        let dist = c.skin_colors.map(|sc| SkinDist {
-            white: sc.white,
-            black: sc.black,
-            _metis: sc.metis,
-        }).unwrap_or_default();
-        (c.code, dist)
-    }).collect()
+    CountryLoader::load()
+        .into_iter()
+        .map(|c| {
+            let d = SkinDist {
+                white: c.skin_colors.white,
+                black: c.skin_colors.black,
+                _metis: c.skin_colors.metis,
+            };
+            (c.code, d)
+        })
+        .collect()
 }
 
 pub fn skin_distribution_for_country(code: &str) -> SkinDist {

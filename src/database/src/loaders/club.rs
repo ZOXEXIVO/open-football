@@ -1,12 +1,15 @@
 use serde::Deserialize;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubEntity {
     pub id: u32,
     pub name: String,
-    /// Populated by the loader from the directory path, not present in JSON.
+    /// Resolved from `country_code` by the loader; zero-default in JSON.
     #[serde(default)]
     pub country_id: u32,
+    /// Baked in by the compiler from the enclosing directory.
+    #[serde(default)]
+    pub country_code: String,
     pub location: ClubLocationEntity,
     pub finance: ClubFinanceEntity,
     pub colors: ClubColorsEntity,
@@ -29,30 +32,30 @@ pub struct ClubFacilitiesEntity {
     pub recruitment: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubColorsEntity {
     pub background: String,
     pub foreground: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubLocationEntity {
     pub city_id: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubFinanceEntity {
     pub balance: i32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubReputationEntity {
     pub home: u16,
     pub national: u16,
     pub world: u16,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct ClubTeamEntity {
     pub id: u32,
     pub name: String,

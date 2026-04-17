@@ -1,29 +1,16 @@
-//! External player database loader (`players.odb`).
+//! Player index built from the compiled database.
 //!
-//! The file is a gzip-compressed JSON document of the form:
-//! ```json
-//! { "version": "0.01", "players": [ ... ] }
-//! ```
-//! embedded at compile time from `src/data/players.odb`. Every club referenced
-//! by at least one ODB player is populated from this file instead of via the
-//! procedural generator. Academy/youth (U18/U19) generation is left untouched.
+//! Each [`OdbPlayer`] record corresponds to one JSON file under
+//! `data/{cc}/{league}/{club}/players/` in the external data repo;
+//! the compiler bundles them into `database.db` and the runtime reads
+//! them back through this loader.
 
 use chrono::NaiveDate;
-use log::{info, warn};
+use log::info;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::io::Read;
 
-pub const ODB_SUPPORTED_VERSION: &str = "0.01";
-
-/// Embedded gzip-compressed ODB payload.
-static ODB_BYTES: &[u8] = include_bytes!("../data/players.odb");
-
-#[derive(Debug, Deserialize)]
-pub struct OdbFile {
-    pub version: String,
-    pub players: Vec<OdbPlayer>,
-}
+use super::compiled::compiled;
 
 /// A single player record. Fields with `#[serde(default)]` are optional —
 /// the hydrator fills sensible defaults so a minimal scraper output still
@@ -129,65 +116,39 @@ pub struct OdbLoan {
     pub min_appearances: Option<u16>,
 }
 
-/// In-memory index of ODB players, grouped by the club where they currently play
+/// In-memory index of players, grouped by the club where they currently play
 /// (loan destination if loaned, otherwise the parent club).
 pub struct PlayersOdb {
     by_current_club: HashMap<u32, Vec<OdbPlayer>>,
 }
 
 impl PlayersOdb {
-    /// Decode the embedded `players.odb` payload. Returns `None` if the
-    /// bundled file is empty, malformed, or carries an unsupported version.
+    /// Build the index from the embedded compiled database. Returns `None`
+    /// only when the compiled doc has no players at all (fresh repo, no
+    /// imports yet).
     pub fn load() -> Option<Self> {
-        if ODB_BYTES.is_empty() {
+        let source = &compiled().players;
+        if source.is_empty() {
             return None;
         }
-        match Self::load_from_bytes(ODB_BYTES) {
-            Ok(odb) => {
-                let total: usize = odb.by_current_club.values().map(|v| v.len()).sum();
-                info!(
-                    "players.odb loaded: {} players across {} clubs (embedded, {} bytes)",
-                    total,
-                    odb.by_current_club.len(),
-                    ODB_BYTES.len()
-                );
-                Some(odb)
-            }
-            Err(e) => {
-                warn!("embedded players.odb ignored: {}", e);
-                None
-            }
-        }
+        let odb = Self::from_players(source.iter().cloned().collect());
+        let total: usize = odb.by_current_club.values().map(|v| v.len()).sum();
+        info!(
+            "players loaded from compiled DB: {} players across {} clubs",
+            total,
+            odb.by_current_club.len()
+        );
+        Some(odb)
     }
 
-    pub fn load_from_bytes(compressed: &[u8]) -> Result<Self, String> {
-        let mut decoder = flate2::read::GzDecoder::new(compressed);
-        let mut json = String::new();
-        decoder
-            .read_to_string(&mut json)
-            .map_err(|e| format!("gunzip: {e}"))?;
-
-        let parsed: OdbFile =
-            serde_json::from_str(&json).map_err(|e| format!("parse: {e}"))?;
-
-        if parsed.version != ODB_SUPPORTED_VERSION {
-            return Err(format!(
-                "unsupported version '{}' (expected '{}')",
-                parsed.version, ODB_SUPPORTED_VERSION
-            ));
-        }
-
+    /// Index an in-memory list of players — useful for tests and ad-hoc tools.
+    pub fn from_players(players: Vec<OdbPlayer>) -> Self {
         let mut by_current_club: HashMap<u32, Vec<OdbPlayer>> = HashMap::new();
-        for p in parsed.players {
-            let current_club = p
-                .loan
-                .as_ref()
-                .map(|l| l.to_club_id)
-                .unwrap_or(p.club_id);
+        for p in players {
+            let current_club = p.loan.as_ref().map(|l| l.to_club_id).unwrap_or(p.club_id);
             by_current_club.entry(current_club).or_default().push(p);
         }
-
-        Ok(PlayersOdb { by_current_club })
+        PlayersOdb { by_current_club }
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {
@@ -200,7 +161,7 @@ impl PlayersOdb {
 
     /// Highest player id present in the index, or `None` when empty.
     /// Used to seed the procedural id sequence so generated players never
-    /// collide with ODB-supplied ids.
+    /// collide with externally-supplied ids.
     pub fn max_player_id(&self) -> Option<u32> {
         self.by_current_club
             .values()
@@ -212,77 +173,66 @@ impl PlayersOdb {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use flate2::write::GzEncoder;
-    use flate2::Compression;
-    use std::io::Write;
 
-    fn gz(json: &str) -> Vec<u8> {
-        let mut enc = GzEncoder::new(Vec::new(), Compression::default());
-        enc.write_all(json.as_bytes()).unwrap();
-        enc.finish().unwrap()
+    fn make_player(id: u32, club_id: u32, loan_to: Option<u32>) -> OdbPlayer {
+        OdbPlayer {
+            id,
+            first_name: "Test".into(),
+            last_name: "Player".into(),
+            middle_name: None,
+            nickname: None,
+            birth_date: NaiveDate::from_ymd_opt(1995, 5, 15).unwrap(),
+            country_id: 776,
+            club_id,
+            positions: vec![OdbPosition { code: "MC".into(), level: 18 }],
+            preferred_foot: None,
+            height: None,
+            weight: None,
+            current_ability: 120,
+            potential_ability: 130,
+            value: None,
+            reputation: None,
+            contract: OdbContract {
+                salary: 100_000,
+                expiration: NaiveDate::from_ymd_opt(2027, 6, 30).unwrap(),
+                started: None,
+                contract_type: None,
+                shirt_number: None,
+                squad_status: None,
+            },
+            loan: loan_to.map(|to| OdbLoan {
+                to_club_id: to,
+                to_team_id: None,
+                expiration: NaiveDate::from_ymd_opt(2026, 6, 30).unwrap(),
+                salary: 100_000,
+                match_fee: None,
+                wage_contribution_pct: None,
+                future_fee: None,
+                future_fee_obligation: false,
+                min_appearances: None,
+            }),
+        }
     }
 
     #[test]
-    fn loads_minimal_record() {
-        let bytes = gz(r#"{
-            "version": "0.01",
-            "players": [{
-                "id": 1,
-                "first_name": "Test",
-                "last_name": "Player",
-                "birth_date": "1995-05-15",
-                "country_id": 776,
-                "club_id": 1139,
-                "positions": [{"code": "MC", "level": 18}],
-                "current_ability": 120,
-                "potential_ability": 130,
-                "contract": {"salary": 100000, "expiration": "2027-06-30"}
-            }]
-        }"#);
-        let odb = PlayersOdb::load_from_bytes(&bytes).unwrap();
+    fn indexes_by_current_club() {
+        let odb = PlayersOdb::from_players(vec![make_player(1, 1139, None)]);
         assert!(odb.has_club(1139));
         assert_eq!(odb.for_club(1139).unwrap().len(), 1);
     }
 
     #[test]
     fn loaned_player_indexed_under_borrower() {
-        let bytes = gz(r#"{
-            "version": "0.01",
-            "players": [{
-                "id": 2,
-                "first_name": "On",
-                "last_name": "Loan",
-                "birth_date": "2000-01-01",
-                "country_id": 390,
-                "club_id": 1139,
-                "positions": [{"code": "DR", "level": 18}],
-                "current_ability": 130,
-                "potential_ability": 140,
-                "contract": {"salary": 200000, "expiration": "2028-06-30"},
-                "loan": {
-                    "to_club_id": 866,
-                    "expiration": "2026-06-30",
-                    "salary": 200000
-                }
-            }]
-        }"#);
-        let odb = PlayersOdb::load_from_bytes(&bytes).unwrap();
+        let odb = PlayersOdb::from_players(vec![make_player(2, 1139, Some(866))]);
         assert!(!odb.has_club(1139), "parent club must NOT have the loaned player");
         assert!(odb.has_club(866), "borrower must own the loaned player");
     }
 
+    /// Smoke test: the embedded compiled DB loads and contains a non-trivial
+    /// number of players.
     #[test]
-    fn rejects_unknown_version() {
-        let bytes = gz(r#"{"version": "9.99", "players": []}"#);
-        assert!(PlayersOdb::load_from_bytes(&bytes).is_err());
-    }
-
-    /// Sanity check that the embedded sample is a valid ODB and contains
-    /// the expected Juventus (1139) and OM (866) buckets.
-    #[test]
-    fn bundled_sample_loads() {
-        let odb = PlayersOdb::load().expect("embedded players.odb is malformed");
-        assert!(odb.has_club(1139), "sample missing Juventus bucket");
-        assert!(odb.has_club(866), "sample missing OM bucket");
+    fn embedded_players_load() {
+        let odb = PlayersOdb::load().expect("embedded DB should contain players");
+        assert!(odb.max_player_id().unwrap_or(0) > 0);
     }
 }

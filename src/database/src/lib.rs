@@ -4,8 +4,8 @@ mod loaders;
 pub use loaders::{
     ClubEntity, ContinentEntity, ContinentLoader, CountryEntity, CountryLoader,
     DataTreeLoader, ForeignPlayerEntry, LeagueEntity, NamesByCountryEntity,
-    NationalCompetitionEntity, NationalCompetitionLoader, OdbContract, OdbFile, OdbLoan,
-    OdbPlayer, OdbPosition, OdbReputation, PlayersOdb,
+    NationalCompetitionEntity, NationalCompetitionLoader, OdbContract, OdbLoan, OdbPlayer,
+    OdbPosition, OdbReputation, PlayersOdb,
 };
 
 pub use generators::DatabaseGenerator;

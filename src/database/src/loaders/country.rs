@@ -1,8 +1,8 @@
 use serde::Deserialize;
 
-const STATIC_COUNTRIES_JSON: &str = include_str!("../data/countries.json");
+use super::compiled::compiled;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CountryEntity {
     pub id: u32,
     pub code: String,
@@ -17,12 +17,12 @@ pub struct CountryEntity {
     pub skin_colors: SkinColorsEntity,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CountrySettingsEntity {
     pub pricing: CountryPricingEntity,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 pub struct CountryPricingEntity {
     pub price_level: f32,
 }
@@ -44,15 +44,14 @@ pub struct CountryLoader;
 
 impl CountryLoader {
     pub fn load() -> Vec<CountryEntity> {
-        serde_json::from_str(STATIC_COUNTRIES_JSON).unwrap()
+        compiled().countries.clone()
     }
 
     /// Look up a country code by its ID. Used during player generation
     /// to assign native languages.
     pub fn code_for_id(country_id: u32) -> String {
-        // Parse once per call — acceptable at generation time (not per-tick)
-        let countries: Vec<CountryEntity> = serde_json::from_str(STATIC_COUNTRIES_JSON).unwrap();
-        countries
+        compiled()
+            .countries
             .iter()
             .find(|c| c.id == country_id)
             .map(|c| c.code.clone())
