@@ -97,6 +97,12 @@ impl CountryResult {
             }
         }
 
+        // Cap club-decided listings so no position group on a main team
+        // drops below a minimum. Player-initiated (REQ/UNH) listings are
+        // honoured even when this leaves the group short — the player
+        // wants out and the club must replace him.
+        let listings_to_add = Self::enforce_position_group_minimums(country, listings_to_add);
+
         if !listings_to_add.is_empty() {
             debug!("Transfer market: listing {} players for transfer/loan", listings_to_add.len());
         }
@@ -143,6 +149,96 @@ impl CountryResult {
                 }
             }
         }
+    }
+
+    /// Drop club-decided listings that would push a position group on the
+    /// main team below a minimum. Player-initiated listings (REQ/UNH) and
+    /// free-transfer releases for under-16s bypass the cap — those must
+    /// be honoured regardless of depth.
+    ///
+    /// Without this, the pipeline's below-average / surplus / aging /
+    /// contract-expiring paths can independently flag every goalkeeper
+    /// in a club whose squad-wide CA average sits above the keepers', and
+    /// the result is a team with zero recognised goalkeepers.
+    fn enforce_position_group_minimums(
+        country: &Country,
+        listings: Vec<PendingListing>,
+    ) -> Vec<PendingListing> {
+        use std::collections::HashMap;
+
+        const EXEMPT_REASONS: &[&str] = &[
+            "dec_reason_player_requested",
+            "dec_reason_player_unhappy",
+            "dec_reason_under16_release",
+        ];
+
+        let (exempt, capped): (Vec<PendingListing>, Vec<PendingListing>) = listings
+            .into_iter()
+            .partition(|l| EXEMPT_REASONS.contains(&l.reason.as_str()));
+
+        let find_main = |club_id: u32| {
+            country
+                .clubs
+                .iter()
+                .find(|c| c.id == club_id)
+                .and_then(|c| c.teams.teams.first())
+        };
+
+        let player_group = |club_id: u32, player_id: u32| {
+            find_main(club_id).and_then(|t| {
+                t.players
+                    .players
+                    .iter()
+                    .find(|p| p.id == player_id)
+                    .map(|p| p.position().position_group())
+            })
+        };
+
+        let player_ca = |club_id: u32, player_id: u32| {
+            find_main(club_id)
+                .and_then(|t| t.players.players.iter().find(|p| p.id == player_id))
+                .map(|p| p.player_attributes.current_ability)
+                .unwrap_or(0)
+        };
+
+        let mut groups: HashMap<(u32, PlayerFieldPositionGroup), Vec<PendingListing>> =
+            HashMap::new();
+        for listing in capped {
+            if let Some(group) = player_group(listing.club_id, listing.player_id) {
+                groups.entry((listing.club_id, group)).or_default().push(listing);
+            }
+        }
+
+        let mut result = exempt;
+
+        for ((club_id, group), mut group_listings) in groups {
+            let current_count = find_main(club_id)
+                .map(|t| {
+                    t.players
+                        .iter()
+                        .filter(|p| !p.is_on_loan())
+                        .filter(|p| p.position().position_group() == group)
+                        .count()
+                })
+                .unwrap_or(0);
+
+            let exempt_in_group = result
+                .iter()
+                .filter(|l| l.club_id == club_id)
+                .filter(|l| player_group(l.club_id, l.player_id) == Some(group))
+                .count();
+
+            let min_to_keep = min_squad_for_group(group);
+            let slots_after_min = current_count.saturating_sub(min_to_keep);
+            let max_can_list = slots_after_min.saturating_sub(exempt_in_group);
+
+            // Worst-CA players get listed first
+            group_listings.sort_by_key(|l| player_ca(l.club_id, l.player_id));
+
+            result.extend(group_listings.into_iter().take(max_can_list));
+        }
+
+        result
     }
 
     pub(crate) fn analyze_squad_needs(club: &Club, current_date: NaiveDate) -> SquadAnalysis {
@@ -483,5 +579,17 @@ fn aging_listing_threshold(group: PlayerFieldPositionGroup) -> u8 {
         PlayerFieldPositionGroup::Defender => 34,
         PlayerFieldPositionGroup::Midfielder => 33,
         PlayerFieldPositionGroup::Forward => 32,
+    }
+}
+
+/// Minimum number of main-team players a club must retain per position
+/// group after any club-decided transfer/loan listings in a single pass.
+/// Player-initiated listings (REQ/UNH) bypass this cap.
+fn min_squad_for_group(group: PlayerFieldPositionGroup) -> usize {
+    match group {
+        PlayerFieldPositionGroup::Goalkeeper => 2,
+        PlayerFieldPositionGroup::Defender => 6,
+        PlayerFieldPositionGroup::Midfielder => 6,
+        PlayerFieldPositionGroup::Forward => 3,
     }
 }

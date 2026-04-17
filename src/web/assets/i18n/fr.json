@@ -141,6 +141,8 @@
   "dec_board_loan_listed": "Direction a mis en prêt",
   "dec_board_transfer_listed": "Direction a mis en transfert",
   "dec_decided_board": "Direction",
+  "dec_contract_renewal_offered": "Prolongation de contrat proposée",
+  "dec_administrative_demotion": "Rétrogradation administrative",
   "dec_free_transfer_listed": "Mis en agent libre",
   "dec_loan_listed": "Mis sur la liste des prêts",
   "dec_reason_aging_declining": "Joueur vieillissant, valeur en baisse",

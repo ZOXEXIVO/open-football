@@ -44,7 +44,7 @@ impl SquadManager {
 
         if !demotions.is_empty() {
             execute_moves(teams, main_idx, reserve_idx, &demotions);
-            record_player_decisions(teams, main_idx, reserve_idx, &demotions, date, &coach_name, "Administrative demotion");
+            record_player_decisions(teams, main_idx, reserve_idx, &demotions, date, &coach_name, "dec_administrative_demotion");
             record_moves(coach_state, &demotions, RecentMoveType::DemotedToReserves, date);
 
             if let Some(state) = coach_state {

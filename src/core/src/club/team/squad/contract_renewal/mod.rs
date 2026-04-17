@@ -6,7 +6,7 @@ use crate::{
 use chrono::NaiveDate;
 
 const RENEWAL_COOLDOWN_DAYS: i64 = 30;
-const DECISION_LABEL: &str = "Contract renewal offered";
+const DECISION_LABEL: &str = "dec_contract_renewal_offered";
 
 pub struct ContractRenewalManager;
 
@@ -50,10 +50,7 @@ impl ContractRenewalManager {
                     }),
                 });
 
-                let movement = format!(
-                    "{} years @ ${}/yr",
-                    years, salary
-                );
+                let movement = format!("{}y · ${}/y", years, salary);
                 player.decision_history.add(
                     date,
                     movement,
