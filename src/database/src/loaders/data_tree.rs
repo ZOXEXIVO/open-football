@@ -5,7 +5,11 @@ use super::country::CountryEntity;
 use super::league::LeagueEntity;
 use super::names::NamesByCountryEntity;
 
-/// Embedded data directory tree: data/{country_code}/{league_slug}/{club|league}.json
+/// Embedded data directory tree:
+///   data/{country_code}/names.json
+///   data/{country_code}/{league_slug}/league.json
+///   data/{country_code}/{league_slug}/{club_slug}/club.json
+///   data/{country_code}/{league_slug}/{club_slug}/players/*.json  (optional, populated later)
 static DATA_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/data");
 
 pub struct DataTreeResult {
@@ -54,8 +58,8 @@ impl DataTreeLoader {
                     .and_then(|n| n.to_str())
                     .unwrap_or("");
 
-                // Load data/league.json
-                let league_file = match league_dir.get_file(league_dir.path().join("data/league.json")) {
+                // Load league.json
+                let league_file = match league_dir.get_file(league_dir.path().join("league.json")) {
                     Some(f) => f,
                     None => continue,
                 };
@@ -81,17 +85,18 @@ impl DataTreeLoader {
                 let league_id = league.id;
                 leagues.push(league);
 
-                // Load all other .json files as clubs
-                for file in league_dir.files() {
-                    let file_name = file.path().file_name()
+                // Each club lives in its own subdirectory: {club_slug}/club.json
+                for club_dir in league_dir.dirs() {
+                    let club_slug = club_dir.path().file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("");
 
-                    if file_name == "league.json" || !file_name.ends_with(".json") {
-                        continue;
-                    }
+                    let club_file = match club_dir.get_file(club_dir.path().join("club.json")) {
+                        Some(f) => f,
+                        None => continue,
+                    };
 
-                    let club_json = match file.contents_utf8() {
+                    let club_json = match club_file.contents_utf8() {
                         Some(s) => s,
                         None => continue,
                     };
@@ -99,7 +104,7 @@ impl DataTreeLoader {
                     let mut club: ClubEntity = match serde_json::from_str(club_json) {
                         Ok(c) => c,
                         Err(e) => {
-                            eprintln!("Failed to parse club {}/{}/{}: {}", country_code, league_slug, file_name, e);
+                            eprintln!("Failed to parse club {}/{}/{}/club.json: {}", country_code, league_slug, club_slug, e);
                             continue;
                         }
                     };
@@ -121,5 +126,20 @@ impl DataTreeLoader {
         leagues.sort_by_key(|l| l.id);
 
         DataTreeResult { leagues, clubs, names_by_country }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::loaders::country::CountryLoader;
+
+    #[test]
+    fn embedded_tree_loads_leagues_and_clubs() {
+        let countries = CountryLoader::load();
+        let tree = DataTreeLoader::load(&countries);
+        // Snapshot counts of enabled leagues and their clubs in the embedded data.
+        assert_eq!(tree.leagues.len(), 63, "enabled league count changed");
+        assert_eq!(tree.clubs.len(), 969, "enabled club count changed");
     }
 }

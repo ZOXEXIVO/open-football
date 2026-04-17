@@ -1800,7 +1800,28 @@ a:link, a:visited, a:hover, a:active {
     align-items: center;
     justify-content: center;
     overflow: hidden;
+    position: relative;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+
+.fm-ph-watermark {
+    position: absolute;
+    left: 50%;
+    bottom: 3px;
+    transform: translateX(-50%);
+    padding: 1px 5px;
+    background: rgba(0, 0, 0, 0.45);
+    color: #fff;
+    font-size: 8px;
+    line-height: 1.2;
+    letter-spacing: 0.2px;
+    border-radius: 2px;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+.fm-ph-watermark:hover {
+    text-decoration: underline;
 }
 
 .fm-ph-photo-img {
