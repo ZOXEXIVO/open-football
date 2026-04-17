@@ -1407,25 +1407,56 @@ fn build_loan_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
     })
 }
 
+/// Derive (current, home, world) reputation from current ability alone.
+///
+/// Ability is normalised to a 0..1 coefficient and shaped by a different
+/// curve for each reputation dimension, mirroring how fame actually
+/// distributes in football:
+///
+/// - **home** — concave (`coef^0.6`). Even a respectable squad pro gets
+///   known by local fans; you don't need to be a superstar to be famous
+///   in your own country.
+/// - **current** — near-linear (`coef^1.0`). Match-to-match standing
+///   tracks raw playing ability closely.
+/// - **world** — steeply convex (`coef^2.5`). International recognition
+///   is reserved for the very top of the ability distribution — a
+///   lower-division pro (CA ~60) barely registers at all, while a
+///   Ballon d'Or candidate dominates. A mid-tier CA-100 regular sits
+///   around 1700, not the 2700 the softer curve produced.
+///
+/// The old flat `CA * 45 * fixed_mult` formula over-rewarded mid-tier
+/// players on world fame and under-rewarded elite players — you ended up
+/// with mathematically-similar numbers for a Ballon d'Or candidate and a
+/// solid top-flight regular, which doesn't match how transfer markets
+/// or contract talks should read those players.
+fn derive_reputation_from_ability(ca: u8) -> (i16, i16, i16) {
+    const REP_CEILING: f32 = 9500.0;
+    let coef = (ca as f32 / 200.0).clamp(0.05, 1.0);
+    let current = (REP_CEILING * coef.powf(1.0) * 0.95) as i16;
+    let home = (REP_CEILING * coef.powf(0.6)) as i16;
+    let world = (REP_CEILING * coef.powf(2.5)) as i16;
+    (current, home, world)
+}
+
 fn build_player_attributes(
     record: &OdbPlayer,
     age: u32,
     primary: PlayerPositionType,
     skills: &PlayerSkills,
 ) -> PlayerAttributes {
-    // Reputation: use record values when present, otherwise scale by CA.
-    let rep_base = (record.current_ability as i32 * 45).min(10000);
+    // Reputation: any record-supplied value wins for its own field;
+    // every missing field falls back to an ability-curve derivation so
+    // partial overrides (e.g. a scraper that only captured world fame)
+    // still produce coherent home/current numbers.
+    let (derived_current, derived_home, derived_world) =
+        derive_reputation_from_ability(record.current_ability);
     let (current_rep, home_rep, world_rep) = match record.reputation.as_ref() {
         Some(r) => (
-            r.current.unwrap_or((rep_base as f32 * 0.7) as i16),
-            r.home,
-            r.world,
+            r.current.unwrap_or(derived_current),
+            r.home.unwrap_or(derived_home),
+            r.world.unwrap_or(derived_world),
         ),
-        None => (
-            (rep_base as f32 * 0.7) as i16,
-            (rep_base as f32 * 0.85) as i16,
-            (rep_base as f32 * 0.40) as i16,
-        ),
+        None => (derived_current, derived_home, derived_world),
     };
 
     // Scaled CA can drift a couple of points off target after rescaling;

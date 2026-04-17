@@ -71,10 +71,16 @@ pub struct OdbPosition {
     pub level: u8,
 }
 
+/// Per-field reputation override. Every field is optional — a record may
+/// supply all three, just one (e.g. a scraper that only captured world
+/// fame), or none. Missing fields are derived from current ability via
+/// the ability-curve fallback in `build_player_attributes`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct OdbReputation {
-    pub home: i16,
-    pub world: i16,
+    #[serde(default)]
+    pub home: Option<i16>,
+    #[serde(default)]
+    pub world: Option<i16>,
     #[serde(default)]
     pub current: Option<i16>,
 }
