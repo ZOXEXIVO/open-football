@@ -1,5 +1,5 @@
 # Multi-platform release builder
-ARG RUST_VERSION=1.94
+ARG RUST_VERSION=1.95
 
 # ── Windows x86_64 ────────────────────────────────────────────────────
 
