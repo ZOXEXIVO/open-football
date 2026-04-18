@@ -1489,15 +1489,26 @@ fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
 
 fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<PlayerClubContract> {
     let loan = record.loan.as_ref()?;
-    // The parent team is the main team of the lending club. Without this,
-    // the parent club's squad page can't find the loaned-out player
-    // (its scanner matches on `loan_from_team_id`).
+    // Anchor the loan-out on the parent club's Reserve team rather than
+    // the Main squad, so the player shows up in the reserve squad page
+    // (via the loaned-out scanner) while physically playing at the
+    // borrower. Fall back to B → U23/U21/U20/U19/U18 → Main in that
+    // order for clubs that don't have a Reserve team.
+    const TEAM_PRIORITY: [&str; 8] = [
+        "Reserve", "B", "U23", "U21", "U20", "U19", "U18", "Main",
+    ];
     let loan_from_team_id = data
         .clubs
         .iter()
         .find(|c| c.id == record.club_id)
-        .and_then(|c| c.teams.iter().find(|t| t.team_type.eq_ignore_ascii_case("Main")))
-        .map(|t| t.id);
+        .and_then(|c| {
+            TEAM_PRIORITY.iter().find_map(|preferred| {
+                c.teams
+                    .iter()
+                    .find(|t| t.team_type.eq_ignore_ascii_case(preferred))
+                    .map(|t| t.id)
+            })
+        });
     Some(PlayerClubContract {
         shirt_number: None,
         salary: loan.salary,
