@@ -46,9 +46,22 @@ impl League {
         ctx: &GlobalContext<'_>,
         friendly: bool,
     ) -> Vec<MatchResult> {
+        let today = ctx.simulation.date.date();
         let matches: Vec<Match> = scheduled_matches
             .iter()
             .map(|scheduled_match| {
+                // Count upcoming competitive fixtures within 5 days for
+                // each side. A team with a cup tie three days from now
+                // has a reason to rotate today even if the league match
+                // would otherwise be high-importance.
+                let home_upcoming = self
+                    .schedule
+                    .get_matches_for_team_in_days(scheduled_match.home_team_id, today + chrono::Duration::days(1), 5)
+                    .len() as u8;
+                let away_upcoming = self
+                    .schedule
+                    .get_matches_for_team_in_days(scheduled_match.away_team_id, today + chrono::Duration::days(1), 5)
+                    .len() as u8;
                 Self::build_match(
                     scheduled_match,
                     clubs,
@@ -56,6 +69,7 @@ impl League {
                     &self.dynamics,
                     &self.table,
                     friendly,
+                    (home_upcoming, away_upcoming),
                 )
             })
             .collect();
@@ -84,6 +98,7 @@ impl League {
         dynamics: &LeagueDynamics,
         table: &LeagueTable,
         friendly: bool,
+        upcoming_fixtures: (u8, u8),
     ) -> Match {
         let home_team = clubs
             .iter()
@@ -109,17 +124,57 @@ impl League {
         );
 
         // Calculate match importance for squad selection decisions
-        let match_importance = if friendly {
+        let base_importance = if friendly {
             0.1
         } else {
             Self::calculate_match_importance(table, home_team, away_team, ctx.simulation.date.date())
         };
+        // Fixture congestion tilt: if a team has another competitive
+        // fixture within the next 5 days, dampen this match's importance
+        // for them so the rotation/development logic kicks in. Applied
+        // per team individually — both teams may be congested, neither
+        // may be. Pre-computed by the caller from the schedule.
+        let congestion_dampen = |ups: u8| -> f32 {
+            if ups >= 2 { 0.55 }
+            else if ups == 1 { 0.80 }
+            else { 1.0 }
+        };
+        let home_importance = base_importance * congestion_dampen(upcoming_fixtures.0);
+        let away_importance = base_importance * congestion_dampen(upcoming_fixtures.1);
 
-        let selection_ctx = SelectionContext {
+        // Surface each team's club philosophy to the selector so
+        // DevelopAndSell / LoanFocused sides actually put their archetype
+        // on the pitch, not just on paper.
+        let home_philosophy = clubs
+            .iter()
+            .find(|c| c.id == home_team.club_id)
+            .map(|c| c.philosophy.clone());
+        let away_philosophy = clubs
+            .iter()
+            .find(|c| c.id == away_team.club_id)
+            .map(|c| c.philosophy.clone());
+
+        // Surface each side's baseline tactic to the other so a sharp
+        // coach can pick a counter. If the team hasn't locked in tactics
+        // yet, the enhanced squad builder will fall back to its default.
+        let home_baseline = home_team.tactics.as_ref().map(|t| t.tactic_type);
+        let away_baseline = away_team.tactics.as_ref().map(|t| t.tactic_type);
+
+        let home_ctx = SelectionContext {
             is_friendly: friendly,
             date: ctx.simulation.date.date(),
-            match_importance,
+            match_importance: home_importance,
+            philosophy: home_philosophy,
+            opponent_tactic: away_baseline,
         };
+        let away_ctx = SelectionContext {
+            is_friendly: friendly,
+            date: ctx.simulation.date.date(),
+            match_importance: away_importance,
+            philosophy: away_philosophy,
+            opponent_tactic: home_baseline,
+        };
+        let selection_ctx = home_ctx;
 
         let (mut home_squad, mut away_squad) = if friendly {
             let mut home_supplements = Self::collect_supplementary_players(clubs, home_team.club_id, home_team.id, friendly);
@@ -136,14 +191,14 @@ impl League {
 
             (
                 home_team.get_rotation_match_squad_with_reserves(&home_supplements, &selection_ctx),
-                away_team.get_rotation_match_squad_with_reserves(&away_supplements, &selection_ctx),
+                away_team.get_rotation_match_squad_with_reserves(&away_supplements, &away_ctx),
             )
         } else {
             let home_reserves = Self::collect_reserve_players(clubs, home_team.club_id, home_team.id, friendly);
             let away_reserves = Self::collect_reserve_players(clubs, away_team.club_id, away_team.id, friendly);
             (
                 home_team.get_enhanced_match_squad(&home_reserves, &selection_ctx),
-                away_team.get_enhanced_match_squad(&away_reserves, &selection_ctx),
+                away_team.get_enhanced_match_squad(&away_reserves, &away_ctx),
             )
         };
 

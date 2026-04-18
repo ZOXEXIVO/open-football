@@ -47,6 +47,7 @@ pub struct TransferCompletion<'a> {
     pub fee: f64,
     pub date: NaiveDate,
     pub selling_club_id: u32,
+    pub buying_club_id: u32,
 }
 
 pub struct LoanCompletion<'a> {
@@ -55,6 +56,7 @@ pub struct LoanCompletion<'a> {
     pub loan_fee: f64,
     pub date: NaiveDate,
     pub loan_contract: PlayerClubContract,
+    pub borrowing_club_id: u32,
 }
 
 impl Player {
@@ -73,12 +75,14 @@ impl Player {
             previous_salary,
             fee: t.fee,
             is_loan: false,
+            destination_club_id: t.buying_club_id,
         });
     }
 
     /// React to a completed loan. The parent contract is preserved; the
     /// borrowing club's contract is installed as `contract_loan`.
     pub fn complete_loan(&mut self, l: LoanCompletion<'_>) {
+        let borrowing_id = l.borrowing_club_id;
         self.on_loan(l.from, l.to, l.loan_fee, l.date);
         self.reset_on_club_change();
         self.contract_loan = Some(l.loan_contract);
@@ -86,6 +90,7 @@ impl Player {
             previous_salary: None,
             fee: l.loan_fee,
             is_loan: true,
+            destination_club_id: borrowing_id,
         });
     }
 

@@ -19,6 +19,9 @@ pub struct PendingSigning {
     pub previous_salary: Option<u32>,
     pub fee: f64,
     pub is_loan: bool,
+    /// Destination club id — needed to check whether the signing is to one
+    /// of the player's favorite clubs so the right shock event can fire.
+    pub destination_club_id: u32,
 }
 
 /// Ambition-vs-club gap (raw units, see `calculate_ambition_fit`) past which
@@ -124,13 +127,44 @@ impl Player {
         // loan wage (distinct from a full contract) so salary shock/boost
         // is skipped for them; that lever is tuned for permanent moves.
         let loan_damp = if pending.is_loan { 0.7 } else { 1.0 };
-        self.emit_ambition_shock(club_rep_0_to_1, loan_damp);
-        self.emit_dream_move(club_rep_0_to_1, loan_damp);
+        let is_favorite_destination = self.favorite_clubs.contains(&pending.destination_club_id);
+        // Ambition shock is muted when joining a favorite club — the player
+        // knew what they were signing for and the sentimental pull covers the
+        // ambition gap. Reputation-based "I should be at a bigger club"
+        // doesn't apply to your boyhood side.
+        if !is_favorite_destination {
+            self.emit_ambition_shock(club_rep_0_to_1, loan_damp);
+        }
+        if is_favorite_destination {
+            // Signing for a childhood/legend club trumps the reputation-gap
+            // logic — fire DreamMove at full weight regardless of where the
+            // club sits on the prestige ladder. A player returning to boyhood
+            // club feels this even if it's a rep-drop move.
+            self.happiness
+                .add_event(HappinessEventType::DreamMove, 15.0 * loan_damp);
+        } else {
+            self.emit_dream_move(club_rep_0_to_1, loan_damp);
+        }
         self.emit_joining_elite(club_rep_0_to_1, loan_damp);
 
         if !pending.is_loan {
             self.emit_salary_shock(pending.previous_salary);
             self.emit_salary_boost(pending.previous_salary);
+        }
+
+        // Shirt number prestige — getting a single-digit or iconic number
+        // at the new club is a real pride moment, especially for younger
+        // players. Fires once per signing.
+        if let Some(shirt) = self.contract.as_ref().and_then(|c| c.shirt_number) {
+            let magnitude = match shirt {
+                7 | 9 | 10 => 4.0,
+                1..=11 => 2.0,
+                _ => 0.0,
+            };
+            if magnitude > 0.0 {
+                self.happiness
+                    .add_event(HappinessEventType::ShirtNumberPromotion, magnitude);
+            }
         }
 
         if !self.speaks_local_language(country_code) {
@@ -276,8 +310,12 @@ impl Player {
     /// fluency, personality, and age. Runs for ~24 weeks after a transfer so
     /// there's a tail of recovery even once the form penalty has faded.
     pub fn process_integration(&mut self, now: NaiveDate, country_code: &str) {
-        let Some(days) = self.days_since_transfer(now) else { return };
+        let Some(days) = self.days_since_transfer(now) else {
+            self.process_chronic_language_isolation(now, country_code);
+            return;
+        };
         if !(0..=168).contains(&days) {
+            self.process_chronic_language_isolation(now, country_code);
             return;
         }
 
@@ -302,5 +340,27 @@ impl Player {
             self.happiness
                 .add_event(HappinessEventType::SettledIntoSquad, 1.0);
         }
+    }
+
+    /// Post-settlement ongoing language check. A player who's been at a
+    /// foreign club for years but never picked up the language keeps
+    /// accruing small isolation hits — the dressing-room outsider model.
+    /// Runs monthly (day-of-month 1) instead of weekly to avoid stacking.
+    fn process_chronic_language_isolation(&mut self, now: NaiveDate, country_code: &str) {
+        use chrono::Datelike;
+        if now.day() != 1 {
+            return;
+        }
+        if self.speaks_local_language(country_code) {
+            return;
+        }
+        // Passive acceptance: high adaptability/professionalism masks it.
+        let adapt = self.attributes.adaptability.clamp(0.0, 20.0);
+        let prof = self.attributes.professionalism.clamp(0.0, 20.0);
+        if (adapt + prof) / 40.0 > 0.7 {
+            return;
+        }
+        self.happiness
+            .add_event(HappinessEventType::FeelingIsolated, -1.5);
     }
 }

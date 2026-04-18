@@ -87,6 +87,22 @@ pub enum HappinessEventType {
     /// Club bought the player out of his contract — a mild blow to pride
     /// softened by the severance payout. Emitted on mutual termination.
     ContractTerminated,
+    /// Head coach was replaced. Fires per-player: strongly negative for
+    /// players who had a close bond with the outgoing manager, mildly
+    /// positive for players whose relationship had soured.
+    ManagerDeparture,
+    /// Called up to the senior national team. Big prestige moment for
+    /// younger players, routine for established internationals.
+    NationalTeamCallup,
+    /// Dropped from the national team squad after previous caps — hurts
+    /// pride more than a non-selection would.
+    NationalTeamDropped,
+    /// Promoted to a prestigious shirt number (1-11, esp. #10 / #7 / #9).
+    /// Small ongoing pride boost while the number holds.
+    ShirtNumberPromotion,
+    /// Had a controversial incident (media or dressing room) — fallout
+    /// tied to `controversy` personality attribute.
+    ControversyIncident,
 }
 
 impl PlayerHappiness {

@@ -92,6 +92,29 @@ impl Relations {
         self.players.get(id)
     }
 
+    /// Record a mentor/mentee link on this player's side of the relation.
+    /// Creates the relation entry if one didn't exist yet.
+    pub fn set_mentorship(&mut self, other_player_id: u32, kind: MentorshipType) {
+        let relation = self.players.get_or_create(other_player_id);
+        relation.mentorship = Some(kind);
+        // Mentorship implies elevated professional respect on both ends —
+        // we only touch this side here; the caller mirrors on the other.
+        relation.professional_respect = (relation.professional_respect + 10.0).min(100.0);
+        // Mentors accumulate dressing-room influence; mentees look up to them.
+        let influence_bump = match kind {
+            MentorshipType::Mentor => 8.0,
+            MentorshipType::Mentee => 3.0,
+        };
+        relation.influence = (relation.influence + influence_bump).min(100.0);
+    }
+
+    /// Clear any mentor/mentee link (e.g. when the pair is disbanded).
+    pub fn clear_mentorship(&mut self, other_player_id: u32) {
+        if let Some(rel) = self.players.get_mut(other_player_id) {
+            rel.mentorship = None;
+        }
+    }
+
     /// Update player relationship with detailed context
     pub fn update_player_relationship(
         &mut self,
@@ -298,6 +321,10 @@ impl<T: Relationship> RelationStore<T> {
 
     fn get(&self, id: u32) -> Option<&T> {
         self.relations.get(&id)
+    }
+
+    fn get_mut(&mut self, id: u32) -> Option<&mut T> {
+        self.relations.get_mut(&id)
     }
 
     fn get_or_create(&mut self, id: u32) -> &mut T {
@@ -926,7 +953,7 @@ impl RelationshipChange {
 }
 
 /// Mentorship types
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MentorshipType {
     Mentor,
     Mentee,

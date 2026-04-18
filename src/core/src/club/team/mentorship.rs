@@ -20,7 +20,7 @@
 
 use crate::club::person::Person;
 use crate::club::player::traits::PlayerTrait;
-use crate::club::{HappinessEventType, Player, PlayerStatusType};
+use crate::club::{HappinessEventType, MentorshipType, Player, PlayerStatusType};
 use crate::PlayerFieldPositionGroup;
 use chrono::NaiveDate;
 
@@ -174,6 +174,20 @@ pub fn process_mentorship(
     // Now mark mentors (separate pass to avoid two mutable borrows).
     for (mentor_idx, _) in &pairings {
         players[*mentor_idx].statuses.add(date, PlayerStatusType::Lrn);
+    }
+
+    // Record mentorship on both sides — the mentor flags the mentee's slot
+    // with Mentee and the mentee flags the mentor with Mentor. Chemistry /
+    // influence passes can now see the pairing and surface it in the UI.
+    for (i, (mentor_idx, mentee_idx)) in pairings.iter().enumerate() {
+        let mentor_id = mentor_ids[i];
+        let mentee_id = mentee_ids[i];
+        players[*mentor_idx]
+            .relations
+            .set_mentorship(mentee_id, MentorshipType::Mentee);
+        players[*mentee_idx]
+            .relations
+            .set_mentorship(mentor_id, MentorshipType::Mentor);
     }
 
     applied

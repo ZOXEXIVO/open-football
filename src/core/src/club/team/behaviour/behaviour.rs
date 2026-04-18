@@ -124,6 +124,20 @@ impl TeamBehaviour {
         // already on good terms with the signer.
         Self::process_contract_jealousy(players, &ctx);
 
+        // Monthly peer-wage audit: a starter earning <60% of the top
+        // earner at their position gets a structural envy hit even when
+        // no one has just signed.
+        Self::process_periodic_wage_envy(players, &ctx);
+
+        // Monthly controversy check — hot-headed players occasionally light
+        // fires that drag their own morale and unsettle nearby teammates.
+        Self::process_controversy_incidents(players, &ctx);
+
+        // Monthly loan-playing-time audit: if a loanee isn't tracking to
+        // hit their contractual minimum apps, the parent club's recall
+        // window opens and the player feels the frustration.
+        Self::process_loan_playing_time_audit(players, &ctx);
+
         // Manager-player talks (weekly during full update)
         Self::process_manager_player_talks(players, staffs, &mut result);
 
@@ -612,6 +626,218 @@ impl TeamBehaviour {
         }
     }
 
+    /// Monthly audit of inbound loanees — did the borrowing club actually
+    /// give them the minutes the loan contract required? If pace falls
+    /// behind, open the recall window (parent may yank them back) and fire
+    /// `LackOfPlayingTime` on the player. Runs on day 1 only.
+    fn process_loan_playing_time_audit(
+        players: &mut PlayerCollection,
+        ctx: &GlobalContext<'_>,
+    ) {
+        use crate::HappinessEventType;
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return;
+        }
+
+        for player in players.players.iter_mut() {
+            let Some(loan) = player.contract_loan.as_mut() else { continue };
+            let Some(min_apps) = loan.loan_min_appearances else { continue };
+            let Some(loan_start) = loan.started else { continue };
+            let loan_end = loan.expiration;
+
+            let total_days = (loan_end - loan_start).num_days().max(1) as f32;
+            let elapsed_days = (today - loan_start).num_days().max(0) as f32;
+            if elapsed_days < 30.0 {
+                continue; // Too early to judge pace
+            }
+            let progress = (elapsed_days / total_days).clamp(0.0, 1.0);
+            let expected_by_now = (min_apps as f32 * progress).floor() as u16;
+            let actual = player.statistics.played + player.statistics.played_subs;
+
+            if actual >= expected_by_now {
+                continue;
+            }
+
+            let deficit = expected_by_now.saturating_sub(actual);
+            // Open the recall window for any meaningful shortfall.
+            if loan.loan_recall_available_after.is_none() {
+                loan.loan_recall_available_after = Some(today);
+            }
+            // Morale hit scales with how badly we're trailing.
+            let magnitude = -((deficit as f32 * 0.8).min(6.0) + 1.0);
+            player
+                .happiness
+                .add_event(HappinessEventType::LackOfPlayingTime, magnitude);
+        }
+    }
+
+    /// Monthly controversy roll — high-controversy players with poor
+    /// temperament occasionally find themselves in incidents: a dressing-
+    /// room row, a media storm, a training-ground scrap. Fires a morale
+    /// hit on the player + a relationship drag against a random teammate.
+    /// Scaled so a calm, sportsmanlike star ~never triggers, while a hot-
+    /// head with controversy >15 and temperament <8 fires frequently.
+    fn process_controversy_incidents(players: &mut PlayerCollection, ctx: &GlobalContext<'_>) {
+        use crate::HappinessEventType;
+        use crate::utils::IntegerUtils;
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return; // Monthly cadence
+        }
+
+        // Collect potential troublemakers (immutable pass).
+        let candidates: Vec<(u32, u32, f32)> = players
+            .players
+            .iter()
+            .filter_map(|p| {
+                let controversy = p.attributes.controversy;
+                let temperament = p.attributes.temperament;
+                let sportsmanship = p.attributes.sportsmanship;
+                if controversy < 12.0 {
+                    return None;
+                }
+                // Risk score: big when controversial + hot-tempered + unsporting
+                let risk = controversy + (20.0 - temperament) * 0.6
+                    + (20.0 - sportsmanship) * 0.4;
+                if risk < 35.0 {
+                    return None;
+                }
+                // Convert to 0-100 trigger chance this month.
+                let chance = ((risk - 35.0) * 1.8).clamp(0.0, 60.0);
+                let roll = IntegerUtils::random(0, 100) as f32;
+                if roll > chance {
+                    return None;
+                }
+                Some((p.id, 0u32, controversy))
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            return;
+        }
+
+        // Pick a nearby teammate (low-friendship, different age bracket) to
+        // be involved in the spat. Only one per incident.
+        let all_ids: Vec<u32> = players.players.iter().map(|p| p.id).collect();
+
+        for (offender_id, _, controversy) in candidates {
+            // Find a candidate teammate — scan for low-friendship relation.
+            let victim_id = {
+                let offender = match players.find(offender_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let mut picked: Option<u32> = None;
+                for tid in &all_ids {
+                    if *tid == offender_id {
+                        continue;
+                    }
+                    let friendship = offender
+                        .relations
+                        .get_player(*tid)
+                        .map(|r| r.friendship)
+                        .unwrap_or(30.0);
+                    if friendship < 35.0 {
+                        picked = Some(*tid);
+                        break;
+                    }
+                }
+                picked
+            };
+
+            // Fire the incident event on the offender.
+            if let Some(offender) = players.players.iter_mut().find(|p| p.id == offender_id) {
+                let magnitude = -(3.0 + ((controversy - 12.0) * 0.3).clamp(0.0, 4.0));
+                offender
+                    .happiness
+                    .add_event(HappinessEventType::ControversyIncident, magnitude);
+            }
+            // And a smaller ripple on the teammate (if one was found).
+            if let Some(vid) = victim_id {
+                if let Some(victim) = players.players.iter_mut().find(|p| p.id == vid) {
+                    victim
+                        .happiness
+                        .add_event(HappinessEventType::ConflictWithTeammate, -2.0);
+                }
+            }
+        }
+    }
+
+    /// Monthly squad-wide wage audit: compare every player's salary to the
+    /// top earner at their position group. If they're a starter earning
+    /// <60% of the top salary in their slot, fire a gentle recurring
+    /// `SalaryGapNoticed` event. Complements `process_contract_jealousy`,
+    /// which only fires on fresh raises.
+    fn process_periodic_wage_envy(players: &mut PlayerCollection, ctx: &GlobalContext<'_>) {
+        let today = ctx.simulation.date.date();
+        if today.day() != 1 {
+            return; // Monthly only
+        }
+
+        use crate::PlayerFieldPositionGroup;
+        use std::collections::HashMap;
+
+        let mut top_by_group: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
+        for p in &players.players {
+            let Some(contract) = p.contract.as_ref() else { continue };
+            if contract.salary == 0 {
+                continue;
+            }
+            let group = p.position().position_group();
+            let entry = top_by_group.entry(group).or_insert(0);
+            if contract.salary > *entry {
+                *entry = contract.salary;
+            }
+        }
+
+        for player in players.players.iter_mut() {
+            let Some(contract) = player.contract.as_ref() else { continue };
+            if contract.salary == 0 {
+                continue;
+            }
+            // Only players who play a meaningful role care about the gap —
+            // the third-choice keeper being underpaid vs the #1 is the way
+            // the world works.
+            if !matches!(
+                contract.squad_status,
+                crate::PlayerSquadStatus::KeyPlayer
+                    | crate::PlayerSquadStatus::FirstTeamRegular
+                    | crate::PlayerSquadStatus::FirstTeamSquadRotation
+            ) {
+                continue;
+            }
+            let group = player.position().position_group();
+            let top = match top_by_group.get(&group) {
+                Some(t) if *t > 0 => *t,
+                _ => continue,
+            };
+            if player.id == 0 || contract.salary >= top {
+                continue;
+            }
+            let ratio = contract.salary as f32 / top as f32;
+            if ratio >= 0.6 {
+                continue;
+            }
+            // Deduplicate: skip if we already fired this month (look at the
+            // last 28 days of recent_events for this event type).
+            let already_noticed = player
+                .happiness
+                .recent_events
+                .iter()
+                .any(|e| e.event_type == HappinessEventType::SalaryGapNoticed
+                    && e.days_ago <= 28);
+            if already_noticed {
+                continue;
+            }
+            // Magnitude: 60% ratio → -1.5, 30% ratio → -4.5, cap at -5.
+            let magnitude = -(((0.6 - ratio) * 10.0) + 1.5).min(5.0);
+            player
+                .happiness
+                .add_event(HappinessEventType::SalaryGapNoticed, magnitude);
+        }
+    }
+
     /// Captain = highest `leadership + influence` on the squad. Their
     /// mood leaks out to teammates: ~±2 morale points/week based on how
     /// happy the captain is relative to neutral 50. Sits on top of the
@@ -664,7 +890,16 @@ impl TeamBehaviour {
             if player.id == captain_id {
                 continue;
             }
-            player.happiness.adjust_morale(delta);
+            // Per-teammate sway — a captain someone respects lands harder,
+            // someone the squad mistrusts lands weaker (or slightly
+            // negative on a good-mood captain). Maps level [-100,100] →
+            // multiplier [0.3, 1.5].
+            let relation_mult = player
+                .relations
+                .get_player(captain_id)
+                .map(|r| 0.9 + (r.level / 100.0).clamp(-0.6, 0.6))
+                .unwrap_or(1.0);
+            player.happiness.adjust_morale(delta * relation_mult);
         }
     }
 
@@ -1149,6 +1384,26 @@ impl TeamBehaviour {
             // Discipline for poor behaviour + high ability
             if player.behaviour.is_poor() && player.player_attributes.current_ability > 100 {
                 talk_candidates.push((player.id, ManagerTalkType::Discipline, 60));
+            }
+
+            // Form-driven automatic talks — gate on the manager's personality.
+            // A strong motivator spots hot streaks; a strong disciplinarian
+            // spots slumps. Managers weak in both skip form-based talks.
+            let mgr_motivating = manager.staff_attributes.mental.motivating;
+            let mgr_discipline = manager.staff_attributes.mental.discipline;
+            let form = player.statistics.average_rating;
+            let apps = player.statistics.played + player.statistics.played_subs;
+            if apps >= 3 {
+                if mgr_motivating >= 14 && form >= 7.5 && player.happiness.morale < 85.0 {
+                    talk_candidates.push((player.id, ManagerTalkType::Praise, 55));
+                }
+                if mgr_discipline >= 14
+                    && form > 0.0
+                    && form < 5.5
+                    && player.player_attributes.current_ability >= 70
+                {
+                    talk_candidates.push((player.id, ManagerTalkType::Discipline, 55));
+                }
             }
         }
 

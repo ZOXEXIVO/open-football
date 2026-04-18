@@ -3,7 +3,8 @@ use chrono::{Datelike, NaiveDate};
 use crate::shared::CurrencyValue;
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, ScoutingRecommendation, TransferNeedReason, TransferRequest,
+    DetailedScoutingReport, ReportRiskFlag, ScoutingRecommendation, TransferNeedReason,
+    TransferRequest,
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
@@ -144,6 +145,14 @@ impl PipelineProcessor {
             for team in &club.teams.teams {
                 if let Some(player) = team.players.find(player_id) {
                     let skill_ability = player.skills.calculate_ability_for_position(player.position());
+                    let (contract_months_remaining, salary) = player
+                        .contract
+                        .as_ref()
+                        .map(|c| {
+                            let days = (c.expiration - date).num_days().max(0);
+                            ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                        })
+                        .unwrap_or((0, 0));
                     return Some(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
@@ -174,11 +183,85 @@ impl PipelineProcessor {
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation: country.reputation,
+                        is_injured: player.player_attributes.is_injured,
+                        contract_months_remaining,
+                        salary,
                     });
                 }
             }
         }
         None
+    }
+
+    /// Derive risk flags for a scouted player from their observable signals.
+    /// Buyer rep is passed in so we can flag wage demands that blow the budget.
+    pub(super) fn evaluate_risk_flags(
+        is_injured: bool,
+        determination: f32,
+        age: u8,
+        contract_months_remaining: i16,
+        player_world_rep: i16,
+        buyer_world_rep: i16,
+    ) -> Vec<ReportRiskFlag> {
+        let mut flags = Vec::new();
+        if is_injured {
+            flags.push(ReportRiskFlag::CurrentlyInjured);
+        }
+        if determination < 8.0 {
+            flags.push(ReportRiskFlag::PoorAttitude);
+        }
+        if age >= 31 {
+            flags.push(ReportRiskFlag::AgeRisk);
+        }
+        // Contract-ending is a bargain, still informational risk (uncertainty re: fee/FA).
+        if contract_months_remaining > 0 && contract_months_remaining <= 6 {
+            flags.push(ReportRiskFlag::ContractExpiring);
+        }
+        // Player's reputation far above buyer's → wage mismatch risk.
+        if player_world_rep > buyer_world_rep + 1500 {
+            flags.push(ReportRiskFlag::WageDemands);
+        }
+        flags
+    }
+
+    pub(super) fn club_world_reputation(club: &Club) -> i16 {
+        club.teams
+            .iter()
+            .find(|t| matches!(t.team_type, crate::TeamType::Main))
+            .map(|t| t.reputation.world as i16)
+            .unwrap_or(0)
+    }
+
+    /// Best `judging_player_data` across the club's scouting staff.
+    /// Drives how aggressively the data department narrows the scout pool.
+    /// Returns 8 as a safe default when no scouts exist.
+    pub(super) fn club_data_analysis_skill(club: &Club) -> u8 {
+        club.teams
+            .iter()
+            .flat_map(|t| t.staffs.iter())
+            .filter(|s| {
+                s.contract
+                    .as_ref()
+                    .map(|c| {
+                        matches!(
+                            c.position,
+                            crate::StaffPosition::Scout | crate::StaffPosition::ChiefScout,
+                        )
+                    })
+                    .unwrap_or(false)
+            })
+            .map(|s| s.staff_attributes.data_analysis.judging_player_data)
+            .max()
+            .unwrap_or(8)
+    }
+
+    /// Performance-adjusted data score used as a pre-scouting filter.
+    /// Weights ability, form (rating × appearances), and raw output (G+A).
+    pub(super) fn player_data_score(p: &PlayerSummary) -> f32 {
+        let ability = p.skill_ability as f32 * 0.4;
+        let form = p.average_rating * (p.appearances.min(40) as f32 / 4.0);
+        let output = ((p.goals + p.assists).min(30)) as f32 * 0.3;
+        ability + form + output
     }
 
     pub(super) fn get_scout_skills(club: &Club, scout_id: u32) -> (u8, u8) {

@@ -68,6 +68,11 @@ impl CountryResult {
                 PipelineProcessor::process_match_scouting(country, current_date);
                 PipelineProcessor::process_scouting(country, &foreign_players, current_date);
                 PipelineProcessor::build_shortlists(country, current_date);
+                // Board review: veto named targets that blow past the
+                // approved budget or clash with the chairman's financial
+                // stance. Coach-driven requests the board rejects are
+                // tracked via `board_approved = Some(false)` + Abandoned.
+                PipelineProcessor::evaluate_board_approvals(country, current_date);
 
                 // Domestic negotiations (local players have priority)
                 PipelineProcessor::initiate_negotiations(country, current_date);
@@ -78,6 +83,11 @@ impl CountryResult {
                 PipelineProcessor::scan_foreign_loan_market(country, &foreign_players, current_date);
 
             }
+
+            // Year-round shadow-squad maintenance: runs on every tick (weekly
+            // cadence enforced inside the function). Keeps tracked players
+            // fresh between windows so the next window opens with current data.
+            PipelineProcessor::refresh_shadow_reports(country, current_date);
 
             debug!(
                 "Transfer Activity - Listings: {}, Negotiations: {}, Completed: {}",

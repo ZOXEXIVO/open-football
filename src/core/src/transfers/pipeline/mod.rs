@@ -67,6 +67,11 @@ mod processor {
         pub home_reputation: i16,
         pub world_reputation: i16,
         pub country_reputation: u16,
+        /// True if the player is currently injured.
+        pub is_injured: bool,
+        /// Months left on contract; 0 if no contract (free agent).
+        pub contract_months_remaining: i16,
+        pub salary: u32,
     }
 }
 
@@ -137,6 +142,14 @@ pub struct TransferRequest {
     pub preferred_age_max: u8,
     pub budget_allocation: f64,
     pub status: TransferRequestStatus,
+    /// Coach-specified named target — skip scouting and go straight at
+    /// this player. Set by `generate_named_target_requests`. The board
+    /// may still veto before scouting runs.
+    pub named_target: Option<u32>,
+    /// Tracks whether the board has rubber-stamped a named target. `None`
+    /// for generic requests. `Some(true)` = approved; `Some(false)` =
+    /// vetoed (also sets status to Abandoned).
+    pub board_approved: Option<bool>,
 }
 
 impl TransferRequest {
@@ -182,6 +195,8 @@ impl TransferRequest {
             preferred_age_max: age_max,
             budget_allocation,
             status: TransferRequestStatus::Pending,
+            named_target: None,
+            board_approved: None,
         }
     }
 }
@@ -270,9 +285,53 @@ pub struct ScoutingAssignment {
     pub preferred_age_min: u8,
     pub preferred_age_max: u8,
     pub max_budget: f64,
+    pub role_profile: RoleProfile,
     pub observations: Vec<PlayerObservation>,
     pub reports_produced: u32,
     pub completed: bool,
+}
+
+/// What the club is actually looking for at the target position —
+/// minimum attribute averages the scout uses to triage candidates.
+/// Drives both scouting focus and shortlist scoring: a player who meets
+/// the ability bar but fails the role profile scores below a slightly
+/// lower-ability candidate who matches the profile.
+#[derive(Debug, Clone)]
+pub struct RoleProfile {
+    pub min_technical_avg: f32,
+    pub min_mental_avg: f32,
+    pub min_physical_avg: f32,
+}
+
+impl RoleProfile {
+    /// Default profile by position group, scaled with the requested ability bar.
+    /// Higher min_ability requests stricter profiles.
+    pub fn for_position(position: PlayerPositionType, min_ability: u8) -> Self {
+        use crate::PlayerFieldPositionGroup;
+        let scale = (min_ability as f32 / 20.0).clamp(0.2, 1.0);
+        let (t, m, p) = match position.position_group() {
+            PlayerFieldPositionGroup::Goalkeeper => (8.0, 12.0, 10.0),
+            PlayerFieldPositionGroup::Defender => (9.0, 11.0, 12.0),
+            PlayerFieldPositionGroup::Midfielder => (12.0, 12.0, 10.0),
+            PlayerFieldPositionGroup::Forward => (13.0, 10.0, 11.0),
+        };
+        RoleProfile {
+            min_technical_avg: t * scale,
+            min_mental_avg: m * scale,
+            min_physical_avg: p * scale,
+        }
+    }
+
+    /// Fit score in [0.0, 1.25] — 1.0 means meets all minimums exactly,
+    /// 1.25 means comfortably above, <1.0 means below in one or more buckets.
+    pub fn fit(&self, technical_avg: f32, mental_avg: f32, physical_avg: f32) -> f32 {
+        let t = (technical_avg / self.min_technical_avg.max(1.0)).min(1.25);
+        let m = (mental_avg / self.min_mental_avg.max(1.0)).min(1.25);
+        let p = (physical_avg / self.min_physical_avg.max(1.0)).min(1.25);
+        // Geometric mean — a deep shortfall in one bucket drags the score down
+        // more than if penalties were simply averaged.
+        (t * m * p).powf(1.0 / 3.0)
+    }
 }
 
 impl ScoutingAssignment {
@@ -286,6 +345,7 @@ impl ScoutingAssignment {
         preferred_age_max: u8,
         max_budget: f64,
     ) -> Self {
+        let role_profile = RoleProfile::for_position(target_position, min_ability);
         ScoutingAssignment {
             id,
             transfer_request_id,
@@ -295,6 +355,7 @@ impl ScoutingAssignment {
             preferred_age_min,
             preferred_age_max,
             max_budget,
+            role_profile,
             observations: Vec::new(),
             reports_produced: 0,
             completed: false,
@@ -323,6 +384,27 @@ pub struct DetailedScoutingReport {
     pub confidence: f32,
     pub estimated_value: f64,
     pub recommendation: ScoutingRecommendation,
+    /// How well the player fits the assignment's role profile. Computed at
+    /// report time from the scout's read of technical/mental/physical averages.
+    /// ~1.0 = meets profile, <1.0 = short in key buckets, >1.0 = above.
+    pub role_fit: f32,
+    /// Non-fatal concerns the scout flagged — fed into shortlist scoring
+    /// and negotiation acceptance without hard-blocking the report.
+    pub risk_flags: Vec<ReportRiskFlag>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportRiskFlag {
+    /// Currently injured — bid timing risk
+    CurrentlyInjured,
+    /// Low determination/work_rate — character concern
+    PoorAttitude,
+    /// Player's reputation is far above the club's budget tier — wage risk
+    WageDemands,
+    /// Contract running out soon — bargain opportunity (informational)
+    ContractExpiring,
+    /// Player is over 30 — age risk for long-term contracts
+    AgeRisk,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -537,6 +619,26 @@ pub struct ClubTransferPlan {
 
     pub last_evaluation_date: Option<NaiveDate>,
     pub initialized: bool,
+
+    /// Players recently rejected by scouts — (player_id, until_date).
+    /// Skipped during future scouting observations until `until_date`.
+    /// Prevents re-scouting the same dud repeatedly in the same window.
+    pub rejected_players: Vec<(u32, NaiveDate)>,
+
+    /// Reports carried over between transfer windows — a persistent shadow
+    /// squad built up over time. On window start these seed new shortlists
+    /// instead of forcing a cold-start scouting pass each cycle.
+    pub shadow_reports: Vec<ShadowReport>,
+}
+
+/// A scouting report preserved past its originating assignment, used to
+/// bootstrap future shortlists without discarding long-tracked targets.
+#[derive(Debug, Clone)]
+pub struct ShadowReport {
+    pub report: DetailedScoutingReport,
+    pub position_group: crate::PlayerFieldPositionGroup,
+    pub observed_ability: u8,
+    pub recorded_on: NaiveDate,
 }
 
 impl ClubTransferPlan {
@@ -558,7 +660,35 @@ impl ClubTransferPlan {
             next_assignment_id: 1,
             last_evaluation_date: None,
             initialized: false,
+            rejected_players: Vec::new(),
+            shadow_reports: Vec::new(),
         }
+    }
+
+    /// True if a player is on the blocklist for the given date.
+    pub fn is_rejected(&self, player_id: u32, date: NaiveDate) -> bool {
+        self.rejected_players
+            .iter()
+            .any(|(id, until)| *id == player_id && *until > date)
+    }
+
+    /// Mark a player as rejected for the next `months` calendar months.
+    pub fn reject_player(&mut self, player_id: u32, date: NaiveDate, months: i64) {
+        let until = date + chrono::Duration::days(months * 30);
+        if let Some(existing) = self
+            .rejected_players
+            .iter_mut()
+            .find(|(id, _)| *id == player_id)
+        {
+            existing.1 = until.max(existing.1);
+        } else {
+            self.rejected_players.push((player_id, until));
+        }
+    }
+
+    /// Purge expired entries.
+    pub fn prune_rejected(&mut self, date: NaiveDate) {
+        self.rejected_players.retain(|(_, until)| *until > date);
     }
 
     pub fn available_budget(&self) -> f64 {
@@ -586,6 +716,10 @@ impl ClubTransferPlan {
     }
 
     pub fn reset_for_window(&mut self) {
+        // Archive reports from the closing window so year-over-year tracking
+        // isn't lost — scouts don't forget every player every summer.
+        self.archive_reports_to_shadow();
+
         self.transfer_requests.clear();
         self.scouting_assignments.clear();
         self.scouting_reports.clear();
@@ -598,6 +732,119 @@ impl ClubTransferPlan {
         self.reserved = 0.0;
         self.initialized = false;
         self.last_evaluation_date = None;
+    }
+
+    /// Move the current window's scouting reports into the persistent shadow
+    /// squad. Keeps only the strongest N per position group to bound growth.
+    pub fn archive_reports_to_shadow(&mut self) {
+        use std::collections::HashMap;
+        const SHADOW_CAP_PER_GROUP: usize = 15;
+
+        if self.scouting_reports.is_empty() {
+            return;
+        }
+
+        let assign_lookup: HashMap<u32, &ScoutingAssignment> = self
+            .scouting_assignments
+            .iter()
+            .map(|a| (a.id, a))
+            .collect();
+        let today = self
+            .last_evaluation_date
+            .unwrap_or_else(|| NaiveDate::from_ymd_opt(2024, 1, 1).unwrap());
+
+        for report in &self.scouting_reports {
+            // Skip reports we've already shadowed (e.g. in-window archive calls).
+            if self.shadow_reports.iter().any(|s| s.report.player_id == report.player_id) {
+                continue;
+            }
+            // Only keep reports for non-Pass recommendations — Pass-flagged
+            // players are already on the rejection blocklist.
+            if matches!(report.recommendation, ScoutingRecommendation::Pass) {
+                continue;
+            }
+            let group = match assign_lookup.get(&report.assignment_id) {
+                Some(a) => a.target_position.position_group(),
+                None => continue,
+            };
+            self.shadow_reports.push(ShadowReport {
+                report: report.clone(),
+                position_group: group,
+                observed_ability: report.assessed_ability,
+                recorded_on: today,
+            });
+        }
+
+        // Cap per position group: keep best by assessed_ability × confidence
+        use crate::PlayerFieldPositionGroup;
+        for group in [
+            PlayerFieldPositionGroup::Goalkeeper,
+            PlayerFieldPositionGroup::Defender,
+            PlayerFieldPositionGroup::Midfielder,
+            PlayerFieldPositionGroup::Forward,
+        ] {
+            let mut indices: Vec<usize> = self
+                .shadow_reports
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.position_group == group)
+                .map(|(i, _)| i)
+                .collect();
+            if indices.len() <= SHADOW_CAP_PER_GROUP {
+                continue;
+            }
+            indices.sort_by(|a, b| {
+                let sa = &self.shadow_reports[*a];
+                let sb = &self.shadow_reports[*b];
+                let score_a = sa.report.assessed_ability as f32 * sa.report.confidence;
+                let score_b = sb.report.assessed_ability as f32 * sb.report.confidence;
+                score_b.partial_cmp(&score_a).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            let to_drop: Vec<usize> = indices.into_iter().skip(SHADOW_CAP_PER_GROUP).collect();
+            // Drop in reverse to preserve indices
+            let mut sorted = to_drop;
+            sorted.sort_unstable_by(|a, b| b.cmp(a));
+            for idx in sorted {
+                self.shadow_reports.swap_remove(idx);
+            }
+        }
+    }
+
+    /// Rehydrate shadow reports into the active window's report pool for any
+    /// ScoutingAssignment whose position group matches. Gives newly opened
+    /// windows a warm start instead of rescouting from scratch.
+    pub fn seed_active_reports_from_shadow(&mut self) {
+        if self.shadow_reports.is_empty() || self.scouting_assignments.is_empty() {
+            return;
+        }
+        let assignments: Vec<(u32, crate::PlayerFieldPositionGroup)> = self
+            .scouting_assignments
+            .iter()
+            .map(|a| (a.id, a.target_position.position_group()))
+            .collect();
+
+        for shadow in &self.shadow_reports {
+            // Bind this shadow report to the first matching active assignment.
+            // Dedupe against existing active reports for the same player.
+            if let Some((assign_id, _)) = assignments
+                .iter()
+                .find(|(_, g)| *g == shadow.position_group)
+            {
+                let already_active = self
+                    .scouting_reports
+                    .iter()
+                    .any(|r| r.player_id == shadow.report.player_id);
+                if already_active {
+                    continue;
+                }
+                let mut seeded = shadow.report.clone();
+                seeded.assignment_id = *assign_id;
+                // Shadow confidence decays with age — a 12-month-old report is
+                // meaningfully less sharp than a fresh one.
+                seeded.confidence = (seeded.confidence * 0.7).clamp(0.2, 1.0);
+                self.scouting_reports.push(seeded);
+            }
+        }
     }
 }
 

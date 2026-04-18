@@ -537,6 +537,7 @@ impl PipelineProcessor {
         player_id: u32,
         accepted: bool,
     ) {
+        let mut manager_satisfaction_hit: f32 = 0.0;
         if let Some(club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             let plan = &mut club.transfer_plan;
 
@@ -555,6 +556,12 @@ impl PipelineProcessor {
                             .find(|r| r.id == shortlist.transfer_request_id)
                         {
                             req.status = TransferRequestStatus::Fulfilled;
+                            // Signing a Critical target is a real morale lift.
+                            manager_satisfaction_hit += match req.priority {
+                                TransferNeedPriority::Critical => 3.0,
+                                TransferNeedPriority::Important => 1.5,
+                                TransferNeedPriority::Optional => 0.5,
+                            };
                         }
                     } else {
                         candidate.status = ShortlistCandidateStatus::NegotiationFailed;
@@ -567,9 +574,19 @@ impl PipelineProcessor {
                                 .find(|r| r.id == shortlist.transfer_request_id)
                             {
                                 if req.priority == TransferNeedPriority::Critical {
+                                    // Critical targets re-open — but the
+                                    // repeated failure still stings.
                                     req.status = TransferRequestStatus::Pending;
+                                    manager_satisfaction_hit -= 2.0;
                                 } else {
                                     req.status = TransferRequestStatus::Abandoned;
+                                    // Abandoned target = identified need we
+                                    // couldn't address. Hits manager morale.
+                                    manager_satisfaction_hit -= match req.priority {
+                                        TransferNeedPriority::Critical => 4.0,
+                                        TransferNeedPriority::Important => 2.5,
+                                        TransferNeedPriority::Optional => 0.75,
+                                    };
                                 }
                             }
                         } else {
@@ -588,6 +605,22 @@ impl PipelineProcessor {
             }
 
             plan.active_negotiation_count = plan.active_negotiation_count.saturating_sub(1);
+
+            // Push the aggregated delta into the manager's job_satisfaction
+            // so a run of failed bids visibly erodes morale. Scoped inside
+            // the same `if let Some(club)` so the borrow is still alive.
+            if manager_satisfaction_hit.abs() > 0.01 {
+                if let Some(main_team) = club.teams.main_mut() {
+                    if let Some(mgr) = main_team
+                        .staffs
+                        .find_mut_by_position(crate::StaffPosition::Manager)
+                    {
+                        mgr.job_satisfaction =
+                            (mgr.job_satisfaction + manager_satisfaction_hit)
+                                .clamp(0.0, 100.0);
+                    }
+                }
+            }
         }
     }
 

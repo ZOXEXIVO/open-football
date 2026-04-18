@@ -68,12 +68,24 @@ impl Team {
         // Use squad selection with reserve pool
         let squad_result = SquadSelector::select_with_context(self, head_coach, reserve_players, ctx);
 
-        // Step 3: Create match squad with selected tactics
-        let final_tactics = self
-            .tactics
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| TacticsSelector::select(self, head_coach));
+        // Step 3: Create match squad with selected tactics.
+        // Opponent-aware tactics: a tactically sharp coach reads the
+        // opposition setup and picks a counter-formation instead of the
+        // default team shape. Knowledge threshold is ≥14 (Conti B level).
+        let head_coach_tac = head_coach
+            .staff_attributes
+            .knowledge
+            .tactical_knowledge;
+        let final_tactics = if let (Some(opp), true) = (ctx.opponent_tactic, head_coach_tac >= 14) {
+            let roster: Vec<&Player> = self.players.players();
+            TacticsSelector::select_counter_tactic(&opp, &roster)
+        } else {
+            self
+                .tactics
+                .as_ref()
+                .cloned()
+                .unwrap_or_else(|| TacticsSelector::select(self, head_coach))
+        };
 
         // Step 5: Validate squad selection
         self.validate_squad_selection(&squad_result, &final_tactics);
@@ -141,11 +153,26 @@ impl Team {
             .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }
 
-    /// Select vice captain
+    /// Select vice captain — second-highest leadership after the captain.
+    /// Steps in when the captain is off the pitch (injured, subbed, sent off).
     fn select_vice_captain(&self) -> Option<MatchPlayer> {
-        // Similar logic to captain but exclude current captain
-        // Implementation would be similar to select_captain
-        None
+        let captain_id = self.select_captain().map(|c| c.id);
+        self.players
+            .players()
+            .iter()
+            .filter(|p| !p.player_attributes.is_injured && !p.player_attributes.is_banned)
+            .filter(|p| Some(p.id) != captain_id)
+            .max_by(|a, b| {
+                let leadership_a = a.skills.mental.leadership;
+                let leadership_b = b.skills.mental.leadership;
+                let experience_a = a.player_attributes.international_apps;
+                let experience_b = b.player_attributes.international_apps;
+
+                (leadership_a + experience_a as f32 / 10.0)
+                    .partial_cmp(&(leadership_b + experience_b as f32 / 10.0))
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|p| MatchPlayer::from_player(self.id, p, p.position(), false))
     }
 
     /// Select penalty taker based on penalty taking skill and composure

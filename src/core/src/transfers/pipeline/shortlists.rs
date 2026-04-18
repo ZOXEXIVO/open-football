@@ -2,16 +2,70 @@ use chrono::NaiveDate;
 use log::debug;
 
 use crate::transfers::pipeline::{
-    DetailedScoutingReport, ScoutingAssignment, ScoutingRecommendation, ShortlistCandidate,
-    ShortlistCandidateStatus, TransferRequestStatus, TransferShortlist,
+    DetailedScoutingReport, ReportRiskFlag, ScoutingAssignment, ScoutingRecommendation,
+    ShortlistCandidate, ShortlistCandidateStatus, TransferNeedPriority, TransferRequestStatus,
+    TransferShortlist,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
-use crate::Country;
+use crate::{Club, Country, PlayerFieldPositionGroup, TeamType};
 
 struct ShortlistResult {
     club_id: u32,
     shortlist: TransferShortlist,
     request_id: u32,
+}
+
+/// Squad depth snapshot at the main team — used to weight shortlist scoring
+/// so well-covered positions don't outrank real gaps.
+struct PositionDepth {
+    count: usize,
+    max: usize,
+    best_ability: u8,
+}
+
+fn position_depth_for(club: &Club, group: PlayerFieldPositionGroup) -> Option<PositionDepth> {
+    let main = club.teams.iter().find(|t| t.team_type == TeamType::Main)?;
+    let max = match group {
+        PlayerFieldPositionGroup::Goalkeeper => 3,
+        PlayerFieldPositionGroup::Defender => 8,
+        PlayerFieldPositionGroup::Midfielder => 8,
+        PlayerFieldPositionGroup::Forward => 6,
+    };
+    let abilities: Vec<u8> = main
+        .players
+        .iter()
+        .filter(|p| p.position().position_group() == group)
+        .map(|p| p.player_attributes.current_ability)
+        .collect();
+    Some(PositionDepth {
+        count: abilities.len(),
+        max,
+        best_ability: abilities.iter().copied().max().unwrap_or(0),
+    })
+}
+
+/// A multiplier applied to candidate score based on whether the club
+/// actually needs depth at this position. Surplus positions get scaled down;
+/// clear gaps get a small boost.
+fn depth_weight(depth: &PositionDepth, candidate_ability: u8) -> f32 {
+    if depth.count == 0 {
+        return 1.25;
+    }
+    if depth.count >= depth.max {
+        // Surplus — only candidates clearly better than our best should score well
+        let gap = candidate_ability as i16 - depth.best_ability as i16;
+        if gap >= 10 {
+            0.95
+        } else if gap >= 0 {
+            0.7
+        } else {
+            0.4
+        }
+    } else {
+        // Room to grow — moderate boost scaled by how thin we are
+        let fill = depth.count as f32 / depth.max as f32;
+        1.0 + (1.0 - fill) * 0.2
+    }
 }
 
 impl PipelineProcessor {
@@ -61,6 +115,8 @@ impl PipelineProcessor {
                     continue;
                 }
 
+                let depth = position_depth_for(club, assignment.target_position.position_group());
+
                 let mut candidates: Vec<ShortlistCandidate> = reports
                     .iter()
                     .filter(|r| budget_alloc <= 0.0 || r.estimated_value <= budget_alloc * 2.0)
@@ -74,7 +130,7 @@ impl PipelineProcessor {
                         };
                         let confidence_score = r.confidence;
 
-                        let score = ability_score * 0.3
+                        let base_score = ability_score * 0.3
                             + potential_score * 0.2
                             + value_fit * 0.25
                             + confidence_score * 0.1
@@ -84,6 +140,30 @@ impl PipelineProcessor {
                                 ScoutingRecommendation::Consider => 0.05,
                                 ScoutingRecommendation::Pass => 0.0,
                             };
+
+                        // Risk flags dampen the score multiplicatively — serious
+                        // flags (injured, bad attitude, wage demand) hurt more
+                        // than softer ones (age, contract-expiring which is
+                        // actually a mild positive).
+                        let mut risk_multiplier: f32 = 1.0;
+                        for flag in &r.risk_flags {
+                            risk_multiplier *= match flag {
+                                ReportRiskFlag::CurrentlyInjured => 0.85,
+                                ReportRiskFlag::PoorAttitude => 0.8,
+                                ReportRiskFlag::WageDemands => 0.75,
+                                ReportRiskFlag::AgeRisk => 0.9,
+                                ReportRiskFlag::ContractExpiring => 1.05,
+                            };
+                        }
+
+                        let depth_mult = match &depth {
+                            Some(d) => depth_weight(d, r.assessed_ability),
+                            None => 1.0,
+                        };
+                        // role_fit is ~[0.5, 1.25]; center it around 1.0 so a perfect
+                        // fit lifts score ~25% and a bad fit drops ~50%.
+                        let role_mult = r.role_fit.clamp(0.5, 1.25);
+                        let score = base_score * depth_mult * risk_multiplier * role_mult;
 
                         ShortlistCandidate {
                             player_id: r.player_id,
@@ -185,6 +265,130 @@ impl PipelineProcessor {
                 }
 
                 plan.shortlists.push(result.shortlist);
+            }
+        }
+    }
+
+    /// Board-approval pass. Runs right after shortlists are built. For
+    /// each shortlist whose top candidate clearly blows past the allocated
+    /// budget, or that clashes with the chairman's financial stance, the
+    /// board quietly vetoes — status goes to Abandoned, chairman_loyalty
+    /// drifts down, and the manager takes a job_satisfaction hit. Named
+    /// targets that DO pass the filter get `board_approved = Some(true)`
+    /// so the downstream negotiation pipeline can pin them as priority #1.
+    pub fn evaluate_board_approvals(country: &mut Country, _date: NaiveDate) {
+        use crate::club::board::FinancialStance;
+
+        struct Decision {
+            club_id: u32,
+            request_id: u32,
+            approved: bool,
+            named_target: Option<u32>,
+            satisfaction_delta: f32,
+            loyalty_delta: i16,
+        }
+        let mut decisions: Vec<Decision> = Vec::new();
+
+        for club in &country.clubs {
+            let stance = club.board.vision.financial_stance;
+            let plan = &club.transfer_plan;
+
+            for shortlist in &plan.shortlists {
+                // Skip anything already approved / vetoed / drained.
+                let Some(top) = shortlist.candidates.first() else { continue };
+                let req = match plan
+                    .transfer_requests
+                    .iter()
+                    .find(|r| r.id == shortlist.transfer_request_id)
+                {
+                    Some(r) if r.board_approved.is_none() => r,
+                    _ => continue,
+                };
+                if req.status != TransferRequestStatus::Shortlisted {
+                    continue;
+                }
+
+                let alloc = req.budget_allocation.max(1.0);
+                let fee = top.estimated_fee;
+                let over_run = fee / alloc;
+
+                // Veto rules — escalating by stance strictness.
+                let veto_reason: Option<&str> = match stance {
+                    FinancialStance::Austerity if over_run > 0.9 => Some("austerity"),
+                    FinancialStance::Conservative if over_run > 1.3 => Some("conservative"),
+                    FinancialStance::Balanced if over_run > 1.8 => Some("over-budget"),
+                    FinancialStance::Ambitious if over_run > 2.5 => Some("over-budget"),
+                    _ => None,
+                };
+
+                if let Some(_reason) = veto_reason {
+                    decisions.push(Decision {
+                        club_id: club.id,
+                        request_id: req.id,
+                        approved: false,
+                        named_target: Some(top.player_id),
+                        satisfaction_delta: match req.priority {
+                            TransferNeedPriority::Critical => -4.0,
+                            TransferNeedPriority::Important => -2.5,
+                            TransferNeedPriority::Optional => -1.0,
+                        },
+                        // Vetoing a manager's top target is a public
+                        // disagreement — shifts the chairman-manager bond.
+                        loyalty_delta: match req.priority {
+                            TransferNeedPriority::Critical => -4,
+                            TransferNeedPriority::Important => -2,
+                            TransferNeedPriority::Optional => -1,
+                        },
+                    });
+                } else {
+                    // Green-lit target. Pin it so downstream can fast-track.
+                    decisions.push(Decision {
+                        club_id: club.id,
+                        request_id: req.id,
+                        approved: true,
+                        named_target: Some(top.player_id),
+                        satisfaction_delta: 0.0,
+                        loyalty_delta: 0,
+                    });
+                }
+            }
+        }
+
+        for d in decisions {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == d.club_id) {
+                if let Some(req) = club
+                    .transfer_plan
+                    .transfer_requests
+                    .iter_mut()
+                    .find(|r| r.id == d.request_id)
+                {
+                    req.board_approved = Some(d.approved);
+                    req.named_target = d.named_target;
+                    if !d.approved {
+                        req.status = TransferRequestStatus::Abandoned;
+                    }
+                }
+
+                if !d.approved {
+                    // Fire the manager hit + loyalty drift once per veto.
+                    if d.loyalty_delta != 0 {
+                        let cur = club.board.chairman.manager_loyalty as i16;
+                        club.board.chairman.manager_loyalty =
+                            (cur + d.loyalty_delta).clamp(0, 100) as u8;
+                    }
+                    if d.satisfaction_delta.abs() > 0.01 {
+                        if let Some(main_team) = club.teams.main_mut() {
+                            if let Some(mgr) = main_team
+                                .staffs
+                                .find_mut_by_position(crate::StaffPosition::Manager)
+                            {
+                                mgr.job_satisfaction =
+                                    (mgr.job_satisfaction + d.satisfaction_delta)
+                                        .clamp(0.0, 100.0);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

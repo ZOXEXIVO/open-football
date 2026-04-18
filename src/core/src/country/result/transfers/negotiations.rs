@@ -357,8 +357,18 @@ impl CountryResult {
         }
 
         // For domestic, check salary and player-specific details
+        let mut moving_to_favorite = false;
         if neg_data.selling_country_id.is_none() {
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
+                // Favorite club bonus — a player moving to a childhood/legend
+                // club accepts terms eagerly, and the usual downward/prestige
+                // penalties are muted. Already-populated list, previously
+                // ignored in every decision path.
+                if player.favorite_clubs.contains(&neg_data.buying_club_id) {
+                    chance += 25.0;
+                    moving_to_favorite = true;
+                }
+
                 // Agent bias: greedy reps depress acceptance; loyal reps push
                 // the client to stay put unless the move is a clear step up.
                 let agent = PlayerAgent::for_player(player);
@@ -442,12 +452,15 @@ impl CountryResult {
             }
         }
 
-        // Geographic preference: players resist moves to less prestigious regions
+        // Geographic preference: players resist moves to less prestigious regions.
+        // A favorite-club destination overrides this — a Barca-raised kid will
+        // go from Bayern to Barcelona even though W.Europe→W.Europe is a wash
+        // and a prestige-drop would otherwise penalise (hypothetically).
         if let Some(sell_continent_id) = neg_data.selling_continent_id {
             let buying_region = ScoutingRegion::from_country(country.continent_id, &country.code);
             let selling_region = ScoutingRegion::from_country(sell_continent_id, &neg_data.selling_country_code);
 
-            if buying_region != selling_region {
+            if buying_region != selling_region && !moving_to_favorite {
                 let buy_prestige = buying_region.league_prestige();
                 let sell_prestige = selling_region.league_prestige();
                 let prestige_drop = sell_prestige - buy_prestige;

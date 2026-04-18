@@ -82,7 +82,7 @@ pub use staff::{
     Staff, StaffCollection, StaffStub,
     StaffAttributes, StaffContext,
     StaffCoaching, StaffGoalkeeperCoaching, StaffMental,
-    StaffKnowledge, StaffDataAnalysis, StaffMedical,
+    StaffKnowledge, StaffDataAnalysis, StaffMedical, RegionFamiliarity,
     StaffClubContract, StaffPosition, StaffStatus,
     CoachFocus, TechnicalFocusType, MentalFocusType, PhysicalFocusType,
     StaffResponsibility, BoardResponsibility, RecruitmentResponsibility,

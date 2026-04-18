@@ -41,6 +41,17 @@ impl PlayerAgent {
         };
         -(greed_penalty + loyalty_penalty)
     }
+
+    /// Renewal acceptance score delta. Positive = more likely to accept a
+    /// same-or-small-raise offer; negative = agent pushes to hold out.
+    /// Raise ratio is (offered / current). Greed fades once the raise is
+    /// genuinely big (>30%), loyalty always leans toward accepting.
+    pub fn renewal_delta(&self, raise_ratio: f32) -> f32 {
+        let effective_greed = (self.greed - (raise_ratio - 1.0).max(0.0) * 0.8).max(0.0);
+        let greed_penalty = effective_greed * 12.0;
+        let loyalty_bonus = self.loyalty * 6.0;
+        loyalty_bonus - greed_penalty
+    }
 }
 
 #[cfg(test)]

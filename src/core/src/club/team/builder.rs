@@ -110,6 +110,8 @@ impl TeamBuilder {
             training_schedule: self.training_schedule.ok_or("training_schedule is required")?,
             transfer_list: self.transfer_list.unwrap_or_else(Transfers::new),
             match_history: self.match_history.unwrap_or_else(MatchHistory::new),
+            captain_id: None,
+            vice_captain_id: None,
         })
     }
 }

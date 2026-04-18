@@ -66,6 +66,22 @@ impl Player {
                 self.statuses.remove(PlayerStatusType::Inj);
                 self.statuses.add(now, PlayerStatusType::Lmp);
                 result.injury_recovered = true;
+
+                // Morale event: being cleared to play lifts morale, more so
+                // after a long absence. Recovery days remaining is our proxy
+                // for the severity of what they just went through.
+                let recovery_left = self.player_attributes.recovery_days_remaining;
+                let magnitude = if recovery_left >= 30 {
+                    8.0 // long-term injury — big lift, been in rehab for weeks
+                } else if recovery_left >= 14 {
+                    5.0
+                } else if recovery_left >= 7 {
+                    3.0
+                } else {
+                    1.5
+                };
+                self.happiness
+                    .add_event(crate::HappinessEventType::InjuryReturn, magnitude);
             }
         } else if self.player_attributes.is_in_recovery() {
             // Phase 2: Recovery — post-injury low match fitness phase.

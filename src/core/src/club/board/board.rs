@@ -76,6 +76,80 @@ pub enum LongTermGoal {
     Survive,
 }
 
+/// Ownership personality — a simplified chairman archetype whose traits
+/// shape how the board actually exercises its powers. Two knobs, each
+/// with meaningful consequences downstream of board.simulate().
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChairmanAmbition {
+    #[default]
+    Balanced,
+    /// "We want the Champions League." Budget skew +, expectations +.
+    Ambitious,
+    /// Sugar daddy / oil money. Budget skew ++, expectations ++,
+    /// but also trigger-happy when results slip.
+    Reckless,
+    /// Old-money prudent. Budget skew -, stability prized.
+    Conservative,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ChairmanPatience {
+    #[default]
+    Medium,
+    /// Results yesterday. Sacking threshold is one bad run away.
+    Low,
+    /// Long-term project builder, trusts the process.
+    High,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ChairmanProfile {
+    pub ambition: ChairmanAmbition,
+    pub patience: ChairmanPatience,
+    /// 0..100 — how personally loyal the chairman is to the current manager.
+    /// Rebuilt on each hire; decays with poor form, lifts with trophies.
+    pub manager_loyalty: u8,
+}
+
+impl ChairmanProfile {
+    pub fn new() -> Self {
+        ChairmanProfile {
+            ambition: ChairmanAmbition::Balanced,
+            patience: ChairmanPatience::Medium,
+            manager_loyalty: 50,
+        }
+    }
+
+    /// Poor-mood-month threshold before patience snaps. Lower = quicker
+    /// firing. High-loyalty chairmen buy their guy some extra time.
+    pub fn poor_mood_threshold(&self) -> u8 {
+        let base = match self.patience {
+            ChairmanPatience::Low => 3,
+            ChairmanPatience::Medium => 4,
+            ChairmanPatience::High => 6,
+        };
+        // Loyal chairmen tolerate one extra poor month before acting.
+        if self.manager_loyalty >= 70 {
+            base + 1
+        } else if self.manager_loyalty <= 20 {
+            base.saturating_sub(1).max(1)
+        } else {
+            base
+        }
+    }
+
+    /// Multiplier applied to the baseline transfer budget. Reckless owners
+    /// push spend harder; conservative ones throttle it.
+    pub fn budget_multiplier(&self) -> f32 {
+        match self.ambition {
+            ChairmanAmbition::Reckless => 1.4,
+            ChairmanAmbition::Ambitious => 1.15,
+            ChairmanAmbition::Balanced => 1.0,
+            ChairmanAmbition::Conservative => 0.85,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct SeasonTargets {
     pub transfer_budget: i32,
@@ -127,6 +201,10 @@ pub struct ClubBoard {
     /// `None` when the manager seat is filled (either permanently, or
     /// an interim has been confirmed as permanent).
     pub manager_search_since: Option<NaiveDate>,
+    /// Ownership archetype. Modulates budget size, sacking threshold,
+    /// and long-term tolerance. Populated at club creation; stable for
+    /// the lifetime of the chairman.
+    pub chairman: ChairmanProfile,
 }
 
 impl ClubBoard {
@@ -142,6 +220,7 @@ impl ClubBoard {
             vision_start_year: None,
             vision_goal_achieved: false,
             manager_search_since: None,
+            chairman: ChairmanProfile::new(),
         }
     }
 
@@ -196,6 +275,16 @@ impl ClubBoard {
                 let current_year = ctx.simulation.date.date().year();
                 self.evaluate_long_term_vision(current_year, &mut result);
                 self.calculate_season_targets(board_ctx);
+                // Season-end review: if the manager's still in their seat
+                // and the board is happy with them, trigger a renewal
+                // offer. Carries the baseline confidence into the new
+                // season so the manager keeps the momentum.
+                if !result.manager_sacked
+                    && self.confidence.level >= 70
+                    && self.chairman.manager_loyalty >= 55
+                {
+                    result.offer_manager_renewal = true;
+                }
                 self.confidence.level = 65; // Reset confidence at season start
                 self.poor_mood_months = 0;
             }
@@ -294,7 +383,13 @@ impl ClubBoard {
         let price_ceiling = price * price * 80_000_000.0;
         let eco_ceiling = eco * eco * 300_000_000.0;
         let budget_ceiling = price_ceiling.min(eco_ceiling) as i64;
-        let transfer_budget = raw_budget.min(budget_ceiling) as i32;
+        // Chairman tilts the budget — reckless spends harder, conservative
+        // throttles. Applied to the raw budget before hitting the sanity
+        // ceiling, so a reckless owner at a mid-table club gets a real
+        // war chest but can't breach the country-wide economic cap.
+        let chair_mult = self.chairman.budget_multiplier() as f64;
+        let tilted_budget = (raw_budget as f64 * chair_mult) as i64;
+        let transfer_budget = tilted_budget.min(budget_ceiling) as i32;
 
         // Wage budget: current annual wages * growth factor
         let wage_growth = if rep >= 0.7 {
@@ -434,6 +529,43 @@ impl ClubBoard {
             result.bonus_transfer_funds = true;
         }
 
+        // Chairman loyalty drifts with results — trophies and strong league
+        // positions build personal trust, collapses erode it. Capped [0,100].
+        let loyalty_delta: i16 = if performance_delta >= 3 {
+            2
+        } else if performance_delta >= 1 {
+            1
+        } else if performance_delta <= -3 {
+            -3
+        } else if performance_delta <= -1 {
+            -1
+        } else {
+            0
+        };
+        self.chairman.manager_loyalty = ((self.chairman.manager_loyalty as i16
+            + loyalty_delta)
+            .clamp(0, 100)) as u8;
+
+        // Manager's own morale tracks the board mood. A manager working
+        // for a happy chairman feels secure; a manager under Poor mood
+        // for months feels the pressure.
+        let mood_delta = match self.mood.state {
+            BoardMoodState::Excellent => 1.5,
+            BoardMoodState::Good => 0.5,
+            BoardMoodState::Normal => 0.0,
+            BoardMoodState::Poor => {
+                // Scaled by how long it's been — a second poor month lands
+                // much harder than the first.
+                -1.0 - (self.poor_mood_months as f32 * 0.5).min(3.0)
+            }
+        };
+        // Style-clash friction: if the manager's preferred tactic fights
+        // the board's vision, the manager also feels that tension (not
+        // just the board). Even in a Good-mood run, a coach pushed into
+        // a style they hate bleeds satisfaction slowly.
+        let style_friction = (style_drag as f32 * 0.35).min(1.5);
+        result.manager_satisfaction_delta = mood_delta - style_friction;
+
         // Squad issues
         if squad_bloated {
             result.squad_over_limit = true;
@@ -468,16 +600,17 @@ impl ClubBoard {
         // ── Sacking gate ──
         // Three independent triggers, any one fires:
         //   1. Confidence collapsed to zero (extreme, rare)
-        //   2. Poor mood ≥4 consecutive months AND underperforming at the table
-        //   3. Poor mood ≥6 consecutive months regardless (patience exhausted)
+        //   2. Poor mood ≥N consecutive months AND underperforming (chairman patience tunes N)
+        //   3. Poor mood ≥(N+2) consecutive months regardless
         // Early-season grace: need at least 10 matches played so a bad August
         // doesn't cost a job. Re-hires are out of scope here — the transfer
         // pipeline / staff search will offer a replacement next tick.
         let enough_data = board_ctx.matches_played >= 10;
         let zero_confidence = self.confidence.level <= 0;
+        let patience_threshold = self.chairman.poor_mood_threshold();
         let sustained_poor_with_underperformance =
-            self.poor_mood_months >= 4 && result.underperforming;
-        let sustained_poor_absolute = self.poor_mood_months >= 6;
+            self.poor_mood_months >= patience_threshold && result.underperforming;
+        let sustained_poor_absolute = self.poor_mood_months >= patience_threshold + 2;
 
         if enough_data
             && (zero_confidence
@@ -499,7 +632,26 @@ impl ClubBoard {
         }
     }
 
-    fn run_director_election(&mut self, _: &SimulationContext) {}
+    /// Stand up a fresh director contract — four-year term, salary
+    /// indexed to board ambition. This is the board's own administrative
+    /// slot, separate from the team's DoF staff member.
+    fn run_director_election(&mut self, ctx: &SimulationContext) {
+        use crate::{StaffPosition, StaffStatus};
+        let base_salary: u32 = match self.chairman.ambition {
+            ChairmanAmbition::Reckless | ChairmanAmbition::Ambitious => 200_000,
+            ChairmanAmbition::Balanced => 120_000,
+            ChairmanAmbition::Conservative => 80_000,
+        };
+        let expires = ctx.date.date()
+            .with_year(ctx.date.date().year() + 4)
+            .unwrap_or(ctx.date.date());
+        self.director = Some(StaffClubContract::new(
+            base_salary,
+            expires,
+            StaffPosition::Director,
+            StaffStatus::Active,
+        ));
+    }
 
     fn is_sport_director_contract_expiring(&self, simulation_ctx: &SimulationContext) -> bool {
         match &self.sport_director {
@@ -508,7 +660,25 @@ impl ClubBoard {
         }
     }
 
-    fn run_sport_director_election(&mut self, _: &SimulationContext) {}
+    /// Stand up a sport director contract — three-year term; this is a
+    /// more "football-side" role so salary floor is slightly higher.
+    fn run_sport_director_election(&mut self, ctx: &SimulationContext) {
+        use crate::{StaffPosition, StaffStatus};
+        let base_salary: u32 = match self.chairman.ambition {
+            ChairmanAmbition::Reckless | ChairmanAmbition::Ambitious => 250_000,
+            ChairmanAmbition::Balanced => 150_000,
+            ChairmanAmbition::Conservative => 100_000,
+        };
+        let expires = ctx.date.date()
+            .with_year(ctx.date.date().year() + 3)
+            .unwrap_or(ctx.date.date());
+        self.sport_director = Some(StaffClubContract::new(
+            base_salary,
+            expires,
+            StaffPosition::DirectorOfFootball,
+            StaffStatus::Active,
+        ));
+    }
 }
 
 /// How poorly does `tactic` embody `style`? 0 = fine, up to 2 = strong

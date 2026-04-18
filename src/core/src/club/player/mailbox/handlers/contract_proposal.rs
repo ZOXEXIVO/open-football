@@ -1,3 +1,4 @@
+use crate::club::player::agent::PlayerAgent;
 use crate::handlers::AcceptContractHandler;
 use crate::{HappinessEventType, PersonBehaviourState, Player, PlayerContractProposal, PlayerResult, PlayerStatusType};
 use crate::utils::DateUtils;
@@ -20,10 +21,20 @@ impl ProcessContractHandler {
             return;
         }
 
+        let agent = PlayerAgent::for_player(player);
         match &player.contract {
             Some(player_contract) => {
                 if proposal.salary > player_contract.salary {
-                    // Salary increase — always accept
+                    // Salary increase. A greedy agent may still reject a
+                    // token raise — "we can do better on the open market."
+                    let raise_ratio = proposal.salary as f32 / player_contract.salary.max(1) as f32;
+                    let agent_delta = agent.renewal_delta(raise_ratio);
+                    // Neutral delta accepts; very negative (greedy agent on
+                    // small raise) flips to a rejection.
+                    if agent_delta < -4.0 && raise_ratio < 1.15 {
+                        result.contract.contract_rejected = true;
+                        return;
+                    }
                     AcceptContractHandler::process(player, proposal, now);
                     player.happiness.add_event(HappinessEventType::ContractRenewal, 5.0);
                     player.happiness.factors.salary_satisfaction = 0.0;
@@ -36,7 +47,12 @@ impl ProcessContractHandler {
                     let negotiation = proposal.negotiation_skill as f32;
 
                     // loyalty (0-20) + morale_bonus (0-10) + negotiation (0-20)
-                    let accept_score = loyalty + (morale / 10.0) + negotiation;
+                    // + agent lean (−6 to +6 roughly): a loyal agent nudges
+                    // them over the line, a greedy one pulls them back.
+                    let accept_score = loyalty
+                        + (morale / 10.0)
+                        + negotiation
+                        + agent.renewal_delta(1.0);
                     if accept_score >= 20.0 {
                         AcceptContractHandler::process(player, proposal, now);
                         player.happiness.add_event(HappinessEventType::ContractOffer, 2.0);

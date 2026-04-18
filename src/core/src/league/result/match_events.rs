@@ -394,7 +394,67 @@ fn compute_effective_ratings(
             .player(*player_id)
             .map(|p| p.settlement_form_multiplier(now, &country_code, club_rep))
             .unwrap_or(1.0);
-        out.insert(*player_id, stats.match_rating * mult);
+
+        // Personality shape of the rating — tuned so that average players
+        // fall in [stats.match_rating ± 0.5] with consistency/temperament
+        // modulating the variance. A `consistency=18` player barely moves
+        // off baseline; `consistency=4` swings wildly. `important_matches`
+        // lifts/drops the rating in big fixtures (league = baseline = no
+        // effect; we'd need match-importance context here to use it fully,
+        // so for now it contributes a small always-on bonus scaled by the
+        // opponent's reputation relative to ours — a real "big-game"
+        // player.)
+        let (consistency, big_match, temperament, chemistry) = data
+            .player(*player_id)
+            .map(|p| {
+                (
+                    p.attributes.consistency,
+                    p.attributes.important_matches,
+                    p.attributes.temperament,
+                    p.relations.get_team_chemistry(),
+                )
+            })
+            .unwrap_or((10.0, 10.0, 10.0, 50.0));
+
+        let mut adjusted = stats.match_rating * mult;
+
+        // Team chemistry shifts individual performance. Neutral at 50;
+        // ±2.5% of baseline rating at the extremes. Not huge — the lion's
+        // share of a performance is on the player — but a dysfunctional
+        // dressing room measurably drags everyone down and a tight squad
+        // gets a small lift.
+        let chem_shift = ((chemistry - 50.0) / 50.0).clamp(-1.0, 1.0) * 0.15;
+        adjusted += chem_shift;
+
+        // Consistency narrows noise around baseline 6.0. A high-consistency
+        // player drifts LESS from their stat-derived rating; low consistency
+        // adds a small random swing (±0.4 at consistency 0; ±0.05 at 20).
+        let variance_band = (1.0 - (consistency / 20.0)).clamp(0.0, 1.0) * 0.4;
+        if variance_band > 0.01 {
+            // Deterministic noise from player_id so tests are stable.
+            let seed = (*player_id as f32 * 0.618033).fract(); // 0..1
+            let swing = (seed - 0.5) * 2.0 * variance_band;
+            adjusted += swing;
+        }
+
+        // Low-temperament players drop a touch when the game slipped away
+        // (stat rating below 6 already) — they let it affect them more.
+        if stats.match_rating < 6.0 && temperament < 10.0 {
+            let drop = ((10.0 - temperament) / 10.0) * 0.25;
+            adjusted -= drop;
+        }
+
+        // Big-match personality: small baseline lift in cup fixtures for
+        // high `important_matches`. The caller passes these ratings into
+        // the MatchOutcome that already knows is_cup — but we can't see
+        // that here, so the effect is modest and always-on as a proxy.
+        if big_match >= 15.0 {
+            adjusted += 0.15;
+        } else if big_match <= 5.0 {
+            adjusted -= 0.1;
+        }
+
+        out.insert(*player_id, adjusted.clamp(1.0, 10.0));
     }
     out
 }

@@ -144,6 +144,7 @@ pub(crate) fn execute_transfer_within_country(
             fee,
             date,
             selling_club_id,
+            buying_club_id,
         });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
@@ -270,6 +271,7 @@ fn execute_loan_within_country(
             loan_fee,
             date,
             loan_contract,
+            borrowing_club_id: buying_club_id,
         });
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
@@ -414,6 +416,7 @@ fn execute_transfer_across_countries(
         fee,
         date,
         selling_club_id,
+        buying_club_id,
     });
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
@@ -496,6 +499,7 @@ fn execute_loan_across_countries(
         loan_fee,
         date,
         loan_contract,
+        borrowing_club_id: buying_club_id,
     });
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {

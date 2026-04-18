@@ -996,6 +996,29 @@ impl Staff {
     }
 
     fn improve_attributes_from_experience(&mut self) {
+        let is_scout = self
+            .contract
+            .as_ref()
+            .map(|c| matches!(c.position, StaffPosition::Scout | StaffPosition::ChiefScout))
+            .unwrap_or(false);
+
+        if is_scout {
+            // Scouts sharpen judging skills by doing the job.
+            // Higher ceiling for Chief Scouts means faster gains at the top end.
+            if rand::random::<f32>() < 0.25 {
+                let improvement = 1;
+                match rand::random::<u8>() % 3 {
+                    0 => self.staff_attributes.knowledge.judging_player_ability =
+                        (self.staff_attributes.knowledge.judging_player_ability + improvement).min(20),
+                    1 => self.staff_attributes.knowledge.judging_player_potential =
+                        (self.staff_attributes.knowledge.judging_player_potential + improvement).min(20),
+                    _ => self.staff_attributes.data_analysis.judging_player_data =
+                        (self.staff_attributes.data_analysis.judging_player_data + improvement).min(20),
+                }
+            }
+            return;
+        }
+
         // Slow improvement over time
         if rand::random::<f32>() < 0.3 {
             // Small chance of improvement each month

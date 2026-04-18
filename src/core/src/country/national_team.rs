@@ -505,12 +505,36 @@ impl NationalTeam {
             self.generate_synthetic_squad(date);
         }
 
-        // Set Int status on called-up players in own clubs
+        // Set Int status on called-up players in own clubs. Fire morale
+        // events on transitions: a fresh call-up is a big moment, being
+        // dropped after recent caps hurts pride.
+        use crate::HappinessEventType;
         for club in own_clubs.iter_mut() {
             for team in club.teams.iter_mut() {
                 for player in team.players.iter_mut() {
-                    if self.squad.iter().any(|s| s.player_id == player.id) {
+                    let called_up = self.squad.iter().any(|s| s.player_id == player.id);
+                    let was_in = player.statuses.get().contains(&PlayerStatusType::Int);
+                    if called_up {
                         player.statuses.add(date, PlayerStatusType::Int);
+                        if !was_in {
+                            // Magnitude scales with prior experience —
+                            // first-time call-ups are bigger deals.
+                            let caps = player.player_attributes.international_apps;
+                            let mag = if caps == 0 { 10.0 }
+                                else if caps < 10 { 6.0 }
+                                else { 3.0 };
+                            player.happiness
+                                .add_event(HappinessEventType::NationalTeamCallup, mag);
+                        }
+                    } else if was_in {
+                        // Previously called up, now dropped.
+                        player.statuses.remove(PlayerStatusType::Int);
+                        let caps = player.player_attributes.international_apps;
+                        let mag = if caps >= 20 { -6.0 }
+                            else if caps >= 5 { -4.0 }
+                            else { -2.0 };
+                        player.happiness
+                            .add_event(HappinessEventType::NationalTeamDropped, mag);
                     }
                 }
             }

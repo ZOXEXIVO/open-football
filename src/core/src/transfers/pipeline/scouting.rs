@@ -1,4 +1,4 @@
-use chrono::NaiveDate;
+use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 use crate::transfers::pipeline::processor::{PipelineProcessor, PlayerSummary};
@@ -125,6 +125,7 @@ impl PipelineProcessor {
             }
         }
 
+        let mut seeded_clubs: Vec<u32> = Vec::new();
         for action in actions {
             if let Some(club) = country.clubs.iter_mut().find(|c| c.id == action.club_id) {
                 let plan = &mut club.transfer_plan;
@@ -139,6 +140,17 @@ impl PipelineProcessor {
 
                 plan.next_assignment_id = action.assignment.id + 1;
                 plan.scouting_assignments.push(action.assignment);
+                if !seeded_clubs.contains(&club.id) {
+                    seeded_clubs.push(club.id);
+                }
+            }
+        }
+
+        // After fresh assignments exist, seed any matching shadow reports
+        // into the active window — saves clubs from cold-starting each window.
+        for club_id in seeded_clubs {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                club.transfer_plan.seed_active_reports_from_shadow();
             }
         }
     }
@@ -460,6 +472,29 @@ impl PipelineProcessor {
                                 0, 0,
                             );
 
+                            let player_age = player.age(current_date);
+                            let (contract_months, _) = player
+                                .contract
+                                .as_ref()
+                                .map(|c| {
+                                    let days = (c.expiration - current_date).num_days().max(0);
+                                    ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                                })
+                                .unwrap_or((0, 0));
+                            let risk_flags = Self::evaluate_risk_flags(
+                                player.player_attributes.is_injured,
+                                player.skills.mental.determination,
+                                player_age,
+                                contract_months,
+                                player.player_attributes.world_reputation,
+                                Self::club_world_reputation(club),
+                            );
+                            let role_fit = assignment.role_profile.fit(
+                                player.skills.technical.average(),
+                                player.skills.mental.average(),
+                                player.skills.physical.average(),
+                            );
+
                             reports.push(ScoutingReportResult {
                                 club_id: club.id,
                                 report: DetailedScoutingReport {
@@ -470,6 +505,8 @@ impl PipelineProcessor {
                                     confidence,
                                     estimated_value: estimated_value.amount,
                                     recommendation,
+                                    role_fit,
+                                    risk_flags,
                                 },
                                 assignment_id: assignment.id,
                             });
@@ -585,6 +622,14 @@ impl PipelineProcessor {
                         player, date, price_level, 0, 0,
                     );
                     let statuses = player.statuses.get();
+                    let (contract_months_remaining, salary) = player
+                        .contract
+                        .as_ref()
+                        .map(|c| {
+                            let days = (c.expiration - date).num_days().max(0);
+                            ((days / 30).min(i16::MAX as i64) as i16, c.salary)
+                        })
+                        .unwrap_or((0, 0));
                     players.push(PlayerSummary {
                         player_id: player.id,
                         club_id: club.id,
@@ -615,6 +660,9 @@ impl PipelineProcessor {
                         home_reputation: player.player_attributes.home_reputation,
                         world_reputation: player.player_attributes.world_reputation,
                         country_reputation,
+                        is_injured: player.player_attributes.is_injured,
+                        contract_months_remaining,
+                        salary,
                     });
                 }
             }
@@ -636,6 +684,8 @@ impl PipelineProcessor {
         let mut observations: Vec<ScoutingObservationResult> = Vec::new();
         let mut reports: Vec<ScoutingReportResult> = Vec::new();
         let mut staff_events: Vec<(u32, u32, StaffEventType)> = Vec::new();
+        let mut familiarity_events: Vec<(u32, u32, ScoutingRegion)> = Vec::new();
+        let mut rejected_events: Vec<(u32, u32)> = Vec::new(); // (club_id, player_id)
         let mut wanted_player_ids: Vec<u32> = Vec::new();
 
         for club in &country.clubs {
@@ -652,18 +702,19 @@ impl PipelineProcessor {
                     (8, 8)
                 };
 
-                // Get this scout's known regions for cross-country scouting.
-                // Borrow the slice instead of cloning the whole Vec — the
-                // scout_id-based lookup walks through teams/staffs, so we
-                // keep the borrow alive via a direct slice.
-                const EMPTY_REGIONS: &[ScoutingRegion] = &[];
-                let scout_known_regions: &[ScoutingRegion] = assignment.scout_staff_id
+                // Borrow the scout's knowledge struct once — we need both
+                // known_regions (slice) and familiarity (per-region lookup).
+                let scout_knowledge = assignment.scout_staff_id
                     .and_then(|sid| {
                         club.teams.iter()
                             .flat_map(|t| t.staffs.iter())
                             .find(|s| s.id == sid)
                     })
-                    .map(|s| s.staff_attributes.knowledge.known_regions.as_slice())
+                    .map(|s| &s.staff_attributes.knowledge);
+
+                const EMPTY_REGIONS: &[ScoutingRegion] = &[];
+                let scout_known_regions: &[ScoutingRegion] = scout_knowledge
+                    .map(|k| k.known_regions.as_slice())
                     .unwrap_or(EMPTY_REGIONS);
 
                 let observe_chance = 60 + (judging_ability as i32 / 2);
@@ -696,6 +747,9 @@ impl PipelineProcessor {
                 let player_filter = |p: &&PlayerSummary| -> bool {
                     if p.club_id == club.id || p.position_group != target_group
                         || club.is_rival(p.club_id) {
+                        return false;
+                    }
+                    if club.transfer_plan.is_rejected(p.player_id, date) {
                         return false;
                     }
                     let effective_min = if p.age <= 21 && matches!(philosophy, ClubPhilosophy::DevelopAndSell) {
@@ -736,6 +790,33 @@ impl PipelineProcessor {
 
                 if matching.is_empty() {
                     continue;
+                }
+
+                // Data-first pre-filter: the club's data department narrows the
+                // candidate pool from "everyone who matches position/age/ability"
+                // to "people the numbers say deserve an eye-test." Higher data
+                // skill = tighter pool with less noise; low skill ≈ random.
+                // This is what real clubs do — Opta/Wyscout shortlists come
+                // first, scouts watch the narrowed list in person.
+                if matching.len() > 20 {
+                    let data_skill = Self::club_data_analysis_skill(club);
+                    // Pool size inversely related to data skill (skill 20 → 25, skill 0 → 80).
+                    let target_pool = (80usize).saturating_sub(data_skill as usize * 3).max(25);
+                    if matching.len() > target_pool {
+                        let noise = (20i32 - data_skill as i32).max(1);
+                        let mut scored: Vec<(&PlayerSummary, f32)> = matching
+                            .iter()
+                            .map(|p| {
+                                let score = Self::player_data_score(p);
+                                let jitter = IntegerUtils::random(-noise, noise) as f32;
+                                (*p, score + jitter)
+                            })
+                            .collect();
+                        scored.sort_by(|a, b| {
+                            b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        matching = scored.into_iter().take(target_pool).map(|(p, _)| p).collect();
+                    }
                 }
 
                 // Scouts observe 2-3 players per day (not just 1)
@@ -780,18 +861,25 @@ impl PipelineProcessor {
                     let obs_count = existing_obs.map(|o| o.observation_count).unwrap_or(0);
                     let sqrt_count = ((obs_count + 1) as f32).sqrt();
 
-                    // Foreign players in unknown regions have +50% assessment error
-                    let region_penalty = if target.country_id != country_id {
-                        let target_region = ScoutingRegion::from_country(
-                            target.continent_id, &target.country_code,
-                        );
-                        if scout_known_regions.contains(&target_region) {
-                            1.0 // Known region — normal accuracy
-                        } else {
-                            1.5 // Unknown region — 50% more error
-                        }
+                    // Region penalty blends structural knowledge (in known_regions?)
+                    // with empirical experience (familiarity, 0-100). A veteran
+                    // scout who's been scouting a region for years is sharper than
+                    // a brand-new assignee, even to a "known" region.
+                    let target_region = ScoutingRegion::from_country(
+                        target.continent_id, &target.country_code,
+                    );
+                    let region_penalty = if target.country_id == country_id {
+                        1.0
                     } else {
-                        1.0 // Domestic — always accurate
+                        let base = if scout_known_regions.contains(&target_region) {
+                            1.0
+                        } else {
+                            1.5
+                        };
+                        let familiarity = scout_knowledge
+                            .map(|k| k.familiarity_for(target_region))
+                            .unwrap_or(0);
+                        (base - familiarity as f32 / 200.0).max(0.5)
                     };
 
                     let base_ability_error = (20i16 - judging_ability as i16).max(1) as f32 * region_penalty;
@@ -850,6 +938,12 @@ impl PipelineProcessor {
                         is_new,
                     });
 
+                    if let Some(scout_id) = assignment.scout_staff_id {
+                        if target.country_id != country_id {
+                            familiarity_events.push((club.id, scout_id, target_region));
+                        }
+                    }
+
                     if is_new && !wanted_player_ids.contains(&target.player_id) {
                         wanted_player_ids.push(target.player_id);
                     }
@@ -897,7 +991,22 @@ impl PipelineProcessor {
                             ScoutingRecommendation::Pass
                         };
 
-                    if recommendation != ScoutingRecommendation::Pass {
+                    if recommendation == ScoutingRecommendation::Pass {
+                        rejected_events.push((club.id, target.player_id));
+                    } else {
+                        let risk_flags = Self::evaluate_risk_flags(
+                            target.is_injured,
+                            target.determination,
+                            target.age,
+                            target.contract_months_remaining,
+                            target.world_reputation,
+                            Self::club_world_reputation(club),
+                        );
+                        let role_fit = assignment.role_profile.fit(
+                            target.technical_avg,
+                            target.mental_avg,
+                            target.physical_avg,
+                        );
                         reports.push(ScoutingReportResult {
                             club_id: club.id,
                             report: DetailedScoutingReport {
@@ -908,6 +1017,8 @@ impl PipelineProcessor {
                                 confidence,
                                 estimated_value: target.estimated_value,
                                 recommendation,
+                                role_fit,
+                                risk_flags,
                             },
                             assignment_id: assignment.id,
                         });
@@ -990,9 +1101,135 @@ impl PipelineProcessor {
                 }
             }
         }
+
+        // Accrue per-region familiarity for scouts who observed foreign players
+        for (club_id, staff_id, region) in familiarity_events {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                for team in &mut club.teams.teams {
+                    if let Some(staff) = team.staffs.find_mut(staff_id) {
+                        staff.staff_attributes.knowledge.accrue_region_day(region);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Commit rejection memory — a Pass recommendation blocks re-scouting
+        // for 6 months, spanning the rest of the current window and the next.
+        for (club_id, player_id) in rejected_events {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                club.transfer_plan.reject_player(player_id, date, 6);
+            }
+        }
     }
 
     /// Pick a player from a list with probability weighted by reputation.
+    /// Year-round refresh of persisted shadow reports.
+    ///
+    /// Runs at slow cadence (weekly) regardless of transfer window state —
+    /// scouts don't stop working between June and January. For each club
+    /// with archived shadow reports, one lookup re-measures a random target's
+    /// assessed ability against the player's current state, then dampens the
+    /// shift by the scout's judging skill. This keeps tracked players from
+    /// drifting out of sync while the window is closed.
+    pub fn refresh_shadow_reports(country: &mut Country, date: NaiveDate) {
+        if date.weekday() != chrono::Weekday::Mon {
+            return;
+        }
+
+        struct RefreshUpdate {
+            club_id: u32,
+            player_id: u32,
+            new_ability: u8,
+            recorded_on: NaiveDate,
+        }
+        let mut updates: Vec<RefreshUpdate> = Vec::new();
+
+        // Build a lookup of current player abilities from every club in the
+        // country once — shadow targets may have moved clubs since we first
+        // observed them, so we search all teams.
+        let mut current_ability: std::collections::HashMap<u32, u8> =
+            std::collections::HashMap::new();
+        for c in &country.clubs {
+            for t in &c.teams.teams {
+                for p in &t.players.players {
+                    current_ability.insert(
+                        p.id,
+                        p.skills.calculate_ability_for_position(p.position()),
+                    );
+                }
+            }
+        }
+
+        for club in &country.clubs {
+            if club.transfer_plan.shadow_reports.is_empty() {
+                continue;
+            }
+            // Use the Chief Scout's judging_ability if present, else a default.
+            let judging = club
+                .teams
+                .iter()
+                .flat_map(|t| t.staffs.iter())
+                .filter(|s| {
+                    s.contract
+                        .as_ref()
+                        .map(|c| {
+                            matches!(
+                                c.position,
+                                crate::StaffPosition::Scout | crate::StaffPosition::ChiefScout,
+                            )
+                        })
+                        .unwrap_or(false)
+                })
+                .map(|s| s.staff_attributes.knowledge.judging_player_ability)
+                .max()
+                .unwrap_or(10);
+
+            // Refresh 1-3 random shadow reports per club per Monday.
+            let refresh_count = (club.transfer_plan.shadow_reports.len() / 5).max(1).min(3);
+            for _ in 0..refresh_count {
+                let idx = IntegerUtils::random(
+                    0,
+                    club.transfer_plan.shadow_reports.len() as i32 - 1,
+                ) as usize;
+                let shadow = &club.transfer_plan.shadow_reports[idx];
+                let truth = match current_ability.get(&shadow.report.player_id) {
+                    Some(v) => *v,
+                    None => continue, // player disappeared — refresh nothing
+                };
+
+                // Drift old assessment toward truth, damped by scout skill.
+                // High-skill scouts re-measure almost exactly; low-skill drift is noisier.
+                let noise = ((20i16 - judging as i16).max(1)) as i32;
+                let drift = IntegerUtils::random(-noise, noise);
+                let blended = ((shadow.observed_ability as i32 + truth as i32) / 2 + drift)
+                    .clamp(1, 200) as u8;
+
+                updates.push(RefreshUpdate {
+                    club_id: club.id,
+                    player_id: shadow.report.player_id,
+                    new_ability: blended,
+                    recorded_on: date,
+                });
+            }
+        }
+
+        for u in updates {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == u.club_id) {
+                if let Some(shadow) = club
+                    .transfer_plan
+                    .shadow_reports
+                    .iter_mut()
+                    .find(|s| s.report.player_id == u.player_id)
+                {
+                    shadow.report.assessed_ability = u.new_ability;
+                    shadow.observed_ability = u.new_ability;
+                    shadow.recorded_on = u.recorded_on;
+                }
+            }
+        }
+    }
+
     /// Higher reputation = more likely to be discovered (media exposure, word of mouth).
     /// A player with 5000 world_rep is ~6x more likely to be picked than one with 0.
     fn pick_reputation_weighted<'a>(players: &[&'a &PlayerSummary]) -> &'a PlayerSummary {

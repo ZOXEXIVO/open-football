@@ -1,6 +1,6 @@
 use crate::club::player::load::{FATIGUE_LOAD_DANGER, FATIGUE_LOAD_THRESHOLD};
 use crate::club::staff::perception::CoachProfile;
-use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
+use crate::club::{ClubPhilosophy, PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::utils::DateUtils;
 use crate::{Player, Tactics};
 use chrono::NaiveDate;
@@ -9,12 +9,55 @@ use super::helpers;
 
 pub(crate) struct ScoringEngine {
     pub(crate) profile: CoachProfile,
+    /// Club philosophy tilts selection — DevelopAndSell pushes youth further
+    /// up the XI, LoanFocused prefers loan signings when merit is close.
+    pub(crate) philosophy: Option<ClubPhilosophy>,
 }
 
 impl ScoringEngine {
     pub fn from_staff(staff: &Staff) -> Self {
         ScoringEngine {
             profile: CoachProfile::from_staff(staff),
+            philosophy: None,
+        }
+    }
+
+    pub fn from_staff_with_philosophy(staff: &Staff, philosophy: Option<ClubPhilosophy>) -> Self {
+        ScoringEngine {
+            profile: CoachProfile::from_staff(staff),
+            philosophy,
+        }
+    }
+
+    /// Philosophy-specific selection tilt. Small magnitudes so philosophy
+    /// biases but doesn't swamp real quality signals.
+    pub fn philosophy_bonus(&self, player: &Player, date: NaiveDate) -> f32 {
+        let Some(phil) = self.philosophy.as_ref() else { return 0.0 };
+        let age = DateUtils::age(player.birth_date, date);
+        let is_loan_in = player.contract_loan.is_some();
+        match phil {
+            ClubPhilosophy::DevelopAndSell => {
+                // Clubs built around developing and selling push youth up
+                // the XI even in important matches.
+                match age {
+                    0..=17 => 0.5,
+                    18..=21 => 1.2,
+                    22..=23 => 0.6,
+                    _ => 0.0,
+                }
+            }
+            ClubPhilosophy::LoanFocused => {
+                if is_loan_in { 0.9 } else { 0.0 }
+            }
+            ClubPhilosophy::SignToCompete => {
+                // Experienced heads get the nod; youngsters are backup.
+                match age {
+                    25..=32 => 0.4,
+                    18..=21 => -0.4,
+                    _ => 0.0,
+                }
+            }
+            _ => 0.0,
         }
     }
 
@@ -353,11 +396,41 @@ impl ScoringEngine {
 
         score += self.cohesion_bonus(player, selected_players, slot_group);
 
+        // Squad status tilt — labelled starters get their planned minutes.
+        score += self.squad_status_bonus(player);
+
+        // Club philosophy tilt — development clubs push youth up, loan-
+        // focused clubs reward borrowed talent.
+        score += self.philosophy_bonus(player, date);
+
         if player.position().position_group() != slot_group {
             score -= 1.5;
         }
 
         score
+    }
+
+    /// Squad status tilt — the coach has a plan for each player's minutes
+    /// at the start of the season. KeyPlayer and FirstTeamRegular always
+    /// play when fit; NotNeeded is a bench dweller; HotProspect gets a small
+    /// preferential nod in rotation calls. Conservative coaches lean into
+    /// the plan; risk-takers override it on form.
+    pub fn squad_status_bonus(&self, player: &Player) -> f32 {
+        use crate::club::PlayerSquadStatus;
+        let Some(contract) = player.contract.as_ref() else { return 0.0 };
+        let raw = match contract.squad_status {
+            PlayerSquadStatus::KeyPlayer => 1.8,
+            PlayerSquadStatus::FirstTeamRegular => 1.0,
+            PlayerSquadStatus::FirstTeamSquadRotation => 0.3,
+            PlayerSquadStatus::HotProspectForTheFuture => 0.5,
+            PlayerSquadStatus::DecentYoungster => 0.1,
+            PlayerSquadStatus::MainBackupPlayer => -0.2,
+            PlayerSquadStatus::NotNeeded => -1.2,
+            _ => 0.0,
+        };
+        // Conservative coaches respect the label; risk-takers ignore it.
+        let weight = 0.6 + self.profile.conservatism * 0.8 - self.profile.risk_tolerance * 0.3;
+        raw * weight.clamp(0.2, 1.4)
     }
 
     /// Bonus for underplayed players in low-importance matches.
@@ -438,6 +511,14 @@ impl ScoringEngine {
         score += p.youth_preference * youth_multiplier;
 
         score += (self.training_impression(player) - 10.0) * p.attitude_weight * 0.3;
+
+        // Squad status tilt applies to bench ordering too: a KeyPlayer
+        // resting on the bench still gets priority to come on.
+        score += self.squad_status_bonus(player) * 0.6;
+
+        // Philosophy bench tilt — half as strong as in the XI, since
+        // bench selection is already broad.
+        score += self.philosophy_bonus(player, date) * 0.5;
 
         // Bench integration bonus: coaches want to give minutes to players
         // who haven't played much — loan players, youth, returning from injury.

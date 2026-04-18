@@ -37,6 +37,13 @@ pub struct Team {
     pub training_schedule: TrainingSchedule,
     pub transfer_list: Transfers,
     pub match_history: MatchHistory,
+
+    /// Appointed captain — wears the armband. Selected monthly by
+    /// `assign_captaincy` based on leadership, loyalty, and tenure.
+    /// Distinct from the emergent "influence leader" used elsewhere.
+    pub captain_id: Option<u32>,
+    /// Stand-in captain when the captain is unavailable (injured / benched).
+    pub vice_captain_id: Option<u32>,
 }
 
 impl Team {
@@ -48,6 +55,10 @@ impl Team {
         // Recalculate squad statuses monthly (1st of month)
         if ctx.simulation.is_month_beginning() {
             self.update_squad_statuses(ctx.simulation.date.date());
+            // Reappoint the captaincy at the same cadence — prevents the
+            // armband drifting off a retiring veteran or onto a newcomer
+            // who hasn't earned it yet.
+            self.assign_captaincy(ctx.simulation.date.date());
         }
 
         // Weekly mentorship pass — pair senior players with juniors. Runs
@@ -139,6 +150,75 @@ impl Team {
 
     pub fn players(&self) -> Vec<&Player> {
         self.players.players()
+    }
+
+    /// Rank squad by leadership × loyalty × tenure × reputation and pin
+    /// the top scorer as captain, second as vice. Captaincy changes carry
+    /// morale consequences: a stripped former captain takes a hit, a new
+    /// appointee gets a lift.
+    pub fn assign_captaincy(&mut self, date: chrono::NaiveDate) {
+        use crate::HappinessEventType;
+        use chrono::Datelike;
+
+        let now_year = date.year();
+        let mut ranked: Vec<(u32, f32)> = self
+            .players
+            .iter()
+            .filter(|p| p.skills.mental.leadership >= 8.0)
+            .filter_map(|p| {
+                let Some(contract) = p.contract.as_ref() else { return None };
+                let tenure_years = contract
+                    .started
+                    .map(|s| (now_year - s.year()).max(0) as f32)
+                    .unwrap_or(0.0);
+                let age = DateUtils::age(p.birth_date, date) as f32;
+                // Age bell curve: peak captaincy fitness around 29-31.
+                let age_factor = if age < 23.0 {
+                    0.5
+                } else if age >= 23.0 && age <= 34.0 {
+                    1.0 + ((age - 28.0).abs() * -0.05).max(-0.25)
+                } else {
+                    0.7
+                };
+                let score = p.skills.mental.leadership * 1.5
+                    + p.attributes.loyalty * 0.8
+                    + p.attributes.professionalism * 0.4
+                    + tenure_years.min(10.0) * 0.6
+                    + p.player_attributes.current_reputation as f32 / 2500.0;
+                Some((p.id, score * age_factor))
+            })
+            .collect();
+
+        if ranked.is_empty() {
+            self.captain_id = None;
+            self.vice_captain_id = None;
+            return;
+        }
+
+        ranked.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        let new_captain = ranked.first().map(|(id, _)| *id);
+        let new_vice = ranked.get(1).map(|(id, _)| *id);
+
+        // Emit morale events on changes — being handed or stripped of the
+        // armband is a real moment for a player.
+        if self.captain_id != new_captain {
+            if let Some(old_id) = self.captain_id {
+                if let Some(p) = self.players.players.iter_mut().find(|p| p.id == old_id) {
+                    p.happiness
+                        .add_event(HappinessEventType::RoleMismatch, -6.0);
+                }
+            }
+            if let Some(new_id) = new_captain {
+                if let Some(p) = self.players.players.iter_mut().find(|p| p.id == new_id) {
+                    p.happiness
+                        .add_event(HappinessEventType::DressingRoomSpeech, 4.0);
+                }
+            }
+        }
+
+        self.captain_id = new_captain;
+        self.vice_captain_id = new_vice;
     }
 
     pub fn add_player_to_transfer_list(&mut self, player_id: u32, value: CurrencyValue) {

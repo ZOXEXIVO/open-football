@@ -14,6 +14,12 @@ pub fn process_substitutions(
     context: &mut MatchContext,
     max_subs_per_team: usize,
 ) {
+    // Roll for explicit in-match injuries first so the force-sub logic
+    // downstream picks them up. A match can now produce genuine injury-
+    // driven substitutions instead of waiting for condition to drift down
+    // naturally.
+    roll_in_match_injuries(field, context);
+
     let team_ids = [field.home_team_id, field.away_team_id];
 
     for &team_id in &team_ids {
@@ -55,6 +61,26 @@ pub fn process_substitutions(
 
         let mut subs_made = 0;
 
+        // Zero: force-sub critically-broken players regardless of score /
+        // minute. Condition below 20% models an in-match injury the coach
+        // can't ignore — a real manager pulls them straight off. Takes
+        // priority over strategic fatigue rotation.
+        const CRITICAL_CONDITION: i16 = 2000;
+        for (player_out_id, condition, position) in &candidates {
+            if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
+                break;
+            }
+            if *condition >= CRITICAL_CONDITION {
+                continue;
+            }
+            let position_group = position.position_group();
+            if let Some(player_in_id) = find_best_substitute(field, team_id, position_group) {
+                if execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+                    subs_made += 1;
+                }
+            }
+        }
+
         // First: replace tired players (condition-based)
         for (player_out_id, condition, position) in &candidates {
             if subs_made >= max_subs_per_team || !context.can_substitute(team_id) {
@@ -68,9 +94,61 @@ pub fn process_substitutions(
                 continue;
             }
 
+            // Skip — already handled in the injury pass above.
+            if *condition < CRITICAL_CONDITION {
+                continue;
+            }
+
             let position_group = position.position_group();
             if let Some(player_in_id) = find_best_substitute(field, team_id, position_group) {
                 if execute_substitution(field, context, team_id, *player_out_id, player_in_id) {
+                    subs_made += 1;
+                }
+            }
+        }
+
+        // Tactical subs — if we're chasing the game late and have bench
+        // options, bring on a fresh attacker for a tired defender/midfielder.
+        // If we're hanging on late, swap an attacker for a defender.
+        let chasing_late = goal_diff < 0 && match_minutes >= 65;
+        let hanging_on_late = goal_diff > 0 && match_minutes >= 75 && !comfortable_lead;
+
+        if (chasing_late || hanging_on_late)
+            && subs_made < max_subs_per_team
+            && context.can_substitute(team_id)
+        {
+            let need_group = if chasing_late {
+                PlayerFieldPositionGroup::Forward
+            } else {
+                PlayerFieldPositionGroup::Defender
+            };
+            let sacrifice_group = if chasing_late {
+                PlayerFieldPositionGroup::Defender
+            } else {
+                PlayerFieldPositionGroup::Forward
+            };
+
+            // Pick the fittest-but-non-critical bench player of need_group.
+            let sub_in: Option<u32> = field
+                .substitutes
+                .iter()
+                .filter(|p| p.team_id == team_id)
+                .filter(|p| {
+                    p.tactical_position.current_position.position_group() == need_group
+                })
+                .max_by_key(|p| p.player_attributes.current_ability)
+                .map(|p| p.id);
+
+            // Pick the most tired on-field player of sacrifice_group still active.
+            let sub_out: Option<u32> = candidates
+                .iter()
+                .filter(|(id, _, _)| field.get_player(*id).is_some())
+                .filter(|(_, _, pos)| pos.position_group() == sacrifice_group)
+                .min_by_key(|(_, cond, _)| *cond)
+                .map(|(id, _, _)| *id);
+
+            if let (Some(in_id), Some(out_id)) = (sub_in, sub_out) {
+                if execute_substitution(field, context, team_id, out_id, in_id) {
                     subs_made += 1;
                 }
             }
@@ -132,6 +210,67 @@ pub fn process_substitutions(
                     }
                 }
             }
+        }
+    }
+}
+
+/// Per-tick in-match injury roll. A small per-player chance scaled by
+/// jadedness, low condition, age, and low natural_fitness. When triggered,
+/// condition is slammed down to 1500 — just below the CRITICAL_CONDITION
+/// threshold (2000) so the next pass of the force-sub loop pulls the
+/// player off. The actual injury type / recovery days are decided by the
+/// post-match path (`on_match_exertion` rolls the injury from minutes +
+/// existing proneness); this function only models the **in-match event**.
+fn roll_in_match_injuries(field: &mut MatchField, context: &MatchContext) {
+    let match_minute = context.total_match_time / 60_000;
+    if match_minute < 5 {
+        return; // No opening-minute theatre
+    }
+
+    let mut victims: Vec<u32> = Vec::new();
+
+    for player in field.players.iter() {
+        // Skip subs (they're not on the pitch) and goalkeepers (rarely
+        // forced off for non-contact injury mid-match).
+        if player.tactical_position.current_position
+            == crate::PlayerPositionType::Goalkeeper
+        {
+            continue;
+        }
+        // Already destroyed condition — no extra work needed.
+        if player.player_attributes.condition < 2000 {
+            continue;
+        }
+        if player.is_sent_off {
+            continue;
+        }
+
+        let jaded = (player.player_attributes.jadedness as f32 / 10_000.0).clamp(0.0, 1.0);
+        let cond = (player.player_attributes.condition as f32 / 10_000.0).clamp(0.0, 1.0);
+        let nat_fit = (player.skills.physical.natural_fitness / 20.0).clamp(0.1, 1.0);
+        let minutes_factor = (match_minute as f32 / 90.0).clamp(0.0, 1.2);
+
+        // Base rate per substitution window (~10-15 minutes between calls).
+        // Starts at 0.0005 for a fresh prime player and climbs toward
+        // 0.01 for a jaded, tired 35-year-old late in the match. This
+        // delivers an injury roughly every 15-20 matches at the team
+        // level, which matches real-world "one injury per match" noise.
+        let base = 0.0005
+            + jaded * 0.004
+            + (1.0 - cond) * 0.003
+            + (1.0 - nat_fit) * 0.002
+            + minutes_factor * 0.001;
+
+        if rand::random::<f32>() < base {
+            victims.push(player.id);
+        }
+    }
+
+    for pid in victims {
+        if let Some(p) = field.get_player_mut(pid) {
+            // Smack the condition down — the critical-condition path in
+            // `process_substitutions` will now pull them off on this tick.
+            p.player_attributes.condition = 1500;
         }
     }
 }

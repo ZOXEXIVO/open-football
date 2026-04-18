@@ -1314,13 +1314,27 @@ impl PlayerEventDispatcher {
             let aggression = player.skills.mental.aggression / 20.0;
             let composure = player.skills.mental.composure / 20.0;
             let teamwork = player.skills.mental.teamwork / 20.0;
+            // Personality contributions — these used to be generated-only.
+            // Dirtiness = how hard/cynical the challenges are; temperament
+            // = how likely the player is to snap under provocation;
+            // sportsmanship is a damper pulling the other way.
+            let dirtiness = player.attributes.dirtiness / 20.0;
+            let temperament = player.attributes.temperament / 20.0;
+            let sportsmanship = player.attributes.sportsmanship / 20.0;
 
             // Persistent fouler escalation — 3+ fouls = next one much more likely booked.
             let persistent = if player.fouls_committed >= 3 { 0.15 } else { 0.0 };
 
             // High-aggression, low-composure, low-teamwork = "dirty" player.
-            let aggressor_factor =
-                (aggression * 0.45 - composure * 0.15 - teamwork * 0.10).clamp(-0.20, 0.60);
+            // Layer personality on top: dirtiness pushes cards up, sportsmanship
+            // pulls them down, low temperament punishes you under pressure.
+            let aggressor_factor = (aggression * 0.40
+                - composure * 0.12
+                - teamwork * 0.08
+                + dirtiness * 0.18
+                + (1.0 - temperament) * 0.10
+                - sportsmanship * 0.10)
+                .clamp(-0.25, 0.70);
 
             match severity {
                 FoulSeverity::Normal => (

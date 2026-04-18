@@ -135,6 +135,48 @@ impl CountryResult {
                         team.on_season_trophy(Achievement::new(ach_type.clone(), date, 8));
                     }
                     club.board.on_achievement(ach_type.clone());
+
+                    // Trophy-triggered renewal bump. The board rewards
+                    // the manager directly — bigger silverware = bigger
+                    // bump, chairman loyalty also lifts. Fires in addition
+                    // to the season-start renewal offer so a winning
+                    // campaign is recognised even when the contract still
+                    // has >18 months left.
+                    let (salary_bump_pct, extension_years, loyalty_lift): (f32, i32, u8) =
+                        match ach_type {
+                            AchievementType::ContinentalTrophy => (0.25, 3, 20),
+                            AchievementType::LeagueTitle => (0.20, 2, 15),
+                            AchievementType::CupWin => (0.08, 1, 6),
+                            AchievementType::Promotion => (0.10, 1, 8),
+                            _ => (0.0, 0, 0),
+                        };
+                    if salary_bump_pct > 0.0 {
+                        let cur = club.board.chairman.manager_loyalty as u16;
+                        club.board.chairman.manager_loyalty =
+                            (cur + loyalty_lift as u16).min(100) as u8;
+                        if let Some(main_team) = club.teams.main_mut() {
+                            if let Some(mgr) = main_team
+                                .staffs
+                                .find_mut_by_position(crate::StaffPosition::Manager)
+                            {
+                                if let Some(contract) = mgr.contract.as_mut() {
+                                    contract.salary =
+                                        ((contract.salary as f32) * (1.0 + salary_bump_pct)) as u32;
+                                    if extension_years > 0 {
+                                        let new_exp = contract
+                                            .expired
+                                            .with_year(contract.expired.year() + extension_years)
+                                            .unwrap_or(contract.expired);
+                                        if new_exp > contract.expired {
+                                            contract.expired = new_exp;
+                                        }
+                                    }
+                                    mgr.job_satisfaction =
+                                        (mgr.job_satisfaction + 12.0).clamp(0.0, 100.0);
+                                }
+                            }
+                        }
+                    }
                     break;
                 }
             }

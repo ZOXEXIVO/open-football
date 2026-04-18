@@ -198,6 +198,8 @@ impl ConferenceLeague {
             is_friendly: false,
             date,
             match_importance: 0.9,
+            philosophy: None,
+            opponent_tactic: None,
         };
 
         let engine_matches: Vec<Match> = todays_matches

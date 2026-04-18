@@ -6,9 +6,9 @@ pub(crate) mod scoring;
 #[cfg(test)]
 mod tests;
 
-use crate::club::{PlayerPositionType, Staff};
+use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{Player, PlayerStatusType, Tactics};
+use crate::{MatchTacticType, Player, PlayerStatusType, Tactics};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
@@ -29,6 +29,14 @@ pub struct SelectionContext {
     /// Match importance: 0.0 = dead rubber, 1.0 = must-win.
     /// Below 0.4: use rotation selection — reserve/youth players get chances.
     pub match_importance: f32,
+    /// Club philosophy — tilts the starting XI selection. Populated by
+    /// the match-day caller so a DevelopAndSell side actually puts the
+    /// kids on the pitch in league games.
+    pub philosophy: Option<ClubPhilosophy>,
+    /// Opponent's expected baseline tactic. When present and the coach is
+    /// tactically astute, `get_enhanced_match_squad` flips to a counter
+    /// formation instead of the pre-selected one.
+    pub opponent_tactic: Option<MatchTacticType>,
 }
 
 impl Default for SelectionContext {
@@ -37,6 +45,8 @@ impl Default for SelectionContext {
             is_friendly: false,
             date: chrono::Utc::now().date_naive(),
             match_importance: 0.7,
+            philosophy: None,
+            opponent_tactic: None,
         }
     }
 }
@@ -63,7 +73,7 @@ impl SquadSelector {
         ctx: &SelectionContext,
     ) -> PlayerSelectionResult {
         let tactics = team.tactics();
-        let engine = ScoringEngine::from_staff(staff);
+        let engine = ScoringEngine::from_staff_with_philosophy(staff, ctx.philosophy.clone());
 
         let mut available: Vec<&Player> = team
             .players

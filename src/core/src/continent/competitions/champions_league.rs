@@ -214,6 +214,8 @@ impl ChampionsLeague {
             is_friendly: false,
             date,
             match_importance: 1.0,
+            philosophy: None,
+            opponent_tactic: None,
         };
 
         let engine_matches: Vec<Match> = todays_matches

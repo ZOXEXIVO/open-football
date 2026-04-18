@@ -151,17 +151,56 @@ impl TeamCollection {
         let head_coach = main_team.staffs.head_coach();
         let coach_id = head_coach.id;
 
-        let needs_rebuild = match &self.coach_state {
-            Some(state) => state.coach_id != coach_id,
-            None => true,
-        };
+        let previous_coach_id = self.coach_state.as_ref().map(|state| state.coach_id);
+        let needs_rebuild = previous_coach_id
+            .map(|pid| pid != coach_id)
+            .unwrap_or(true);
 
         if needs_rebuild {
             self.coach_state = Some(CoachDecisionState::new(head_coach, date));
+
+            // Manager-change shock: only fire when there actually was a
+            // previous coach (not on first-ever initialization). Players
+            // who had a strong bond with the outgoing coach take a hit;
+            // those whose relationship had soured get a fresh-start bump.
+            if let Some(prev_id) = previous_coach_id {
+                Self::fire_manager_departure_events(&mut self.teams, prev_id);
+            }
         }
 
         if let Some(ref mut state) = self.coach_state {
             state.current_week = date_to_week(date);
+        }
+    }
+
+    fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32) {
+        use crate::HappinessEventType;
+        for team in teams.iter_mut() {
+            if !matches!(team.team_type, TeamType::Main) {
+                continue;
+            }
+            for player in team.players.players.iter_mut() {
+                let magnitude = match player.relations.get_staff(outgoing_coach_id) {
+                    Some(rel) => {
+                        let bond = rel.personal_bond + rel.trust_in_abilities + rel.loyalty * 0.5;
+                        if bond >= 150.0 {
+                            -8.0
+                        } else if bond >= 100.0 {
+                            -4.0
+                        } else if bond <= -50.0 {
+                            3.0
+                        } else if rel.authority_respect < 30.0 {
+                            2.0
+                        } else {
+                            -1.0
+                        }
+                    }
+                    None => -1.0,
+                };
+                player
+                    .happiness
+                    .add_event(HappinessEventType::ManagerDeparture, magnitude);
+            }
         }
     }
 

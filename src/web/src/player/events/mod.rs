@@ -196,6 +196,11 @@ fn is_big_event(event_type: &HappinessEventType) -> bool {
             | HappinessEventType::SalaryBoost
             | HappinessEventType::JoiningElite
             | HappinessEventType::ContractTerminated
+            | HappinessEventType::ManagerDeparture
+            | HappinessEventType::NationalTeamCallup
+            | HappinessEventType::NationalTeamDropped
+            | HappinessEventType::ShirtNumberPromotion
+            | HappinessEventType::ControversyIncident
     )
 }
 
@@ -233,6 +238,11 @@ pub fn event_type_to_i18n_key(event_type: &HappinessEventType) -> &'static str {
         HappinessEventType::SalaryBoost => "event_salary_boost",
         HappinessEventType::JoiningElite => "event_joining_elite",
         HappinessEventType::ContractTerminated => "event_contract_terminated",
+        HappinessEventType::ManagerDeparture => "event_manager_departure",
+        HappinessEventType::NationalTeamCallup => "event_national_team_callup",
+        HappinessEventType::NationalTeamDropped => "event_national_team_dropped",
+        HappinessEventType::ShirtNumberPromotion => "event_shirt_number_promotion",
+        HappinessEventType::ControversyIncident => "event_controversy_incident",
     }
 }
 
