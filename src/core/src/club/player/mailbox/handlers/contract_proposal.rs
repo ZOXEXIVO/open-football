@@ -6,6 +6,22 @@ use chrono::NaiveDate;
 
 pub struct ProcessContractHandler;
 
+/// Written into `decision_history.decision` whenever the player turns
+/// down a proposal. The ContractRenewalManager reads this back to tell
+/// "still waiting" from "already said no", applies a longer cooldown,
+/// caps the retry count, and escalates terms on the next attempt.
+pub const RENEWAL_REJECTED_LABEL: &str = "dec_contract_renewal_rejected";
+
+fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: NaiveDate) {
+    let movement = format!("{}y · ${}/y", proposal.years, proposal.salary);
+    player.decision_history.add(
+        now,
+        movement,
+        RENEWAL_REJECTED_LABEL.to_string(),
+        String::new(),
+    );
+}
+
 impl ProcessContractHandler {
     pub fn process(
         player: &mut Player,
@@ -18,6 +34,7 @@ impl ProcessContractHandler {
         if proposal.years < min_acceptable_years {
             // Contract too short — player/agent rejects regardless of salary
             result.contract.contract_rejected = true;
+            log_rejection(player, &proposal, now);
             return;
         }
 
@@ -33,6 +50,7 @@ impl ProcessContractHandler {
                     // small raise) flips to a rejection.
                     if agent_delta < -4.0 && raise_ratio < 1.15 {
                         result.contract.contract_rejected = true;
+                        log_rejection(player, &proposal, now);
                         return;
                     }
                     AcceptContractHandler::process(player, proposal, now);
@@ -58,6 +76,7 @@ impl ProcessContractHandler {
                         player.happiness.add_event(HappinessEventType::ContractOffer, 2.0);
                     } else {
                         result.contract.contract_rejected = true;
+                        log_rejection(player, &proposal, now);
                     }
                 } else {
                     // Lower salary — accept only with very high loyalty + excellent negotiator
@@ -71,6 +90,7 @@ impl ProcessContractHandler {
                         player.happiness.add_event(HappinessEventType::ContractOffer, 1.0);
                     } else {
                         result.contract.contract_rejected = true;
+                        log_rejection(player, &proposal, now);
                     }
                 }
             }
@@ -82,6 +102,7 @@ impl ProcessContractHandler {
                             AcceptContractHandler::process(player, proposal, now);
                         } else {
                             result.contract.contract_rejected = true;
+                            log_rejection(player, &proposal, now);
                         }
                     }
                     PersonBehaviourState::Normal => {
@@ -89,6 +110,7 @@ impl ProcessContractHandler {
                             AcceptContractHandler::process(player, proposal, now);
                         } else {
                             result.contract.contract_rejected = true;
+                            log_rejection(player, &proposal, now);
                         }
                     }
                     PersonBehaviourState::Good => {

@@ -80,11 +80,18 @@ impl Player {
     }
 
     /// React to a completed loan. The parent contract is preserved; the
-    /// borrowing club's contract is installed as `contract_loan`.
+    /// borrowing club's contract is installed as `contract_loan`. We also
+    /// annotate the parent contract's `loan_to_club_id` so downstream
+    /// queries (UI, match-day loaned-in collector) can locate the borrower
+    /// directly from the parent-side contract without digging into
+    /// `contract_loan`.
     pub fn complete_loan(&mut self, l: LoanCompletion<'_>) {
         let borrowing_id = l.borrowing_club_id;
         self.on_loan(l.from, l.to, l.loan_fee, l.date);
         self.reset_on_club_change();
+        if let Some(parent) = self.contract.as_mut() {
+            parent.loan_to_club_id = Some(borrowing_id);
+        }
         self.contract_loan = Some(l.loan_contract);
         self.pending_signing = Some(PendingSigning {
             previous_salary: None,

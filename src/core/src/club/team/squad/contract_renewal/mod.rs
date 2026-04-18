@@ -1,11 +1,22 @@
 use crate::club::player::player::Player;
+use crate::club::player::mailbox::handlers::contract_proposal::RENEWAL_REJECTED_LABEL;
 use crate::{
     PlayerContractProposal, PlayerMessage, PlayerMessageType, PlayerSquadStatus,
     PlayerStatusType, Team,
 };
 use chrono::NaiveDate;
 
+/// Minimum gap between proactive offers when the previous one hasn't
+/// actually been turned down yet.
 const RENEWAL_COOLDOWN_DAYS: i64 = 30;
+/// Longer cooldown after the player rejects. Real clubs don't hammer the
+/// same player every month with the same deal — they regroup, raise, and
+/// try again after a while.
+const RENEWAL_COOLDOWN_AFTER_REJECT_DAYS: i64 = 120;
+/// Hard cap on how many times a proactive offer is made within a year.
+/// After three flat refusals the club gives up and the player runs down
+/// their deal (or gets transfer-listed via the usual flows).
+const MAX_RENEWAL_ATTEMPTS_PER_YEAR: usize = 3;
 const DECISION_LABEL: &str = "dec_contract_renewal_offered";
 
 pub struct ContractRenewalManager;
@@ -25,12 +36,37 @@ impl ContractRenewalManager {
         let candidates = Self::collect_candidates(&teams[main_idx], date);
 
         for candidate in candidates {
+            // Count how many previous attempts we've already made in the
+            // last year. After MAX_RENEWAL_ATTEMPTS_PER_YEAR the club
+            // stops pursuing — the player will run the deal down or the
+            // normal transfer-listing pipeline will handle them.
+            let attempts = teams[main_idx]
+                .players
+                .players
+                .iter()
+                .find(|p| p.id == candidate.player_id)
+                .map(|p| {
+                    p.decision_history
+                        .items
+                        .iter()
+                        .filter(|d| {
+                            d.decision == DECISION_LABEL
+                                && (date - d.date).num_days() < 365
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+            if attempts >= MAX_RENEWAL_ATTEMPTS_PER_YEAR {
+                continue;
+            }
+
             let (salary, years) = match Self::build_offer(
                 &teams[main_idx],
                 candidate.player_id,
                 negotiation_skill,
                 judging_ability,
                 date,
+                attempts,
             ) {
                 Some(pair) => pair,
                 None => continue,
@@ -151,16 +187,26 @@ impl ContractRenewalManager {
         }
     }
 
+    /// Two-tier cooldown. A proactive offer uses the short window; a
+    /// rejected offer gets a much longer one before we come back with a
+    /// revised deal.
     fn recently_offered(player: &Player, date: NaiveDate) -> bool {
-        player
+        // Look at the most recent renewal-related decision.
+        let last = player
             .decision_history
             .items
             .iter()
             .rev()
-            .any(|d| {
-                d.decision == DECISION_LABEL
-                    && (date - d.date).num_days() < RENEWAL_COOLDOWN_DAYS
-            })
+            .find(|d| {
+                d.decision == DECISION_LABEL || d.decision == RENEWAL_REJECTED_LABEL
+            });
+        match last {
+            Some(d) if d.decision == RENEWAL_REJECTED_LABEL => {
+                (date - d.date).num_days() < RENEWAL_COOLDOWN_AFTER_REJECT_DAYS
+            }
+            Some(d) => (date - d.date).num_days() < RENEWAL_COOLDOWN_DAYS,
+            None => false,
+        }
     }
 
     fn build_offer(
@@ -169,6 +215,7 @@ impl ContractRenewalManager {
         negotiation_skill: u8,
         judging_ability: u8,
         date: NaiveDate,
+        previous_attempts: usize,
     ) -> Option<(u32, u8)> {
         let player = team.players.find(player_id)?;
         let contract = player.contract.as_ref()?;
@@ -184,9 +231,15 @@ impl ContractRenewalManager {
         let adjusted_base = (base_salary as f32 * accuracy) as u32;
 
         let current_salary = contract.salary;
+        // Each prior rejection pushes the offer up a meaningful step —
+        // +10% per failed attempt. By the 3rd attempt the offer is 20%
+        // above the opening bid, which is a credible final position.
+        let escalation = 1.0 + previous_attempts as f32 * 0.10;
+        let escalated_base = (adjusted_base as f32 * escalation) as u32;
+
         // Always offer at least a small raise — this is a proactive renewal,
         // not a haircut. Player happiness logic rewards salary increases.
-        let offered = adjusted_base
+        let offered = escalated_base
             .max(current_salary + current_salary / 20) // +5% floor
             .max(current_salary + 1);
 

@@ -834,12 +834,52 @@ impl PipelineProcessor {
                 continue;
             }
 
+            // Depth-chart position in the player's group. Used later as
+            // a graduated resistance — the higher up the pecking order
+            // a player sits, the harder it is for any loan-out trigger
+            // to fire. No hard cut-off: an utterly surplus #1 can still
+            // go, it just needs much stronger signals than the 4th-choice
+            // would to get there.
+            let mut group_ranks: Vec<(u32, u8)> = squad
+                .iter()
+                .filter(|p| p.primary_position.position_group() == group)
+                .map(|p| (p.player_id, p.current_ability))
+                .collect();
+            group_ranks.sort_by(|a, b| b.1.cmp(&a.1));
+            let rank = group_ranks
+                .iter()
+                .position(|(pid, _)| *pid == player_info.player_id)
+                .unwrap_or(usize::MAX);
+            // Position-group average CA — compares the player to their own
+            // role peer group rather than the outfield-dominated starting
+            // XI mean (which quietly branded first-choice keepers "below
+            // average" and kept shipping them out).
+            let group_avg: u8 = if !group_ranks.is_empty() {
+                let sum: u32 = group_ranks.iter().map(|(_, ca)| *ca as u32).sum();
+                (sum / group_ranks.len() as u32) as u8
+            } else {
+                avg_ability
+            };
+            // Depth cushion: extra CA-below-group-average the player needs
+            // to exceed before any "surplus / lack of minutes" branch will
+            // fire. Rank 0 (main) needs a massive deficit; rank 3+ needs
+            // the normal amount. Scales smoothly; no hard cliff.
+            let depth_cushion: i16 = match rank {
+                0 => 25,
+                1 => 12,
+                2 => 5,
+                _ => 0,
+            };
+
             match rep_level {
                 ReputationLevel::Elite | ReputationLevel::Continental => {
-                    // Young players who need game time
+                    // Young players who need game time. Compare to the
+                    // position-group average + depth cushion so the main
+                    // at any position isn't routed to "dev minutes".
                     if player_info.age <= age_threshold
                         && player_info.potential_ability > player_info.current_ability + 5
-                        && (player_info.current_ability as i16) < avg_ability as i16 - ability_gap
+                        && (player_info.current_ability as i16)
+                            < group_avg as i16 - ability_gap - depth_cushion
                     {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
@@ -904,10 +944,12 @@ impl PipelineProcessor {
                     }
                 }
                 ReputationLevel::National => {
-                    // Young players with high potential gap
+                    // Young players with high potential gap — group-relative
+                    // deficit + depth cushion keeps the starter unscathed.
                     if player_info.age <= 22
                         && player_info.potential_ability > player_info.current_ability + 10
-                        && (player_info.current_ability as i16) < avg_ability as i16 - 5
+                        && (player_info.current_ability as i16)
+                            < group_avg as i16 - 5 - depth_cushion
                     {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
@@ -930,10 +972,12 @@ impl PipelineProcessor {
                     }
                 }
                 _ => {
-                    // Regional/Local/Amateur: only loan very young players
+                    // Regional/Local/Amateur: only loan very young players.
+                    // Group-relative + depth cushion, same logic as above.
                     if player_info.age <= 21
                         && player_info.potential_ability > player_info.current_ability + 15
-                        && (player_info.current_ability as i16) < avg_ability as i16 - 10
+                        && (player_info.current_ability as i16)
+                            < group_avg as i16 - 10 - depth_cushion
                     {
                         loan_outs.push(LoanOutCandidate {
                             player_id: player_info.player_id,
@@ -963,8 +1007,12 @@ impl PipelineProcessor {
                 }
             };
 
+            // Surplus fires on a position-group-relative deficit — a GK
+            // sitting below the outfield-dominated squad mean is normal.
+            // Depth cushion makes the first-choice extremely hard to flag.
+            let deficit_vs_group = group_avg as i16 - player_info.current_ability as i16;
             if group_count >= surplus_threshold
-                && (player_info.current_ability as i16) < avg_ability as i16 - 5
+                && deficit_vs_group >= 5 + depth_cushion
             {
                 loan_outs.push(LoanOutCandidate {
                     player_id: player_info.player_id,
@@ -975,9 +1023,11 @@ impl PipelineProcessor {
                 continue;
             }
 
-            // Financial relief (LoanFocused philosophy)
+            // Financial relief (LoanFocused philosophy). The depth cushion
+            // protects starters here too — you don't dump your first-choice
+            // for wage relief.
             if *philosophy == ClubPhilosophy::LoanFocused
-                && (player_info.current_ability as i16) < avg_ability as i16
+                && deficit_vs_group >= depth_cushion
                 && player_info.appearances < 10
             {
                 loan_outs.push(LoanOutCandidate {

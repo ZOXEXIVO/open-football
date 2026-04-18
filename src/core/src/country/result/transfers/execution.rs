@@ -306,7 +306,7 @@ fn take_player_from_selling_country(
     selling_club_id: u32,
     fee: f64,
     is_loan: bool,
-) -> Option<(Player, TeamInfo, Option<u32>)> {
+) -> Option<(Player, TeamInfo, Option<u32>, u32)> {
     let country = data.country_mut(selling_country_id)?;
 
     let selling_club = country.clubs.iter_mut().find(|c| c.id == selling_club_id)?;
@@ -337,8 +337,10 @@ fn take_player_from_selling_country(
     }
 
     let mut player = None;
+    let mut parent_team_id: u32 = 0;
     for team in &mut selling_club.teams.teams {
         if let Some(p) = team.players.take_player(&player_id) {
+            parent_team_id = team.id;
             player = Some(p);
             team.transfer_list.remove(player_id);
             break;
@@ -360,7 +362,7 @@ fn take_player_from_selling_country(
     from_info.league_name = league_name;
     from_info.league_slug = league_slug;
 
-    player.map(|p| (p, from_info, league_id))
+    player.map(|p| (p, from_info, league_id, parent_team_id))
 }
 
 fn execute_transfer_across_countries(
@@ -375,7 +377,7 @@ fn execute_transfer_across_countries(
 ) -> bool {
     let taken = take_player_from_selling_country(data, player_id, selling_country_id, selling_club_id, fee, false);
 
-    let (mut player, from_info, _) = match taken {
+    let (mut player, from_info, _, _) = match taken {
         Some(v) => v,
         None => {
             debug!("Transfer failed: player {} not found in country {}", player_id, selling_country_id);
@@ -455,7 +457,7 @@ fn execute_loan_across_countries(
 
     let taken = take_player_from_selling_country(data, player_id, selling_country_id, selling_club_id, loan_fee, true);
 
-    let (mut player, from_info, _) = match taken {
+    let (mut player, from_info, _, parent_team_id) = match taken {
         Some(v) => v,
         None => {
             debug!("Loan failed: player {} not found in country {}", player_id, selling_country_id);
@@ -492,7 +494,7 @@ fn execute_loan_across_countries(
         name: String::new(), slug: String::new(), reputation: 0,
         league_name: String::new(), league_slug: String::new(),
     });
-    let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, 0, buying_club_id);
+    let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, parent_team_id, buying_club_id);
     player.complete_loan(LoanCompletion {
         from: &from_info,
         to: &to,
