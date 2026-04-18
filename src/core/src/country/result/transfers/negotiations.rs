@@ -1,5 +1,9 @@
 use chrono::NaiveDate;
-use super::types::{DeferredTransfer, NegotiationData, TransferActivitySummary, find_player_in_country};
+use super::types::{
+    DeferredTransfer, NegotiationData, TransferActivitySummary,
+    find_player_in_country, find_player_in_country_mut,
+};
+use crate::club::player::agent::PlayerAgent;
 use crate::country::result::CountryResult;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
 use crate::transfers::pipeline::PipelineProcessor;
@@ -144,6 +148,16 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.advance_to_club_negotiation(date);
             }
+            // Interest is now real — fire the tap-up happiness event on the
+            // target so the rumour mill actually nudges morale. Only fires
+            // for domestic targets; foreign players sit outside this country.
+            if neg_data.selling_country_id.is_none() {
+                let buyer_rep = neg_data.buying_rep;
+                let seller_rep = neg_data.selling_rep;
+                if let Some(player) = find_player_in_country_mut(country, neg_data.player_id) {
+                    player.on_transfer_interest_confirmed(buyer_rep, seller_rep);
+                }
+            }
         } else {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 negotiation.reject_with_reason(NegotiationRejectionReason::SellerRefusedToNegotiate);
@@ -165,6 +179,20 @@ impl CountryResult {
         round: u8,
         date: NaiveDate,
     ) {
+        // Release clauses bypass the normal acceptance calculation entirely:
+        // if a matching clause is triggered, the selling club has no choice
+        // and the negotiation jumps straight to personal terms. Buy-back
+        // clauses and division-tier variants are not modelled yet (they
+        // need richer context than NegotiationData carries today).
+        if neg_data.selling_country_id.is_none()
+            && Self::clause_triggers_sale(country, neg_data)
+        {
+            if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                negotiation.advance_to_personal_terms(date);
+            }
+            return;
+        }
+
         let mut chance: f32 = if neg_data.asking_price > 0.0 {
             let ratio = neg_data.offer_amount / neg_data.asking_price;
             if ratio >= 1.2 { 90.0 }
@@ -196,6 +224,11 @@ impl CountryResult {
             chance += 10.0;
         }
 
+        // As deadline day approaches, the selling club gets less precious —
+        // either take this bid or risk keeping an unhappy asset.
+        let urgency = Self::deadline_urgency(country.id, date);
+        chance += urgency * 30.0;
+
         chance = chance.clamp(5.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
 
@@ -205,8 +238,11 @@ impl CountryResult {
             }
         } else if round < 3 {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
+                // Buyer escalation rate climbs with urgency: 15% at start of
+                // window, up to ~30% on the last few days (panic buy).
+                let escalation = (1.15 + urgency * 0.15) as f64;
                 let new_amount = FormattingUtils::round_fee(
-                    negotiation.current_offer.base_fee.amount * 1.15
+                    negotiation.current_offer.base_fee.amount * escalation
                 );
                 negotiation.current_offer.base_fee.amount = new_amount;
                 negotiation.advance_club_negotiation_round(date);
@@ -244,6 +280,17 @@ impl CountryResult {
         } else {
             60.0
         };
+
+        // Release clause: the player almost always welcomes the move they
+        // negotiated the escape route for. Overrides downward-move and
+        // salary resistance below.
+        if !is_foreign && Self::clause_triggers_sale(country, neg_data) {
+            chance += 45.0;
+        }
+
+        // End-of-window pressure: players prefer a signed deal over an
+        // expired negotiation that drops them back into limbo.
+        chance += Self::deadline_urgency(country.id, date) * 15.0;
 
         if neg_data.is_listed {
             chance += 10.0;
@@ -312,6 +359,11 @@ impl CountryResult {
         // For domestic, check salary and player-specific details
         if neg_data.selling_country_id.is_none() {
             if let Some(player) = find_player_in_country(country, neg_data.player_id) {
+                // Agent bias: greedy reps depress acceptance; loyal reps push
+                // the client to stay put unless the move is a clear step up.
+                let agent = PlayerAgent::for_player(player);
+                chance += agent.personal_terms_delta(rep_diff);
+
                 let current_salary = player.contract.as_ref()
                     .map(|c| c.salary as f64)
                     .unwrap_or(500.0);
@@ -598,5 +650,90 @@ impl CountryResult {
                 break;
             }
         }
+    }
+
+    /// True when the offer amount meets a release clause on the player's
+    /// current contract. Caller must only consult this for domestic
+    /// transfers — we don't carry the foreign contract into NegotiationData.
+    fn clause_triggers_sale(country: &Country, neg_data: &NegotiationData) -> bool {
+        let player = match find_player_in_country(country, neg_data.player_id) {
+            Some(p) => p,
+            None => return false,
+        };
+        let contract = match player.contract.as_ref() {
+            Some(c) => c,
+            None => return false,
+        };
+        // Buyer is foreign to the selling club when the negotiation was
+        // cross-country to start with — that's captured by selling_country_id
+        // being Some. Domestic negotiations resolve within this country.
+        let buyer_is_foreign = neg_data.selling_country_id.is_some();
+        contract
+            .release_clause_triggered(neg_data.offer_amount, buyer_is_foreign)
+            .is_some()
+    }
+
+    /// How close are we to the transfer window slamming shut? 0 when at
+    /// least two weeks remain; ramps linearly to 1.0 on deadline day.
+    /// Used to push both sides toward a deal instead of letting stale
+    /// negotiations age into the expiry rejection.
+    pub(crate) fn deadline_urgency(country_id: u32, date: NaiveDate) -> f32 {
+        let mgr = TransferWindowManager::new();
+        let (_, end) = match mgr.current_window_dates(country_id, date) {
+            Some(w) => w,
+            None => return 0.0,
+        };
+        let days_left = (end - date).num_days();
+        if days_left >= 14 {
+            0.0
+        } else if days_left <= 1 {
+            1.0
+        } else {
+            1.0 - (days_left as f32 - 1.0) / 13.0
+        }
+    }
+}
+
+#[cfg(test)]
+mod deadline_urgency_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32, day: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, day).unwrap()
+    }
+
+    #[test]
+    fn no_urgency_when_window_is_closed() {
+        // Default summer window is Jun 1 – Aug 31; March is outside.
+        assert_eq!(CountryResult::deadline_urgency(1, d(2025, 3, 15)), 0.0);
+    }
+
+    #[test]
+    fn no_urgency_early_in_window() {
+        // Jun 5 is early summer window, plenty of time left.
+        assert_eq!(CountryResult::deadline_urgency(1, d(2025, 6, 5)), 0.0);
+    }
+
+    #[test]
+    fn urgency_ramps_up_in_final_two_weeks() {
+        // Aug 31 = deadline; Aug 25 ≈ 6 days left.
+        let six_days = CountryResult::deadline_urgency(1, d(2025, 8, 25));
+        assert!(six_days > 0.4 && six_days < 0.8, "got {six_days}");
+    }
+
+    #[test]
+    fn urgency_peaks_on_deadline_day() {
+        let last = CountryResult::deadline_urgency(1, d(2025, 8, 31));
+        assert!(last >= 0.95, "got {last}");
+    }
+
+    #[test]
+    fn urgency_monotonic_across_window() {
+        let a = CountryResult::deadline_urgency(1, d(2025, 8, 18));
+        let b = CountryResult::deadline_urgency(1, d(2025, 8, 25));
+        let c = CountryResult::deadline_urgency(1, d(2025, 8, 30));
+        assert!(a < b);
+        assert!(b < c);
     }
 }

@@ -1,7 +1,8 @@
 use chrono::{Datelike, NaiveDate};
 use log::{debug, info};
 use super::CountryResult;
-use crate::utils::IntegerUtils;
+use crate::utils::{DateUtils, IntegerUtils};
+use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::{
     ClubResult, Country, Person, Player, PlayerHappiness, PlayerStatusType, TeamInfo, TeamType,
 };
@@ -31,7 +32,7 @@ impl CountryResult {
             debug!("End of season processing");
 
             if let Some(country) = data.country_mut(country_id) {
-                Self::process_season_awards(country, club_results);
+                Self::process_season_awards(country, club_results, date);
                 // NOTE: loan returns are handled in a separate phase (process_loan_returns)
                 // that runs AFTER club results, so ClubResult references remain valid
                 Self::process_player_retirements(country, date);
@@ -40,9 +41,21 @@ impl CountryResult {
 
         // Monthly check: retire players who are past max retirement age
         // so they don't linger on teams until season end
-        if date.day() == 1 && date.month() as u8 != season.end_month {
+        if DateUtils::is_month_beginning(date) && date.month() as u8 != season.end_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_overdue_retirements(country, date);
+            }
+        }
+
+        // Monthly reputation decay — teams that aren't achieving anything
+        // drift back toward the mean. Runs on the 1st regardless of season.
+        if DateUtils::is_month_beginning(date) {
+            if let Some(country) = data.country_mut(country_id) {
+                for club in &mut country.clubs {
+                    for team in club.teams.iter_mut() {
+                        team.on_month_tick();
+                    }
+                }
             }
         }
 
@@ -60,7 +73,7 @@ impl CountryResult {
             })
             .unwrap_or(season.end_month);
         let promo_month = if latest_end_month == 12 { 1u8 } else { latest_end_month + 1 };
-        if date.day() == 1 && date.month() as u8 == promo_month {
+        if DateUtils::is_month_beginning(date) && date.month() as u8 == promo_month {
             if let Some(country) = data.country_mut(country_id) {
                 Self::process_promotion_relegation(country);
             }
@@ -73,7 +86,11 @@ impl CountryResult {
         }
     }
 
-    fn process_season_awards(country: &mut Country, _club_results: &[ClubResult]) {
+    fn process_season_awards(
+        country: &mut Country,
+        _club_results: &[ClubResult],
+        date: NaiveDate,
+    ) {
         debug!("Processing season awards");
 
         // Build team_id -> club index mapping
@@ -83,6 +100,45 @@ impl CountryResult {
                 club.teams.iter().map(move |t| (t.id, ci))
             })
             .collect();
+
+        // Trophy reputation boost: league champions and promoted sides get
+        // a durable rep bump that lingers for 2 seasons (see Achievement).
+        // Collected before the prize-money loop so we don't mix concerns.
+        let mut trophy_awards: Vec<(u32, AchievementType)> = Vec::new();
+        for league in &country.leagues.leagues {
+            if league.friendly {
+                continue;
+            }
+            let table = match &league.final_table {
+                Some(t) if !t.is_empty() => t,
+                _ => continue,
+            };
+            if let Some(champion) = table.first() {
+                trophy_awards.push((champion.team_id, AchievementType::LeagueTitle));
+            }
+            let promo_slots = league.settings.promotion_spots as usize;
+            if promo_slots > 0 {
+                // The top `promo_slots` rows are already the title winners
+                // plus those promoted; skip index 0 since that's the title
+                // event already recorded.
+                for row in table.iter().take(promo_slots).skip(1) {
+                    trophy_awards.push((row.team_id, AchievementType::Promotion));
+                }
+            }
+        }
+        for (team_id, ach_type) in trophy_awards {
+            for club in &mut country.clubs {
+                if club.teams.iter().any(|t| t.id == team_id) {
+                    // Reputation achievement on the team side; long-term
+                    // vision tracker on the board side.
+                    if let Some(team) = club.teams.iter_mut().find(|t| t.id == team_id) {
+                        team.on_season_trophy(Achievement::new(ach_type.clone(), date, 8));
+                    }
+                    club.board.on_achievement(ach_type.clone());
+                    break;
+                }
+            }
+        }
 
         // Collect awards per club: (club_idx, prize_money, tv_money)
         let mut club_awards: HashMap<usize, (i64, i64)> = HashMap::new();

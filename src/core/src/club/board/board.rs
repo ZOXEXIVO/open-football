@@ -1,6 +1,8 @@
+use crate::club::team::reputation::AchievementType;
 use crate::club::{BoardContext, BoardMood, BoardMoodState, BoardResult, StaffClubContract};
 use crate::context::{GlobalContext, SimulationContext};
-use chrono::NaiveDate;
+use crate::MatchTacticType;
+use chrono::{Datelike, NaiveDate};
 use log::debug;
 
 /// Long-term club vision — the direction the board wants the manager to
@@ -112,6 +114,15 @@ pub struct ClubBoard {
     /// Long-term vision — the "contract" the board expects the manager
     /// to honour across multiple seasons.
     pub vision: ClubVision,
+    /// Year the current vision horizon started. Populated on the first
+    /// season-start tick after the vision is installed. Reset at the end
+    /// of each horizon regardless of outcome.
+    pub vision_start_year: Option<i32>,
+    /// Set to true the first time a trophy / promotion matching the
+    /// long-term goal lands in the current horizon. Tracked separately
+    /// from `team.reputation` achievements because those decay after two
+    /// years and horizons can extend longer.
+    pub vision_goal_achieved: bool,
     /// Date the last manager was dismissed — drives the search timer.
     /// `None` when the manager seat is filled (either permanently, or
     /// an interim has been confirmed as permanent).
@@ -128,7 +139,36 @@ impl ClubBoard {
             season_targets: None,
             poor_mood_months: 0,
             vision: ClubVision::default(),
+            vision_start_year: None,
+            vision_goal_achieved: false,
             manager_search_since: None,
+        }
+    }
+
+    /// True when the current long-term goal matches the achievement just
+    /// earned. Call at trophy time to flip `vision_goal_achieved`.
+    pub fn matches_long_term_goal(&self, ach: AchievementType) -> bool {
+        let Some(goal) = self.vision.long_term_goal else {
+            return false;
+        };
+        use LongTermGoal::*;
+        matches!(
+            (goal, ach),
+            (WinLeague, AchievementType::LeagueTitle)
+                | (WinDomesticCup, AchievementType::CupWin)
+                | (WinContinental, AchievementType::ContinentalTrophy)
+                | (PromotionToTopFlight, AchievementType::Promotion)
+        )
+    }
+
+    /// Flip `vision_goal_achieved` when this achievement lands the long-term
+    /// target. Returns true if the flag changed.
+    pub fn on_achievement(&mut self, ach: AchievementType) -> bool {
+        if !self.vision_goal_achieved && self.matches_long_term_goal(ach) {
+            self.vision_goal_achieved = true;
+            true
+        } else {
+            false
         }
     }
 
@@ -153,6 +193,8 @@ impl ClubBoard {
         let season = ctx.country.as_ref().map(|c| c.season_dates).unwrap_or_default();
         if ctx.simulation.is_season_start(&season) {
             if let Some(board_ctx) = &ctx.board {
+                let current_year = ctx.simulation.date.date().year();
+                self.evaluate_long_term_vision(current_year, &mut result);
                 self.calculate_season_targets(board_ctx);
                 self.confidence.level = 65; // Reset confidence at season start
                 self.poor_mood_months = 0;
@@ -180,6 +222,49 @@ impl ClubBoard {
         }
 
         result
+    }
+
+    /// Check whether the long-term horizon has elapsed and reckon with the
+    /// manager against the original vision goal. Fires at the START of a
+    /// season — the previous season's trophies are already banked in
+    /// `vision_goal_achieved`. Horizonless visions (no `long_term_goal`)
+    /// don't trigger any judgment.
+    fn evaluate_long_term_vision(&mut self, current_year: i32, result: &mut BoardResult) {
+        if self.vision.long_term_goal.is_none() || self.vision.long_term_horizon_seasons == 0 {
+            return;
+        }
+
+        let start_year = match self.vision_start_year {
+            Some(y) => y,
+            None => {
+                // First season under this vision — start the clock and return.
+                self.vision_start_year = Some(current_year);
+                return;
+            }
+        };
+
+        let seasons_elapsed = (current_year - start_year).max(0) as u8;
+        if seasons_elapsed < self.vision.long_term_horizon_seasons {
+            return;
+        }
+
+        // Horizon reached. Judge and reset regardless of outcome.
+        if !self.vision_goal_achieved {
+            debug!(
+                "Long-term vision failed: goal {:?} not met in {} seasons — manager sacked",
+                self.vision.long_term_goal, self.vision.long_term_horizon_seasons
+            );
+            result.manager_sacked = true;
+            self.confidence.level = 20;
+            self.poor_mood_months = 0;
+        } else {
+            // Horizon met. Small confidence bump so the next horizon starts
+            // on a positive note; board keeps the manager.
+            self.confidence.level = (self.confidence.level + 10).clamp(0, 100);
+        }
+
+        self.vision_start_year = Some(current_year);
+        self.vision_goal_achieved = false;
     }
 
     fn calculate_season_targets(&mut self, board_ctx: &BoardContext) {
@@ -298,12 +383,22 @@ impl ClubBoard {
 
         let squad_health: i32 = if squad_bloated { -1 } else if squad_thin { -1 } else { 0 };
 
+        // ── Factor 5: Style fit ──
+        // How much does the chosen formation embody the board's preferred
+        // playing style? A non-default vision that the manager ignores
+        // erodes confidence, even when results are decent.
+        let style_drag = match board_ctx.main_tactic {
+            Some(t) => style_mismatch_drag(self.vision.playing_style, t),
+            None => 0,
+        };
+
         // ── Update confidence (cumulative, carries across months) ──
         let confidence_change =
             performance_delta * 3     // League position is most important
             + form_score * 2          // Recent form matters
             + financial_health * 2    // Financial stability
-            + squad_health;           // Squad management
+            + squad_health            // Squad management
+            - style_drag;             // Vision / tactics alignment
 
         self.confidence.level = (self.confidence.level + confidence_change).clamp(0, 100);
 
@@ -414,4 +509,85 @@ impl ClubBoard {
     }
 
     fn run_sport_director_election(&mut self, _: &SimulationContext) {}
+}
+
+/// How poorly does `tactic` embody `style`? 0 = fine, up to 2 = strong
+/// clash. Used as a monthly confidence drag so the board slowly loses
+/// patience with a manager whose football doesn't match what they were
+/// hired to deliver. `Balanced` never drags.
+fn style_mismatch_drag(style: VisionPlayingStyle, tactic: MatchTacticType) -> i32 {
+    use MatchTacticType::*;
+    use VisionPlayingStyle::*;
+
+    // Bias each formation on two axes: attacking weight (more forwards)
+    // and possession weight (tight midfield). Hand-tuned from conventional
+    // football wisdom rather than derived from match-engine values.
+    let (attacking, possession) = match tactic {
+        T343 => (2, 0),
+        T4222 => (2, 1),
+        T433 => (1, 2),
+        T4231 => (1, 2),
+        T4312 => (1, 1),
+        T442 => (0, 0),
+        T442Diamond | T442Narrow | T442DiamondWide => (0, 1),
+        T352 => (0, 0),
+        T4411 => (-1, 0),
+        T4141 => (-1, 1),
+        T451 => (-2, 0),
+        T1333 => (-2, -1),
+    };
+
+    match style {
+        Balanced => 0,
+        AttackingFootball => (1 - attacking).max(0),
+        DefensiveSolid => (1 + attacking).max(0),
+        Possession => (1 - possession).max(0),
+        DirectPlay => (possession).max(0),
+        HighPressing => (1 - possession).max(0) + (0 - attacking).max(0),
+        CounterAttack => (attacking - 1).max(0),
+    }
+}
+
+#[cfg(test)]
+mod style_fit_tests {
+    use super::*;
+
+    #[test]
+    fn balanced_vision_never_drags() {
+        for t in MatchTacticType::all() {
+            assert_eq!(style_mismatch_drag(VisionPlayingStyle::Balanced, t), 0);
+        }
+    }
+
+    #[test]
+    fn attacking_vision_punishes_defensive_formations() {
+        assert!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T451) > 0);
+        assert!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T1333) > 0);
+    }
+
+    #[test]
+    fn attacking_vision_accepts_attacking_formations() {
+        assert_eq!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T343), 0);
+        assert_eq!(style_mismatch_drag(VisionPlayingStyle::AttackingFootball, MatchTacticType::T4222), 0);
+    }
+
+    #[test]
+    fn defensive_vision_punishes_attacking_formations() {
+        assert!(style_mismatch_drag(VisionPlayingStyle::DefensiveSolid, MatchTacticType::T343) > 0);
+        assert!(style_mismatch_drag(VisionPlayingStyle::DefensiveSolid, MatchTacticType::T4222) > 0);
+    }
+
+    #[test]
+    fn possession_vision_accepts_possession_formations() {
+        assert_eq!(style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T433), 0);
+        assert_eq!(style_mismatch_drag(VisionPlayingStyle::Possession, MatchTacticType::T4231), 0);
+    }
+
+    #[test]
+    fn counter_attack_vision_prefers_modest_formations() {
+        // T442 = balanced → fits counter-attack fine.
+        assert_eq!(style_mismatch_drag(VisionPlayingStyle::CounterAttack, MatchTacticType::T442), 0);
+        // T343 = all-out attack → clashes with counter-attack's defensive base.
+        assert!(style_mismatch_drag(VisionPlayingStyle::CounterAttack, MatchTacticType::T343) > 0);
+    }
 }

@@ -1,4 +1,5 @@
 use crate::club::player::language::PlayerLanguage;
+use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::{generate_player_traits, PlayerTrait};
 use crate::club::{
@@ -220,6 +221,7 @@ impl PlayerBuilder {
             promises: Vec::new(),
             pending_signing: None,
             generated: self.generated.unwrap_or(false),
+            load: PlayerLoad::new(),
         })
     }
 }

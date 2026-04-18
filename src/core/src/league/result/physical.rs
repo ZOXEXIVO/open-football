@@ -5,7 +5,11 @@ use std::collections::HashMap;
 use super::LeagueResult;
 
 impl LeagueResult {
-    pub(super) fn apply_post_match_physical_effects(details: &MatchResultRaw, data: &mut SimulatorData) {
+    pub(super) fn apply_post_match_physical_effects(
+        details: &MatchResultRaw,
+        data: &mut SimulatorData,
+        is_friendly: bool,
+    ) {
         let now = data.date.date();
 
         let mut subbed_out_at: HashMap<u32, u64> = HashMap::new();
@@ -16,7 +20,7 @@ impl LeagueResult {
         }
 
         for team in [&details.left_team_players, &details.right_team_players] {
-            apply_side(team, &subbed_out_at, &subbed_in_at, data, now);
+            apply_side(team, &subbed_out_at, &subbed_in_at, data, now, is_friendly);
         }
     }
 }
@@ -27,6 +31,7 @@ fn apply_side(
     subbed_in_at: &HashMap<u32, u64>,
     data: &mut SimulatorData,
     now: chrono::NaiveDate,
+    is_friendly: bool,
 ) {
     for &player_id in &team.main {
         let minutes = subbed_out_at
@@ -34,7 +39,7 @@ fn apply_side(
             .map(|ms| (*ms / 60000) as f32)
             .unwrap_or(90.0);
         if let Some(player) = data.player_mut(player_id) {
-            player.on_match_exertion(minutes, now);
+            player.on_match_exertion(minutes, now, is_friendly);
         }
     }
 
@@ -44,7 +49,7 @@ fn apply_side(
             .map(|ms| 90.0 - (*ms / 60000) as f32)
             .unwrap_or(30.0);
         if let Some(player) = data.player_mut(player_id) {
-            player.on_match_exertion(minutes, now);
+            player.on_match_exertion(minutes, now, is_friendly);
         }
     }
 }

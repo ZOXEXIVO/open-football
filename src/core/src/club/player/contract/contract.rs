@@ -258,6 +258,38 @@ impl PlayerClubContract {
         let monthly_wage = self.salary as f32 / 12.0;
         (months_remaining * monthly_wage * settlement_factor).max(0.0) as u32
     }
+
+    /// Does an incoming bid match a release-clause threshold that forces
+    /// the selling club to accept? Returns the clause type that triggered,
+    /// or `None` if no clause applies. The club can still veto; callers
+    /// override negotiation chance to "guaranteed" when Some.
+    ///
+    /// Division-tier variants require richer context and are deferred — the
+    /// cross-country variants are the common ones in real football.
+    pub fn release_clause_triggered(
+        &self,
+        offer_amount: f64,
+        buyer_is_foreign: bool,
+    ) -> Option<ContractClauseType> {
+        for clause in &self.clauses {
+            if offer_amount < clause.value as f64 {
+                continue;
+            }
+            match clause.bonus_type {
+                ContractClauseType::MinimumFeeRelease => {
+                    return Some(ContractClauseType::MinimumFeeRelease);
+                }
+                ContractClauseType::MinimumFeeReleaseToForeignClubs if buyer_is_foreign => {
+                    return Some(ContractClauseType::MinimumFeeReleaseToForeignClubs);
+                }
+                ContractClauseType::MinimumFeeReleaseToDomesticClubs if !buyer_is_foreign => {
+                    return Some(ContractClauseType::MinimumFeeReleaseToDomesticClubs);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
 }
 
 // Bonuses
@@ -320,5 +352,96 @@ pub struct ContractClause {
 impl ContractClause {
     pub fn new(value: i32, bonus_type: ContractClauseType) -> Self {
         ContractClause { value, bonus_type }
+    }
+}
+
+#[cfg(test)]
+mod release_clause_tests {
+    use super::*;
+
+    fn base_contract() -> PlayerClubContract {
+        PlayerClubContract::new(
+            500_000,
+            NaiveDate::from_ymd_opt(2030, 6, 30).unwrap(),
+        )
+    }
+
+    #[test]
+    fn no_clause_means_no_trigger() {
+        let c = base_contract();
+        assert!(c.release_clause_triggered(50_000_000.0, false).is_none());
+    }
+
+    #[test]
+    fn universal_clause_triggers_when_offer_meets_threshold() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        assert!(matches!(
+            c.release_clause_triggered(30_000_000.0, false),
+            Some(ContractClauseType::MinimumFeeRelease)
+        ));
+        assert!(matches!(
+            c.release_clause_triggered(50_000_000.0, true),
+            Some(ContractClauseType::MinimumFeeRelease)
+        ));
+    }
+
+    #[test]
+    fn universal_clause_does_not_trigger_below_threshold() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        assert!(c.release_clause_triggered(29_999_999.0, false).is_none());
+    }
+
+    #[test]
+    fn foreign_only_clause_rejects_domestic_bidder() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(
+            20_000_000,
+            ContractClauseType::MinimumFeeReleaseToForeignClubs,
+        ));
+        assert!(c.release_clause_triggered(25_000_000.0, false).is_none());
+        assert!(matches!(
+            c.release_clause_triggered(25_000_000.0, true),
+            Some(ContractClauseType::MinimumFeeReleaseToForeignClubs)
+        ));
+    }
+
+    #[test]
+    fn domestic_only_clause_rejects_foreign_bidder() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(
+            20_000_000,
+            ContractClauseType::MinimumFeeReleaseToDomesticClubs,
+        ));
+        assert!(c.release_clause_triggered(25_000_000.0, true).is_none());
+        assert!(matches!(
+            c.release_clause_triggered(25_000_000.0, false),
+            Some(ContractClauseType::MinimumFeeReleaseToDomesticClubs)
+        ));
+    }
+
+    #[test]
+    fn multiple_clauses_first_match_wins() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(
+            50_000_000,
+            ContractClauseType::MinimumFeeReleaseToDomesticClubs,
+        ));
+        c.clauses.push(ContractClause::new(30_000_000, ContractClauseType::MinimumFeeRelease));
+        // Domestic bidder meeting the universal clause triggers it even when
+        // domestic-only comes first in the list but its threshold is higher.
+        assert!(matches!(
+            c.release_clause_triggered(35_000_000.0, false),
+            Some(ContractClauseType::MinimumFeeRelease)
+        ));
+    }
+
+    #[test]
+    fn unhandled_clause_types_do_not_trigger() {
+        let mut c = base_contract();
+        c.clauses.push(ContractClause::new(1_000_000, ContractClauseType::SellOnFee));
+        c.clauses.push(ContractClause::new(1_000_000, ContractClauseType::RelegationFeeRelease));
+        assert!(c.release_clause_triggered(100_000_000.0, false).is_none());
     }
 }

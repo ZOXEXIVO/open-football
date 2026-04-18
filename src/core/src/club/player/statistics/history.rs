@@ -427,9 +427,10 @@ impl PlayerStatisticsHistory {
     /// Seed the player's history with their initial team when the game starts.
     /// Seeds whenever there is no current-season entry — prior-season `items`
     /// loaded from the database still need a current-season row appended.
-    pub fn seed_initial_team(&mut self, team: &TeamInfo, date: NaiveDate) {
+    /// `is_loan` flags the stint as a loan so the history UI labels it.
+    pub fn seed_initial_team(&mut self, team: &TeamInfo, date: NaiveDate, is_loan: bool) {
         if self.current.is_empty() {
-            self.upsert_current(team, PlayerStatistics::default(), false, None, date);
+            self.upsert_current(team, PlayerStatistics::default(), is_loan, None, date);
         }
     }
 

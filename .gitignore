@@ -6,6 +6,7 @@ styles.min.css
 
 .idea/
 .claude/
+CLAUDE.md
 
 training_result.json
 

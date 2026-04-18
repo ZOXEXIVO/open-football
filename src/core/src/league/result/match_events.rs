@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use crate::club::player::contract::ContractBonusType;
 use crate::club::player::events::{MatchOutcome, MatchParticipation};
+use crate::club::team::reputation::{
+    CompetitionType as RepCompetition, MatchOutcome as RepOutcome,
+};
 use crate::r#match::player::statistics::MatchStatisticType;
 use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext, TeamTalkTone};
 use crate::club::StaffPosition;
@@ -38,10 +41,29 @@ impl LeagueResult {
         let home_goals = result.score.home_team.get();
         let away_goals = result.score.away_team.get();
         let home_team_id = result.score.home_team.team_id;
+        let away_team_id = result.score.away_team.team_id;
+
+        // Rivalry detection: walk team → club on both sides and check whether
+        // either club lists the other as a rival. Either-direction is a derby.
+        let home_club = data.team(home_team_id).map(|t| t.club_id);
+        let away_club = data.team(away_team_id).map(|t| t.club_id);
+        let is_derby = match (home_club, away_club) {
+            (Some(h), Some(a)) => {
+                let h_vs_a = data.club(h).map(|c| c.is_rival(a)).unwrap_or(false);
+                let a_vs_h = data.club(a).map(|c| c.is_rival(h)).unwrap_or(false);
+                h_vs_a || a_vs_h
+            }
+            _ => false,
+        };
 
         // Per-player match reaction — Player owns all bookkeeping.
         for side in [&details.left_team_players, &details.right_team_players] {
             let conceded = if side.team_id == home_team_id { away_goals } else { home_goals };
+            let (team_won, team_lost) = if side.team_id == home_team_id {
+                (home_goals > away_goals, home_goals < away_goals)
+            } else {
+                (away_goals > home_goals, away_goals < home_goals)
+            };
             dispatch_match_outcomes(
                 side,
                 conceded,
@@ -53,6 +75,9 @@ impl LeagueResult {
                 is_cup,
                 league_weight,
                 world_weight,
+                is_derby,
+                team_won,
+                team_lost,
             );
         }
 
@@ -62,10 +87,64 @@ impl LeagueResult {
         }
 
         Self::apply_full_time_team_talks(result, details, data);
-        Self::apply_post_match_physical_effects(details, data);
+        Self::apply_post_match_physical_effects(details, data, is_friendly);
+        Self::apply_post_match_reputation(result, data, is_friendly, is_cup);
 
         if let Some(details_mut) = &mut result.details {
             details_mut.player_of_the_match_id = best_player_id;
+        }
+    }
+
+    /// Feed the completed match into both teams' `TeamReputation`. Friendlies
+    /// don't drift reputation; cups and league games do, with competition
+    /// weighting handled inside `process_weekly_update`.
+    fn apply_post_match_reputation(
+        result: &MatchResult,
+        data: &mut SimulatorData,
+        is_friendly: bool,
+        is_cup: bool,
+    ) {
+        if is_friendly {
+            return;
+        }
+
+        let home_team_id = result.score.home_team.team_id;
+        let away_team_id = result.score.away_team.team_id;
+        let home_goals = result.score.home_team.get();
+        let away_goals = result.score.away_team.get();
+
+        let home_rep = data
+            .team(home_team_id)
+            .map(|t| overall_score_to_u16(t.reputation.overall_score()))
+            .unwrap_or(0);
+        let away_rep = data
+            .team(away_team_id)
+            .map(|t| overall_score_to_u16(t.reputation.overall_score()))
+            .unwrap_or(0);
+
+        let (home_outcome, away_outcome) = match home_goals.cmp(&away_goals) {
+            std::cmp::Ordering::Greater => (RepOutcome::Win, RepOutcome::Loss),
+            std::cmp::Ordering::Less => (RepOutcome::Loss, RepOutcome::Win),
+            std::cmp::Ordering::Equal => (RepOutcome::Draw, RepOutcome::Draw),
+        };
+
+        let comp = match (result.league_id, is_cup) {
+            (CHAMPIONS_LEAGUE_ID | EUROPA_LEAGUE_ID | CONFERENCE_LEAGUE_ID, _) => {
+                RepCompetition::ContinentalCup
+            }
+            (_, true) => RepCompetition::DomesticCup,
+            _ => RepCompetition::League,
+        };
+
+        let (home_pos, away_pos, total_teams) =
+            league_standings(result.league_id, home_team_id, away_team_id, data);
+        let date = data.date.date();
+
+        if let Some(team) = data.team_mut(home_team_id) {
+            team.on_match_completed(home_outcome, away_rep, comp.clone(), home_pos, total_teams, date);
+        }
+        if let Some(team) = data.team_mut(away_team_id) {
+            team.on_match_completed(away_outcome, home_rep, comp, away_pos, total_teams, date);
         }
     }
 
@@ -371,6 +450,9 @@ fn dispatch_match_outcomes(
     is_cup: bool,
     league_weight: f32,
     world_weight: f32,
+    is_derby: bool,
+    team_won: bool,
+    team_lost: bool,
 ) {
     let starter_ids: Vec<u32> = side.main.iter().copied().collect();
     let sub_ids: Vec<u32> = side.substitutes_used.iter().copied().collect();
@@ -400,6 +482,9 @@ fn dispatch_match_outcomes(
                 team_goals_against,
                 league_weight,
                 world_weight,
+                is_derby,
+                team_won,
+                team_lost,
             });
         }
     }
@@ -413,4 +498,41 @@ fn dispatch_match_outcomes(
             }
         }
     }
+}
+
+/// Compact the overall reputation score (0.0–1.0) into the u16 scale the
+/// `TeamReputation` drift model expects (same 0–10_000 basis as `home`/
+/// `national`/`world`).
+fn overall_score_to_u16(score: f32) -> u16 {
+    (score * 10_000.0).clamp(0.0, 10_000.0) as u16
+}
+
+/// Look up league-table positions for both teams and the total number of
+/// teams. Cup and continental competitions fall back to 1/1/1 — the
+/// position factor is meaningless there but still needs a valid denominator.
+fn league_standings(
+    league_id: u32,
+    home_team_id: u32,
+    away_team_id: u32,
+    data: &SimulatorData,
+) -> (u8, u8, u8) {
+    let league = match data.league(league_id) {
+        Some(l) => l,
+        None => return (1, 1, 1),
+    };
+    let rows = &league.table.rows;
+    if rows.is_empty() {
+        return (1, 1, 1);
+    }
+    let total = rows.len().min(u8::MAX as usize) as u8;
+    let position = |team_id: u32| -> u8 {
+        let pts = rows
+            .iter()
+            .find(|r| r.team_id == team_id)
+            .map(|r| r.points)
+            .unwrap_or(0);
+        let ahead = rows.iter().filter(|r| r.points > pts).count();
+        (ahead + 1).min(u8::MAX as usize) as u8
+    };
+    (position(home_team_id), position(away_team_id), total)
 }

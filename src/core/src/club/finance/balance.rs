@@ -111,6 +111,52 @@ impl ClubFinances {
             });
         }
     }
+
+    /// Net loss accumulated over the trailing three years, read from the
+    /// monthly history snapshots. Profitable months offset loss-making
+    /// ones; a non-positive return means the club is cash-neutral or
+    /// profitable over the period.
+    pub fn three_year_loss(&self, today: NaiveDate) -> i64 {
+        let cutoff = today - chrono::Duration::days(365 * 3);
+        let mut losses = 0i64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            losses += snap.outcome - snap.income;
+        }
+        losses
+    }
+
+    /// Player wages paid over the trailing twelve months. Used as the
+    /// scale for the FFP breach threshold so wealthy clubs aren't flagged
+    /// for the same absolute losses that would cripple a smaller side.
+    pub fn trailing_annual_wages(&self, today: NaiveDate) -> u64 {
+        let cutoff = today - chrono::Duration::days(365);
+        let mut total = 0u64;
+        for (date, snap) in self.history.iter() {
+            if *date < cutoff {
+                continue;
+            }
+            total += snap.expense_player_wages.max(0) as u64;
+        }
+        total
+    }
+
+    /// Have the trailing three years of football operations pushed the
+    /// club into FFP breach territory? Threshold is twice the trailing
+    /// annual wage bill, with a floor of $20M so empty-history clubs get
+    /// a sensible default. Downstream code (transfer pipeline, board)
+    /// reads this to gate big spends.
+    pub fn is_ffp_breach(&self, today: NaiveDate) -> bool {
+        let loss = self.three_year_loss(today);
+        if loss <= 0 {
+            return false;
+        }
+        let annual_wages = self.trailing_annual_wages(today);
+        let threshold = ((annual_wages as i64).saturating_mul(2)).max(20_000_000);
+        loss > threshold
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -283,5 +329,79 @@ impl ClubFinancialBalance {
         self.expense_debt_interest = 0;
         self.income_loan_fees = 0;
         self.expense_loan_fees = 0;
+    }
+}
+
+#[cfg(test)]
+mod ffp_tests {
+    use super::*;
+    use chrono::NaiveDate;
+
+    fn d(y: i32, m: u32) -> NaiveDate {
+        NaiveDate::from_ymd_opt(y, m, 1).unwrap()
+    }
+
+    fn finances_with_history(months: Vec<(NaiveDate, i64, i64, i64)>) -> ClubFinances {
+        let mut f = ClubFinances::new(0, vec![]);
+        for (date, income, outcome, wages) in months {
+            let mut snap = ClubFinancialBalance::new(0);
+            snap.income = income;
+            snap.outcome = outcome;
+            snap.expense_player_wages = wages;
+            f.history.add(date, snap);
+        }
+        f
+    }
+
+    #[test]
+    fn no_history_means_no_breach() {
+        let f = ClubFinances::new(0, vec![]);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+        assert_eq!(f.three_year_loss(d(2025, 1)), 0);
+    }
+
+    #[test]
+    fn profitable_club_is_not_in_breach() {
+        let f = finances_with_history(vec![
+            (d(2024, 6), 5_000_000, 3_000_000, 2_500_000),
+            (d(2024, 7), 5_000_000, 3_000_000, 2_500_000),
+            (d(2024, 8), 5_000_000, 3_000_000, 2_500_000),
+        ]);
+        assert!(f.three_year_loss(d(2025, 1)) <= 0);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn loss_under_threshold_is_not_breach() {
+        // ~$15M loss, wage base $100M/yr → threshold $200M. Not a breach.
+        let f = finances_with_history(vec![
+            (d(2024, 6), 2_000_000, 7_000_000, 8_000_000),
+            (d(2024, 7), 2_000_000, 7_000_000, 8_000_000),
+            (d(2024, 8), 2_000_000, 7_000_000, 8_000_000),
+        ]);
+        assert!(f.three_year_loss(d(2025, 1)) > 0);
+        assert!(!f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn loss_above_threshold_trips_breach() {
+        // Zero wage bill → threshold floors at $20M. Accumulate $24M loss.
+        let months: Vec<_> = (1..=12)
+            .map(|m| (d(2024, m), 0_i64, 2_000_000_i64, 0_i64))
+            .collect();
+        let f = finances_with_history(months);
+        let loss = f.three_year_loss(d(2025, 1));
+        assert!(loss > 20_000_000, "loss={loss}");
+        assert!(f.is_ffp_breach(d(2025, 1)));
+    }
+
+    #[test]
+    fn old_history_outside_three_year_window_is_ignored() {
+        let f = finances_with_history(vec![
+            (d(2020, 6), 0, 50_000_000, 0), // >3 years old — shouldn't count
+            (d(2024, 6), 1_000_000, 1_500_000, 100_000),
+        ]);
+        let loss = f.three_year_loss(d(2025, 1));
+        assert!(loss < 1_000_000, "old loss leaked in: {loss}");
     }
 }

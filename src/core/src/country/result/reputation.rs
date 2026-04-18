@@ -1,6 +1,7 @@
-use chrono::{Datelike, NaiveDate};
+use chrono::NaiveDate;
 use log::debug;
 use super::CountryResult;
+use crate::utils::DateUtils;
 use crate::{ClubResult, Country};
 use crate::league::LeagueResult;
 use crate::simulator::SimulatorData;
@@ -23,7 +24,7 @@ impl CountryResult {
         country_id: u32,
         date: NaiveDate,
     ) {
-        if date.day() == 1 {
+        if DateUtils::is_month_beginning(date) {
             if let Some(country) = data.country_mut(country_id) {
                 country.economic_factors.monthly_update();
             }

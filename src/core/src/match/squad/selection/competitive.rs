@@ -51,9 +51,11 @@ pub(crate) fn select_starting_eleven(
             .filter(|p| !helpers::is_goalkeeper_player(p))
             .max_by(|a, b| {
                 let sa = engine.score_player_for_slot(a, pos, target_group, staff, tactics, date, is_friendly, &selected_players)
-                    + engine.development_minutes_bonus(a, match_importance);
+                    + engine.development_minutes_bonus(a, match_importance)
+                    + engine.fatigue_penalty(a, is_friendly);
                 let sb = engine.score_player_for_slot(b, pos, target_group, staff, tactics, date, is_friendly, &selected_players)
-                    + engine.development_minutes_bonus(b, match_importance);
+                    + engine.development_minutes_bonus(b, match_importance)
+                    + engine.fatigue_penalty(b, is_friendly);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -73,9 +75,11 @@ pub(crate) fn select_starting_eleven(
             .filter(|p| !helpers::is_goalkeeper_player(p))
             .max_by(|a, b| {
                 let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(a, match_importance);
+                    + engine.development_minutes_bonus(a, match_importance)
+                    + engine.fatigue_penalty(a, is_friendly);
                 let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(b, match_importance);
+                    + engine.development_minutes_bonus(b, match_importance)
+                    + engine.fatigue_penalty(b, is_friendly);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -162,9 +166,11 @@ pub(crate) fn select_substitutes(
             .filter(|p| p.position().position_group() == *target_group)
             .max_by(|a, b| {
                 let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(a, match_importance);
+                    + engine.development_minutes_bonus(a, match_importance)
+                    + engine.fatigue_penalty(a, is_friendly);
                 let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(b, match_importance);
+                    + engine.development_minutes_bonus(b, match_importance)
+                    + engine.fatigue_penalty(b, is_friendly);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();
@@ -183,9 +189,11 @@ pub(crate) fn select_substitutes(
             .filter(|p| !used_ids.contains(&p.id))
             .max_by(|a, b| {
                 let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(a, match_importance);
+                    + engine.development_minutes_bonus(a, match_importance)
+                    + engine.fatigue_penalty(a, is_friendly);
                 let sb = engine.overall_quality(b, staff, tactics, date, is_friendly)
-                    + engine.development_minutes_bonus(b, match_importance);
+                    + engine.development_minutes_bonus(b, match_importance)
+                    + engine.fatigue_penalty(b, is_friendly);
                 sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
             })
             .copied();

@@ -30,6 +30,11 @@ impl DateUtils {
         date.month() == 12 && date.day() == 31
     }
 
+    #[inline]
+    pub fn is_month_beginning(date: NaiveDate) -> bool {
+        date.day() == 1
+    }
+
     pub fn next_saturday(date: NaiveDate) -> NaiveDate {
         let mut current_date = date;
 

@@ -1,3 +1,5 @@
+use crate::MatchTacticType;
+
 #[derive(Clone)]
 pub struct BoardContext {
     pub balance: i64,
@@ -23,6 +25,10 @@ pub struct BoardContext {
     pub total_matches: u8,
     /// Average squad CA (main team)
     pub avg_squad_ability: u8,
+    /// Main team's currently selected tactical formation. None when the
+    /// team has no tactics configured. Used to judge style fit against
+    /// `ClubVision.playing_style`.
+    pub main_tactic: Option<MatchTacticType>,
 }
 
 impl BoardContext {
@@ -42,6 +48,7 @@ impl BoardContext {
             matches_played: 0,
             total_matches: 0,
             avg_squad_ability: 0,
+            main_tactic: None,
         }
     }
 }

@@ -296,7 +296,8 @@ impl SimulatorData {
                             if only_empty && !player.statistics_history.needs_current_season_seed() {
                                 continue;
                             }
-                            player.statistics_history.seed_initial_team(&team_info, date);
+                            let is_loan = player.is_on_loan();
+                            player.statistics_history.seed_initial_team(&team_info, date, is_loan);
                         }
                     }
                 }

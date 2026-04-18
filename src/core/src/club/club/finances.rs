@@ -140,14 +140,26 @@ impl Club {
     }
 
     /// Returns (recent_wins_ratio, league_position, total_teams) for the
-    /// club's main team. Currently returns a neutral placeholder — the
-    /// hook exists so that once team-level recent-form tracking and a
-    /// league-table accessor are plumbed through `GlobalContext`, they can
-    /// drop in here with zero change at the call site.
+    /// club's main team. Form comes from the last ~5 matches in the team's
+    /// `match_history`; league position rides through `ClubContext` —
+    /// which the country simulation populates from the live table.
     fn compute_team_form_and_position(
         &self,
-        _ctx: &GlobalContext<'_>,
+        ctx: &GlobalContext<'_>,
     ) -> (f32, u16, u16) {
-        (0.5, 10, 20)
+        let wins_ratio = self
+            .teams
+            .main()
+            .map(|team| team.match_history.recent_wins_ratio(5))
+            .unwrap_or(0.5);
+
+        let (position, total) = ctx
+            .club
+            .as_ref()
+            .map(|c| (c.league_position as u16, c.league_size as u16))
+            .map(|(p, t)| if p == 0 || t == 0 { (10, 20) } else { (p, t) })
+            .unwrap_or((10, 20));
+
+        (wins_ratio, position, total)
     }
 }

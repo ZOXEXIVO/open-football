@@ -624,38 +624,40 @@ fn format_squad_status(status: &PlayerSquadStatus) -> String {
         .to_string()
 }
 
-fn get_loan_status(player: &Player, _team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
+fn get_loan_status(player: &Player, team: &Team, data: &SimulatorData) -> Option<PlayerLoanDto> {
     let loan = player.contract_loan.as_ref()?;
 
-    // Loaned IN: player has loan_from_club_id
-    if let Some(from_club_id) = loan.loan_from_club_id {
-        let (club_name, club_slug) = data.club(from_club_id)
-            .and_then(|c| c.teams.teams.first())
-            .map(|t| (t.name.clone(), t.slug.clone()))
-            .unwrap_or_default();
+    // Direction is decided by where the player currently sits. If the
+    // player's team belongs to the lending club, it's a loan OUT (view
+    // the destination). If it belongs to the borrowing club, loan IN
+    // (view the origin). A contract with neither side set is malformed
+    // and renders nothing.
+    let at_borrower = loan.loan_to_club_id == Some(team.club_id);
+    let at_parent = loan.loan_from_club_id == Some(team.club_id);
 
-        return Some(PlayerLoanDto {
-            is_loan_in: true,
-            club_name,
-            club_slug,
-        });
-    }
+    let (target_club_id, is_loan_in) = if at_borrower {
+        (loan.loan_from_club_id.or(Some(team.club_id)), true)
+    } else if at_parent {
+        (loan.loan_to_club_id, false)
+    } else if let Some(to_id) = loan.loan_to_club_id {
+        // Fallback: no direction hint matches — treat `loan_to` as the
+        // destination, which means this side is the parent.
+        (Some(to_id), false)
+    } else {
+        return None;
+    };
 
-    // Loaned OUT: player has loan_to_club_id
-    if let Some(to_club_id) = loan.loan_to_club_id {
-        let (club_name, club_slug) = data.club(to_club_id)
-            .and_then(|c| c.teams.teams.first())
-            .map(|t| (t.name.clone(), t.slug.clone()))
-            .unwrap_or_default();
+    let (club_name, club_slug) = target_club_id
+        .and_then(|id| data.club(id))
+        .and_then(|c| c.teams.teams.first())
+        .map(|t| (t.name.clone(), t.slug.clone()))
+        .unwrap_or_default();
 
-        return Some(PlayerLoanDto {
-            is_loan_in: false,
-            club_name,
-            club_slug,
-        });
-    }
-
-    None
+    Some(PlayerLoanDto {
+        is_loan_in,
+        club_name,
+        club_slug,
+    })
 }
 
 fn get_position_map(player: &Player) -> PositionMapDto {

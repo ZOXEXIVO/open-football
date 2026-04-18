@@ -1,5 +1,6 @@
 use crate::club::player::player::Player;
 use crate::club::PlayerStatusType;
+use crate::league::SeasonPhase;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
@@ -59,8 +60,15 @@ impl Player {
                 1.0
             };
 
-            let recovery =
-                (base_recovery * age_factor.max(0.5) * jadedness_factor.max(0.5) * rest_bonus) as u16;
+            // Calendar phase: winter breaks and post-season rest buy extra
+            // recovery beyond what day-to-day spacing alone would yield.
+            let phase_bonus = SeasonPhase::from_date(now).condition_recovery_multiplier();
+
+            let recovery = (base_recovery
+                * age_factor.max(0.5)
+                * jadedness_factor.max(0.5)
+                * rest_bonus
+                * phase_bonus) as u16;
 
             // Cap recovery so we don't overshoot normal level
             let max_gain = (CONDITION_NORMAL_LEVEL - condition) as u16;
@@ -104,10 +112,21 @@ impl Player {
             (self.skills.physical.match_readiness - 0.2).max(0.0);
     }
 
-    /// Players not playing lose match sharpness over time
-    pub(crate) fn process_match_readiness_decay(&mut self) {
+    /// Players not playing lose match sharpness over time — except in
+    /// pre-season, when structured training rebuilds it.
+    pub(crate) fn process_match_readiness_decay(&mut self, now: NaiveDate) {
         if self.player_attributes.is_injured {
             // Already handled in process_injury_condition_decay
+            return;
+        }
+
+        let phase = SeasonPhase::from_date(now);
+        let phase_gain = phase.match_readiness_gain();
+        if phase_gain > 0.0 {
+            // Pre-season / winter-break conditioning actively rebuilds
+            // sharpness — override the idle-decay branch entirely.
+            self.skills.physical.match_readiness =
+                (self.skills.physical.match_readiness + phase_gain).min(20.0);
             return;
         }
 

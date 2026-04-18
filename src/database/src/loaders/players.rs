@@ -162,10 +162,12 @@ pub struct OdbHistoryItem {
     pub rating: f32,
 }
 
-/// In-memory index of players, grouped by the club where they currently play
-/// (loan destination if loaned, otherwise the parent club).
+/// In-memory index of players, grouped by the club where they physically
+/// play. Loaned-out players are indexed under the borrower so their squad
+/// lists them in training / matches. Loan metadata rides on the player's
+/// `contract_loan`, which the web layer reads to label the loan direction.
 pub struct PlayersOdb {
-    by_current_club: HashMap<u32, Vec<OdbPlayer>>,
+    by_physical_club: HashMap<u32, Vec<OdbPlayer>>,
 }
 
 impl PlayersOdb {
@@ -178,38 +180,38 @@ impl PlayersOdb {
             return None;
         }
         let odb = Self::from_players(source.iter().cloned().collect());
-        let total: usize = odb.by_current_club.values().map(|v| v.len()).sum();
+        let total: usize = odb.by_physical_club.values().map(|v| v.len()).sum();
         info!(
             "players loaded from compiled DB: {} players across {} clubs",
             total,
-            odb.by_current_club.len()
+            odb.by_physical_club.len()
         );
         Some(odb)
     }
 
     /// Index an in-memory list of players — useful for tests and ad-hoc tools.
     pub fn from_players(players: Vec<OdbPlayer>) -> Self {
-        let mut by_current_club: HashMap<u32, Vec<OdbPlayer>> = HashMap::new();
+        let mut by_physical_club: HashMap<u32, Vec<OdbPlayer>> = HashMap::new();
         for p in players {
-            let current_club = p.loan.as_ref().map(|l| l.to_club_id).unwrap_or(p.club_id);
-            by_current_club.entry(current_club).or_default().push(p);
+            let physical_club = p.loan.as_ref().map(|l| l.to_club_id).unwrap_or(p.club_id);
+            by_physical_club.entry(physical_club).or_default().push(p);
         }
-        PlayersOdb { by_current_club }
+        PlayersOdb { by_physical_club }
     }
 
     pub fn for_club(&self, club_id: u32) -> Option<&[OdbPlayer]> {
-        self.by_current_club.get(&club_id).map(|v| v.as_slice())
+        self.by_physical_club.get(&club_id).map(|v| v.as_slice())
     }
 
     pub fn has_club(&self, club_id: u32) -> bool {
-        self.by_current_club.contains_key(&club_id)
+        self.by_physical_club.contains_key(&club_id)
     }
 
     /// Highest player id present in the index, or `None` when empty.
     /// Used to seed the procedural id sequence so generated players never
     /// collide with externally-supplied ids.
     pub fn max_player_id(&self) -> Option<u32> {
-        self.by_current_club
+        self.by_physical_club
             .values()
             .flat_map(|v| v.iter().map(|p| p.id))
             .max()
@@ -262,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn indexes_by_current_club() {
+    fn indexes_by_physical_club() {
         let odb = PlayersOdb::from_players(vec![make_player(1, 1139, None)]);
         assert!(odb.has_club(1139));
         assert_eq!(odb.for_club(1139).unwrap().len(), 1);
@@ -271,8 +273,8 @@ mod tests {
     #[test]
     fn loaned_player_indexed_under_borrower() {
         let odb = PlayersOdb::from_players(vec![make_player(2, 1139, Some(866))]);
-        assert!(!odb.has_club(1139), "parent club must NOT have the loaned player");
-        assert!(odb.has_club(866), "borrower must own the loaned player");
+        assert!(!odb.has_club(1139), "parent club must not list the loaned player in their squad");
+        assert!(odb.has_club(866), "borrower physically fields the loaned player");
     }
 
     /// Smoke test: the embedded compiled DB loads and contains a non-trivial

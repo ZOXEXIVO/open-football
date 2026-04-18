@@ -26,6 +26,8 @@ pub mod language;
 pub mod plan;
 pub mod adaptation;
 pub mod events;
+pub mod load;
+pub mod agent;
 mod display;
 
 pub use attributes::*;
@@ -49,5 +51,7 @@ pub use rapport::*;
 pub use training::*;
 pub use traits::*;
 pub use utils::*;
+pub use agent::*;
 pub use language::*;
+pub use load::*;
 pub use plan::*;

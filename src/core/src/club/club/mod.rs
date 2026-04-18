@@ -311,14 +311,9 @@ impl Club {
             .unwrap_or(0.0);
 
         // Recent form from match history (last 5 matches)
-        let (recent_wins, recent_losses) = main_team
-            .map(|t| {
-                let recent: Vec<_> = t.match_history.items().iter().rev().take(5).collect();
-                let wins = recent.iter().filter(|m| m.score.0.get() > m.score.1.get()).count() as u8;
-                let losses = recent.iter().filter(|m| m.score.0.get() < m.score.1.get()).count() as u8;
-                (wins, losses)
-            })
-            .unwrap_or((0, 0));
+        let (recent_wins, _draws, recent_losses) = main_team
+            .map(|t| t.match_history.recent_results(5))
+            .unwrap_or((0, 0, 0));
 
         let matches_played = main_team
             .map(|t| t.match_history.items().len().min(255) as u8)
@@ -328,6 +323,8 @@ impl Club {
         let avg_squad_ability = main_team
             .map(|t| t.players.current_ability_avg())
             .unwrap_or(0);
+
+        let main_tactic = main_team.and_then(|t| t.tactics.as_ref()).map(|tac| tac.tactic_type);
 
         BoardContext {
             balance: self.finance.balance.balance,
@@ -344,6 +341,7 @@ impl Club {
             matches_played,
             total_matches: 0,
             avg_squad_ability,
+            main_tactic,
         }
     }
 }

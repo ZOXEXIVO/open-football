@@ -122,13 +122,20 @@ impl PipelineProcessor {
         let mut loan_outs = Vec::new();
         let mut next_id = club.transfer_plan.next_request_id;
 
-        // Calculate budget
-        let budget = club
+        // Calculate budget. Clubs in FFP breach have half their buying
+        // power until the losses unwind — a soft equivalent of the
+        // real-world transfer ban / spending cap.
+        let raw_budget = club
             .finance
             .transfer_budget
             .as_ref()
             .map(|b| b.amount)
             .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
+        let budget = if club.finance.is_ffp_breach(date) {
+            raw_budget * 0.5
+        } else {
+            raw_budget
+        };
 
         if club.teams.teams.is_empty() {
             return SquadEvaluation {

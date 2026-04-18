@@ -1,3 +1,4 @@
+use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
@@ -786,6 +787,7 @@ impl PlayerGenerator {
             promises: Vec::new(),
             pending_signing: None,
             generated: true,
+            load: PlayerLoad::new(),
         }
     }
 

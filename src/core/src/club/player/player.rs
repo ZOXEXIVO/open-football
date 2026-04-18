@@ -4,6 +4,7 @@ use crate::club::player::happiness::TeamSeasonState;
 use crate::club::player::development::CoachingEffect;
 use crate::club::player::injury::processing::MedicalStaffQuality;
 use crate::club::player::language::PlayerLanguage;
+use crate::club::player::load::PlayerLoad;
 use crate::club::player::plan::PlayerPlan;
 use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
@@ -92,6 +93,10 @@ pub struct Player {
     /// processing to emit shock events, check role fit, and record an
     /// implicit playing-time promise. Cleared once consumed.
     pub pending_signing: Option<PendingSigning>,
+
+    /// Rolling competitive workload and form rating. Drives rotation
+    /// decisions, injury risk, and form-based morale events.
+    pub load: PlayerLoad,
 
     /// True if this player was produced by a runtime generator (random squad
     /// fill, youth intake, synthetic national-team filler). False when loaded
@@ -215,6 +220,10 @@ impl Player {
 
         let mut result = PlayerResult::new(self.id);
 
+        // Age the rolling workload windows before anything reads them today.
+        // Cheap and idempotent — safe to call before every other step.
+        self.load.daily_decay(now.date());
+
         // Birthday
         if DateUtils::is_birthday(self.birth_date, now.date()) {
             self.behaviour.try_increase();
@@ -246,8 +255,8 @@ impl Player {
         // Natural condition recovery for non-injured players
         self.process_condition_recovery(now.date());
 
-        // Match readiness decay for players not playing
-        self.process_match_readiness_decay();
+        // Match readiness decay for players not playing (rebuilds during pre-season)
+        self.process_match_readiness_decay(now.date());
 
         // Player happiness & morale evaluation (weekly)
         let team_reputation = ctx.team.as_ref().map(|t| t.reputation).unwrap_or(0.0);

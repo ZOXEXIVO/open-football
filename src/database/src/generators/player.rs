@@ -1220,7 +1220,7 @@ impl PlayerGenerator {
         let preferred_foot = parse_preferred_foot(record.preferred_foot.as_deref());
 
         let contract = build_main_contract(record);
-        let contract_loan = build_loan_contract(record);
+        let contract_loan = build_loan_contract(record, data);
 
         let player_attributes = build_player_attributes(record, age, primary, &skills);
 
@@ -1487,8 +1487,17 @@ fn build_main_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
     Some(c)
 }
 
-fn build_loan_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
+fn build_loan_contract(record: &OdbPlayer, data: &DatabaseEntity) -> Option<PlayerClubContract> {
     let loan = record.loan.as_ref()?;
+    // The parent team is the main team of the lending club. Without this,
+    // the parent club's squad page can't find the loaned-out player
+    // (its scanner matches on `loan_from_team_id`).
+    let loan_from_team_id = data
+        .clubs
+        .iter()
+        .find(|c| c.id == record.club_id)
+        .and_then(|c| c.teams.iter().find(|t| t.team_type.eq_ignore_ascii_case("Main")))
+        .map(|t| t.id);
     Some(PlayerClubContract {
         shirt_number: None,
         salary: loan.salary,
@@ -1499,7 +1508,7 @@ fn build_loan_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
         started: None,
         expiration: loan.expiration,
         loan_from_club_id: Some(record.club_id),
-        loan_from_team_id: None,
+        loan_from_team_id,
         loan_to_club_id: Some(loan.to_club_id),
         loan_match_fee: loan.match_fee,
         loan_wage_contribution_pct: loan.wage_contribution_pct,

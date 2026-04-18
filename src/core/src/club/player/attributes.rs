@@ -58,14 +58,27 @@ impl PlayerAttributes {
         (self.condition as f32 * 100.0 / CONDITION_MAX_VALUE as f32).floor() as u32
     }
 
-    /// Set an injury on this player, calculating a random duration within the injury's range
+    /// Set an injury on this player, calculating a random duration within the injury's range.
+    /// Severe and critical injuries leave a lasting mark — `injury_proneness`
+    /// is nudged upward so a player with a torn ACL carries elevated career
+    /// injury risk long after the current injury heals ("glass bones").
     pub fn set_injury(&mut self, injury_type: InjuryType) {
+        use crate::club::player::injury::InjurySeverity;
         self.is_injured = true;
         self.injury_type = Some(injury_type);
         self.injury_days_remaining = injury_type.random_duration();
         self.last_injury_body_part = injury_type.body_part().to_u8();
         self.recovery_days_remaining = injury_type.recovery_days();
         self.injury_count = self.injury_count.saturating_add(1);
+
+        let bump = match injury_type.severity() {
+            InjurySeverity::Minor | InjurySeverity::Moderate => 0,
+            InjurySeverity::Severe => 1,
+            InjurySeverity::Critical => 2,
+        };
+        if bump > 0 {
+            self.injury_proneness = self.injury_proneness.saturating_add(bump).min(20);
+        }
     }
 
     /// Decrement injury days by one. Returns true when the injury countdown reaches 0
@@ -205,6 +218,38 @@ mod tests {
         attrs.recovery_days_remaining = 0;
         attrs.set_injury(InjuryType::Cramp);
         assert_eq!(attrs.injury_count, 2);
+    }
+
+    #[test]
+    fn minor_injuries_do_not_bump_proneness() {
+        let mut attrs = default_attrs();
+        let before = attrs.injury_proneness;
+        attrs.set_injury(InjuryType::Bruise);
+        assert_eq!(attrs.injury_proneness, before);
+    }
+
+    #[test]
+    fn severe_injury_bumps_proneness_once() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 5;
+        attrs.set_injury(InjuryType::TornMeniscus);
+        assert_eq!(attrs.injury_proneness, 6);
+    }
+
+    #[test]
+    fn critical_injury_bumps_proneness_more() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 5;
+        attrs.set_injury(InjuryType::ACLTear);
+        assert_eq!(attrs.injury_proneness, 7);
+    }
+
+    #[test]
+    fn injury_proneness_caps_at_twenty() {
+        let mut attrs = default_attrs();
+        attrs.injury_proneness = 19;
+        attrs.set_injury(InjuryType::ACLTear);
+        assert_eq!(attrs.injury_proneness, 20);
     }
 
     #[test]

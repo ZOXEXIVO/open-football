@@ -11,7 +11,6 @@ use crate::country::CountryResult;
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
 use crate::SimulationResult;
-use chrono::Datelike;
 
 pub struct ContinentResult {
     pub continent_id: u32,
@@ -49,7 +48,7 @@ impl ContinentResult {
         }
 
         // Phase 2: Update Continental Rankings (monthly)
-        if current_date.day() == 1 {
+        if DateUtils::is_month_beginning(current_date) {
             self.update_continental_rankings(data, result);
         }
 

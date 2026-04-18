@@ -494,7 +494,7 @@ mod tests {
         let torino = make_team("Torino", "torino");
 
         // -- Season 2025/26: full season at Roma, 30 apps --
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(30, 8);
         player.on_season_end(Season::new(2025), &roma, make_date(2026, 8, 1));
 
@@ -573,7 +573,7 @@ mod tests {
         let monza = make_team("Monza", "monza");
 
         // -- Season 2025/26: at Inter --
-        player.statistics_history.seed_initial_team(&inter, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&inter, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
 
         // Loaned to Monza in January
@@ -634,7 +634,7 @@ mod tests {
         let marsaxlokk = make_team("Marsaxlokk", "marsaxlokk");
 
         // -- Setup: player at Gzira --
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
 
         // -- Season 2025/26: loaned to Birkirkara --
         player.statistics = make_stats(0, 0);
@@ -720,7 +720,7 @@ mod tests {
         let empoli = make_team("Empoli", "empoli");
 
         // -- Season 2025/26: at Napoli, 20 apps --
-        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &napoli, make_date(2026, 8, 1));
 
@@ -778,7 +778,7 @@ mod tests {
         let mosta = make_team("Mosta", "mosta");
 
         // -- Season 2025/26: at Gzira, loaned to Mosta early --
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_loan(&gzira, &mosta, 200.0, make_date(2025, 8, 10));
 
@@ -820,7 +820,7 @@ mod tests {
         let gzira = make_team("Gzira United", "gzira");
         let mosta = make_team("Mosta", "mosta");
 
-        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&gzira, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_loan(&gzira, &mosta, 200.0, make_date(2025, 8, 10));
 
@@ -859,7 +859,7 @@ mod tests {
         let juve = make_team("Juventus", "juventus");
         let torino = make_team("Torino", "torino");
 
-        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&napoli, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &napoli, make_date(2026, 8, 1));
 
@@ -892,7 +892,7 @@ mod tests {
         let torino = make_team("Torino", "torino");
 
         // Season 2025/26: at Roma, loaned to Torino, returns 2 months early
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(2, 0);
         player.on_loan(&roma, &torino, 30_000.0, make_date(2025, 9, 1));
 
@@ -941,7 +941,7 @@ mod tests {
         };
 
         // Season start: player at Floriana
-        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1));
+        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1), false);
 
         // Immediate loan to Spartak on Aug 1 (free loan)
         player.statistics = make_stats(0, 0);
@@ -989,7 +989,7 @@ mod tests {
             league_slug: "russian-premier-league".to_string(),
         };
 
-        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1));
+        player.statistics_history.seed_initial_team(&floriana, make_date(2026, 8, 1), false);
 
         player.statistics = make_stats(0, 0);
         player.on_loan(&floriana, &spartak, 0.0, make_date(2026, 8, 1));
@@ -1041,7 +1041,7 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Spartak, plays 25 games --
-        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
         player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
 
@@ -1136,7 +1136,7 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Spartak, plays 25 games --
-        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&spartak, make_date(2025, 8, 1), false);
         player.statistics = make_stats(25, 5);
         player.on_season_end(Season::new(2025), &spartak, make_date(2026, 8, 1));
 
@@ -1234,7 +1234,7 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Floriana --
-        player.statistics_history.seed_initial_team(&floriana, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&floriana, make_date(2025, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_season_end(Season::new(2025), &floriana, make_date(2026, 8, 1));
 
@@ -1289,7 +1289,7 @@ mod tests {
         };
 
         // Seed and play a season
-        player.statistics_history.seed_initial_team(&bari, make_date(2026, 8, 1));
+        player.statistics_history.seed_initial_team(&bari, make_date(2026, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2026), &bari, make_date(2027, 8, 20));
 
@@ -1329,7 +1329,7 @@ mod tests {
         let zabbar = make_team("Zabbar St. Patrick", "zabbar");
 
         // -- Setup: player at Sporting CP --
-        player.statistics_history.seed_initial_team(&parent, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&parent, make_date(2025, 8, 1), false);
         player.statistics = make_stats(10, 2);
         player.on_season_end(Season::new(2025), &parent, make_date(2026, 8, 25));
 
@@ -1404,7 +1404,7 @@ mod tests {
         let zabbar = make_team("Zabbar St. Patrick", "zabbar");
 
         // -- Setup: player at Floriana --
-        player.statistics_history.seed_initial_team(&floriana, make_date(2027, 8, 1));
+        player.statistics_history.seed_initial_team(&floriana, make_date(2027, 8, 1), false);
         player.statistics = make_stats(0, 0);
         player.on_season_end(Season::new(2027), &floriana, make_date(2028, 8, 25));
 
@@ -1484,7 +1484,7 @@ mod tests {
         };
 
         // -- Season 2025/26: player at Dynamo --
-        player.statistics_history.seed_initial_team(&dynamo, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&dynamo, make_date(2025, 8, 1), false);
         player.statistics = make_stats(10, 2);
         player.on_season_end(Season::new(2025), &dynamo, make_date(2026, 8, 1));
 
@@ -1558,7 +1558,7 @@ mod tests {
         let juve = make_team("Juventus", "juventus");
 
         // -- Season 2025/26: at Roma --
-        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1));
+        player.statistics_history.seed_initial_team(&roma, make_date(2025, 8, 1), false);
         player.statistics = make_stats(20, 5);
         player.on_season_end(Season::new(2025), &roma, make_date(2026, 8, 1));
 

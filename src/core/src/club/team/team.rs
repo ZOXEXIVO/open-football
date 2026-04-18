@@ -4,12 +4,15 @@ use crate::club::team::mentorship::process_mentorship;
 use crate::context::GlobalContext;
 use crate::shared::CurrencyValue;
 use crate::utils::DateUtils;
+use crate::club::team::reputation::{
+    Achievement, CompetitionType, MatchOutcome, MatchResultInfo,
+};
 use crate::{
     MatchHistory, MatchTacticType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatusType,
     StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining,
     TrainingSchedule, TransferItem, Transfers,
 };
-use chrono::Datelike;
+use chrono::NaiveDate;
 use std::borrow::Cow;
 use std::fmt;
 use std::str::FromStr;
@@ -43,7 +46,7 @@ impl Team {
 
     pub fn simulate(&mut self, ctx: GlobalContext<'_>) -> TeamResult {
         // Recalculate squad statuses monthly (1st of month)
-        if ctx.simulation.date.day() == 1 {
+        if ctx.simulation.is_month_beginning() {
             self.update_squad_statuses(ctx.simulation.date.date());
         }
 
@@ -167,6 +170,40 @@ impl Team {
         } else {
             Cow::Owned(Tactics::new(MatchTacticType::T442))
         }
+    }
+
+    /// React to a completed competitive match: feed the result into the
+    /// reputation drift model. Caller supplies the opponent's overall
+    /// reputation and the team's current league standing so we don't
+    /// thread a Country reference in here.
+    pub fn on_match_completed(
+        &mut self,
+        outcome: MatchOutcome,
+        opponent_reputation: u16,
+        competition: CompetitionType,
+        league_position: u8,
+        total_teams: u8,
+        date: NaiveDate,
+    ) {
+        let info = MatchResultInfo {
+            outcome,
+            opponent_reputation,
+            competition_type: competition,
+        };
+        self.reputation
+            .process_weekly_update(&[info], league_position, total_teams, date);
+    }
+
+    /// Monthly decay pass — reputation softly drifts down without fresh
+    /// achievements. Called on the 1st of each month.
+    pub fn on_month_tick(&mut self) {
+        self.reputation.apply_monthly_decay();
+    }
+
+    /// Record a season-end trophy/promotion/qualification event, feeding
+    /// the reputation model so title wins stick to the club for years.
+    pub fn on_season_trophy(&mut self, achievement: Achievement) {
+        self.reputation.process_achievement(achievement);
     }
 }
 

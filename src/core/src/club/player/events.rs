@@ -1,5 +1,6 @@
 use crate::club::player::adaptation::PendingSigning;
 use crate::club::player::injury::InjuryType;
+use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::Player;
 use crate::club::PlayerClubContract;
 use crate::r#match::PlayerMatchEndStats;
@@ -31,6 +32,13 @@ pub struct MatchOutcome<'a> {
     pub team_goals_against: Option<u8>,
     pub league_weight: f32,
     pub world_weight: f32,
+    /// True when the opposing club is in this player's club's rivals list.
+    /// Derby results produce bigger morale swings either way.
+    pub is_derby: bool,
+    /// Did this player's team win the match? Derby bonus/penalty uses it.
+    pub team_won: bool,
+    /// Did this player's team lose the match?
+    pub team_lost: bool,
 }
 
 pub struct TransferCompletion<'a> {
@@ -98,6 +106,10 @@ impl Player {
             self.statuses.remove(s);
         }
         self.happiness = PlayerHappiness::new();
+        // Workload doesn't carry across clubs — minutes-played at the old
+        // side don't burden the new manager's selection choice, and form
+        // naturally resets as the player settles.
+        self.load = PlayerLoad::new();
     }
 
 }
@@ -143,6 +155,13 @@ impl Player {
     }
 
     fn record_match_stats(&mut self, o: &MatchOutcome<'_>) {
+        // Feed the per-player form EMA before we mutate any stat bucket —
+        // `effective_rating` is the post-settlement rating already used for
+        // season averages and POM selection, so form stays consistent.
+        if !o.is_friendly {
+            self.load.update_form(o.effective_rating);
+        }
+
         let s = stats_bucket_mut(self, o.is_cup, o.is_friendly);
         s.goals += o.stats.goals;
         s.assists += o.stats.assists;
@@ -200,14 +219,27 @@ impl Player {
         }
 
         // Debriefs are only meaningful for competitive matches where the
-        // player actually had stats recorded.
+        // player actually had stats recorded. Derbies double both directions —
+        // a derby day lost is a wound; a derby day won lifts everyone.
         if !o.is_friendly && o.stats.match_rating >= 1.0 {
+            let derby_mult = if o.is_derby { 2.0 } else { 1.0 };
             if o.effective_rating < 6.3 {
-                let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 3.0));
+                let mag = -(2.0 + (6.3 - o.effective_rating).clamp(0.0, 3.0)) * derby_mult;
                 self.happiness.add_event(HappinessEventType::ManagerCriticism, mag);
             } else if o.effective_rating >= 7.5 {
-                let mag = 1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5);
+                let mag = (1.5 + (o.effective_rating - 7.5).clamp(0.0, 2.5)) * derby_mult;
                 self.happiness.add_event(HappinessEventType::ManagerEncouragement, mag);
+            }
+        }
+
+        // Team result morale: derby wins and losses swing morale on top of
+        // individual-performance effects. Keeps losses from a rival stinging
+        // even when the player personally played fine.
+        if !o.is_friendly && o.is_derby {
+            if o.team_won {
+                self.happiness.add_event(HappinessEventType::ManagerEncouragement, 2.5);
+            } else if o.team_lost {
+                self.happiness.add_event(HappinessEventType::ManagerCriticism, -3.0);
             }
         }
     }
@@ -215,6 +247,29 @@ impl Player {
     /// Named to a squad but never got off the bench. Small morale hit.
     pub fn on_match_dropped(&mut self) {
         self.happiness.add_event(HappinessEventType::MatchDropped, -1.5);
+    }
+
+    /// An approach from `buyer_rep` has made it past the selling club's
+    /// initial acceptance check, so it counts as real media-reported
+    /// interest rather than a rumour. Flattery boost for ambitious
+    /// players being chased upward; light destabilisation for the rest
+    /// (rumour mill unsettles focus). Noop unless the gap is at least
+    /// modest — generic peer-level interest isn't news.
+    pub fn on_transfer_interest_confirmed(&mut self, buyer_rep: f32, seller_rep: f32) {
+        let rep_diff = buyer_rep - seller_rep;
+        if rep_diff < 0.1 {
+            return;
+        }
+        let ambition = self.attributes.ambition;
+        if ambition >= 12.0 {
+            // Ambitious player flattered by a bigger club's interest.
+            let mag = 1.0 + (rep_diff - 0.1).clamp(0.0, 0.6) * 4.0;
+            self.happiness.add_event(HappinessEventType::ManagerEncouragement, mag);
+        } else {
+            // Settled player disrupted by headline-grabbing rumour.
+            let mag = -(0.5 + (rep_diff - 0.1).clamp(0.0, 0.4) * 2.0);
+            self.happiness.add_event(HappinessEventType::ManagerCriticism, mag);
+        }
     }
 
     /// React to a mutual contract termination. Clears the contract (player
@@ -237,9 +292,11 @@ impl Player {
     }
 
     /// Apply the physical cost of featuring in a match: condition floor,
-    /// readiness boost, jadedness accumulation, injury roll. Called by the
-    /// league/match-result pipeline once per featured player.
-    pub fn on_match_exertion(&mut self, minutes: f32, now: NaiveDate) {
+    /// readiness boost, jadedness accumulation, injury roll, workload.
+    /// Called by the league/match-result pipeline once per featured player.
+    pub fn on_match_exertion(&mut self, minutes: f32, now: NaiveDate, is_friendly: bool) {
+        self.load.record_match_minutes(minutes, is_friendly);
+
         let age = self.age(now);
         let natural_fitness = self.skills.physical.natural_fitness;
 

@@ -1,3 +1,4 @@
+use crate::club::player::load::{FATIGUE_LOAD_DANGER, FATIGUE_LOAD_THRESHOLD};
 use crate::club::staff::perception::CoachProfile;
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType, Staff};
 use crate::utils::DateUtils;
@@ -63,13 +64,17 @@ impl ScoringEngine {
 
         let base = skill_composite * 0.75 + position_contribution * 0.25;
 
-        // Form bonus amplified by recency_bias
-        let raw_form_bonus =
-            if player.statistics.played + player.statistics.played_subs > 3 {
-                (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
-            } else {
-                0.0
-            };
+        // Form bonus amplified by recency_bias. Prefer the fast-moving EMA
+        // (`load.form_rating`) when the player has accumulated form data;
+        // fall back to the season-average only for players without a
+        // recent match rating (e.g. just arrived from another club).
+        let raw_form_bonus = if player.load.form_rating > 0.0 {
+            (player.load.form_rating - 6.5).clamp(-1.5, 1.5)
+        } else if player.statistics.played + player.statistics.played_subs > 3 {
+            (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
+        } else {
+            0.0
+        };
         let form_bonus = raw_form_bonus * (1.0 + self.profile.recency_bias * 0.8);
 
         // Attitude bleed
@@ -132,6 +137,31 @@ impl ScoringEngine {
         let blended = actual_performance * actual_weight + visible_effort * (1.0 - actual_weight);
 
         blended * (0.5 + self.profile.attitude_weight * 0.5)
+    }
+
+    /// Recent-workload penalty for squad rotation. Returns a non-positive
+    /// bonus: zero for fresh players, down to roughly −6 for players on
+    /// the edge of overload. Combined with selection scoring so managers
+    /// naturally rotate through weeks of congested fixtures instead of
+    /// flogging the same XI into the ground.
+    ///
+    /// Friendlies don't rotate — preseason / testimonial XIs already
+    /// feature a different player pool — so this returns 0 there.
+    pub fn fatigue_penalty(&self, player: &Player, is_friendly: bool) -> f32 {
+        if is_friendly {
+            return 0.0;
+        }
+        let load = player.load.minutes_last_7;
+        if load <= FATIGUE_LOAD_THRESHOLD {
+            return 0.0;
+        }
+        // Linear ramp from 0 at the threshold to -3.0 at the danger line.
+        let over = load - FATIGUE_LOAD_THRESHOLD;
+        let span = (FATIGUE_LOAD_DANGER - FATIGUE_LOAD_THRESHOLD).max(1.0);
+        let t = (over / span).min(2.0); // allow overshoot beyond danger
+        // Risk-tolerant coaches shrug off load; conservative coaches rotate early.
+        let scale = 1.0 - self.profile.risk_tolerance * 0.4;
+        -(t * 3.0) * scale
     }
 
     /// Unified condition floor penalty

@@ -1,4 +1,4 @@
-use crate::{Club, Country, PlayerPositionType};
+use crate::{Club, Country, Player, PlayerPositionType};
 use crate::transfers::negotiation::{NegotiationPhase};
 
 #[allow(dead_code)]
@@ -88,10 +88,24 @@ pub(crate) fn can_club_accept_player(club: &Club) -> bool {
     main_squad < max_squad
 }
 
-pub(crate) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&crate::Player> {
+pub(crate) fn find_player_in_country(country: &Country, player_id: u32) -> Option<&Player> {
     for club in &country.clubs {
         for team in &club.teams.teams {
             if let Some(player) = team.players.find(player_id) {
+                return Some(player);
+            }
+        }
+    }
+    None
+}
+
+pub(crate) fn find_player_in_country_mut(
+    country: &mut Country,
+    player_id: u32,
+) -> Option<&mut Player> {
+    for club in &mut country.clubs {
+        for team in club.teams.iter_mut() {
+            if let Some(player) = team.players.find_mut(player_id) {
                 return Some(player);
             }
         }

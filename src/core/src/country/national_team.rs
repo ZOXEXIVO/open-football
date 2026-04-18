@@ -1,3 +1,4 @@
+use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
 use crate::country::PeopleNameGeneratorData;
 use crate::r#match::{MatchPlayer, MatchSquad};
@@ -1017,6 +1018,7 @@ impl NationalTeam {
             promises: Vec::new(),
             pending_signing: None,
             generated: true,
+            load: PlayerLoad::new(),
         }
     }
 
