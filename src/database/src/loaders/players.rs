@@ -61,6 +61,13 @@ pub struct OdbPlayer {
     /// `club_id` remains the parent.
     #[serde(default)]
     pub loan: Option<OdbLoan>,
+
+    /// Prior-season career history. Each entry is one completed season at
+    /// one club. Populates `Player.statistics_history.items` at hydration
+    /// time so the `/players/:id/history` page shows real career data
+    /// instead of starting empty.
+    #[serde(default)]
+    pub history: Vec<OdbHistoryItem>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -120,6 +127,39 @@ pub struct OdbLoan {
     pub future_fee_obligation: bool,
     #[serde(default)]
     pub min_appearances: Option<u16>,
+}
+
+/// One prior-season career history entry. Club identity (name/slug/league/country)
+/// is resolved from the live database at hydration time via `club_id`, so
+/// records stay correct even as club names/leagues change between releases.
+///
+/// Stat fields are minimal by design — scrapers rarely capture assists,
+/// ratings, conceded goals or clean sheets per historical season, so every
+/// stat is optional and defaults to 0. For goalkeepers, populate only
+/// `played`; for outfield players, populate `played` and `goals`.
+///
+/// Keys are single-letter on the wire: history arrays repeat the same keys
+/// once per season per player across ~50k players, so short names cut the
+/// uncompressed JSON size meaningfully (gzip still benefits downstream).
+#[derive(Debug, Clone, Deserialize)]
+pub struct OdbHistoryItem {
+    /// Season start year (e.g. 2017 for the 2017/18 season).
+    #[serde(rename = "s")]
+    pub season: u16,
+    /// Club where the player played that season. Resolved to team/league/country
+    /// using the loaded DB. Unknown ids produce an entry with empty club links.
+    #[serde(rename = "c")]
+    pub club_id: u32,
+    #[serde(default, rename = "l")]
+    pub is_loan: bool,
+
+    #[serde(default, rename = "p")]
+    pub played: u16,
+    #[serde(default, rename = "g")]
+    pub goals: u16,
+    /// Average match rating 0.0–10.0. Zero renders as "-".
+    #[serde(default, rename = "r")]
+    pub rating: f32,
 }
 
 /// In-memory index of players, grouped by the club where they currently play
@@ -217,6 +257,7 @@ mod tests {
                 future_fee_obligation: false,
                 min_appearances: None,
             }),
+            history: Vec::new(),
         }
     }
 

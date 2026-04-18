@@ -197,7 +197,7 @@ fn build_team_players(
             .map(|records| {
                 records
                     .iter()
-                    .map(|r| PlayerGenerator::generate_from_odb(r, continent_id, country_code))
+                    .map(|r| PlayerGenerator::generate_from_odb(r, continent_id, country_code, data))
                     .collect()
             })
             .unwrap_or_default();

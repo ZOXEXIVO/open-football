@@ -1,11 +1,14 @@
-use crate::loaders::{OdbPlayer, OdbPosition};
+use crate::loaders::{OdbHistoryItem, OdbPlayer, OdbPosition};
+use crate::DatabaseEntity;
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
 use core::utils::{FloatUtils, IntegerUtils};
+use core::league::Season;
 use core::{
     ContractType, Mental, PeopleNameGeneratorData, PersonAttributes, Physical, Player,
     PlayerAttributes, PlayerClubContract, PlayerPosition, PlayerPositionType, PlayerPositions,
-    PlayerPreferredFoot, PlayerSkills, Technical,
+    PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatisticsHistoryItem, Technical,
 };
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::LazyLock;
@@ -1183,7 +1186,12 @@ impl PlayerGenerator {
     // CA/PA from the record are authoritative; per-skill values are generated
     // through the same PA-anchored pipeline and then uniformly rescaled so the
     // resulting position-weighted CA matches the target.
-    pub fn generate_from_odb(record: &OdbPlayer, continent_id: u32, country_code: &str) -> Player {
+    pub fn generate_from_odb(
+        record: &OdbPlayer,
+        continent_id: u32,
+        country_code: &str,
+        data: &DatabaseEntity,
+    ) -> Player {
         let now = Utc::now().date_naive();
         let age = age_in_years(record.birth_date, now);
 
@@ -1222,7 +1230,9 @@ impl PlayerGenerator {
                 .map(core::PlayerLanguage::native)
                 .collect();
 
-        Player::builder()
+        let statistics_history = build_statistics_history(&record.history, data);
+
+        let mut builder = Player::builder()
             .id(record.id)
             .full_name(full_name)
             .birth_date(record.birth_date)
@@ -1234,10 +1244,105 @@ impl PlayerGenerator {
             .contract_loan(contract_loan)
             .preferred_foot(preferred_foot)
             .positions(positions)
-            .languages(native_languages)
-            .build()
-            .expect("Failed to build Player from ODB record")
+            .languages(native_languages);
+
+        if let Some(history) = statistics_history {
+            builder = builder.statistics_history(history);
+        }
+
+        builder.build().expect("Failed to build Player from ODB record")
     }
+}
+
+/// Build a `PlayerStatisticsHistory` from scraped per-season records, looking
+/// up each entry's club/team/league/country name and slug from the current
+/// database. Returns `None` when there is no history to avoid overriding the
+/// default empty history (and the simulator's initial-team seeding).
+fn build_statistics_history(
+    history: &[OdbHistoryItem],
+    data: &DatabaseEntity,
+) -> Option<PlayerStatisticsHistory> {
+    if history.is_empty() {
+        return None;
+    }
+
+    // Chronological order — oldest first — so the assigned seq_ids grow with
+    // time and `view_items` sorts the newest season to the top.
+    let mut sorted: Vec<&OdbHistoryItem> = history.iter().collect();
+    sorted.sort_by_key(|h| h.season);
+
+    let items: Vec<PlayerStatisticsHistoryItem> = sorted
+        .into_iter()
+        .enumerate()
+        .map(|(seq, h)| {
+            let (team_name, team_slug, team_reputation, league_name, league_slug) =
+                resolve_club_display(h.club_id, data);
+
+            let statistics = PlayerStatistics {
+                played: h.played,
+                played_subs: 0,
+                goals: h.goals,
+                assists: 0,
+                penalties: 0,
+                player_of_the_match: 0,
+                yellow_cards: 0,
+                red_cards: 0,
+                shots_on_target: 0.0,
+                tackling: 0.0,
+                passes: 0,
+                average_rating: h.rating,
+                conceded: 0,
+                clean_sheets: 0,
+            };
+
+            PlayerStatisticsHistoryItem {
+                season: Season::new(h.season),
+                team_name,
+                team_slug,
+                team_reputation,
+                league_name,
+                league_slug,
+                is_loan: h.is_loan,
+                transfer_fee: None,
+                statistics,
+                seq_id: seq as u32,
+            }
+        })
+        .collect();
+
+    Some(PlayerStatisticsHistory::from_items(items))
+}
+
+/// Look up a club by id and return (team_name, team_slug, team_reputation,
+/// league_name, league_slug). Prefers the club's main team; falls back to the
+/// first team. Missing clubs return empty strings so the page still renders
+/// the stats row with no links.
+fn resolve_club_display(
+    club_id: u32,
+    data: &DatabaseEntity,
+) -> (String, String, u16, String, String) {
+    let Some(club) = data.clubs.iter().find(|c| c.id == club_id) else {
+        return (String::new(), String::new(), 0, String::new(), String::new());
+    };
+
+    // Prefer the "Main" team; fall back to the first listed team.
+    let team = club
+        .teams
+        .iter()
+        .find(|t| t.team_type.eq_ignore_ascii_case("Main"))
+        .or_else(|| club.teams.first());
+
+    let (team_slug, team_reputation, league_id) = match team {
+        Some(t) => (t.slug.clone(), t.reputation.world, t.league_id),
+        None => (String::new(), 0, None),
+    };
+
+    let (league_name, league_slug) = league_id
+        .and_then(|lid| data.leagues.iter().find(|l| l.id == lid))
+        .map(|l| (l.name.clone(), l.slug.clone()))
+        .unwrap_or_default();
+
+    (club.name.clone(), team_slug, team_reputation, league_name, league_slug)
 }
 
 fn age_in_years(dob: NaiveDate, now: NaiveDate) -> u32 {

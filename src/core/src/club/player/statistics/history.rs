@@ -58,8 +58,29 @@ impl PlayerStatisticsHistory {
         }
     }
 
+    /// Build a history pre-populated with frozen items from external data
+    /// (e.g. the database loader). Caller is responsible for assigning
+    /// `seq_id` in chronological order; `next_seq` is seeded past the max
+    /// so future runtime events continue from a unique value.
+    pub fn from_items(items: Vec<PlayerStatisticsHistoryItem>) -> Self {
+        let next_seq = items.iter().map(|i| i.seq_id + 1).max().unwrap_or(0);
+        PlayerStatisticsHistory {
+            items,
+            current: Vec::new(),
+            next_seq,
+        }
+    }
+
     pub fn is_empty(&self) -> bool {
         self.items.is_empty() && self.current.is_empty()
+    }
+
+    /// True when no current-season entry has been seeded yet, regardless of
+    /// whether prior-season `items` are populated. Used by the simulator's
+    /// initial-team seeding pass — players hydrated with historical `items`
+    /// still need their current club seeded into `current`.
+    pub fn needs_current_season_seed(&self) -> bool {
+        self.current.is_empty()
     }
 
     fn next_seq(&mut self) -> u32 {
@@ -404,9 +425,10 @@ impl PlayerStatisticsHistory {
     // ── Initial seeding ───────────────────────────────────
 
     /// Seed the player's history with their initial team when the game starts.
-    /// Only seeds if history is completely empty (no current entries).
+    /// Seeds whenever there is no current-season entry — prior-season `items`
+    /// loaded from the database still need a current-season row appended.
     pub fn seed_initial_team(&mut self, team: &TeamInfo, date: NaiveDate) {
-        if self.current.is_empty() && self.items.is_empty() {
+        if self.current.is_empty() {
             self.upsert_current(team, PlayerStatistics::default(), false, None, date);
         }
     }

@@ -247,7 +247,7 @@ impl SimulatorData {
                     // cheaply as possible before we pay any allocation cost.
                     if only_empty
                         && !club.teams.iter().any(|t| {
-                            t.players.iter().any(|p| p.statistics_history.is_empty())
+                            t.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
                         })
                     {
                         continue;
@@ -269,7 +269,7 @@ impl SimulatorData {
                     for team in club.teams.iter_mut() {
                         // Cheap per-team scan — skip if no seeding needed.
                         if only_empty
-                            && !team.players.iter().any(|p| p.statistics_history.is_empty())
+                            && !team.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
                         {
                             continue;
                         }
@@ -293,7 +293,7 @@ impl SimulatorData {
                         };
 
                         for player in &mut team.players.players {
-                            if only_empty && !player.statistics_history.is_empty() {
+                            if only_empty && !player.statistics_history.needs_current_season_seed() {
                                 continue;
                             }
                             player.statistics_history.seed_initial_team(&team_info, date);
