@@ -142,6 +142,7 @@
   "dec_board_transfer_listed": "Yönetim kurulu transfer listesine aldı",
   "dec_decided_board": "Yönetim Kurulu",
   "dec_contract_renewal_offered": "Sözleşme yenilemesi önerildi",
+  "dec_contract_renewal_rejected": "Sözleşme yenilemesi reddedildi",
   "dec_administrative_demotion": "İdari düşürme",
   "dec_free_transfer_listed": "Serbest transfer listesinde",
   "dec_loan_listed": "Kiralık listesinde",

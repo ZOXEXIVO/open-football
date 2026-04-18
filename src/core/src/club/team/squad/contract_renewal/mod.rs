@@ -86,7 +86,11 @@ impl ContractRenewalManager {
                     }),
                 });
 
-                let movement = format!("{}y · ${}/y", years, salary);
+                let movement = format!(
+                    "{}y · ${}/y",
+                    years,
+                    crate::utils::FormattingUtils::format_money(salary as f64)
+                );
                 player.decision_history.add(
                     date,
                     movement,

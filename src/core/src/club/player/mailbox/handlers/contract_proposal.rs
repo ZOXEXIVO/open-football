@@ -13,7 +13,11 @@ pub struct ProcessContractHandler;
 pub const RENEWAL_REJECTED_LABEL: &str = "dec_contract_renewal_rejected";
 
 fn log_rejection(player: &mut Player, proposal: &PlayerContractProposal, now: NaiveDate) {
-    let movement = format!("{}y · ${}/y", proposal.years, proposal.salary);
+    let movement = format!(
+        "{}y · ${}/y",
+        proposal.years,
+        crate::utils::FormattingUtils::format_money(proposal.salary as f64)
+    );
     player.decision_history.add(
         now,
         movement,

@@ -648,6 +648,7 @@
   "dec_board_transfer_listed": "Board transfer-listed",
   "dec_decided_board": "Board",
   "dec_contract_renewal_offered": "Contract renewal offered",
+  "dec_contract_renewal_rejected": "Contract renewal rejected",
   "dec_administrative_demotion": "Administrative demotion",
 
   "dec_reason_under16_release": "Released — under-16 free transfer",
