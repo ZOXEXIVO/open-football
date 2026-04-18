@@ -317,14 +317,30 @@ impl PipelineProcessor {
         // Quality issues: a formation slot's best player is well below squad level.
         // But only flag positions where the group genuinely lacks quality starters —
         // a weak 4th-choice defender is normal, not a reason to buy another one.
+        //
+        // Threshold is position-group aware: goalkeepers naturally score
+        // lower on the raw CA scale (fewer outfield-style attributes feed
+        // their rating), so a -15 gate against a team's top-11 mean fired
+        // on nearly every mid-tier starting keeper and generated a "need
+        // an upgrade" request immediately. The wider -25 gate for GKs
+        // mirrors how clubs actually look at the position: the starter
+        // stays unless he's clearly a weak link, not just "below the
+        // striker's numbers on paper".
+        let quality_gap = |group: PlayerFieldPositionGroup| -> i16 {
+            match group {
+                PlayerFieldPositionGroup::Goalkeeper => 25,
+                _ => 15,
+            }
+        };
+
         let quality_issues: Vec<_> = position_coverage
             .iter()
             .filter(|(pos, player, quality)| {
-                if player.is_none() || (*quality as i16) >= avg_ability as i16 - 15 {
+                let group = pos.position_group();
+                let gap = quality_gap(group);
+                if player.is_none() || (*quality as i16) >= avg_ability as i16 - gap {
                     return false;
                 }
-
-                let group = pos.position_group();
 
                 // How many formation slots need this position group?
                 let formation_need = formation_positions
@@ -336,7 +352,7 @@ impl PipelineProcessor {
                 let good_players = squad
                     .iter()
                     .filter(|p| p.primary_position.position_group() == group)
-                    .filter(|p| (p.current_ability as i16) >= avg_ability as i16 - 15)
+                    .filter(|p| (p.current_ability as i16) >= avg_ability as i16 - gap)
                     .count();
 
                 // If we have enough good players to fill all formation slots,

@@ -1413,9 +1413,12 @@ fn build_loan_contract(record: &OdbPlayer) -> Option<PlayerClubContract> {
 /// curve for each reputation dimension, mirroring how fame actually
 /// distributes in football:
 ///
-/// - **home** — concave (`coef^0.6`). Even a respectable squad pro gets
-///   known by local fans; you don't need to be a superstar to be famous
-///   in your own country.
+/// - **home** — mildly concave (`coef^0.9`). Known domestically scales
+///   almost linearly with ability, but bends upward a touch at the top
+///   so superstars cross the World Class label cleanly. The earlier
+///   `coef^0.6` pushed a CA-100 second-division keeper over the
+///   Continental threshold, which is not how anyone at that level would
+///   describe himself.
 /// - **current** — near-linear (`coef^1.0`). Match-to-match standing
 ///   tracks raw playing ability closely.
 /// - **world** — steeply convex (`coef^2.5`). International recognition
@@ -1433,7 +1436,7 @@ fn derive_reputation_from_ability(ca: u8) -> (i16, i16, i16) {
     const REP_CEILING: f32 = 9500.0;
     let coef = (ca as f32 / 200.0).clamp(0.05, 1.0);
     let current = (REP_CEILING * coef.powf(1.0) * 0.95) as i16;
-    let home = (REP_CEILING * coef.powf(0.6)) as i16;
+    let home = (REP_CEILING * coef.powf(0.9)) as i16;
     let world = (REP_CEILING * coef.powf(2.5)) as i16;
     (current, home, world)
 }

@@ -181,7 +181,7 @@ impl CountryResult {
                 .clubs
                 .iter()
                 .find(|c| c.id == club_id)
-                .and_then(|c| c.teams.teams.first())
+                .and_then(|c| c.teams.main())
         };
 
         let player_group = |club_id: u32, player_id: u32| {
@@ -228,9 +228,36 @@ impl CountryResult {
                 .filter(|l| player_group(l.club_id, l.player_id) == Some(group))
                 .count();
 
+            // State-derived throttle: count players in this group that are
+            // ALREADY on a transfer / loan / free-transfer list from
+            // earlier passes. Each one occupies a "selling slot" until it
+            // moves on, so the cap emerges naturally from squad state
+            // instead of a hard-coded per-pass maximum. A club that has
+            // already put two backups on the market can't list a third
+            // this month; once one clears (either sells or gets delisted),
+            // a new slot opens next cycle. Exempt listings (REQ / UNH)
+            // aren't subject to this throttle — when the player wants out,
+            // he goes regardless of how full the selling queue is.
+            let already_listed_in_group = find_main(club_id)
+                .map(|t| {
+                    t.players
+                        .iter()
+                        .filter(|p| p.position().position_group() == group)
+                        .filter(|p| {
+                            let s = p.statuses.get();
+                            s.contains(&PlayerStatusType::Lst)
+                                || s.contains(&PlayerStatusType::Loa)
+                                || s.contains(&PlayerStatusType::Frt)
+                        })
+                        .count()
+                })
+                .unwrap_or(0);
+
             let min_to_keep = min_squad_for_group(group);
             let slots_after_min = current_count.saturating_sub(min_to_keep);
-            let max_can_list = slots_after_min.saturating_sub(exempt_in_group);
+            let max_can_list = slots_after_min
+                .saturating_sub(exempt_in_group)
+                .saturating_sub(already_listed_in_group);
 
             // Worst-CA players get listed first
             group_listings.sort_by_key(|l| player_ca(l.club_id, l.player_id));
@@ -393,7 +420,7 @@ impl CountryResult {
         // explicit decisions (NotNeeded / club-listed / REQ / UNH) so those
         // still dictate, but before numeric triggers so a club captain with
         // a few rating points below the squad mean isn't auto-sold.
-        if Self::is_squad_protected(player, date) {
+        if Self::is_squad_protected(player, club, date) {
             return ListingDecision::Keep;
         }
 
@@ -543,7 +570,7 @@ impl CountryResult {
     /// bypass this — the club can still sell, the player can still ask
     /// out, but routine below-average/surplus/aging sweeps don't touch
     /// this tier.
-    fn is_squad_protected(player: &Player, date: NaiveDate) -> bool {
+    fn is_squad_protected(player: &Player, club: &Club, date: NaiveDate) -> bool {
         // Club has formally labelled the player as core to the project.
         if let Some(ref c) = player.contract {
             if matches!(
@@ -552,6 +579,29 @@ impl CountryResult {
                     | PlayerSquadStatus::FirstTeamRegular
                     | PlayerSquadStatus::HotProspectForTheFuture
             ) {
+                return true;
+            }
+        }
+
+        // Highest-CA player in his position group on the main team — i.e.
+        // the de facto starter. squad_status is updated monthly, so at
+        // simulation start (or before the first-of-month tick on a fresh
+        // save) every player still has `NotYetSet` and can't be protected
+        // via the formal-designation branch above. Without this fallback,
+        // the starting goalkeeper at every club was fair game for the
+        // numeric listing paths on day one.
+        if let Some(main_team) = club.teams.teams.first() {
+            let group = player.position().position_group();
+            let player_ca = player.player_attributes.current_ability;
+            let group_top_ca = main_team
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == group)
+                .filter(|p| !p.is_on_loan())
+                .map(|p| p.player_attributes.current_ability)
+                .max()
+                .unwrap_or(0);
+            if player_ca == group_top_ca && group_top_ca > 0 {
                 return true;
             }
         }
@@ -566,8 +616,6 @@ impl CountryResult {
         }
 
         // Long-serving pro still delivering: tenure AND last-season form.
-        // Without the form gate this would shield every ageing squad
-        // filler who's been on the books forever.
         let tenure_years = player
             .contract
             .as_ref()
@@ -583,6 +631,28 @@ impl CountryResult {
             .unwrap_or(0.0);
 
         if tenure_years >= 4 && last_rating >= 6.9 {
+            return true;
+        }
+
+        // Club stalwart — 6+ years regardless of recent form. Deep-backup
+        // roles naturally produce thin playing records (and thus no form
+        // data or low ratings from few appearances); the tenure+form
+        // branch above punishes them unfairly. Six-year loyalty earned
+        // patience from the dressing room and, typically, the boardroom.
+        if tenure_years >= 6 {
+            return true;
+        }
+
+        // Experienced goalkeeper — keepers have the longest careers of
+        // any position and #2/#3 veterans are kept on specifically to
+        // mentor the starter, cover injuries, and anchor the dressing
+        // room. Pure CA-vs-squad-average maths lists them every season;
+        // real clubs do the opposite. Antonio Chimenti spent eight years
+        // as Juventus backup without being listed. Equivalent carve-outs
+        // for outfield positions aren't warranted — those roles turn
+        // over much faster.
+        let group = player.position().position_group();
+        if group == PlayerFieldPositionGroup::Goalkeeper && age >= 30 {
             return true;
         }
 

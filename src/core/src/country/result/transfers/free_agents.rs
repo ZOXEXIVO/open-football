@@ -43,15 +43,16 @@ impl CountryResult {
         for club in &country.clubs {
             for team in &club.teams.teams {
                 for player in &team.players.players {
-                    // Also consider players with no contract (already released)
+                    // Loaned-in players belong to their parent club regardless
+                    // of whether the local record has a `contract` field set.
+                    // Check in both branches so a stale None-contract on a loan
+                    // can't accidentally mark the player as free.
+                    if player.is_on_loan() {
+                        continue;
+                    }
+
                     let days_left = match &player.contract {
-                        Some(c) => {
-                            // Skip loan players
-                            if player.is_on_loan() {
-                                continue;
-                            }
-                            (c.expiration - date).num_days()
-                        }
+                        Some(c) => (c.expiration - date).num_days(),
                         None => 0, // already a free agent
                     };
 
@@ -61,8 +62,16 @@ impl CountryResult {
                         // Still add as candidate (will be available after release below)
                     }
 
-                    // Available for free agent signing: expired, no contract, or expiring within 90 days
-                    if days_left <= 90 {
+                    // Available for free agent signing: contract expired or
+                    // the player has no contract at all. A player with a
+                    // running contract — even one expiring next week —
+                    // stays at his current club until it actually ends;
+                    // otherwise we fabricate "free transfers" of players
+                    // who were still under contract, which is the exact
+                    // move real leagues prohibit. Pre-contract agreements
+                    // (signed now, effective at contract end) would need
+                    // their own deferred-execution flow, not this path.
+                    if days_left <= 0 {
                         // Skip if already in negotiation
                         let statuses = player.statuses.get();
                         if statuses.contains(&PlayerStatusType::Trn)
@@ -263,6 +272,28 @@ impl CountryResult {
                 .map(|c| c.name.clone())
                 .unwrap_or_default();
 
+            // Execute first — a failed move (squad full, player not found
+            // at claimed origin) must NOT leave a phantom transfer-history
+            // row. The club-transfers page reads this list directly, so
+            // any entry written here is visible whether or not the player
+            // actually moved.
+            let executed = super::execution::execute_transfer_within_country(
+                country,
+                signing.player_id,
+                signing.from_club_id,
+                signing.to_club_id,
+                0.0,
+                date,
+            );
+
+            if !executed {
+                debug!(
+                    "Free agent signing rejected: player {} from club {} to club {}",
+                    signing.player_id, signing.from_club_id, signing.to_club_id
+                );
+                continue;
+            }
+
             country.transfer_market.transfer_history.push(
                 CompletedTransfer::new(
                     signing.player_id,
@@ -278,14 +309,6 @@ impl CountryResult {
                 ).with_reason(signing.reason),
             );
 
-            super::execution::execute_transfer_within_country(
-                country,
-                signing.player_id,
-                signing.from_club_id,
-                signing.to_club_id,
-                0.0,
-                date,
-            );
             PipelineProcessor::clear_player_interest(country, signing.player_id);
             summary.completed_transfers += 1;
 

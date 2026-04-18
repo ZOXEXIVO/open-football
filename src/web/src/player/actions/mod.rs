@@ -218,11 +218,16 @@ pub async fn transfer_action(
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
         let mut new_contract = PlayerClubContract::new(salary, expiration);
 
-        // Calculate squad status relative to destination team
+        // Rank the incoming player against destination teammates in the
+        // SAME position group, not the whole squad. Whole-squad ranking
+        // mislabels a specialist (goalkeeper, lone striker) as NotNeeded
+        // simply because outfield depth skews the CA distribution.
         let player_ca = player.player_attributes.current_ability;
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
+        let player_group = player.position().position_group();
         let mut dest_cas: Vec<u8> = sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.players.iter()
+            .filter(|p| p.position().position_group() == player_group)
             .map(|p| p.player_attributes.current_ability)
             .collect();
         dest_cas.push(player_ca); // include the player themselves

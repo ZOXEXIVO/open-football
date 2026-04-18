@@ -98,18 +98,38 @@ impl Team {
         result
     }
 
-    /// Assign squad status based on CA rank within the team.
+    /// Assign squad status based on CA rank **within the player's own
+    /// position group**. Ranking against the whole squad puts a backup
+    /// goalkeeper at the bottom of a CA-sorted list dominated by
+    /// outfield stars — you'd get `NotNeeded` for every 3rd/4th keeper
+    /// at an elite club, and every downstream code path keyed on
+    /// squad status would treat them as surplus.
     fn update_squad_statuses(&mut self, date: chrono::NaiveDate) {
-        let team_cas = self.players.current_abilities_desc();
+        use crate::PlayerFieldPositionGroup;
+        use std::collections::HashMap;
+
+        let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
+        for p in self.players.iter() {
+            let g = p.position().position_group();
+            by_group
+                .entry(g)
+                .or_default()
+                .push(p.player_attributes.current_ability);
+        }
+        for cas in by_group.values_mut() {
+            cas.sort_unstable_by(|a, b| b.cmp(a));
+        }
 
         for player in self.players.iter_mut() {
+            let group = player.position().position_group();
+            let ca = player.player_attributes.current_ability;
+            let age = DateUtils::age(player.birth_date, date);
             if let Some(ref mut contract) = player.contract {
-                let age = DateUtils::age(player.birth_date, date);
-                contract.squad_status = PlayerSquadStatus::calculate(
-                    player.player_attributes.current_ability,
-                    age,
-                    &team_cas,
-                );
+                let group_cas = by_group
+                    .get(&group)
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                contract.squad_status = PlayerSquadStatus::calculate(ca, age, group_cas);
             }
         }
     }
