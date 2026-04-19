@@ -717,6 +717,8 @@
   "bonus_avoid_relegation": "Avoid Relegation Bonus",
   "bonus_international_cap": "International Cap Fee",
   "bonus_unused_sub": "Unused Sub Fee",
+  "bonus_signing": "Signing Bonus",
+  "bonus_loyalty": "Loyalty Bonus",
 
   "clause_min_fee_release": "Minimum Fee Release",
   "clause_relegation_release": "Relegation Release",

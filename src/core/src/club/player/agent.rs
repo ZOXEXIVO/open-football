@@ -47,7 +47,25 @@ impl PlayerAgent {
     /// Raise ratio is (offered / current). Greed fades once the raise is
     /// genuinely big (>30%), loyalty always leans toward accepting.
     pub fn renewal_delta(&self, raise_ratio: f32) -> f32 {
-        let effective_greed = (self.greed - (raise_ratio - 1.0).max(0.0) * 0.8).max(0.0);
+        self.renewal_delta_with(raise_ratio, 0.0, false)
+    }
+
+    /// Extended version that considers off-salary sweeteners. `sweetener_ratio`
+    /// is (signing + loyalty bonuses) ÷ current salary; a release clause is a
+    /// separate boolean because its value is in fee terms, not wage terms —
+    /// it shifts the calculus without adding cash to the agent's pocket.
+    /// Both fade greed non-linearly: the agent relaxes when the deal has
+    /// depth beyond base wage.
+    pub fn renewal_delta_with(
+        &self,
+        raise_ratio: f32,
+        sweetener_ratio: f32,
+        has_release_clause: bool,
+    ) -> f32 {
+        let raise_fade = (raise_ratio - 1.0).max(0.0) * 0.8;
+        let sweetener_fade = sweetener_ratio.min(0.5) * 0.6;
+        let clause_fade = if has_release_clause { 0.15 } else { 0.0 };
+        let effective_greed = (self.greed - raise_fade - sweetener_fade - clause_fade).max(0.0);
         let greed_penalty = effective_greed * 12.0;
         let loyalty_bonus = self.loyalty * 6.0;
         loyalty_bonus - greed_penalty

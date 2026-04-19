@@ -193,7 +193,7 @@ impl ClubResult {
             let adjusted_base = (base_salary as f32 * accuracy) as u32;
 
             // Loaned players always get the extension path (parent club renewing remotely)
-            let offered_salary = if !is_on_loan && result.contract.want_improve_contract {
+            let mut offered_salary = if !is_on_loan && result.contract.want_improve_contract {
                 // Staff evaluates whether this player deserves a raise
                 let ability_f = ability as f32;
                 let matches_played = player.statistics.played + player.statistics.played_subs;
@@ -214,12 +214,25 @@ impl ClubResult {
                     1.10 + (ability_f / 200.0) * 0.10 // 10-15% raise
                 };
 
-                let raised = (current_salary as f32 * raise_pct) as u32;
-                raised.max(adjusted_base).max(current_salary + 1)
+                // Escalate from whichever anchor is higher — player's
+                // current wage or our band-based valuation. Escalating only
+                // off the band meant players already above their band saw
+                // no meaningful raise and their agent rejected every
+                // attempt (see contract_renewal fix).
+                let anchor = adjusted_base.max(current_salary);
+                let raised = (anchor as f32 * raise_pct) as u32;
+                raised.max(current_salary + current_salary / 20).max(current_salary + 1)
             } else {
-                // Extension/no-contract: offer at least their current salary
-                adjusted_base.max(current_salary)
+                adjusted_base.max(current_salary + current_salary / 20).max(current_salary + 1)
             };
+
+            // Converge toward the player's own ask when we have it — same
+            // split-the-gap heuristic as the proactive path.
+            if let Some(ask) = &player.pending_contract_ask {
+                if ask.desired_salary > offered_salary {
+                    offered_salary = (offered_salary + ask.desired_salary) / 2;
+                }
+            }
 
             // Wage budget enforcement: don't offer salary that would bust the budget
             // The new salary replaces the current one, so check the net increase
@@ -241,13 +254,24 @@ impl ClubResult {
 
             let years = negotiate_contract_years(player, age, negotiation_skill);
 
-            // Step 3: Deliver proposal via mutable club access
-            // Player physically resides at the borrowing club (club_id)
+            // Reactive path stays lean on sweeteners — the player has
+            // asked for the renewal themselves, so greed is usually not
+            // the blocker. Attach loyalty bonus for veterans to cover the
+            // same case where a 30+ player hesitates on length.
+            let loyalty_bonus = if age >= 30 {
+                (final_salary as f32 * 0.10) as u32
+            } else {
+                0
+            };
+
             Self::deliver_message(data, club_id, result.player_id, PlayerMessage {
                 message_type: PlayerMessageType::ContractProposal(PlayerContractProposal {
                     salary: final_salary,
                     years,
                     negotiation_skill,
+                    signing_bonus: 0,
+                    loyalty_bonus,
+                    release_clause: None,
                 }),
             });
 

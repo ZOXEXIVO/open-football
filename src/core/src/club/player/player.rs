@@ -10,6 +10,7 @@ use crate::club::player::rapport::PlayerRapport;
 use crate::club::player::traits::PlayerTrait;
 use crate::club::player::utils::PlayerUtils;
 use crate::HappinessEventType;
+use crate::club::player::mailbox::PlayerContractAsk;
 use crate::club::{
     PersonBehaviour, PlayerAttributes, PlayerClubContract, PlayerMailbox,
     PlayerResult, PlayerSkills, PlayerTraining,
@@ -97,6 +98,11 @@ pub struct Player {
     /// Rolling competitive workload and form rating. Drives rotation
     /// decisions, injury risk, and form-based morale events.
     pub load: PlayerLoad,
+
+    /// The player's own stated terms after turning down a proposal.
+    /// Lets the next club offer converge on a deal the player would sign,
+    /// rather than guessing from scratch. Cleared when a deal is accepted.
+    pub pending_contract_ask: Option<PlayerContractAsk>,
 
     /// True if this player was produced by a runtime generator (random squad
     /// fill, youth intake, synthetic national-team filler). False when loaded

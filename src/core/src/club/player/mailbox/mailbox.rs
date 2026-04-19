@@ -19,6 +19,24 @@ pub struct PlayerContractProposal {
     pub years: u8,
     /// Staff negotiation skill (man_management, 0-20). Higher = more persuasive.
     pub negotiation_skill: u8,
+    /// One-off signature payment. Opens doors with greedy agents.
+    pub signing_bonus: u32,
+    /// Yearly loyalty bonus — rewards staying. Real clubs use this on
+    /// long-service renewals where the base wage has hit the cap.
+    pub loyalty_bonus: u32,
+    /// Negotiated release clause. Players take short deals with a release
+    /// more readily than long deals without one.
+    pub release_clause: Option<u32>,
+}
+
+/// The player's own side of the negotiation. Stashed on the Player when a
+/// proposal is turned down so the next offer from the club can converge on
+/// terms the player would actually sign, rather than guessing again.
+#[derive(Debug, Clone)]
+pub struct PlayerContractAsk {
+    pub desired_salary: u32,
+    pub desired_years: u8,
+    pub recorded_on: chrono::NaiveDate,
 }
 
 #[derive(Debug, Clone)]

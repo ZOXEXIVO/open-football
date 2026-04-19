@@ -1043,6 +1043,7 @@ impl NationalTeam {
             pending_signing: None,
             generated: true,
             load: PlayerLoad::new(),
+            pending_contract_ask: None,
         }
     }
 

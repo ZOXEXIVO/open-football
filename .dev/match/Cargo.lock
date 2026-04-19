@@ -162,7 +162,7 @@ dependencies = [
 
 [[package]]
 name = "core"
-version = "0.9.5"
+version = "0.9.57"
 dependencies = [
  "chrono",
  "itertools",

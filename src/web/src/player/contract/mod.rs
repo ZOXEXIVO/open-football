@@ -228,6 +228,8 @@ fn build_contract_detail(
                 ContractBonusType::AvoidRelegationFee => i18n.t("bonus_avoid_relegation"),
                 ContractBonusType::InternationalCapFee => i18n.t("bonus_international_cap"),
                 ContractBonusType::UnusedSubstitutionFee => i18n.t("bonus_unused_sub"),
+                ContractBonusType::SigningBonus => i18n.t("bonus_signing"),
+                ContractBonusType::LoyaltyBonus => i18n.t("bonus_loyalty"),
             }.to_string(),
             value: FormattingUtils::format_money(b.value as f64),
         }

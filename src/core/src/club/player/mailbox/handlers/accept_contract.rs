@@ -1,4 +1,7 @@
-use crate::{ContractType, Player, PlayerClubContract, PlayerContractProposal, PlayerSquadStatus};
+use crate::{
+    ContractBonus, ContractBonusType, ContractClause, ContractClauseType, ContractType, Player,
+    PlayerClubContract, PlayerContractProposal, PlayerSquadStatus,
+};
 use chrono::NaiveDate;
 
 pub struct AcceptContractHandler;
@@ -13,6 +16,28 @@ impl AcceptContractHandler {
         let (shirt_number, squad_status) = player.contract.as_ref()
             .map(|c| (c.shirt_number, c.squad_status.clone()))
             .unwrap_or((None, PlayerSquadStatus::FirstTeamRegular));
+
+        let mut bonuses = Vec::new();
+        if proposal.signing_bonus > 0 {
+            bonuses.push(ContractBonus::new(
+                proposal.signing_bonus as i32,
+                ContractBonusType::SigningBonus,
+            ));
+        }
+        if proposal.loyalty_bonus > 0 {
+            bonuses.push(ContractBonus::new(
+                proposal.loyalty_bonus as i32,
+                ContractBonusType::LoyaltyBonus,
+            ));
+        }
+
+        let mut clauses = Vec::new();
+        if let Some(release_value) = proposal.release_clause {
+            clauses.push(ContractClause::new(
+                release_value as i32,
+                ContractClauseType::MinimumFeeRelease,
+            ));
+        }
 
         player.contract = Some(PlayerClubContract {
             shirt_number,
@@ -32,8 +57,8 @@ impl AcceptContractHandler {
             loan_future_fee_obligation: false,
             loan_recall_available_after: None,
             loan_min_appearances: None,
-            bonuses: vec![],
-            clauses: vec![],
+            bonuses,
+            clauses,
         });
     }
 }

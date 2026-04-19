@@ -222,6 +222,7 @@ impl PlayerBuilder {
             pending_signing: None,
             generated: self.generated.unwrap_or(false),
             load: PlayerLoad::new(),
+            pending_contract_ask: None,
         })
     }
 }

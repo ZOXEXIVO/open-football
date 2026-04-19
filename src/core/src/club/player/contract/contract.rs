@@ -1,4 +1,3 @@
-use crate::context::SimulationContext;
 pub use chrono::prelude::{DateTime, Datelike, NaiveDate, Utc};
 use chrono::NaiveDateTime;
 
@@ -222,16 +221,11 @@ impl PlayerClubContract {
     }
 
     pub fn is_expired(&self, now: NaiveDateTime) -> bool {
-        self.expiration >= now.date()
+        self.expiration < now.date()
     }
 
     pub fn days_to_expiration(&self, now: NaiveDateTime) -> i64 {
-        let diff = self.expiration - now.date();
-        diff.num_days().abs()
-    }
-
-    pub fn simulate(&mut self, context: &mut SimulationContext) {
-        if context.check_contract_expiration() && self.is_expired(context.date) {}
+        (self.expiration - now.date()).num_days()
     }
 
     /// Severance the club must pay to tear this contract up today — the
@@ -304,6 +298,10 @@ pub enum ContractBonusType {
     AvoidRelegationFee,
     InternationalCapFee,
     UnusedSubstitutionFee,
+    /// One-off payment on signature — opens closed doors in renewal talks.
+    SigningBonus,
+    /// Yearly loyalty bonus — paid for each full contract year served.
+    LoyaltyBonus,
 }
 
 #[derive(Debug, Clone)]
