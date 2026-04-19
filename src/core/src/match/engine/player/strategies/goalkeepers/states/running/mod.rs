@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperRunningState {}
 
 impl StateProcessingHandler for GoalkeeperRunningState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             if let Some((teammate, _reason)) = self.find_best_pass_option(ctx) {
                 Some(StateChangeResult::with_goalkeeper_state_and_event(
@@ -36,9 +36,6 @@ impl StateProcessingHandler for GoalkeeperRunningState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // GK should always move toward start position, never wander away from goal

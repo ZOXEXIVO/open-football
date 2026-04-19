@@ -15,7 +15,7 @@ const SHOT_SPEED_THRESHOLD: f32 = 0.3; // Ball speed indicating still in motion 
 pub struct DefenderBlockingState {}
 
 impl StateProcessingHandler for DefenderBlockingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::Standing
@@ -74,9 +74,6 @@ impl StateProcessingHandler for DefenderBlockingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

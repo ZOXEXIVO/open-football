@@ -6,12 +6,13 @@ use super::types::{
 use crate::club::player::agent::PlayerAgent;
 use crate::country::result::CountryResult;
 use crate::transfers::negotiation::{NegotiationPhase, NegotiationRejectionReason};
+use crate::transfers::offer::TransferClause;
 use crate::transfers::pipeline::PipelineProcessor;
 use crate::transfers::scouting_region::ScoutingRegion;
 use crate::transfers::TransferListingStatus;
 use crate::utils::{FloatUtils, FormattingUtils};
 use crate::transfers::TransferWindowManager;
-use crate::{Country, PlayerSquadStatus, PlayerStatusType};
+use crate::{Country, PlayerSquadStatus, PlayerStatusType, WageCalculator};
 
 impl CountryResult {
     pub(crate) fn resolve_pending_negotiations(
@@ -42,12 +43,20 @@ impl CountryResult {
                         .map(|l| l.status == TransferListingStatus::InNegotiation
                             || l.status == TransferListingStatus::Available)
                         .unwrap_or(false);
+                    let sell_on_percentage = n.current_offer.clauses.iter().find_map(|c| {
+                        if let TransferClause::SellOnClause(pct) = c {
+                            Some(*pct)
+                        } else {
+                            None
+                        }
+                    });
                     NegotiationData {
                         player_id: n.player_id,
                         selling_club_id: n.selling_club_id,
                         buying_club_id: n.buying_club_id,
                         offer_amount: n.current_offer.base_fee.amount,
                         is_loan: n.is_loan,
+                        has_option_to_buy: n.has_option_to_buy,
                         is_unsolicited: n.is_unsolicited,
                         phase: n.phase.clone(),
                         selling_rep: n.selling_club_reputation,
@@ -62,6 +71,9 @@ impl CountryResult {
                         player_sold_from: n.player_sold_from.clone(),
                         player_name: n.player_name.clone(),
                         selling_club_name: n.selling_club_name.clone(),
+                        offered_annual_wage: n.offered_salary,
+                        buying_league_reputation: n.buying_league_reputation,
+                        sell_on_percentage,
                     }
                 }
                 None => continue,
@@ -84,6 +96,23 @@ impl CountryResult {
         }
 
         deferred
+    }
+
+    /// True when the selling club has the buying club flagged as a rival.
+    /// Rivalry is an acceptance-chance friction (stronger at seller's end),
+    /// not a hard block — a big enough bid or a player who forces the move
+    /// still gets a deal through.
+    fn seller_views_buyer_as_rival(
+        country: &Country,
+        selling_club_id: u32,
+        buying_club_id: u32,
+    ) -> bool {
+        country
+            .clubs
+            .iter()
+            .find(|c| c.id == selling_club_id)
+            .map(|c| c.is_rival(buying_club_id))
+            .unwrap_or(false)
     }
 
     fn resolve_initial_approach(
@@ -141,7 +170,29 @@ impl CountryResult {
             chance -= 10.0;
         }
 
-        chance = chance.clamp(5.0, 95.0);
+        // Rivalry friction: seller reluctant to strengthen a rival. Softened
+        // when the buyer is clearly bigger (pragmatic payday) or when the
+        // bid is far above asking (can't turn down that kind of money).
+        if neg_data.selling_country_id.is_none()
+            && Self::seller_views_buyer_as_rival(
+                country,
+                neg_data.selling_club_id,
+                neg_data.buying_club_id,
+            )
+        {
+            let mut rival_penalty: f32 = 35.0;
+            if rep_diff > 0.25 {
+                rival_penalty -= 12.0;
+            }
+            if neg_data.asking_price > 0.0
+                && neg_data.offer_amount >= neg_data.asking_price * 1.5
+            {
+                rival_penalty -= 15.0;
+            }
+            chance -= rival_penalty.max(5.0);
+        }
+
+        chance = chance.clamp(2.0, 95.0);
         let roll = FloatUtils::random(0.0, 100.0);
 
         if roll < chance {
@@ -224,6 +275,20 @@ impl CountryResult {
             chance += 10.0;
         }
 
+        // Rivalry friction carries into the fee-negotiation round. Stays
+        // lighter than the initial-approach penalty — at this point both
+        // sides have already committed to talking, so the resistance is
+        // "price it higher" rather than "walk out".
+        if neg_data.selling_country_id.is_none()
+            && Self::seller_views_buyer_as_rival(
+                country,
+                neg_data.selling_club_id,
+                neg_data.buying_club_id,
+            )
+        {
+            chance -= 18.0;
+        }
+
         // As deadline day approaches, the selling club gets less precious —
         // either take this bid or risk keeping an unhappy asset.
         let urgency = Self::deadline_urgency(country.id, date);
@@ -240,11 +305,16 @@ impl CountryResult {
             if let Some(negotiation) = country.transfer_market.negotiations.get_mut(&neg_id) {
                 // Buyer escalation rate climbs with urgency: 15% at start of
                 // window, up to ~30% on the last few days (panic buy).
+                // The previous offer is archived to `counter_offers` so the
+                // negotiation history is auditable (who bid what, when).
                 let escalation = (1.15 + urgency * 0.15) as f64;
                 let new_amount = FormattingUtils::round_fee(
                     negotiation.current_offer.base_fee.amount * escalation
                 );
-                negotiation.current_offer.base_fee.amount = new_amount;
+                let mut escalated = negotiation.current_offer.clone();
+                escalated.base_fee.amount = new_amount;
+                escalated.offered_date = date;
+                negotiation.counter_offer(escalated);
                 negotiation.advance_club_negotiation_round(date);
             }
         } else {
@@ -377,26 +447,45 @@ impl CountryResult {
                 let current_salary = player.contract.as_ref()
                     .map(|c| c.salary as f64)
                     .unwrap_or(500.0);
-                let offered_salary = (neg_data.offer_amount / 200.0).max(500.0);
-                let salary_ratio = offered_salary / current_salary;
 
-                // Salary influence: money talks, but can't override everything.
-                // For downward moves, salary can soften the blow.
-                // For veterans, salary is a bigger motivator.
-                if salary_ratio >= 2.0 {
-                    if age >= 29 {
-                        chance += 20.0; // Veterans: big payday is very tempting
-                    } else {
-                        chance += 12.0; // Younger: money helps but doesn't override ambition
-                    }
-                } else if salary_ratio >= 1.3 {
-                    if age >= 29 {
-                        chance += 12.0;
-                    } else {
-                        chance += 5.0;
-                    }
+                // Reservation wage: what the player expects to earn at the buying
+                // club given their ability, age, and the destination's tier. The
+                // offered wage (staged by the pipeline; falls back to a proxy of
+                // the current deal if absent) is compared against this.
+                let club_rep_score = (neg_data.buying_rep).clamp(0.0, 1.0);
+                let reservation_wage = WageCalculator::expected_annual_wage(
+                    player,
+                    age,
+                    club_rep_score,
+                    neg_data.buying_league_reputation,
+                ) as f64;
+                let offered_salary = neg_data
+                    .offered_annual_wage
+                    .map(|w| w as f64)
+                    .unwrap_or_else(|| current_salary.max(500.0) * 1.05);
+                let wage_gap = offered_salary / reservation_wage.max(500.0);
+                let salary_ratio = offered_salary / current_salary.max(500.0);
+
+                // Gap vs reservation wage drives the primary pass/fail signal;
+                // ratio-to-current adds flavour for veterans chasing paydays.
+                if wage_gap >= 1.15 {
+                    chance += 15.0;
+                } else if wage_gap >= 0.95 {
+                    chance += 5.0;
+                } else if wage_gap >= 0.80 {
+                    chance -= 5.0;
+                } else if wage_gap >= 0.65 {
+                    chance -= 18.0;
+                } else {
+                    chance -= 35.0;
+                }
+
+                if salary_ratio >= 2.0 && age >= 29 {
+                    chance += 10.0;
+                } else if salary_ratio >= 1.3 && age >= 29 {
+                    chance += 6.0;
                 } else if salary_ratio < 0.8 {
-                    chance -= 20.0; // Pay cut on top of prestige drop = very unattractive
+                    chance -= 10.0;
                 }
 
                 let statuses = player.statuses.get();
@@ -605,6 +694,10 @@ impl CountryResult {
                     buying_club_id: neg_data.buying_club_id,
                     fee: neg_data.offer_amount,
                     is_loan: neg_data.is_loan,
+                    has_option_to_buy: neg_data.has_option_to_buy,
+                    agreed_annual_wage: neg_data.offered_annual_wage,
+                    buying_league_reputation: neg_data.buying_league_reputation,
+                    sell_on_percentage: neg_data.sell_on_percentage,
                 });
 
                 PipelineProcessor::on_negotiation_resolved(country, neg_data.buying_club_id, neg_data.player_id, true);

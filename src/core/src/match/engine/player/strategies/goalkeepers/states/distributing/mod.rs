@@ -3,13 +3,14 @@ use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperC
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperDistributingState {}
 
 impl StateProcessingHandler for GoalkeeperDistributingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If we no longer have the ball, we must have passed or lost it
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -45,9 +46,6 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -238,7 +236,7 @@ impl GoalkeeperDistributingState {
 
             // Skill-based position preference with distance consideration
             let position_bonus = match teammate.tactical_positions.position_group() {
-                crate::PlayerFieldPositionGroup::Forward => {
+                PlayerFieldPositionGroup::Forward => {
                     // Ultra-long passes to forwards are more valuable
                     let ultra_long_multiplier = if distance > 300.0 {
                         1.5 // Extreme distance to striker - game-changing
@@ -260,7 +258,7 @@ impl GoalkeeperDistributingState {
                         2.0
                     }
                 }
-                crate::PlayerFieldPositionGroup::Midfielder => {
+                PlayerFieldPositionGroup::Midfielder => {
                     // Medium to long passes to midfield
                     let long_pass_multiplier = if distance > 200.0 {
                         0.8 // Less ideal for ultra-long to midfield
@@ -280,7 +278,7 @@ impl GoalkeeperDistributingState {
                         1.5
                     }
                 }
-                crate::PlayerFieldPositionGroup::Defender => {
+                PlayerFieldPositionGroup::Defender => {
                     // Short passes to defenders, avoid long ones
                     if distance > 200.0 {
                         0.3 // Never ultra-long pass to defender
@@ -294,7 +292,7 @@ impl GoalkeeperDistributingState {
                         0.6 // Others avoid defenders
                     }
                 }
-                crate::PlayerFieldPositionGroup::Goalkeeper => 0.1,
+                PlayerFieldPositionGroup::Goalkeeper => 0.1,
             };
 
             // Check if receiver is in space

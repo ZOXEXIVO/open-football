@@ -48,11 +48,19 @@ pub struct TransferNegotiation {
     pub expiry_date: NaiveDate,
     pub created_date: NaiveDate,
     pub is_loan: bool,
+    /// True when the buyer proposed Loan-with-option-to-buy. Recorded as a
+    /// contractual option on the resulting loan contract.
+    pub has_option_to_buy: bool,
     pub is_unsolicited: bool,
+    /// Buying club's league reputation at negotiation start (0–10000).
+    /// Anchors the player's reservation wage during PersonalTerms.
+    pub buying_league_reputation: u16,
 
     // Phased negotiation fields
     pub phase: NegotiationPhase,
     pub phase_expiry: NaiveDate,
+    /// Annual wage the buying club has staged for the player. None until the
+    /// pipeline fills it at negotiation start.
     pub offered_salary: Option<u32>,
     pub selling_club_reputation: f32,
     pub buying_club_reputation: f32,
@@ -116,7 +124,9 @@ impl TransferNegotiation {
             expiry_date,
             created_date,
             is_loan: false,
+            has_option_to_buy: false,
             is_unsolicited: false,
+            buying_league_reputation: 0,
             phase: NegotiationPhase::InitialApproach {
                 started: created_date,
             },

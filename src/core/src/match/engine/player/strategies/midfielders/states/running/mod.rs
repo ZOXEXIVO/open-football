@@ -3,7 +3,8 @@ use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderC
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 // Shooting distance constants for midfielders — more conservative than forwards
@@ -16,7 +17,7 @@ const MIN_SHOOTING_DISTANCE: f32 = 5.0;
 pub struct MidfielderRunningState {}
 
 impl StateProcessingHandler for MidfielderRunningState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
@@ -387,14 +388,10 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
-            // Loose ball nearby — chase it if we're the closest teammate
-            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
-                && ctx.team().is_best_player_to_chase_ball()
-            {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::TakeBall,
-                ));
-            }
+            // Loose-ball claim is handled universally at the dispatcher
+            // (`PlayerFieldPositionGroup::process`). Duplicating the check
+            // here with the tolerance-banded `is_best_player_to_chase_ball`
+            // let multiple players enter TakeBall simultaneously.
 
             // Also respond to ball system notifications
             if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
@@ -497,9 +494,6 @@ impl StateProcessingHandler for MidfielderRunningState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Simplified waypoint following
@@ -531,28 +525,68 @@ impl StateProcessingHandler for MidfielderRunningState {
             let field_width = ctx.context.field_size.width as f32;
             let field_height = ctx.context.field_size.height as f32;
 
-            // When opponent has ball: hold tactical shape at start position
-            // DO NOT converge toward ball — that creates clusters in front of goalkeeper
+            // Off-ball movement when our team isn't in control. Compact
+            // defensive block rather than a frozen formation line:
+            //   - Ball-side compaction: the whole midfield shifts toward
+            //     the ball's lateral (y) position.
+            //   - Depth compaction: the line pushes up when the ball
+            //     advances, drops back when the ball retreats.
+            //   - Ball-side / far-side stagger: the midfielder on the
+            //     ball's half steps slightly forward to engage, the
+            //     far-side one drops slightly back to cover. This is
+            //     what breaks the straight-line "robot" look.
+            //   - Separation from nearby teammates naturally spreads
+            //     players when formation positions overlap.
+            // Loose ball pulls harder (45%) because the designated chaser
+            // has already transitioned to TakeBall via `process()`; the
+            // rest gently close the gap in support.
             if !ctx.team().is_control_ball() {
-                let target = Vector3::new(
-                    start_pos.x.clamp(30.0, field_width - 30.0),
-                    start_pos.y.clamp(30.0, field_height - 30.0),
-                    0.0,
-                );
+                let ball_pos = ctx.tick_context.positions.ball.position;
+                let ball_loose = !ctx.ball().is_owned();
+                let field_half_x = field_width * 0.5;
+                let field_half_y = field_height * 0.5;
+                let attacking_left = ctx.player.side == Some(PlayerSide::Left);
 
-                let dist = (target - ctx.player.position).magnitude();
-                if dist < 8.0 {
-                    return Some(Vector3::new(0.0, 0.0, 0.0));
-                }
+                // Lateral (y) shift: always track ball laterally so the
+                // midfield slides as a block. 0.3 = a normal compact block,
+                // more during a loose-ball scramble (urgency).
+                let lateral_coef = if ball_loose { 0.45 } else { 0.30 };
+                let lateral_shift = (ball_pos.y - field_half_y) * lateral_coef;
 
-                let arrive_velocity = SteeringBehavior::Arrive {
+                // Depth (x) shift: push with ball depth. Low coefficient so
+                // we don't abandon the defensive line when ball is deep.
+                let depth_shift = (ball_pos.x - field_half_x) * 0.15;
+
+                // Ball-side stagger: player on the same lateral half as the
+                // ball steps ~10 units toward the opponent's goal to
+                // engage; the far-side player drops ~10 units back. A
+                // diagonal stagger instead of a flat line.
+                let ball_top = ball_pos.y < field_half_y;
+                let player_top = start_pos.y < field_half_y;
+                let on_ball_side = ball_top == player_top;
+                let forward_sign = if attacking_left { 1.0 } else { -1.0 };
+                let stagger_x = if on_ball_side { 10.0 } else { -10.0 } * forward_sign;
+
+                let target_x = (start_pos.x + depth_shift + stagger_x)
+                    .clamp(30.0, field_width - 30.0);
+                let target_y = (start_pos.y + lateral_shift)
+                    .clamp(30.0, field_height - 30.0);
+
+                let target = Vector3::new(target_x, target_y, 0.0);
+
+                // No outer deadzone / zero-velocity early return: the hard
+                // stop produced the "arrive-and-jitter" look. Arrive's own
+                // quadratic slowing + 3-unit brake zone handles settling.
+                // Add separation so players shuffle apart when formation
+                // shifts stack them together.
+                let arrive = SteeringBehavior::Arrive {
                     target,
-                    slowing_distance: 20.0,
+                    slowing_distance: 25.0,
                 }
                 .calculate(ctx.player)
                 .velocity;
 
-                return Some(arrive_velocity);
+                return Some(arrive + ctx.player().separation_velocity() * 0.4);
             }
 
             // Team has ball — off-ball movement: spread across the pitch using unique player slots
@@ -578,8 +612,8 @@ impl StateProcessingHandler for MidfielderRunningState {
             }
 
             let attacking_direction = match ctx.player.side {
-                Some(crate::r#match::PlayerSide::Left) => 1.0,
-                Some(crate::r#match::PlayerSide::Right) => -1.0,
+                Some(PlayerSide::Left) => 1.0,
+                Some(PlayerSide::Right) => -1.0,
                 None => 0.0,
             };
 
@@ -1100,7 +1134,6 @@ impl MidfielderRunningState {
     /// Find a safe backward/lateral pass target for tempo control.
     /// Prefers defenders and GK when coach says to slow down.
     fn find_safe_backward_pass(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        use crate::PlayerFieldPositionGroup;
         let player_pos = ctx.player.position;
         let own_goal = ctx.ball().direction_to_own_goal();
 

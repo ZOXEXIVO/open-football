@@ -46,7 +46,7 @@ pub use transfers::{
 
 // Player exports (except conflicting modules)
 pub use player::{
-    Player, PlayerCollection, PlayerBuilder,
+    Player, PlayerCollection, PlayerBuilder, SellOnObligation,
     PlayerAttributes, PlayerContext,
     PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
     PlayerSkills, Technical, Mental, Physical, Goalkeeping,
@@ -60,7 +60,7 @@ pub use player::{
     PlayerDecisionHistory, PlayerDecision,
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
-    PlayerValueCalculator, PlayerGenerator, PlayerUtils,
+    PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
     PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
     InjuryType, InjurySeverity,

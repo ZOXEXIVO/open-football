@@ -18,7 +18,7 @@ const BOUNDARY_MARGIN: f32 = 15.0; // Stay away from field edges
 pub struct MidfielderGuardingState {}
 
 impl StateProcessingHandler for MidfielderGuardingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If we have the ball, run with it
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -139,9 +139,6 @@ impl StateProcessingHandler for MidfielderGuardingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if let Some(opponent) = self.find_guard_target(ctx) {

@@ -1,5 +1,6 @@
-use crate::Staff;
+use crate::club::staff::attributes::StaffCoaching;
 use crate::club::staff::staff::CoachingStyle;
+use crate::Staff;
 
 // ─── PerceptionLens ─────────────────────────────────────────────────
 
@@ -14,7 +15,7 @@ pub struct PerceptionLens {
 }
 
 impl PerceptionLens {
-    pub fn from_style_and_staff(style: &CoachingStyle, coaching: &crate::club::staff::attributes::StaffCoaching) -> Self {
+    pub fn from_style_and_staff(style: &CoachingStyle, coaching: &StaffCoaching) -> Self {
         let (tech_w, mental_w, phys_w, atk_focus, creat_focus, phys_focus) = match style {
             CoachingStyle::Tactical         => (0.30, 0.45, 0.25, 0.5, 0.3, 0.4),
             CoachingStyle::Authoritarian    => (0.30, 0.40, 0.30, 0.4, 0.2, 0.7),

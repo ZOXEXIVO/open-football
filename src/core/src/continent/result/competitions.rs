@@ -1,5 +1,6 @@
 use super::{ContinentResult, ContinentalCompetitionResults};
 use crate::continent::{CompetitionTier, ContinentalMatchResult};
+use crate::league::League;
 use crate::simulator::SimulatorData;
 use crate::{Club, Country, SimulationResult};
 use chrono::{Datelike, NaiveDate};
@@ -99,7 +100,7 @@ impl ContinentResult {
     /// Top 4 countries get 4 spots, next 2 get 2 spots, rest get 1.
     /// Check if a country's top league actually played matches (not just an empty table).
     /// Countries with disabled leagues have clubs but no league activity.
-    fn league_has_played(league: &crate::league::League) -> bool {
+    fn league_has_played(league: &League) -> bool {
         league.table.rows.iter().any(|r| r.played > 0)
     }
 

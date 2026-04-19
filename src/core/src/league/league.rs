@@ -4,7 +4,7 @@ use crate::league::{
     LeagueResult, LeagueStatistics, LeagueTable, LeagueTableRow,
     MatchStorage, Schedule, ScheduleItem,
 };
-use crate::Club;
+use crate::{Club, Team};
 use chrono::{Datelike, NaiveDate};
 use log::debug;
 
@@ -144,7 +144,7 @@ impl League {
     }
 
     #[allow(dead_code)]
-    fn get_team<'c>(&self, clubs: &'c [Club], id: u32) -> &'c crate::Team {
+    fn get_team<'c>(&self, clubs: &'c [Club], id: u32) -> &'c Team {
         clubs
             .iter()
             .flat_map(|c| &c.teams.teams)

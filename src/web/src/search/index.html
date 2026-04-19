@@ -1,0 +1,196 @@
+{% extends "layout.html" %}
+
+{% block content %}
+<div class="fm-page fm-search-page">
+    <section class="fm-panel fm-search-panel"
+             data-lang="{{ lang }}"
+             data-i18n-countries="{{ i18n.t("search_countries") }}"
+             data-i18n-clubs="{{ i18n.t("search_clubs") }}"
+             data-i18n-players="{{ i18n.t("search_players") }}"
+             data-i18n-no-results="{{ i18n.t("search_no_results") }}">
+        <div class="fm-panel-head">
+            <h3>{{ i18n.t("search") }}</h3>
+        </div>
+        <div class="fm-search-wrap">
+            <div class="fm-search-box">
+                <i class="fa fa-search fm-search-icon"></i>
+                <input type="text"
+                       id="fm-search-input"
+                       class="fm-search-input"
+                       autocomplete="off"
+                       spellcheck="false"
+                       placeholder="{{ i18n.t("search_placeholder") }}"
+                       aria-label="{{ i18n.t("search") }}">
+                <button type="button" id="fm-search-clear" class="fm-search-clear" aria-label="Clear">
+                    <i class="fa fa-times"></i>
+                </button>
+            </div>
+            <div id="fm-search-results" class="fm-search-results" hidden>
+                <div id="fm-search-hint" class="fm-search-hint"></div>
+                <div id="fm-search-groups" class="fm-search-groups"></div>
+            </div>
+        </div>
+    </section>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function() {
+    var panel = document.querySelector('.fm-search-panel');
+    if (!panel) return;
+    var lang = panel.dataset.lang || 'en';
+    var i18n = {
+        countries: panel.dataset.i18nCountries || 'Countries',
+        clubs: panel.dataset.i18nClubs || 'Clubs',
+        players: panel.dataset.i18nPlayers || 'Players',
+        noResults: panel.dataset.i18nNoResults || 'No results'
+    };
+
+    var input = document.getElementById('fm-search-input');
+    var clearBtn = document.getElementById('fm-search-clear');
+    var results = document.getElementById('fm-search-results');
+    var hint = document.getElementById('fm-search-hint');
+    var groups = document.getElementById('fm-search-groups');
+
+    if (!input) return;
+
+    var debounceTimer = null;
+    var lastQuery = '';
+    var lastReqId = 0;
+
+    function esc(s) {
+        return String(s).replace(/[&<>"']/g, function(c) {
+            return ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c];
+        });
+    }
+
+    function showHint(text) {
+        hint.textContent = text;
+        hint.hidden = !text;
+    }
+
+    function render(data) {
+        groups.innerHTML = '';
+
+        var total = (data.countries ? data.countries.length : 0)
+            + (data.clubs ? data.clubs.length : 0)
+            + (data.players ? data.players.length : 0);
+
+        if (total === 0) {
+            showHint(i18n.noResults);
+            return;
+        }
+        showHint('');
+
+        if (data.countries && data.countries.length) {
+            var g = document.createElement('div');
+            g.className = 'fm-search-group';
+            var items = data.countries.map(function(c) {
+                return '<a class="fm-search-item" href="/' + encodeURIComponent(lang) +
+                    '/countries/' + encodeURIComponent(c.slug) + '/leagues">' +
+                    '<span class="fm-search-icon-slot"><span class="flag flag-' + esc(c.code) + '"></span></span>' +
+                    '<span class="fm-search-main">' + esc(c.name) + '</span>' +
+                '</a>';
+            }).join('');
+            g.innerHTML = '<div class="fm-search-group-title">' + esc(i18n.countries) + '</div>' +
+                          '<div class="fm-search-list">' + items + '</div>';
+            groups.appendChild(g);
+        }
+
+        if (data.clubs && data.clubs.length) {
+            var g2 = document.createElement('div');
+            g2.className = 'fm-search-group';
+            var items2 = data.clubs.map(function(c) {
+                return '<a class="fm-search-item" href="/' + encodeURIComponent(lang) +
+                    '/teams/' + encodeURIComponent(c.team_slug) + '">' +
+                    '<span class="fm-search-icon-slot"></span>' +
+                    '<span class="fm-search-main">' + esc(c.name) + '</span>' +
+                '</a>';
+            }).join('');
+            g2.innerHTML = '<div class="fm-search-group-title">' + esc(i18n.clubs) + '</div>' +
+                           '<div class="fm-search-list">' + items2 + '</div>';
+            groups.appendChild(g2);
+        }
+
+        if (data.players && data.players.length) {
+            var g3 = document.createElement('div');
+            g3.className = 'fm-search-group';
+            var items3 = data.players.map(function(p) {
+                var faceSrc = '/api/players/' + encodeURIComponent(p.id) +
+                    '/face.svg?age=' + encodeURIComponent(p.age) +
+                    '&cc=' + encodeURIComponent(p.country_code || '');
+                var realSrc = 'https://open-football.org/player/' + encodeURIComponent(p.id) + '.png';
+                var sub = esc(p.team_name || '');
+                var img = p.generated
+                    ? '<img class="fm-search-avatar-img" src="' + faceSrc + '" alt="">'
+                    : '<img class="fm-search-avatar-img fm-search-avatar-real" src="' + realSrc +
+                      '" data-fallback="' + faceSrc + '" alt="">';
+                return '<a class="fm-search-item fm-search-item-player" href="/' + encodeURIComponent(lang) +
+                    '/players/' + encodeURIComponent(p.id) + '">' +
+                    '<span class="fm-search-avatar">' + img + '</span>' +
+                    '<span class="fm-search-main">' +
+                        '<span class="fm-search-name">' + esc(p.name) + '</span>' +
+                        (sub ? '<span class="fm-search-sub">' + sub + '</span>' : '') +
+                    '</span>' +
+                    (p.country_code ? '<span class="fm-search-flag"><span class="flag flag-' +
+                        esc(p.country_code) + '"></span></span>' : '') +
+                '</a>';
+            }).join('');
+            g3.innerHTML = '<div class="fm-search-group-title">' + esc(i18n.players) + '</div>' +
+                           '<div class="fm-search-list fm-search-list-players">' + items3 + '</div>';
+            groups.appendChild(g3);
+
+            g3.querySelectorAll('.fm-search-avatar-real').forEach(function(img) {
+                img.addEventListener('error', function handler() {
+                    img.removeEventListener('error', handler);
+                    var fb = img.getAttribute('data-fallback');
+                    if (fb) img.src = fb;
+                });
+            });
+        }
+    }
+
+    function runSearch() {
+        var q = input.value.trim();
+        if (q.length <= 3) {
+            results.hidden = true;
+            groups.innerHTML = '';
+            return;
+        }
+        if (q === lastQuery) return;
+        lastQuery = q;
+
+        results.hidden = false;
+        showHint('');
+        var reqId = ++lastReqId;
+
+        fetch('/api/search?q=' + encodeURIComponent(q))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (reqId !== lastReqId) return;
+                render(data);
+            })
+            .catch(function() {
+                if (reqId !== lastReqId) return;
+                showHint(i18n.noResults);
+            });
+    }
+
+    input.addEventListener('input', function() {
+        if (debounceTimer) clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(runSearch, 150);
+    });
+
+    clearBtn.addEventListener('click', function() {
+        input.value = '';
+        lastQuery = '';
+        results.hidden = true;
+        groups.innerHTML = '';
+        input.focus();
+    });
+
+    input.focus();
+})();
+</script>
+{% endblock %}

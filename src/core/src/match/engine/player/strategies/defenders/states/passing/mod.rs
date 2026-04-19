@@ -12,7 +12,7 @@ use nalgebra::Vector3;
 pub struct DefenderPassingState {}
 
 impl StateProcessingHandler for DefenderPassingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the defender still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to appropriate state
@@ -146,9 +146,6 @@ impl StateProcessingHandler for DefenderPassingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // While holding the ball and looking for pass options, move slowly or stand still

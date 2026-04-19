@@ -8,7 +8,7 @@ use crate::transfers::pipeline::{
 };
 use crate::transfers::window::PlayerValuationCalculator;
 use crate::utils::FormattingUtils;
-use crate::{Club, Country, Person, Player, PlayerStatusType, ReputationLevel};
+use crate::{Club, Country, Person, Player, PlayerStatusType, ReputationLevel, StaffPosition, TeamType};
 
 impl PipelineProcessor {
     pub(super) fn is_january_window(date: NaiveDate) -> bool {
@@ -227,7 +227,7 @@ impl PipelineProcessor {
     pub(super) fn club_world_reputation(club: &Club) -> i16 {
         club.teams
             .iter()
-            .find(|t| matches!(t.team_type, crate::TeamType::Main))
+            .find(|t| matches!(t.team_type, TeamType::Main))
             .map(|t| t.reputation.world as i16)
             .unwrap_or(0)
     }
@@ -245,7 +245,7 @@ impl PipelineProcessor {
                     .map(|c| {
                         matches!(
                             c.position,
-                            crate::StaffPosition::Scout | crate::StaffPosition::ChiefScout,
+                            StaffPosition::Scout | StaffPosition::ChiefScout,
                         )
                     })
                     .unwrap_or(false)

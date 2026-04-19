@@ -4,7 +4,8 @@ use super::CountryResult;
 use crate::utils::{DateUtils, IntegerUtils};
 use crate::club::team::reputation::{Achievement, AchievementType};
 use crate::{
-    ClubResult, Country, Person, Player, PlayerHappiness, PlayerStatusType, TeamInfo, TeamType,
+    ClubResult, Country, Person, Player, PlayerHappiness, PlayerStatusType, StaffPosition, TeamInfo,
+    TeamType,
 };
 use crate::simulator::SimulatorData;
 use std::collections::HashMap;
@@ -157,7 +158,7 @@ impl CountryResult {
                         if let Some(main_team) = club.teams.main_mut() {
                             if let Some(mgr) = main_team
                                 .staffs
-                                .find_mut_by_position(crate::StaffPosition::Manager)
+                                .find_mut_by_position(StaffPosition::Manager)
                             {
                                 if let Some(contract) = mgr.contract.as_mut() {
                                     contract.salary =

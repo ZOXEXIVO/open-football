@@ -14,7 +14,7 @@ const OPPONENT_THREAT_THRESHOLD: usize = 2;
 pub struct MidfielderRestingState {}
 
 impl StateProcessingHandler for MidfielderRestingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if player's stamina has recovered
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina >= STAMINA_RECOVERY_THRESHOLD {
@@ -46,10 +46,6 @@ impl StateProcessingHandler for MidfielderRestingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Defender remains stationary or moves minimally while resting

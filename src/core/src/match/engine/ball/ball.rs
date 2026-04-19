@@ -28,9 +28,40 @@ pub struct Ball {
     pub recent_passers: VecDeque<u32>,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
+    /// Snapshot captured at the moment the ball became uncontrolled — ball
+    /// kinematics plus every player's state/position/velocity. Held until
+    /// the stall resolves, then attached to the resolution log (only if
+    /// the stall was long enough to log). Provides the "what did the
+    /// pitch look like when this got stuck" context in the same line as
+    /// the duration. Cleared on ownership resume.
+    pub stall_start_snapshot: Option<String>,
     pub goal_scored: bool,
     pub kickoff_team_side: Option<PlayerSide>,
     pub cached_landing_position: Vector3<f32>,
+    /// When a set-piece (corner, goal kick) rewrites ownership to a
+    /// specific player, the ball can only mutate itself here — player
+    /// teleport requires &mut field.players which lives one layer up.
+    /// Populated inside `check_wide_of_goal` and drained by the engine
+    /// after `ball.update` returns, so the owner is on the ball before
+    /// the next `move_to` distance check can null their ownership.
+    pub pending_set_piece_teleport: Option<(u32, Vector3<f32>)>,
+    /// Counter for "ball is owned but nothing is happening" stalls.
+    /// The unowned-stall warning can't see these because ownership is
+    /// set, but visually the ball sits with a player who isn't moving,
+    /// isn't passing, isn't dribbling — same "ball stuck" symptom, no
+    /// warning. Reset whenever owner changes or any meaningful motion
+    /// resumes; fires a separate warning once it crosses the threshold.
+    pub owned_stuck_ticks: u32,
+    pub owned_stuck_logged: bool,
+    /// Position-based stall detector — catches cases the owned/unowned
+    /// counters miss, specifically: rapid ownership flipping keeps
+    /// resetting both counters (each "change" looks like progress) but
+    /// the ball physically never leaves a small region. We sample the
+    /// ball's position every N ticks and if it hasn't moved more than
+    /// a threshold distance over a window, it's stuck regardless of
+    /// who "owns" it at any given instant.
+    pub stall_anchor_pos: Vector3<f32>,
+    pub stall_anchor_tick: u32,
 }
 
 #[derive(Default, Clone)]
@@ -72,9 +103,15 @@ impl Ball {
             recent_passers: VecDeque::with_capacity(5),
             contested_claim_count: 0,
             unowned_ticks: 0,
+            stall_start_snapshot: None,
             goal_scored: false,
             kickoff_team_side: None,
             cached_landing_position: Vector3::new(x, y, 0.0),
+            pending_set_piece_teleport: None,
+            owned_stuck_ticks: 0,
+            owned_stuck_logged: false,
+            stall_anchor_pos: Vector3::new(x, y, 0.0),
+            stall_anchor_tick: 0,
         }
     }
 
@@ -106,6 +143,12 @@ impl Ball {
 
         // Unconditional unowned safety net - forces nearest players to TakeBall
         self.force_takeball_if_unowned_too_long(players, events);
+        // `detect_owned_stuck` was too sensitive — it fired on legitimate
+        // possession play (defender holding in back line for 6-12s is
+        // normal). `detect_position_stall` is the stricter signal: ball
+        // hasn't moved ANYWHERE in 1000 ticks, regardless of who owns
+        // it. That's a real stall.
+        self.detect_position_stall(players);
 
         self.process_ownership(context, players, events);
 
@@ -415,28 +458,33 @@ impl Ball {
         }
     }
 
-    /// Calculate where an aerial ball will land (when z reaches 0)
-    /// Returns the predicted landing position using simple projection
+    /// Calculate where an aerial ball will land (when z reaches 0).
+    /// Uses projectile motion: z(t) = h + vz·t − ½g·t² = 0, solving for
+    /// the positive root. Ignores air drag — close enough for chase
+    /// positioning, and erring long is better than erring short.
+    ///
+    /// Units are ticks, not seconds: position integration is
+    /// `position += velocity` per tick (no dt scaling), while gravity
+    /// applies `velocity.z += -GRAVITY * 0.016` per tick. So the
+    /// effective per-tick² gravity is `9.81 * 0.016 ≈ 0.157`, and the
+    /// resulting `time_to_ground` comes out in ticks — which matches
+    /// the horizontal integration `x += vx` per tick.
     pub fn calculate_landing_position(&self) -> Vector3<f32> {
-        // If ball is already on ground or owned, return current position
         if self.position.z <= 0.1 || self.current_owner.is_some() {
             return self.position;
         }
 
-        // If ball is moving up or not moving vertically, estimate it will land near current position
-        if self.velocity.z >= 0.0 {
-            return Vector3::new(self.position.x, self.position.y, 0.0);
-        }
+        const G_PER_TICK: f32 = 9.81 * 0.016;
+        let vz = self.velocity.z;
+        let h = self.position.z;
 
-        // Simple projection: calculate time until ball reaches ground (z = 0)
-        // time = current_height / vertical_speed
-        let time_to_ground = self.position.z / self.velocity.z.abs();
+        // Positive root of ½g·t² − vz·t − h = 0
+        let discriminant = vz * vz + 2.0 * G_PER_TICK * h;
+        let time_to_ground = (vz + discriminant.sqrt()) / G_PER_TICK;
 
-        // Project horizontal position
         let landing_x = self.position.x + self.velocity.x * time_to_ground;
         let landing_y = self.position.y + self.velocity.y * time_to_ground;
 
-        // Clamp to field boundaries
         let clamped_x = landing_x.clamp(0.0, self.field_width);
         let clamped_y = landing_y.clamp(0.0, self.field_height);
 
@@ -587,24 +635,234 @@ impl Ball {
         events: &mut EventCollection,
     ) {
         const UNOWNED_THRESHOLD: u32 = 300;
+        /// Only a genuinely stuck stall is interesting — a single pass is
+        /// unowned briefly by design. 300 ticks is the same threshold as
+        /// the nuclear-option force-claim: if the system needed that
+        /// intervention, the stall was real. Emitted once per stall, on
+        /// resolution, with the full duration.
+        const STALL_RESOLVE_LOG_THRESHOLD: u32 = 300;
 
         if self.current_owner.is_some() {
+            if self.unowned_ticks >= STALL_RESOLVE_LOG_THRESHOLD {
+                let claimed_by = self.current_owner.unwrap_or(0);
+                // Include the snapshot captured at period start so the
+                // whole stall is reported in one log line: start-state
+                // + duration + who resolved it.
+                let snapshot = self.stall_start_snapshot.as_deref().unwrap_or("<no snapshot>");
+                log::warn!(
+                    "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
+                    self.unowned_ticks,
+                    claimed_by,
+                    self.position.x, self.position.y,
+                    snapshot,
+                );
+            }
             self.unowned_ticks = 0;
+            self.stall_start_snapshot = None;
             return;
         }
 
         self.unowned_ticks += 1;
 
-        if self.unowned_ticks >= UNOWNED_THRESHOLD {
-            // Send TakeMe to nearest player per team (forces them into TakeBall state)
+        // Period just started — capture the state snapshot while it's
+        // still fresh. Every transition from owned → unowned triggers
+        // this, so routine passes also allocate; negligible for match
+        // runtime (~100 passes × 1–2KB string ≈ 200KB discarded across
+        // a 90-minute match). Held until resolution, then discarded if
+        // below the log threshold or emitted with the log otherwise.
+        if self.unowned_ticks == 1 {
+            self.stall_start_snapshot = Some(self.format_stall_snapshot(players));
+        }
+
+        // Force-takeball fires every UNOWNED_THRESHOLD ticks while the
+        // stall persists. The counter is NOT reset — it keeps climbing
+        // so the resolution log reports the true total duration.
+        if self.unowned_ticks > 0 && self.unowned_ticks % UNOWNED_THRESHOLD == 0 {
             let notified = self.notify_nearest_player(players, events);
             if !notified.is_empty() {
                 self.take_ball_notified_players = notified;
                 self.notification_timeout = 0;
             }
-            // Reset counter to allow re-triggering every 300 ticks if still unowned
-            self.unowned_ticks = 0;
         }
+    }
+
+    /// Serialise the current tick's ball + player state into a compact
+    /// human-readable block. Used by the stall-resolution log to explain
+    /// "what did the pitch look like when this got stuck".
+    /// Owned-ball stall detector + resolver. The unowned warning misses
+    /// this: owner is set, `unowned_ticks` stays 0, but visually the
+    /// ball is glued to a player who isn't moving, passing, or
+    /// dribbling. After the threshold we warn AND force-release the
+    /// ball with a small forward velocity so the pack can reset.
+    /// Without the force-release the stall persists indefinitely —
+    /// state-machine bugs don't self-heal.
+    fn detect_owned_stuck(&mut self, players: &[MatchPlayer]) {
+        // 600 ticks = 6 seconds of match time. Real football has
+        // legitimate pauses up to ~2-3 sec (set-piece setup, holding
+        // under pressure); only log/force-release above that.
+        const OWNED_STUCK_THRESHOLD: u32 = 600;
+        const MIN_MOTION: f32 = 0.5;
+        const MIN_MOTION_SQ: f32 = MIN_MOTION * MIN_MOTION;
+
+        let Some(owner_id) = self.current_owner else {
+            self.owned_stuck_ticks = 0;
+            self.owned_stuck_logged = false;
+            return;
+        };
+
+        let Some(owner) = players.iter().find(|p| p.id == owner_id) else {
+            self.owned_stuck_ticks = 0;
+            self.owned_stuck_logged = false;
+            return;
+        };
+
+        let owner_speed_sq = owner.velocity.norm_squared();
+        let ball_speed_sq = self.velocity.norm_squared();
+        let stationary = owner_speed_sq < MIN_MOTION_SQ && ball_speed_sq < MIN_MOTION_SQ;
+
+        if !stationary {
+            self.owned_stuck_ticks = 0;
+            self.owned_stuck_logged = false;
+            return;
+        }
+
+        self.owned_stuck_ticks += 1;
+
+        if self.owned_stuck_ticks >= OWNED_STUCK_THRESHOLD && !self.owned_stuck_logged {
+            log::warn!(
+                "owned-ball stuck: player {} (team {}) has held still for {} ticks at ({:.1}, {:.1}) state={:?} — force-releasing",
+                owner.id,
+                owner.team_id,
+                self.owned_stuck_ticks,
+                owner.position.x,
+                owner.position.y,
+                owner.state,
+            );
+            self.owned_stuck_logged = true;
+
+            // Force-release with protected flight — a small push gets
+            // re-claimed the same tick by the nearest player (usually
+            // the stuck owner themselves). `in_flight_state` blocks
+            // normal claims for 40 ticks so the ball physically
+            // leaves the stall zone.
+            let push_x: f32 = match owner.side {
+                Some(PlayerSide::Left) => 7.0,
+                Some(PlayerSide::Right) => -7.0,
+                None => 7.0,
+            };
+            self.velocity = Vector3::new(push_x, 0.0, 1.5);
+            self.previous_owner = self.current_owner;
+            self.current_owner = None;
+            self.ownership_duration = 0;
+            self.claim_cooldown = 0;
+            self.flags.in_flight_state = 40;
+            self.pass_target_player_id = None;
+            self.owned_stuck_ticks = 0;
+        }
+    }
+
+    /// Position-based stall: the ball hasn't left a small region in N
+    /// ticks, regardless of who owns it. Catches the case where
+    /// ownership rapidly flips between teammates (each flip resets
+    /// owned/unowned counters) but the ball physically stays put.
+    /// The anchor resets whenever the ball travels outside the radius,
+    /// so normal play keeps advancing the anchor every few ticks.
+    fn detect_position_stall(&mut self, players: &[MatchPlayer]) {
+        // Raised thresholds so normal possession play doesn't trigger.
+        // A team can legitimately keep the ball in a 15-unit zone for
+        // 8-10 seconds during sideline passing or defensive possession;
+        // 1000 ticks = 10 sec is the floor for "genuinely stuck".
+        const STALL_RADIUS: f32 = 15.0;
+        const STALL_RADIUS_SQ: f32 = STALL_RADIUS * STALL_RADIUS;
+        const STALL_TICKS: u32 = 1000;
+
+        let ball_xy = Vector3::new(self.position.x, self.position.y, 0.0);
+        let anchor_xy = Vector3::new(self.stall_anchor_pos.x, self.stall_anchor_pos.y, 0.0);
+        let drift_sq = (ball_xy - anchor_xy).norm_squared();
+
+        if drift_sq > STALL_RADIUS_SQ {
+            self.stall_anchor_pos = self.position;
+            self.stall_anchor_tick = 0;
+            return;
+        }
+
+        self.stall_anchor_tick += 1;
+
+        if self.stall_anchor_tick == STALL_TICKS {
+            let owner_str = self.current_owner
+                .map(|id| format!("Some({})", id))
+                .unwrap_or_else(|| "None".to_string());
+            let owner_state = self.current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .map(|p| format!("{:?}", p.state))
+                .unwrap_or_else(|| "-".to_string());
+            log::warn!(
+                "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
+                STALL_RADIUS,
+                self.stall_anchor_pos.x,
+                self.stall_anchor_pos.y,
+                STALL_TICKS,
+                owner_str,
+                owner_state,
+                self.velocity.x,
+                self.velocity.y,
+            );
+            // Force-kick out of the zone. Previous attempts with a
+            // small push got immediately re-claimed by the same player
+            // in `process_ownership` the SAME tick — ball never
+            // escaped the 12-unit radius. Solution: kick harder AND
+            // set `in_flight_state` so normal ownership checks are
+            // suppressed long enough for the ball to actually leave.
+            let owner_side = self.current_owner
+                .and_then(|id| players.iter().find(|p| p.id == id))
+                .and_then(|p| p.side);
+            let push_x: f32 = match owner_side {
+                Some(PlayerSide::Left) => 7.0,
+                Some(PlayerSide::Right) => -7.0,
+                _ => 7.0,
+            };
+            self.velocity = Vector3::new(push_x, 0.0, 1.5);
+            self.previous_owner = self.current_owner;
+            self.current_owner = None;
+            self.ownership_duration = 0;
+            self.claim_cooldown = 0;
+            // 40 ticks of protected flight — matches a short pass,
+            // long enough for the ball to clear the stall radius.
+            self.flags.in_flight_state = 40;
+            self.pass_target_player_id = None;
+            self.owned_stuck_ticks = 0;
+            self.owned_stuck_logged = false;
+            self.stall_anchor_tick = 0;
+            // Teleport anchor so post-release ball travel advances
+            // the anchor naturally instead of re-triggering.
+            self.stall_anchor_pos = self.position;
+        }
+    }
+
+    fn format_stall_snapshot(&self, players: &[MatchPlayer]) -> String {
+        let mut out = String::with_capacity(2048);
+        out.push_str(&format!(
+            "  ball pos=({:.1}, {:.1}, {:.1}) velocity=({:.2}, {:.2}, {:.2}) in_flight={} previous_owner={:?}",
+            self.position.x, self.position.y, self.position.z,
+            self.velocity.x, self.velocity.y, self.velocity.z,
+            self.flags.in_flight_state,
+            self.previous_owner,
+        ));
+        for p in players {
+            if p.is_sent_off {
+                continue;
+            }
+            out.push_str(&format!(
+                "\n  id={} team={} pos=({:.1}, {:.1}) vel=({:.2}, {:.2}) state={} tactical={:?}",
+                p.id,
+                p.team_id,
+                p.position.x, p.position.y,
+                p.velocity.x, p.velocity.y,
+                p.state,
+                p.tactical_position.current_position,
+            ));
+        }
+        out
     }
 
     fn notify_nearest_player(
@@ -722,13 +980,29 @@ impl Ball {
             return;
         }
 
-        // Distance threshold for claiming ball
-        const BALL_DISTANCE_THRESHOLD: f32 = 3.5; // Players can claim within 3.5m (generous for corners/boundaries)
+        // Distance threshold for claiming ball.
+        // Bumped from 3.5 → 5.0: a clearance that lands and bounces
+        // travels 4-5 units/tick horizontally. With a 3.5-unit claim
+        // zone the closest chaser only has a 1-tick window to touch
+        // the ball as it flies past, and a small positional error
+        // (plus Arrive's braking at the landing spot) means they
+        // routinely miss by 4-6 units and the ball runs free for
+        // 300+ ticks through multiple bounces before anyone catches
+        // up. 5.0 is still a realistic first-touch distance (one step
+        // to the ball) and gives a wider interception window without
+        // affecting actual contact semantics. Genuinely fast balls
+        // (> 10 u/t) still get the tighter 1-unit rule below.
+        const BALL_DISTANCE_THRESHOLD: f32 = 5.0;
         const BALL_DISTANCE_THRESHOLD_SQUARED: f32 = BALL_DISTANCE_THRESHOLD * BALL_DISTANCE_THRESHOLD;
         const PLAYER_HEIGHT: f32 = 1.8; // Average player height in meters
         #[allow(dead_code)]
         const PLAYER_REACH_HEIGHT: f32 = PLAYER_HEIGHT + 0.5; // Player can reach ~2.3m when standing
-        const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.0; // Player can reach ~2.8m when jumping
+        // 3.5m includes a proper jump header reach — real elite leapers
+        // win aerials closer to 3m, and a chest/thigh trap works all
+        // the way up to about shoulder height on the way down. The
+        // tighter 2.8 was missing any ball descending through 2.8-3.5,
+        // which with the bouncy 0.6 coefficient was most of the window.
+        const PLAYER_JUMP_REACH: f32 = PLAYER_HEIGHT + 1.7;
         const MAX_BALL_HEIGHT: f32 = PLAYER_JUMP_REACH + 0.5; // Absolute max reachable height
 
         // CRITICAL: Early validation - if current owner is too far AND ball is moving, clear ownership
@@ -1232,12 +1506,13 @@ impl Ball {
                 });
 
             if let Some(taker) = taker {
+                let taker_id = taker.id;
                 self.position.x = corner_x;
                 self.position.y = corner_y;
                 self.position.z = 0.0;
                 self.velocity = Vector3::zeros();
 
-                self.current_owner = Some(taker.id);
+                self.current_owner = Some(taker_id);
                 self.previous_owner = None;
                 self.ownership_duration = 0;
                 self.claim_cooldown = 30;
@@ -1245,7 +1520,13 @@ impl Ball {
                 self.pass_target_player_id = None;
                 self.recent_passers.clear();
 
-                events.add_ball_event(BallEvent::Claimed(taker.id));
+                events.add_ball_event(BallEvent::Claimed(taker_id));
+                // Teleport the taker onto the ball so `move_to`'s
+                // distance check doesn't immediately null ownership
+                // on the next tick. The ball struct only has a &[MatchPlayer]
+                // here — record the teleport and let the engine apply
+                // it when it has &mut field.players.
+                self.pending_set_piece_teleport = Some((taker_id, self.position));
                 return;
             }
             // If no eligible outfielder was found, fall through to goal kick
@@ -1256,6 +1537,7 @@ impl Ball {
             p.side == Some(defending_side)
                 && p.tactical_position.current_position.is_goalkeeper()
         }) {
+            let gk_id = gk.id;
             let goal_kick_x = match side {
                 GoalSide::Home => 50.0,
                 GoalSide::Away => field_width - 50.0,
@@ -1266,7 +1548,7 @@ impl Ball {
             self.position.z = 0.0;
             self.velocity = Vector3::zeros();
 
-            self.current_owner = Some(gk.id);
+            self.current_owner = Some(gk_id);
             self.previous_owner = None;
             self.ownership_duration = 0;
             self.claim_cooldown = 30;
@@ -1274,7 +1556,12 @@ impl Ball {
             self.pass_target_player_id = None;
             self.recent_passers.clear();
 
-            events.add_ball_event(BallEvent::Claimed(gk.id));
+            events.add_ball_event(BallEvent::Claimed(gk_id));
+            // Same as corner kick: put the GK onto the ball so the
+            // distance check in `move_to` doesn't immediately null
+            // ownership because the GK was ~35 units away at the goal
+            // line when the ball crossed the end line.
+            self.pending_set_piece_teleport = Some((gk_id, self.position));
         }
     }
 
@@ -1282,7 +1569,12 @@ impl Ball {
         const GRAVITY: f32 = 9.81;
         const BALL_MASS: f32 = 0.43;
         const STOPPING_THRESHOLD: f32 = 0.05; // Lower threshold for smoother final stop
-        const BOUNCE_COEFFICIENT: f32 = 0.6; // Ball keeps 60% of velocity when bouncing
+        // Football bounce retention on grass is ~25-35%. The previous
+        // 0.6 produced trampoline bounces where a lofted clearance
+        // bounced to 30m+ and stayed airborne (above PLAYER_JUMP_REACH)
+        // for 3-5 cycles before a defender could claim. 0.3 keeps the
+        // second bounce low enough to reach on the return trip.
+        const BOUNCE_COEFFICIENT: f32 = 0.3;
         const MAX_VELOCITY: f32 = 15.0; // Maximum realistic ball velocity per tick
 
         // Physics constants for realistic ball behavior
@@ -1546,6 +1838,11 @@ impl Ball {
         self.contested_claim_count = 0;
         self.unowned_ticks = 0;
         self.cached_landing_position = self.position;
+        self.pending_set_piece_teleport = None;
+        self.owned_stuck_ticks = 0;
+        self.owned_stuck_logged = false;
+        self.stall_anchor_pos = self.position;
+        self.stall_anchor_tick = 0;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {

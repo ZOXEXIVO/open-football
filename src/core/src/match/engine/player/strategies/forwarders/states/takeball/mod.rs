@@ -6,79 +6,68 @@ use crate::r#match::{
 };
 use nalgebra::Vector3;
 
-// TakeBall timeout and distance constants
-const MAX_TAKEBALL_DISTANCE: f32 = 80.0;
-const OPPONENT_ADVANTAGE_THRESHOLD: f32 = 20.0; // Opponent must be this much closer to give up
-const TEAMMATE_ADVANTAGE_THRESHOLD: f32 = 3.0; // Very small margin — yield quickly to prevent clustering
-
 #[derive(Default, Clone)]
 pub struct ForwardTakeBallState {}
 
 impl StateProcessingHandler for ForwardTakeBallState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Check if ball is now owned by someone
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // If WE own the ball, TakeBall is the wrong state — transition
+        // to Running so the "has ball" paths in Running can pick
+        // Shooting/Passing/Dribbling. Guards against a race where
+        // ownership got assigned mid-tick but `is_owned` wasn't
+        // refreshed before the dispatcher.
+        if ctx.player.has_ball(ctx) {
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
+        }
+        // Ball got claimed (by anyone). Running state handles "someone else
+        // has it" — for teammates: off-ball movement; for opponents: engage
+        // via Pressing. Hand off there instead of duplicating here.
         if ctx.ball().is_owned() {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
-        let ball_distance = ctx.ball().distance();
-        let ball_position = ctx.tick_context.positions.ball.landing_position;
-
-        // 1. Distance check - ball too far away
-        if ball_distance > MAX_TAKEBALL_DISTANCE {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::Running,
-            ));
-        }
-
-        // 2. Check if opponent will reach ball first
-        if let Some(closest_opponent) = ctx.players().opponents().all().min_by(|a, b| {
-            let dist_a = (a.position - ball_position).magnitude();
-            let dist_b = (b.position - ball_position).magnitude();
-            dist_a.partial_cmp(&dist_b).unwrap()
-        }) {
-            let opponent_distance = (closest_opponent.position - ball_position).magnitude();
-
-            // If opponent is significantly closer, give up and press
-            if opponent_distance < ball_distance - OPPONENT_ADVANTAGE_THRESHOLD {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Pressing,
-                ));
-            }
-        }
-
-        // 3. Check if teammate is closer to the ball
-        if let Some(closest_teammate) = ctx.players().teammates().all().filter(|t| t.id != ctx.player.id).min_by(|a, b| {
-            let dist_a = (a.position - ball_position).magnitude();
-            let dist_b = (b.position - ball_position).magnitude();
-            dist_a.partial_cmp(&dist_b).unwrap()
-        }) {
-            let teammate_distance = (closest_teammate.position - ball_position).magnitude();
-
-            // If teammate is significantly closer, let them take it (stricter threshold)
-            if teammate_distance < ball_distance - TEAMMATE_ADVANTAGE_THRESHOLD {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::CreatingSpace,
-                ));
-            }
-        }
-
-        // Continue trying to take the ball
+        // Ball is loose: commit. No distance cap, no teammate yield, no
+        // "opponent is closer" bailout. The Running state's
+        // `is_best_player_to_chase_ball` already committed this player;
+        // second-guessing here created stalemates where two players each
+        // deferred to the other and a stationary ball sat untouched.
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // If ball is aerial, target the landing position instead of current position
-        let target = ctx.tick_context.positions.ball.landing_position;
+        // For an in-flight pass, the ball has real velocity — Seek would
+        // just chase the ball's current position and lag behind. Pursuit
+        // predicts an interception point based on our speed and the ball's
+        // velocity, which is what we want whether the ball is rolling flat,
+        // arriving from a lofted pass, or stationary (Pursuit reduces to
+        // Seek when target velocity is ~0).
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let ball_vel = ctx.tick_context.positions.ball.velocity;
+        let landing = ctx.tick_context.positions.ball.landing_position;
 
-        // Use Seek for full-speed approach - no slowing when chasing a loose ball
-        let mut arrive_velocity = SteeringBehavior::Seek { target }
+        // If the ball is aerial (well above the ground), the stable target
+        // is the landing point — Pursuit on a flying ball overshoots. For
+        // ground balls (z ≈ 0) use Pursuit with the current position +
+        // velocity so we lead the ball.
+        let is_aerial = ball_pos.z > 2.3;
+        let target = if is_aerial { landing } else { ball_pos };
+
+        let mut arrive_velocity = if is_aerial {
+            SteeringBehavior::Arrive {
+                target,
+                slowing_distance: 10.0,
+            }
             .calculate(ctx.player)
-            .velocity;
+            .velocity
+        } else {
+            SteeringBehavior::Pursuit {
+                target,
+                target_velocity: ball_vel,
+            }
+            .calculate(ctx.player)
+            .velocity
+        };
 
         // Add separation force to prevent player stacking
         // Reduce separation when approaching ball, but keep minimum to prevent clustering

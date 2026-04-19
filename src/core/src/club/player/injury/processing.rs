@@ -1,6 +1,7 @@
 use crate::club::player::injury::{BodyPart, InjuryType};
 use crate::club::player::player::Player;
 use crate::club::{PlayerResult, PlayerStatusType};
+use crate::HappinessEventType;
 use crate::utils::DateUtils;
 use chrono::NaiveDate;
 
@@ -81,7 +82,7 @@ impl Player {
                     1.5
                 };
                 self.happiness
-                    .add_event(crate::HappinessEventType::InjuryReturn, magnitude);
+                    .add_event(HappinessEventType::InjuryReturn, magnitude);
             }
         } else if self.player_attributes.is_in_recovery() {
             // Phase 2: Recovery — post-injury low match fitness phase.

@@ -736,5 +736,11 @@
   "watchlist": "Lista de Observação",
   "work_rate": "Dedicação",
   "yc": "CA",
-  "years_old": "anos"
+  "years_old": "anos",
+  "search": "Pesquisar",
+  "search_placeholder": "Pesquisar países, clubes, jogadores...",
+  "search_countries": "Países",
+  "search_clubs": "Clubes",
+  "search_players": "Jogadores",
+  "search_no_results": "Sem resultados"
 }

@@ -10,7 +10,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperTakeBallState {}
 
 impl StateProcessingHandler for GoalkeeperTakeBallState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::ReturningToGoal,
@@ -48,9 +48,6 @@ impl StateProcessingHandler for GoalkeeperTakeBallState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Use Seek for full-speed approach - no slowing when chasing a loose ball

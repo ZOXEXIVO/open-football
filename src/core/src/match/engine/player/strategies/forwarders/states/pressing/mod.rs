@@ -15,7 +15,7 @@ const MAX_PRESS_BALL_DISTANCE: f32 = 120.0;
 pub struct ForwardPressingState {}
 
 impl StateProcessingHandler for ForwardPressingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Dribbling,
@@ -78,9 +78,6 @@ impl StateProcessingHandler for ForwardPressingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();

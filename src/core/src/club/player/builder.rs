@@ -216,6 +216,7 @@ impl PlayerBuilder {
             plan: None,
             favorite_clubs: self.favorite_clubs.unwrap_or_default(),
             sold_from: None,
+            sell_on_obligations: Vec::new(),
             traits,
             rapport: PlayerRapport::new(),
             promises: Vec::new(),

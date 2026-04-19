@@ -14,7 +14,7 @@ const CROSS_EXECUTION_TIME: u64 = 5;
 pub struct MidfielderCrossingState {}
 
 impl StateProcessingHandler for MidfielderCrossingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running
             return Some(StateChangeResult::with_midfielder_state(
@@ -47,9 +47,6 @@ impl StateProcessingHandler for MidfielderCrossingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Stationary while preparing the cross

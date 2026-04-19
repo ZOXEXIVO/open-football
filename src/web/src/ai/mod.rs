@@ -2,8 +2,9 @@ pub mod providers;
 pub mod registry;
 pub mod routes;
 
+use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
-use crate::{ApiResult, GameAppData};
+use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -26,7 +27,7 @@ pub struct AiPageRequest {
 pub struct AiPageTemplate {
     pub css_version: &'static str,
     pub computer_name: &'static str,
-    pub i18n: crate::I18n,
+    pub i18n: I18n,
     pub lang: String,
     pub title: String,
     pub sub_title_prefix: String,
@@ -59,8 +60,8 @@ pub async fn ai_page_action(
     let menu_sections = views::ai_menu(&i18n, &route_params.lang, &current_path);
 
     Ok(AiPageTemplate {
-        css_version: crate::common::default_handler::CSS_VERSION,
-        computer_name: &crate::common::default_handler::COMPUTER_NAME,
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
         i18n,
         lang: route_params.lang.clone(),
         title: "AI Management".to_string(),

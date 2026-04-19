@@ -18,7 +18,7 @@ const RETURN_DISTANCE: f32 = 120.0;
 pub struct DefenderTacklingState {}
 
 impl StateProcessingHandler for DefenderTacklingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If we have the ball or our team controls it, transition to running
         if ctx.player.has_ball(ctx) || ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_defender_state(
@@ -119,10 +119,6 @@ impl StateProcessingHandler for DefenderTacklingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let target = self.calculate_intelligent_target(ctx);

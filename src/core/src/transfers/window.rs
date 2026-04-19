@@ -1,5 +1,5 @@
-use crate::shared::CurrencyValue;
-use crate::{Player, PlayerValueCalculator};
+use crate::shared::{Currency, CurrencyValue};
+use crate::{Player, PlayerStatusType, PlayerValueCalculator};
 use chrono::{Datelike, NaiveDate};
 use std::collections::HashMap;
 
@@ -74,18 +74,18 @@ impl PlayerValuationCalculator {
         // Transfer-listed players face market discount (buyer leverage)
         let mut market_value = base_value;
 
-        if player.statuses.get().contains(&crate::PlayerStatusType::Lst) {
+        if player.statuses.get().contains(&PlayerStatusType::Lst) {
             market_value *= 0.9;
         }
 
         // Players wanting to leave lose negotiating power
-        if player.statuses.get().contains(&crate::PlayerStatusType::Req) {
+        if player.statuses.get().contains(&PlayerStatusType::Req) {
             market_value *= 0.85;
         }
 
         CurrencyValue {
             amount: market_value,
-            currency: crate::shared::Currency::Usd,
+            currency: Currency::Usd,
         }
     }
 }

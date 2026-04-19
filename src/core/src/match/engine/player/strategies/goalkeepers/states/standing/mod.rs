@@ -15,7 +15,7 @@ const FAR_THREAT_DISTANCE: f32 = 300.0;
 pub struct GoalkeeperStandingState {}
 
 impl StateProcessingHandler for GoalkeeperStandingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Direct catch for close slow balls
         let ball_distance = ctx.ball().distance();
         if ball_distance < 10.0
@@ -130,11 +130,6 @@ impl StateProcessingHandler for GoalkeeperStandingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        // For now, return None to indicate no state change
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate optimal position based on ball and goal

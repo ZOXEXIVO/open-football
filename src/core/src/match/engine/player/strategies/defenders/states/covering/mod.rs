@@ -20,7 +20,7 @@ const MIN_STATE_TIME_WITH_THREAT: u64 = 5; // Reduced - very fast reaction to th
 pub struct DefenderCoveringState {}
 
 impl StateProcessingHandler for DefenderCoveringState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Adaptive reaction time based on threat detection
         let min_time = if self.has_dangerous_threat_nearby(ctx) {
             MIN_STATE_TIME_WITH_THREAT
@@ -141,9 +141,6 @@ impl StateProcessingHandler for DefenderCoveringState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // When an opponent with ball is advancing on own side, position between them and goal

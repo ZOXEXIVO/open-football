@@ -10,7 +10,7 @@ const MIN_SHOOTING_DISTANCE: f32 = 20.0; // Minimum distance to attempt a shot (
 pub struct MidfielderHoldingPossessionState {}
 
 impl StateProcessingHandler for MidfielderHoldingPossessionState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the midfielder has the ball
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -43,9 +43,6 @@ impl StateProcessingHandler for MidfielderHoldingPossessionState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(

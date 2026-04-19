@@ -736,5 +736,11 @@
   "watchlist": "Liste de suivi",
   "work_rate": "Volume de jeu",
   "yc": "CJ",
-  "years_old": "ans"
+  "years_old": "ans",
+  "search": "Rechercher",
+  "search_placeholder": "Rechercher pays, clubs, joueurs...",
+  "search_countries": "Pays",
+  "search_clubs": "Clubs",
+  "search_players": "Joueurs",
+  "search_no_results": "Aucun résultat"
 }

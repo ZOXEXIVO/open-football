@@ -17,7 +17,7 @@ const FOUL_CHANCE_BASE: f32 = 0.1; // Base chance of committing a foul for goalk
 pub struct GoalkeeperTacklingState {}
 
 impl StateProcessingHandler for GoalkeeperTacklingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let opponents = ctx.players().opponents();
         let mut opponents_with_ball = opponents.with_ball();
 
@@ -88,10 +88,6 @@ impl StateProcessingHandler for GoalkeeperTacklingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the opponent to attempt the tackle

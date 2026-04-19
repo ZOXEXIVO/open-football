@@ -18,7 +18,7 @@ const HEADING_SUCCESS_THRESHOLD: f32 = 0.5; // Threshold for heading success bas
 pub struct DefenderHeadingState {}
 
 impl StateProcessingHandler for DefenderHeadingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
         if ctx.ball().distance() > HEADING_DISTANCE_THRESHOLD {
@@ -54,10 +54,6 @@ impl StateProcessingHandler for DefenderHeadingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

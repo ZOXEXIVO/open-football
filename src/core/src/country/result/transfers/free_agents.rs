@@ -277,12 +277,31 @@ impl CountryResult {
             // row. The club-transfers page reads this list directly, so
             // any entry written here is visible whether or not the player
             // actually moved.
+            let buying_league_reputation = country
+                .clubs
+                .iter()
+                .find(|c| c.id == signing.to_club_id)
+                .and_then(|c| c.teams.teams.first())
+                .and_then(|t| t.league_id)
+                .and_then(|lid| country.leagues.leagues.iter().find(|l| l.id == lid))
+                .map(|l| l.reputation)
+                .unwrap_or(0);
+            let deferred = super::types::DeferredTransfer {
+                player_id: signing.player_id,
+                selling_country_id: country.id,
+                selling_club_id: signing.from_club_id,
+                buying_country_id: country.id,
+                buying_club_id: signing.to_club_id,
+                fee: 0.0,
+                is_loan: false,
+                has_option_to_buy: false,
+                agreed_annual_wage: None,
+                buying_league_reputation,
+                sell_on_percentage: None,
+            };
             let executed = super::execution::execute_transfer_within_country(
                 country,
-                signing.player_id,
-                signing.from_club_id,
-                signing.to_club_id,
-                0.0,
+                &deferred,
                 date,
             );
 

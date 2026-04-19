@@ -42,14 +42,8 @@ pub struct MenuParams<'a> {
 impl<'a> MenuParams<'a> {
     fn home_and_country_sections(&self) -> Vec<MenuSection> {
         vec![
-            MenuSection {
-                items: vec![MenuItem {
-                    title: self.i18n.t("home").to_string(),
-                    url: format!("/{}", self.lang),
-                    icon: "fa-home".to_string(),
-                    active: false,
-                }],
-            },
+            home_section(self.i18n, self.lang),
+            search_section(self.i18n, self.lang, self.current_path),
             MenuSection {
                 items: vec![MenuItem {
                     title: self.country_name.to_string(),
@@ -62,17 +56,34 @@ impl<'a> MenuParams<'a> {
     }
 }
 
+fn home_section(i18n: &I18n, lang: &str) -> MenuSection {
+    MenuSection {
+        items: vec![MenuItem {
+            title: i18n.t("home").to_string(),
+            url: format!("/{}", lang),
+            icon: "fa-home".to_string(),
+            active: false,
+        }],
+    }
+}
+
+fn search_section(i18n: &I18n, lang: &str, current_path: &str) -> MenuSection {
+    let search_url = format!("/{}/search", lang);
+    MenuSection {
+        items: vec![MenuItem {
+            active: current_path == search_url,
+            title: i18n.t("search").to_string(),
+            url: search_url,
+            icon: "fa-search".to_string(),
+        }],
+    }
+}
+
 pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     let ai_url = format!("/{}/ai", lang);
     vec![
-        MenuSection {
-            items: vec![MenuItem {
-                title: i18n.t("home").to_string(),
-                url: format!("/{}", lang),
-                icon: "fa-home".to_string(),
-                active: false,
-            }],
-        },
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
         MenuSection {
             items: vec![MenuItem {
                 active: current_path == ai_url,
@@ -87,15 +98,17 @@ pub fn ai_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> 
 
 pub fn watchlist_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
     vec![
-        MenuSection {
-            items: vec![MenuItem {
-                title: i18n.t("home").to_string(),
-                url: format!("/{}", lang),
-                icon: "fa-home".to_string(),
-                active: false,
-            }],
-        },
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
         watchlist_section(i18n, lang, current_path),
+        source_code_section(),
+    ]
+}
+
+pub fn search_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
+    vec![
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
         source_code_section(),
     ]
 }
@@ -343,14 +356,8 @@ pub fn country_menu(p: &MenuParams, country_leagues: &[(&str, &str)]) -> Vec<Men
 
 #[allow(dead_code)]
 pub fn match_menu(i18n: &I18n, lang: &str, current_path: &str) -> Vec<MenuSection> {
-    let mut sections = vec![MenuSection {
-        items: vec![MenuItem {
-            title: i18n.t("home").to_string(),
-            url: format!("/{}", lang),
-            icon: "fa-home".to_string(),
-            active: false,
-        }],
-    }];
+    let mut sections = vec![home_section(i18n, lang)];
+    sections.push(search_section(i18n, lang, current_path));
     sections.push(watchlist_section(i18n, lang, current_path));
     sections.push(source_code_section());
     sections
@@ -362,14 +369,8 @@ fn continental_competitions_menu(i18n: &I18n, lang: &str, current_path: &str) ->
     let conf_url = format!("/{}/conference-league", lang);
     let nat_url = format!("/{}/national-competitions", lang);
     vec![
-        MenuSection {
-            items: vec![MenuItem {
-                title: i18n.t("home").to_string(),
-                url: format!("/{}", lang),
-                icon: "fa-home".to_string(),
-                active: false,
-            }],
-        },
+        home_section(i18n, lang),
+        search_section(i18n, lang, current_path),
         MenuSection {
             items: vec![
                 MenuItem {

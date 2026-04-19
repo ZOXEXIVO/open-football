@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct DefenderShootingState {}
 
 impl StateProcessingHandler for DefenderShootingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Must have possession to shoot
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_defender_state(
@@ -39,9 +39,6 @@ impl StateProcessingHandler for DefenderShootingState {
         ))
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

@@ -80,6 +80,15 @@ impl Serialize for ResultPositionDataItem {
 /// 0.3 units on an 840-unit field = 0.036% — completely imperceptible.
 const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
 
+/// Maximum interval between recorded samples for any on-pitch player.
+/// A stationary GK or sweeper could otherwise go minutes without a new
+/// sample (dedup threshold never tripped). Replay viewers use the gap
+/// between samples as a "player left the pitch" signal, so an infinitely
+/// quiet stretch makes a still-playing player disappear. 2 s is short
+/// enough that the viewer can reliably distinguish "standing still" from
+/// "subbed off" and long enough that storage cost stays negligible.
+const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
+
 /// Quantize a coordinate to 0.1 precision.
 /// This improves dedup hit rate and produces shorter JSON floats.
 #[inline]
@@ -362,8 +371,13 @@ impl ResultMatchPositionData {
             let dy = position.y - last.position.y;
             let dz = position.z - last.position.z;
 
-            // Tolerance dedup: skip if moved less than 0.3 units
-            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ {
+            // Tolerance dedup + heartbeat: skip tiny movements unless we're
+            // overdue for a sample. Without the heartbeat, a GK planted in
+            // the six-yard box gets no updates until a save, and replay
+            // viewers can't distinguish "on-pitch, idle" from "subbed off".
+            let distance_sq = dx * dx + dy * dy + dz * dz;
+            let since_last = timestamp.saturating_sub(last.timestamp);
+            if distance_sq < DEDUP_TOLERANCE_SQ && since_last < HEARTBEAT_INTERVAL_MS {
                 return;
             }
 
@@ -393,8 +407,17 @@ impl ResultMatchPositionData {
             let dy = position.y - last.position.y;
             let dz = position.z - last.position.z;
 
-            // Tolerance dedup: skip if ball moved less than 0.3 units
-            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ {
+            // Tolerance dedup + heartbeat. Without the heartbeat, an
+            // owned-and-stationary ball (stuck with a player who isn't
+            // passing) gets no ball samples for the rest of the match
+            // — `max_timestamp` freezes at the last movement and the
+            // chunk split discards everything after that point, even
+            // though the sim is still running. Player positions use
+            // the same heartbeat for the same reason.
+            let since_last = timestamp.saturating_sub(last.timestamp);
+            if dx * dx + dy * dy + dz * dz < DEDUP_TOLERANCE_SQ
+                && since_last < HEARTBEAT_INTERVAL_MS
+            {
                 return;
             }
         }

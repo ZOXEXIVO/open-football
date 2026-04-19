@@ -1,6 +1,6 @@
 use chrono::{Datelike, NaiveDate};
 use log::debug;
-use super::types::can_club_accept_player;
+use super::types::{can_club_accept_player, DeferredTransfer};
 use crate::club::player::events::{LoanCompletion, TransferCompletion};
 use crate::{Country, Player, PlayerClubContract, TeamInfo, TeamType};
 use crate::simulator::SimulatorData;
@@ -11,15 +11,16 @@ use crate::simulator::SimulatorData;
 /// Returns true if the player was successfully placed at the buying club.
 pub(crate) fn execute_transfer(
     data: &mut SimulatorData,
-    player_id: u32,
-    selling_country_id: u32,
-    selling_club_id: u32,
-    buying_country_id: u32,
-    buying_club_id: u32,
-    fee: f64,
-    is_loan: bool,
+    transfer: &DeferredTransfer,
     date: NaiveDate,
 ) -> bool {
+    let player_id = transfer.player_id;
+    let selling_country_id = transfer.selling_country_id;
+    let selling_club_id = transfer.selling_club_id;
+    let buying_country_id = transfer.buying_country_id;
+    let buying_club_id = transfer.buying_club_id;
+    let is_loan = transfer.is_loan;
+
     // Safety: never transfer/loan a player to their own club
     if selling_club_id == buying_club_id {
         debug!("Blocked self-transfer: club {} tried to {} player {} to itself",
@@ -41,9 +42,9 @@ pub(crate) fn execute_transfer(
         // Domestic — work within a single country
         if let Some(country) = data.country_mut(selling_country_id) {
             if is_loan {
-                execute_loan_within_country(country, player_id, selling_club_id, buying_club_id, fee, date)
+                execute_loan_within_country(country, transfer, date)
             } else {
-                execute_transfer_within_country(country, player_id, selling_club_id, buying_club_id, fee, date)
+                execute_transfer_within_country(country, transfer, date)
             }
         } else {
             false
@@ -51,9 +52,9 @@ pub(crate) fn execute_transfer(
     } else {
         // Cross-country — take from one country, place in another
         if is_loan {
-            execute_loan_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date)
+            execute_loan_across_countries(data, transfer, date)
         } else {
-            execute_transfer_across_countries(data, player_id, selling_country_id, selling_club_id, buying_country_id, buying_club_id, fee, date)
+            execute_transfer_across_countries(data, transfer, date)
         }
     }
 }
@@ -64,12 +65,13 @@ pub(crate) fn execute_transfer(
 
 pub(crate) fn execute_transfer_within_country(
     country: &mut Country,
-    player_id: u32,
-    selling_club_id: u32,
-    buying_club_id: u32,
-    fee: f64,
+    transfer: &DeferredTransfer,
     date: NaiveDate,
 ) -> bool {
+    let player_id = transfer.player_id;
+    let selling_club_id = transfer.selling_club_id;
+    let buying_club_id = transfer.buying_club_id;
+    let fee = transfer.fee;
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
@@ -138,6 +140,9 @@ pub(crate) fn execute_transfer_within_country(
             name: String::new(), slug: String::new(), reputation: 0,
             league_name: String::new(), league_slug: String::new(),
         });
+        // Drain existing sell-on obligations now — they pay previous
+        // beneficiaries out of the selling club's proceeds on this sale.
+        let obligations = player.drain_sell_on_obligations();
         player.complete_transfer(TransferCompletion {
             from: &from,
             to: &to,
@@ -145,7 +150,29 @@ pub(crate) fn execute_transfer_within_country(
             date,
             selling_club_id,
             buying_club_id,
+            agreed_wage: transfer.agreed_annual_wage,
+            buying_league_reputation: transfer.buying_league_reputation,
+            record_sell_on: transfer.sell_on_percentage,
         });
+
+        for obligation in &obligations {
+            let payout = fee * obligation.percentage as f64;
+            if payout <= 0.0 { continue; }
+            if let Some(beneficiary) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == obligation.beneficiary_club_id)
+            {
+                beneficiary.finance.add_transfer_income(payout);
+            }
+            if let Some(seller) = country
+                .clubs
+                .iter_mut()
+                .find(|c| c.id == selling_club_id)
+            {
+                seller.finance.add_transfer_income(-payout);
+            }
+        }
 
         if let Some(buying_club) = country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
             buying_club.finance.spend_from_transfer_budget(fee);
@@ -169,12 +196,13 @@ pub(crate) fn execute_transfer_within_country(
 
 fn execute_loan_within_country(
     country: &mut Country,
-    player_id: u32,
-    selling_club_id: u32,
-    buying_club_id: u32,
-    loan_fee: f64,
+    transfer: &DeferredTransfer,
     date: NaiveDate,
 ) -> bool {
+    let player_id = transfer.player_id;
+    let selling_club_id = transfer.selling_club_id;
+    let buying_club_id = transfer.buying_club_id;
+    let loan_fee = transfer.fee;
     let mut player = None;
     let mut from_info: Option<TeamInfo> = None;
     let mut selling_league_id = None;
@@ -264,7 +292,16 @@ fn execute_loan_within_country(
             name: String::new(), slug: String::new(), reputation: 0,
             league_name: String::new(), league_slug: String::new(),
         });
-        let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, from_team_id, buying_club_id);
+        let loan_contract = build_loan_contract(
+            loan_fee,
+            loan_end,
+            selling_club_id,
+            from_team_id,
+            buying_club_id,
+            &player,
+            transfer.has_option_to_buy,
+            transfer.agreed_annual_wage,
+        );
         player.complete_loan(LoanCompletion {
             from: &from,
             to: &to,
@@ -287,7 +324,7 @@ fn execute_loan_within_country(
             selling_club.transfer_plan.loan_out_candidates.retain(|c| c.player_id != player_id);
         }
 
-        debug!("Loan completed: player {} from club {} to club {} (fee: {}, match_fee: {})", player_id, selling_club_id, buying_club_id, loan_fee, ((loan_fee * 0.02).max(500.0)) as u32);
+        debug!("Loan completed: player {} from club {} to club {}", player_id, selling_club_id, buying_club_id);
         true
     } else {
         debug!("Loan failed: player {} not found at club {}", player_id, selling_club_id);
@@ -367,14 +404,15 @@ fn take_player_from_selling_country(
 
 fn execute_transfer_across_countries(
     data: &mut SimulatorData,
-    player_id: u32,
-    selling_country_id: u32,
-    selling_club_id: u32,
-    buying_country_id: u32,
-    buying_club_id: u32,
-    fee: f64,
+    transfer: &DeferredTransfer,
     date: NaiveDate,
 ) -> bool {
+    let player_id = transfer.player_id;
+    let selling_country_id = transfer.selling_country_id;
+    let selling_club_id = transfer.selling_club_id;
+    let buying_country_id = transfer.buying_country_id;
+    let buying_club_id = transfer.buying_club_id;
+    let fee = transfer.fee;
     let taken = take_player_from_selling_country(data, player_id, selling_country_id, selling_club_id, fee, false);
 
     let (mut player, from_info, _, _) = match taken {
@@ -412,6 +450,11 @@ fn execute_transfer_across_countries(
         name: String::new(), slug: String::new(), reputation: 0,
         league_name: String::new(), league_slug: String::new(),
     });
+    // Drain sell-on obligations for cross-country. The beneficiaries may
+    // live in a different country from the current seller, so we hold the
+    // drained list and settle after returning the player into the buyer
+    // country — routing goes via `data.country_mut` lookups.
+    let obligations = player.drain_sell_on_obligations();
     player.complete_transfer(TransferCompletion {
         from: &from_info,
         to: &to,
@@ -419,6 +462,9 @@ fn execute_transfer_across_countries(
         date,
         selling_club_id,
         buying_club_id,
+        agreed_wage: transfer.agreed_annual_wage,
+        buying_league_reputation: transfer.buying_league_reputation,
+        record_sell_on: transfer.sell_on_percentage,
     });
 
     if let Some(buying_club) = buying_country.clubs.iter_mut().find(|c| c.id == buying_club_id) {
@@ -428,20 +474,46 @@ fn execute_transfer_across_countries(
         }
     }
 
+    // Settle obligations across countries: locate each beneficiary globally
+    // and credit them. The seller's finance was already incremented by the
+    // full fee in `take_player_from_selling_country`, so we debit the share
+    // from the seller too.
+    for obligation in &obligations {
+        let payout = fee * obligation.percentage as f64;
+        if payout <= 0.0 { continue; }
+        credit_club_globally(data, obligation.beneficiary_club_id, payout);
+        credit_club_globally(data, selling_club_id, -payout);
+    }
+
     debug!("Transfer completed: player {} from country {} to country {} (fee: {})", player_id, selling_country_id, buying_country_id, fee);
     true
 }
 
+/// Locate a club anywhere in the simulator and add `amount` to their finance
+/// balance. Used for cross-country sell-on routing where the beneficiary
+/// sits in a different country from the selling club.
+fn credit_club_globally(data: &mut SimulatorData, club_id: u32, amount: f64) {
+    for continent in data.continents.iter_mut() {
+        for country in continent.countries.iter_mut() {
+            if let Some(club) = country.clubs.iter_mut().find(|c| c.id == club_id) {
+                club.finance.add_transfer_income(amount);
+                return;
+            }
+        }
+    }
+}
+
 fn execute_loan_across_countries(
     data: &mut SimulatorData,
-    player_id: u32,
-    selling_country_id: u32,
-    selling_club_id: u32,
-    buying_country_id: u32,
-    buying_club_id: u32,
-    loan_fee: f64,
+    transfer: &DeferredTransfer,
     date: NaiveDate,
 ) -> bool {
+    let player_id = transfer.player_id;
+    let selling_country_id = transfer.selling_country_id;
+    let selling_club_id = transfer.selling_club_id;
+    let buying_country_id = transfer.buying_country_id;
+    let buying_club_id = transfer.buying_club_id;
+    let loan_fee = transfer.fee;
     // Get loan end date from selling country's league before taking the player
     let selling_league_id = data.country(selling_country_id)
         .and_then(|c| c.clubs.iter().find(|cl| cl.id == selling_club_id))
@@ -494,7 +566,16 @@ fn execute_loan_across_countries(
         name: String::new(), slug: String::new(), reputation: 0,
         league_name: String::new(), league_slug: String::new(),
     });
-    let loan_contract = build_loan_contract(loan_fee, loan_end, selling_club_id, parent_team_id, buying_club_id);
+    let loan_contract = build_loan_contract(
+        loan_fee,
+        loan_end,
+        selling_club_id,
+        parent_team_id,
+        buying_club_id,
+        &player,
+        transfer.has_option_to_buy,
+        transfer.agreed_annual_wage,
+    );
     player.complete_loan(LoanCompletion {
         from: &from_info,
         to: &to,
@@ -539,15 +620,24 @@ fn resolve_buying_club_info(country: &Country, buying_club_id: u32) -> Option<Te
 }
 
 fn build_loan_contract(
-    loan_fee: f64,
+    _loan_fee: f64,
     loan_end: NaiveDate,
     parent_club_id: u32,
     parent_team_id: u32,
     buying_club_id: u32,
+    player: &Player,
+    _has_option_to_buy: bool,
+    agreed_parent_wage: Option<u32>,
 ) -> PlayerClubContract {
-    let salary = (loan_fee / 50.0).max(200.0) as u32;
-    let match_fee = ((loan_fee * 0.02).max(500.0)) as u32;
-    PlayerClubContract::new_loan(salary, loan_end, parent_club_id, parent_team_id, buying_club_id)
+    // Parent wage drives the loan split: borrower covers the majority,
+    // parent keeps paying the rest. Falls back to the player's current
+    // contract salary when the pipeline didn't stage an explicit wage.
+    let parent_wage = agreed_parent_wage
+        .or_else(|| player.contract.as_ref().map(|c| c.salary))
+        .unwrap_or(1_000);
+    let (borrower_wage, match_fee) =
+        crate::club::player::calculators::WageCalculator::loan_wage_split(parent_wage);
+    PlayerClubContract::new_loan(borrower_wage, loan_end, parent_club_id, parent_team_id, buying_club_id)
         .with_loan_match_fee(match_fee)
 }
 

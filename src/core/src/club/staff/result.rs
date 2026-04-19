@@ -1,5 +1,5 @@
 use crate::simulator::SimulatorData;
-use crate::{ChangeType, HappinessEventType, HealthIssue, RelationshipChange, RelationshipEvent, ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning};
+use crate::{ChangeType, HappinessEventType, HealthIssue, Player, RelationshipChange, RelationshipEvent, ResignationReason, StaffContractResult, StaffMoraleEvent, StaffTrainingResult, StaffWarning};
 
 pub struct StaffCollectionResult {
     pub staff: Vec<StaffResult>,
@@ -149,7 +149,7 @@ impl StaffResult {
         }
     }
 
-    fn random_player(data: &mut SimulatorData) -> Option<&mut crate::Player> {
+    fn random_player(data: &mut SimulatorData) -> Option<&mut Player> {
         // Pick a random player from the simulation data
         let player_count: usize = data.continents.iter()
             .flat_map(|c| &c.countries)

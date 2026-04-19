@@ -8,9 +8,10 @@ use crate::club::team::reputation::{
     Achievement, CompetitionType, MatchOutcome, MatchResultInfo,
 };
 use crate::{
-    MatchHistory, MatchTacticType, Player, PlayerCollection, PlayerSquadStatus, PlayerStatusType,
-    StaffCollection, Tactics, TacticsSelector, TeamReputation, TeamResult, TeamTraining,
-    TrainingSchedule, TransferItem, Transfers,
+    HappinessEventType, MatchHistory, MatchTacticType, Player, PlayerCollection,
+    PlayerFieldPositionGroup, PlayerSquadStatus, PlayerStatusType, StaffCollection, Tactics,
+    TacticsSelector, TeamReputation, TeamResult, TeamTraining, TrainingSchedule, TransferItem,
+    Transfers,
 };
 use chrono::NaiveDate;
 use std::borrow::Cow;
@@ -119,7 +120,6 @@ impl Team {
     /// at an elite club, and every downstream code path keyed on
     /// squad status would treat them as surplus.
     fn update_squad_statuses(&mut self, date: chrono::NaiveDate) {
-        use crate::PlayerFieldPositionGroup;
         use std::collections::HashMap;
 
         let mut by_group: HashMap<PlayerFieldPositionGroup, Vec<u8>> = HashMap::new();
@@ -157,7 +157,6 @@ impl Team {
     /// morale consequences: a stripped former captain takes a hit, a new
     /// appointee gets a lift.
     pub fn assign_captaincy(&mut self, date: chrono::NaiveDate) {
-        use crate::HappinessEventType;
         use chrono::Datelike;
 
         let now_year = date.year();

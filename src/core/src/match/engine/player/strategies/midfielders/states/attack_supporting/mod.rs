@@ -15,13 +15,15 @@ const CHANNEL_WIDTH: f32 = 15.0; // Width of vertical channels for runs
 pub struct MidfielderAttackSupportingState {}
 
 impl StateProcessingHandler for MidfielderAttackSupportingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If player has the ball, transition to running with ball
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
             ));
         }
+
+        // Loose-ball claim lives in the dispatcher.
 
         // If team loses possession, switch to defensive duties
         if !ctx.team().is_control_ball() {
@@ -95,9 +97,6 @@ impl StateProcessingHandler for MidfielderAttackSupportingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

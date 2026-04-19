@@ -60,24 +60,32 @@ pub fn calculate_match_rating(
     };
     rating += (stats.tackles as f32 * tackle_weight).min(0.5);
 
-    // Interceptions — reading the game is valuable, especially for defenders
+    // Interceptions — reading the game is valuable, especially for defenders.
+    // For goalkeepers this includes commanding the box: claimed crosses,
+    // through-balls collected, aerials caught — same weight as defenders
+    // because the GK's "cleaned ball" work is a direct defensive action.
     let interception_weight = match pos {
         PlayerFieldPositionGroup::Defender => 0.15,
+        PlayerFieldPositionGroup::Goalkeeper => 0.15,
         PlayerFieldPositionGroup::Midfielder => 0.10,
         _ => 0.06,
     };
-    rating += (stats.interceptions as f32 * interception_weight).min(0.6);
+    rating += (stats.interceptions as f32 * interception_weight).min(0.8);
 
     // ── Goalkeeper saves ─────────────────────────────────────────────────
 
     if pos == PlayerFieldPositionGroup::Goalkeeper {
-        // Each save is a tangible contribution: +0.15 per save, cap +1.5
-        let save_bonus = (stats.saves as f32 * 0.15).min(1.5);
+        // Each save is a tangible contribution. Bumped from +0.15 to
+        // +0.2 per save (cap +2.0): real match ratings reward busy
+        // keepers heavily, and this keeps a GK who made 8 saves but
+        // conceded 2 comfortably at 6.5+ instead of sitting at 6.0.
+        let save_bonus = (stats.saves as f32 * 0.2).min(2.0);
         rating += save_bonus;
 
-        // Busy keeper who kept a clean sheet — exceptional performance
+        // Busy keeper who kept a clean sheet — exceptional performance,
+        // the kind of shutout that should read 8-9+.
         if stats.saves >= 5 && opponent_goals == 0 {
-            rating += 0.3;
+            rating += 0.5;
         }
     }
 
@@ -93,21 +101,54 @@ pub fn calculate_match_rating(
 
     if opponent_goals == 0 {
         match pos {
-            PlayerFieldPositionGroup::Goalkeeper => rating += 0.5,
+            // A clean sheet is the keeper's highest-value outcome —
+            // raised from +0.5 to +1.0 so a quiet shutout lands at
+            // 7 and a busy one (5+ saves) comfortably at 8+.
+            PlayerFieldPositionGroup::Goalkeeper => rating += 1.0,
             PlayerFieldPositionGroup::Defender => rating += 0.3,
             PlayerFieldPositionGroup::Midfielder => rating += 0.1,
             _ => {}
         }
     }
 
-    // ── Conceding many goals penalty ─────────────────────────────────────
+    // ── Conceding goals penalty ──────────────────────────────────────────
+    //
+    // The goalkeeper owns every conceded goal — a flat -0.5 for "3+"
+    // let a GK who shipped seven still post an 8/10 (base 6 + saves 1.5
+    // + passing 0.8 + etc). Penalty has to scale with the actual number
+    // of goals past them.
 
-    if opponent_goals >= 3 {
-        match pos {
-            PlayerFieldPositionGroup::Goalkeeper => rating -= 0.5,
-            PlayerFieldPositionGroup::Defender => rating -= 0.3,
-            _ => {}
+    match pos {
+        PlayerFieldPositionGroup::Goalkeeper => {
+            // Real-football rating is performance-driven: the GK
+            // doesn't "own" every goal (defenders, luck, unstoppable
+            // shots all contribute). Linear base + linear extra past
+            // the 3rd — not quadratic, because quadratic clamps the
+            // worst cases at 1.0 regardless of effort, making a
+            // 10-conceding-with-saves display as "as bad as possible"
+            // same as a 10-conceding-with-zero-saves.
+            //   1 conceded → -0.15   (normal, still ~6 with saves)
+            //   2 conceded → -0.30   (below avg, ~6 with saves)
+            //   3 conceded → -0.45   (bad day, ~5.7)
+            //   4 conceded → -1.00   (slipping, ~5)
+            //   5 conceded → -1.55   (~4.5)
+            //   6 conceded → -2.10   (awful, ~4)
+            //   7 conceded → -2.65   (~3.7)
+            //   8 conceded → -3.20   (~3)
+            //  10 conceded → -4.30   (~2, not hard-floored)
+            let base = opponent_goals as f32 * 0.15;
+            let heavy = (opponent_goals as f32 - 3.0).max(0.0) * 0.4;
+            rating -= base + heavy;
         }
+        PlayerFieldPositionGroup::Defender => {
+            // -0.25 per goal past the 2nd, capped at -1.5. Defenders
+            // share blame for a hammering but not on the GK's scale.
+            if opponent_goals >= 3 {
+                let extra = (opponent_goals as f32 - 2.0).min(6.0);
+                rating -= extra * 0.25;
+            }
+        }
+        _ => {}
     }
 
     // ── xG-based finishing quality ───────────────────────────────────────
@@ -228,6 +269,78 @@ mod tests {
         let expected_rating = calculate_match_rating(&expected, 2, 0);
 
         assert!(clinical_rating > expected_rating);
+    }
+
+    #[test]
+    fn goalkeeper_shipping_seven_goals_is_rated_awful() {
+        // Regression: flat conceded penalty let a GK with 7 goals
+        // against post ~8.0 (save bonuses outweighed the penalty).
+        // A 7-goal shipping has to stay in the "disaster" band.
+        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let rating = calculate_match_rating(&gk, 0, 7);
+        assert!(rating < 4.0, "GK conceding 7 rated {} — too high", rating);
+    }
+
+    #[test]
+    fn goalkeeper_three_goals_is_below_average_not_awful() {
+        // Regression: an overly-steep linear penalty put a GK with
+        // 3 conceded near 4.0 (matches a player who should be dropped).
+        // Conceding 3 is a bad day, not a disaster — should land in
+        // the 5.0-6.2 band: around or just below average.
+        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let rating = calculate_match_rating(&gk, 0, 3);
+        assert!(rating >= 5.0 && rating <= 6.2,
+            "GK conceding 3 rated {} — should be around 6", rating);
+    }
+
+    #[test]
+    fn goalkeeper_clean_sheet_is_well_rewarded() {
+        // A GK who keeps a clean sheet should be in the 7+ band,
+        // busy ones in the 8+ band. Clean sheets are the headline
+        // keeper achievement and the rating needs to reflect that.
+        let quiet = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 1, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let busy = make_stats(0, 0, 15, 12, 0, 0, 0, 0, 6, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let quiet_rating = calculate_match_rating(&quiet, 1, 0);
+        let busy_rating = calculate_match_rating(&busy, 1, 0);
+        assert!(quiet_rating >= 7.0,
+            "Quiet CS rated {} — should be 7+", quiet_rating);
+        assert!(busy_rating >= 8.0,
+            "Busy CS (6 saves, clean sheet) rated {} — should be 8+", busy_rating);
+    }
+
+    #[test]
+    fn goalkeeper_two_goals_is_around_six() {
+        // Regression: earlier linear -0.6 per goal put a 2-goal-shipping
+        // GK at 4-5. Real football: a keeper who made some saves but
+        // let in a couple should be around 6 — not "bad", just "had a
+        // normal match where their team lost 2-0".
+        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let rating = calculate_match_rating(&gk, 0, 2);
+        assert!(rating >= 5.5 && rating <= 6.5,
+            "GK conceding 2 rated {} — should be around 6", rating);
+    }
+
+    #[test]
+    fn conceded_penalty_scales_with_goals() {
+        // One-goal GK should outrate a six-goal GK.
+        let one = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let six = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let one_rating = calculate_match_rating(&one, 0, 1);
+        let six_rating = calculate_match_rating(&six, 0, 6);
+        assert!(one_rating - six_rating > 1.5,
+            "1-goal GK ({}) vs 6-goal GK ({}) — delta too small", one_rating, six_rating);
+    }
+
+    #[test]
+    fn goalkeeper_ten_conceded_does_not_floor_at_one() {
+        // Regression: quadratic penalty put a 10-goal shipping at the
+        // 1.0 floor, so save bonuses couldn't distinguish "awful + no
+        // effort" from "awful but made saves". Keep the rating low
+        // but not pinned to the absolute minimum.
+        let gk = make_stats(0, 0, 20, 15, 0, 0, 0, 0, 3, 0.0, PlayerFieldPositionGroup::Goalkeeper);
+        let rating = calculate_match_rating(&gk, 0, 10);
+        assert!(rating >= 1.5 && rating <= 3.0,
+            "GK conceding 10 with 3 saves rated {} — should sit in the 1.5-3.0 disaster band, not the 1.0 floor", rating);
     }
 
     #[test]

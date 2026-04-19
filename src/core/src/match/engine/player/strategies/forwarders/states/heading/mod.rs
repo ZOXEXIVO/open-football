@@ -15,7 +15,7 @@ const HEADING_DISTANCE_THRESHOLD: f32 = 4.0;
 pub struct ForwardHeadingState {}
 
 impl StateProcessingHandler for ForwardHeadingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_position = ctx.tick_context.positions.ball.position;
 
         // Ball too far — transition back to running
@@ -47,9 +47,6 @@ impl StateProcessingHandler for ForwardHeadingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

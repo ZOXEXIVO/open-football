@@ -43,6 +43,7 @@ pub(crate) struct NegotiationData {
     pub(crate) buying_club_id: u32,
     pub(crate) offer_amount: f64,
     pub(crate) is_loan: bool,
+    pub(crate) has_option_to_buy: bool,
     pub(crate) is_unsolicited: bool,
     pub(crate) phase: NegotiationPhase,
     pub(crate) selling_rep: f32,
@@ -62,6 +63,14 @@ pub(crate) struct NegotiationData {
     /// Cached names for cross-country (player not accessible from buying country)
     pub(crate) player_name: String,
     pub(crate) selling_club_name: String,
+    /// Annual wage the buying club has staged for PersonalTerms.
+    pub(crate) offered_annual_wage: Option<u32>,
+    /// Buying club's league reputation (0–10000). Used to anchor the
+    /// player's reservation wage and for wage installation fallback.
+    pub(crate) buying_league_reputation: u16,
+    /// Sell-on percentage pledged in the buyer's offer, owed to the current
+    /// seller on the player's next sale.
+    pub(crate) sell_on_percentage: Option<f32>,
 }
 
 /// A completed negotiation that needs execution at SimulatorData level.
@@ -74,6 +83,16 @@ pub(crate) struct DeferredTransfer {
     pub(crate) buying_club_id: u32,
     pub(crate) fee: f64,
     pub(crate) is_loan: bool,
+    /// If true, record a contractual option-to-buy clause on the loan so the
+    /// buyer can trigger a permanent purchase at window close / loan end.
+    pub(crate) has_option_to_buy: bool,
+    /// Annual wage agreed in PersonalTerms — drives installed salary at execution.
+    pub(crate) agreed_annual_wage: Option<u32>,
+    /// Buying club's league reputation, for wage fallback at execution time.
+    pub(crate) buying_league_reputation: u16,
+    /// If the buyer's offer carried a sell-on clause, this is the percentage
+    /// owed to the *current seller* on the player's next permanent sale.
+    pub(crate) sell_on_percentage: Option<f32>,
 }
 
 pub(crate) fn can_club_accept_player(club: &Club) -> bool {

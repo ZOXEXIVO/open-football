@@ -1,5 +1,5 @@
 use crate::club::{PlayerFieldPositionGroup, PlayerPositionType};
-use crate::{Player, PlayerStatusType, Tactics};
+use crate::{Player, PlayerStatusType, TacticalStyle, Tactics};
 
 pub const DEFAULT_SQUAD_SIZE: usize = 11;
 pub const DEFAULT_BENCH_SIZE: usize = 7;
@@ -101,7 +101,7 @@ pub fn tactical_style_bonus(
     let mut bonus = 0.0;
 
     match tactics.tactical_style() {
-        crate::TacticalStyle::Attacking => {
+        TacticalStyle::Attacking => {
             if position.is_forward()
                 || position == PlayerPositionType::AttackingMidfielderCenter
             {
@@ -109,23 +109,23 @@ pub fn tactical_style_bonus(
                 bonus += player.skills.mental.off_the_ball * 0.1;
             }
         }
-        crate::TacticalStyle::Defensive => {
+        TacticalStyle::Defensive => {
             if position.is_defender() || position == PlayerPositionType::DefensiveMidfielder {
                 bonus += player.skills.technical.tackling * 0.1;
                 bonus += player.skills.mental.positioning * 0.1;
             }
         }
-        crate::TacticalStyle::Possession => {
+        TacticalStyle::Possession => {
             bonus += player.skills.technical.passing * 0.08;
             bonus += player.skills.mental.vision * 0.08;
         }
-        crate::TacticalStyle::Counterattack => {
+        TacticalStyle::Counterattack => {
             if position.is_forward() || position.is_midfielder() {
                 bonus += player.skills.physical.pace * 0.1;
                 bonus += player.skills.mental.off_the_ball * 0.08;
             }
         }
-        crate::TacticalStyle::WingPlay | crate::TacticalStyle::WidePlay => {
+        TacticalStyle::WingPlay | TacticalStyle::WidePlay => {
             if position == PlayerPositionType::WingbackLeft
                 || position == PlayerPositionType::WingbackRight
                 || position == PlayerPositionType::MidfielderLeft

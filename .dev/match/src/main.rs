@@ -126,12 +126,22 @@ fn make_squad(
 fn save_gzip_json(path: &PathBuf, data: &[u8]) {
     let file = std::fs::File::create(path)
         .unwrap_or_else(|e| panic!("failed to create {}: {}", path.display(), e));
-    let mut encoder = GzEncoder::new(file, Compression::best());
+    // Default (level 6) over best (9): ~3–5× faster with <2% size difference
+    // on already-compact position JSON. Dev iteration favours speed.
+    let mut encoder = GzEncoder::new(file, Compression::default());
     encoder.write_all(data).expect("failed to write gzip data");
     encoder.finish().expect("failed to finish gzip");
 }
 
 fn main() {
+    // Route `log::warn!` from core (notably the ball-stall snapshot in
+    // `ball.rs`) to stderr. Default filter `warn` surfaces diagnostics
+    // without drowning the terminal in per-tick debug output. Override
+    // with `RUST_LOG=info` or `RUST_LOG=debug` for more verbosity.
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+        .format_timestamp_millis()
+        .init();
+
     // Enable event+state tracking for dev viewer
     core::set_match_events_mode(true);
 
@@ -169,12 +179,13 @@ fn main() {
     let chunks = result.position_data.split_into_chunks(CHUNK_DURATION_MS);
     let chunk_count = chunks.len();
 
-    // Save chunks in parallel with progress
-    let done = AtomicUsize::new(0);
+    // Save chunks in parallel. No per-chunk progress print: `\r` updates
+    // from rayon threads interleave non-monotonically and mangle the
+    // terminal. One line after the join is enough — the save step is
+    // seconds long anyway.
+    let save_start = std::time::Instant::now();
     let total_raw = AtomicUsize::new(0);
     let total_gz = AtomicUsize::new(0);
-
-    print!("Save results: 0%");
 
     chunks.par_iter().enumerate().for_each(|(idx, chunk)| {
         let chunk_data = serde_json::to_vec(chunk).expect("failed to serialize chunk");
@@ -185,16 +196,19 @@ fn main() {
 
         total_raw.fetch_add(raw_size, Ordering::Relaxed);
         total_gz.fetch_add(gz_size, Ordering::Relaxed);
-        let completed = done.fetch_add(1, Ordering::Relaxed) + 1;
-        let pct = completed * 100 / chunk_count;
-        print!("\rSave results: {}%", pct);
     });
 
     let raw = total_raw.load(Ordering::Relaxed) as f64;
     let gz = total_gz.load(Ordering::Relaxed) as f64;
     let ratio = if gz > 0.0 { raw / gz } else { 0.0 };
-    println!("\rCompleted: compression ratio {:.1}x ({:.0} MB -> {:.0} MB)",
-        ratio, raw / 1_048_576.0, gz / 1_048_576.0);
+    println!(
+        "Saved {} chunks in {}ms: {:.1}x compression ({:.0} MB -> {:.0} MB)",
+        chunk_count,
+        save_start.elapsed().as_millis(),
+        ratio,
+        raw / 1_048_576.0,
+        gz / 1_048_576.0,
+    );
 
     // Save metadata
     let metadata = MetadataJson {

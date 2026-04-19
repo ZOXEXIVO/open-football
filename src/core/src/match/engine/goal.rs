@@ -1,6 +1,6 @@
 use crate::r#match::ball::events::GoalSide;
 use crate::r#match::field::MatchField;
-use crate::r#match::MatchContext;
+use crate::r#match::{MatchContext, PlayerSide};
 use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
@@ -64,6 +64,51 @@ impl GoalPosition {
     }
 }
 
+/// Place an outfield player from `side` on the centre spot and give
+/// them protected possession. Used by every restart that puts the
+/// ball on the centre circle — goals, match start, halftime, start of
+/// extra time. Without this, `reset_players_positions` leaves the
+/// whole squad at formation start and the ball sits with no claimant
+/// — once `in_flight_state` expires nobody is close enough to keep
+/// it, ownership gets nulled, and the period stalls for ~14 seconds
+/// until the emergency chaser-override fires.
+pub fn assign_kickoff(field: &mut MatchField, side: PlayerSide) {
+    let ball_pos = field.ball.position;
+    let kickoff_player_id = field
+        .players
+        .iter()
+        .filter(|p| p.side == Some(side))
+        .filter(|p| {
+            p.tactical_position.current_position.position_group()
+                != PlayerFieldPositionGroup::Goalkeeper
+        })
+        .min_by(|a, b| {
+            let da = (a.position - ball_pos).norm_squared();
+            let db = (b.position - ball_pos).norm_squared();
+            da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|p| p.id);
+
+    if let Some(player_id) = kickoff_player_id {
+        if let Some(kicker) = field.players.iter_mut().find(|p| p.id == player_id) {
+            kicker.position = ball_pos;
+            kicker.velocity = Vector3::zeros();
+            kicker.set_default_state();
+            kicker.in_state_time = 0;
+        }
+        field.ball.current_owner = Some(player_id);
+        // Short ping-pong guard only — the kicker needs to take the
+        // ball forward, not hold on to it for 1.2 s while the whole
+        // pack watches. A 30-tick cooldown is enough to stop the
+        // ownership logic from immediately ripping the ball back out
+        // of their feet and falls away by the time the state machine
+        // decides to pass.
+        field.ball.claim_cooldown = 30;
+        field.ball.flags.in_flight_state = 0;
+        field.ball.contested_claim_count = 0;
+    }
+}
+
 /// Reset field after a goal: reposition players, assign kickoff possession.
 pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     if !field.ball.goal_scored {
@@ -75,25 +120,8 @@ pub fn handle_goal_reset(field: &mut MatchField, context: &mut MatchContext) {
     field.reset_players_positions();
     field.ball.reset();
 
-    // Kickoff: give the conceding team protected possession at center
     if let Some(side) = kickoff_side {
-        let ball_pos = field.ball.position;
-        let kickoff_player_id = field.players.iter()
-            .filter(|p| p.side == Some(side))
-            .filter(|p| p.tactical_position.current_position.position_group() != PlayerFieldPositionGroup::Goalkeeper)
-            .min_by(|a, b| {
-                let da = (a.position - ball_pos).norm_squared();
-                let db = (b.position - ball_pos).norm_squared();
-                da.partial_cmp(&db).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .map(|p| p.id);
-
-        if let Some(player_id) = kickoff_player_id {
-            field.ball.current_owner = Some(player_id);
-            field.ball.claim_cooldown = 120;
-            field.ball.flags.in_flight_state = 120;
-            field.ball.contested_claim_count = 0;
-        }
+        assign_kickoff(field, side);
     }
 
     field.ball.goal_scored = false;

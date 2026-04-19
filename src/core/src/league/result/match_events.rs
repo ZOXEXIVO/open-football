@@ -9,7 +9,7 @@ use crate::club::team::team_talks::{apply_team_talk, MatchPhase, TeamTalkContext
 use crate::club::StaffPosition;
 use crate::continent::competitions::{CHAMPIONS_LEAGUE_ID, EUROPA_LEAGUE_ID, CONFERENCE_LEAGUE_ID};
 use crate::r#match::engine::result::MatchResultRaw;
-use crate::r#match::MatchResult;
+use crate::r#match::{FieldSquad, MatchResult};
 use crate::simulator::SimulatorData;
 use super::LeagueResult;
 
@@ -500,7 +500,7 @@ fn reputation_weights(
 
 #[allow(clippy::too_many_arguments)]
 fn dispatch_match_outcomes(
-    side: &crate::r#match::FieldSquad,
+    side: &FieldSquad,
     team_conceded: u8,
     details: &MatchResultRaw,
     data: &mut SimulatorData,

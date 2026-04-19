@@ -11,7 +11,7 @@ const RESTING_STAMINA_THRESHOLD: u32 = 60; // Minimum stamina to transition out 
 pub struct GoalkeeperRestingState {}
 
 impl StateProcessingHandler for GoalkeeperRestingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Emergency response: fast ball heading towards player
         if ctx.ball().is_towards_player_with_angle(0.7)
             && ctx.ball().distance() < 100.0
@@ -31,9 +31,6 @@ impl StateProcessingHandler for GoalkeeperRestingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

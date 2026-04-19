@@ -1,7 +1,8 @@
 pub mod routes;
 
+use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData};
+use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
@@ -35,7 +36,7 @@ pub struct LeagueTransfersTemplate {
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub i18n: crate::I18n,
+    pub i18n: I18n,
     pub lang: String,
     pub league_slug: String,
     pub completed_transfers: Vec<CompletedTransferItem>,
@@ -224,8 +225,8 @@ pub async fn league_transfers_action(
     let league_title = views::league_display_name(&league, &i18n, simulator_data);
 
     Ok(LeagueTransfersTemplate {
-        css_version: crate::common::default_handler::CSS_VERSION,
-        computer_name: &crate::common::default_handler::COMPUTER_NAME,
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
         title: format!("{} - Transfers", league_title),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

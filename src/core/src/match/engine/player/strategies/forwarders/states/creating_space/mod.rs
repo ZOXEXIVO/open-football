@@ -4,6 +4,7 @@ use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
+use crate::TacticalStyle;
 
 // Movement patterns for forwards
 #[derive(Debug, Clone, Copy)]
@@ -33,7 +34,7 @@ const PASSING_LANE_IMPORTANCE: f32 = 15.0; // High weight for clear passing lane
 pub struct ForwardCreatingSpaceState {}
 
 impl StateProcessingHandler for ForwardCreatingSpaceState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if player has the ball
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(
@@ -77,9 +78,6 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let field_width = ctx.context.field_size.width as f32;
@@ -87,8 +85,8 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         let ball_pos = ctx.tick_context.positions.ball.position;
 
         let attacking_direction = match ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => 1.0,
-            Some(crate::r#match::PlayerSide::Right) => -1.0,
+            Some(PlayerSide::Left) => 1.0,
+            Some(PlayerSide::Right) => -1.0,
             None => 1.0,
         };
 
@@ -960,19 +958,19 @@ impl ForwardCreatingSpaceState {
 
         // Adjust based on tactical style
         match player_tactics.tactical_style() {
-            crate::TacticalStyle::Attacking => {
+            TacticalStyle::Attacking => {
                 // Push higher up the pitch
                 let attacking_direction = self.get_attacking_direction(ctx);
                 position += attacking_direction * 10.0;
             }
-            crate::TacticalStyle::Counterattack => {
+            TacticalStyle::Counterattack => {
                 // Stay ready to exploit space
                 if self.has_space_behind_defense(ctx) {
                     let attacking_direction = self.get_attacking_direction(ctx);
                     position += attacking_direction * 15.0;
                 }
             }
-            crate::TacticalStyle::WidePlay | crate::TacticalStyle::WingPlay => {
+            TacticalStyle::WidePlay | TacticalStyle::WingPlay => {
                 // Push wider
                 let field_height = ctx.context.field_size.height as f32;
                 if position.y < field_height / 2.0 {
@@ -981,7 +979,7 @@ impl ForwardCreatingSpaceState {
                     position.y = (position.y + 10.0).min(field_height - 10.0);
                 }
             }
-            crate::TacticalStyle::Possession => {
+            TacticalStyle::Possession => {
                 // Come shorter to help build play
                 let ball_pos = ctx.tick_context.positions.ball.position;
                 let to_ball = (ball_pos - position).normalize();
@@ -1088,8 +1086,8 @@ impl ForwardCreatingSpaceState {
 
             // Clamp to just behind defensive line
             match ctx.player.side {
-                Some(crate::r#match::PlayerSide::Left) => ideal_x.min(defensive_line - 3.0),
-                Some(crate::r#match::PlayerSide::Right) => ideal_x.max(defensive_line + 3.0),
+                Some(PlayerSide::Left) => ideal_x.min(defensive_line - 3.0),
+                Some(PlayerSide::Right) => ideal_x.max(defensive_line + 3.0),
                 None => ideal_x,
             }
         } else {

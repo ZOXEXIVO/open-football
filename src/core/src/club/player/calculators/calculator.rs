@@ -17,6 +17,7 @@ impl PlayerValueCalculator {
         let status_factor = determine_status_factor(player);
         let contract_factor = determine_contract_factor(player, now);
         let performance_factor = determine_performance_factor(player);
+        let recent_form_factor = determine_recent_form_factor(player);
         let career_factor = determine_career_consistency_factor(player);
         let reputation_factor = determine_reputation_factor(player);
         let position_factor = determine_position_factor(player);
@@ -28,6 +29,7 @@ impl PlayerValueCalculator {
             * status_factor
             * contract_factor
             * performance_factor
+            * recent_form_factor
             * career_factor
             * reputation_factor
             * position_factor
@@ -250,6 +252,30 @@ fn determine_performance_factor(player: &Player) -> f64 {
     }
 
     factor
+}
+
+/// Recent-form EMA multiplier. Complements the longer-horizon
+/// `determine_performance_factor` (season average rating) with a short-window
+/// signal that reacts to current form. A blazing run is worth a modest
+/// premium; a cold streak is a discount. Zero form (pre-season / no match
+/// data yet) returns 1.0 — neutral.
+fn determine_recent_form_factor(player: &Player) -> f64 {
+    let form = player.load.form_rating;
+    if form <= 0.0 {
+        return 1.0;
+    }
+    // Around 6.0 is neutral, 7.5+ hot, 5.5- cold. Kept lighter than the
+    // season-average factor so two signals don't double-penalise a bad
+    // stretch inside an otherwise-fine season.
+    match form {
+        f if f >= 8.0 => 1.10,
+        f if f >= 7.5 => 1.06,
+        f if f >= 7.0 => 1.03,
+        f if f >= 6.5 => 1.00,
+        f if f >= 6.0 => 0.98,
+        f if f >= 5.5 => 0.94,
+        _ => 0.88,
+    }
 }
 
 /// Career consistency: players with a track record of mediocre performance across

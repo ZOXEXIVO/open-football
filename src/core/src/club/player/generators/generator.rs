@@ -782,6 +782,7 @@ impl PlayerGenerator {
             plan: None,
             favorite_clubs: Vec::new(),
             sold_from: None,
+            sell_on_obligations: Vec::new(),
             traits: Vec::new(), // academy youth start with no traits; grow via training
             rapport: PlayerRapport::new(),
             promises: Vec::new(),

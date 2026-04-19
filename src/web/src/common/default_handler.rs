@@ -1,3 +1,4 @@
+use crate::i18n::{I18nManager, DEFAULT_LANGUAGE};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Redirect};
 
@@ -53,10 +54,10 @@ pub async fn default_handler(uri: axum::http::Uri) -> axum::response::Response {
 
     // Check if path is missing a language prefix — redirect to default language
     let first_segment = path_str.split('/').next().unwrap_or("");
-    let has_lang_prefix = crate::i18n::I18nManager::is_supported_language(first_segment);
+    let has_lang_prefix = I18nManager::is_supported_language(first_segment);
 
     if !has_lang_prefix && !path_str.is_empty() {
-        let redirect_url = format!("/{}/{}", crate::i18n::DEFAULT_LANGUAGE, path_str);
+        let redirect_url = format!("/{}/{}", DEFAULT_LANGUAGE, path_str);
         return Redirect::permanent(&redirect_url).into_response();
     }
 

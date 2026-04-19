@@ -1,10 +1,11 @@
 use crate::club::team::behaviour::{ContractTermination, ManagerTalkResult, ManagerTalkType, PlayerRelationshipChangeResult, TeamBehaviourResult};
 use crate::context::GlobalContext;
 use crate::utils::{DateUtils, FloatUtils};
+use crate::utils::IntegerUtils;
 use crate::{
     ChangeType, ContractType, HappinessEventType, Person, PersonBehaviourState, Player,
-    PlayerCollection, PlayerPositionType, PlayerRelation, PlayerSquadStatus, PlayerStatusType,
-    Staff, StaffCollection, StaffPosition,
+    PlayerCollection, PlayerFieldPositionGroup, PlayerPositionType, PlayerRelation,
+    PlayerSquadStatus, PlayerStatusType, Staff, StaffCollection, StaffPosition,
 };
 use chrono::{Datelike, NaiveDate};
 use log::debug;
@@ -634,7 +635,6 @@ impl TeamBehaviour {
         players: &mut PlayerCollection,
         ctx: &GlobalContext<'_>,
     ) {
-        use crate::HappinessEventType;
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
             return;
@@ -679,8 +679,6 @@ impl TeamBehaviour {
     /// Scaled so a calm, sportsmanlike star ~never triggers, while a hot-
     /// head with controversy >15 and temperament <8 fires frequently.
     fn process_controversy_incidents(players: &mut PlayerCollection, ctx: &GlobalContext<'_>) {
-        use crate::HappinessEventType;
-        use crate::utils::IntegerUtils;
         let today = ctx.simulation.date.date();
         if today.day() != 1 {
             return; // Monthly cadence
@@ -775,7 +773,6 @@ impl TeamBehaviour {
             return; // Monthly only
         }
 
-        use crate::PlayerFieldPositionGroup;
         use std::collections::HashMap;
 
         let mut top_by_group: HashMap<PlayerFieldPositionGroup, u32> = HashMap::new();
@@ -801,9 +798,9 @@ impl TeamBehaviour {
             // the world works.
             if !matches!(
                 contract.squad_status,
-                crate::PlayerSquadStatus::KeyPlayer
-                    | crate::PlayerSquadStatus::FirstTeamRegular
-                    | crate::PlayerSquadStatus::FirstTeamSquadRotation
+                PlayerSquadStatus::KeyPlayer
+                    | PlayerSquadStatus::FirstTeamRegular
+                    | PlayerSquadStatus::FirstTeamSquadRotation
             ) {
                 continue;
             }

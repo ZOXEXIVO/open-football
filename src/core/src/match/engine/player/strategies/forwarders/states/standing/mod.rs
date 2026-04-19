@@ -9,7 +9,7 @@ const PRESS_DISTANCE: f32 = 20.0; // Distance within which to press opponents
 pub struct ForwardStandingState {}
 
 impl StateProcessingHandler for ForwardStandingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
@@ -54,22 +54,7 @@ impl StateProcessingHandler for ForwardStandingState {
                 ));
             }
 
-            // Emergency: ball nearby and unowned - only chase if nearest teammate
-            if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-                let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-                if ball_velocity < 3.0 {
-                    let ball_pos = ctx.tick_context.positions.ball.position;
-                    let my_dist = ctx.ball().distance();
-                    let closer_teammate = ctx.players().teammates().all()
-                        .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
-
-                    if !closer_teammate {
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::TakeBall,
-                        ));
-                    }
-                }
-            }
+            // Loose-ball claim lives in the dispatcher.
 
             // Minimum time in standing state to prevent rapid state oscillation
             if ctx.in_state_time < 10 {
@@ -91,11 +76,6 @@ impl StateProcessingHandler for ForwardStandingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic for advanced decision-making if necessary
-        // For example, adjust positioning based on opponent movement
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Check if player should follow waypoints even when standing

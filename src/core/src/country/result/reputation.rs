@@ -3,7 +3,7 @@ use log::debug;
 use super::CountryResult;
 use crate::utils::DateUtils;
 use crate::{ClubResult, Country};
-use crate::league::LeagueResult;
+use crate::league::{League, LeagueResult};
 use crate::simulator::SimulatorData;
 
 impl CountryResult {
@@ -81,7 +81,7 @@ impl CountryResult {
         }
     }
 
-    fn calculate_league_competitiveness(league: &crate::league::League) -> f32 {
+    fn calculate_league_competitiveness(league: &League) -> f32 {
         if league.table.rows.is_empty() {
             return 0.0;
         }

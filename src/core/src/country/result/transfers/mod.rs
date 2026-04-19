@@ -106,16 +106,10 @@ impl CountryResult {
         }
 
         // Phase 2: Execute all completed transfers (domestic + foreign) via unified path
-        for transfer in deferred_transfers {
+        for transfer in &deferred_transfers {
             let success = execution::execute_transfer(
                 data,
-                transfer.player_id,
-                transfer.selling_country_id,
-                transfer.selling_club_id,
-                transfer.buying_country_id,
-                transfer.buying_club_id,
-                transfer.fee,
-                transfer.is_loan,
+                transfer,
                 current_date,
             );
 

@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperShootingState {}
 
 impl StateProcessingHandler for GoalkeeperShootingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
@@ -31,10 +31,6 @@ impl StateProcessingHandler for GoalkeeperShootingState {
         ))
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Remain stationary while shooting

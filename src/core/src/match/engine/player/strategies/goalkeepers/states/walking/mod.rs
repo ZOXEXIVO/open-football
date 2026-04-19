@@ -13,7 +13,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperWalkingState {}
 
 impl StateProcessingHandler for GoalkeeperWalkingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Direct catch for very close slow balls
         if ctx.ball().distance() < 5.0
             && !ctx.ball().is_owned()
@@ -100,9 +100,6 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate optimal position using goalkeeper skills

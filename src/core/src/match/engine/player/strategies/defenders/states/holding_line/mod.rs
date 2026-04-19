@@ -16,7 +16,7 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.5; // Wider angle detection for goal-bound ru
 pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Calculate the defensive line position (x-axis: goal-to-goal)
         let defensive_line_position = self.calculate_defensive_line_position(ctx);
 
@@ -211,11 +211,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        // For now, return None to indicate no state change
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let current_position = ctx.player.position;

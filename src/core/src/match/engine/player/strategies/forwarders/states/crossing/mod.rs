@@ -14,7 +14,7 @@ const CROSS_EXECUTION_TIME: u64 = 5;
 pub struct ForwardCrossingState {}
 
 impl StateProcessingHandler for ForwardCrossingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Lost possession - transition out
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_forward_state(
@@ -54,9 +54,6 @@ impl StateProcessingHandler for ForwardCrossingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Stationary while preparing the cross

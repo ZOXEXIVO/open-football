@@ -8,7 +8,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperCatchingState {}
 
 impl StateProcessingHandler for GoalkeeperCatchingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if self.is_catch_successful(ctx) {
             let mut holding_result =
                 StateChangeResult::with_goalkeeper_state(GoalkeeperState::HoldingBall);
@@ -56,9 +56,6 @@ impl StateProcessingHandler for GoalkeeperCatchingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_distance = ctx.ball().distance();

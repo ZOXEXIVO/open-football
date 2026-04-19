@@ -1,5 +1,5 @@
 use crate::club::staff::perception::{CoachDecisionState, RecentMoveType};
-use crate::Team;
+use crate::{Team, TeamType};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -149,14 +149,14 @@ impl SquadComposition {
             .iter()
             .map(|&(idx, _)| {
                 let type_name = match teams[idx].team_type {
-                    crate::TeamType::Main => "Main",
-                    crate::TeamType::B => "B Team",
-                    crate::TeamType::Reserve => "U20",
-                    crate::TeamType::U18 => "Under 18s",
-                    crate::TeamType::U19 => "Under 19s",
-                    crate::TeamType::U20 => "Under 20s",
-                    crate::TeamType::U21 => "Under 21s",
-                    crate::TeamType::U23 => "Under 23s",
+                    TeamType::Main => "Main",
+                    TeamType::B => "B Team",
+                    TeamType::Reserve => "U20",
+                    TeamType::U18 => "Under 18s",
+                    TeamType::U19 => "Under 19s",
+                    TeamType::U20 => "Under 20s",
+                    TeamType::U21 => "Under 21s",
+                    TeamType::U23 => "Under 23s",
                 };
                 format!("team_index={}, type={}", idx, type_name)
             })

@@ -21,7 +21,7 @@ fn penalty_save_probability(ctx: &StateProcessingContext) -> f32 {
 pub struct GoalkeeperPenaltyState {}
 
 impl StateProcessingHandler for GoalkeeperPenaltyState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the ball is moving towards the goal
         let is_ball_moving_towards_goal = ctx.ball().is_towards_player();
 
@@ -53,10 +53,6 @@ impl StateProcessingHandler for GoalkeeperPenaltyState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Determine the velocity based on the penalty save attempt

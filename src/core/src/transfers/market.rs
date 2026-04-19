@@ -21,7 +21,13 @@ pub struct TransferListing {
     pub club_id: u32,
     pub team_id: u32,
     pub asking_price: CurrencyValue,
+    /// Kept separate from `asking_price` so decay steps have a reference
+    /// point and can't drift below a sensible floor.
+    pub original_asking_price: CurrencyValue,
     pub listed_date: NaiveDate,
+    /// Last date a decay step was applied. Equal to `listed_date` when
+    /// freshly created. Used to gate "one decay per week" cadence.
+    pub last_decay_date: NaiveDate,
     pub listing_type: TransferListingType,
     pub status: TransferListingStatus,
 }
@@ -54,8 +60,10 @@ impl TransferListing {
             player_id,
             club_id,
             team_id,
-            asking_price,
+            asking_price: asking_price.clone(),
+            original_asking_price: asking_price,
             listed_date,
+            last_decay_date: listed_date,
             listing_type,
             status: TransferListingStatus::Available,
         }
@@ -247,6 +255,29 @@ impl TransferMarket {
     }
 
     pub fn update(&mut self, current_date: NaiveDate) -> Vec<(u32, u32)> {
+        // Stale-listing decay: an Available listing sitting without a bid
+        // loses 5% of its asking every 7 days, down to 60% of the original
+        // ask. Gives sellers a natural market-clearing signal and keeps
+        // listings from sitting forever at an unrealistic price.
+        for listing in self.listings.iter_mut() {
+            if listing.status != TransferListingStatus::Available {
+                continue;
+            }
+            let days_since_decay = (current_date - listing.last_decay_date).num_days();
+            if days_since_decay < 7 {
+                continue;
+            }
+            let steps = (days_since_decay / 7) as i32;
+            let floor = listing.original_asking_price.amount * 0.6;
+            let multiplier = 0.95_f64.powi(steps);
+            let decayed = (listing.asking_price.amount * multiplier).max(floor);
+            listing.asking_price.amount = decayed;
+            listing.last_decay_date = listing
+                .last_decay_date
+                .checked_add_signed(chrono::Duration::days(steps as i64 * 7))
+                .unwrap_or(current_date);
+        }
+
         // Check for expired negotiations
         let expired_ids: Vec<u32> = self.negotiations.iter_mut()
             .filter_map(|(id, negotiation)| {

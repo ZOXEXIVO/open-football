@@ -31,7 +31,7 @@ const LONG_KICK_MIN_DISTANCE: f32 = 60.0; // Reduced from 100.0
 pub struct GoalkeeperPassingState {}
 
 impl StateProcessingHandler for GoalkeeperPassingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Standing,
@@ -115,9 +115,6 @@ impl StateProcessingHandler for GoalkeeperPassingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct ForwardWalkingState {}
 
 impl StateProcessingHandler for ForwardWalkingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.ball().is_owned() {
             if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_forward_state(
@@ -24,23 +24,7 @@ impl StateProcessingHandler for ForwardWalkingState {
             }
         }
         
-        // Emergency: if ball is nearby, slow/stopped, and unowned, go for it
-        // But only if this player is the nearest teammate to prevent mass-chasing
-        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 3.0 {
-                let ball_pos = ctx.tick_context.positions.ball.position;
-                let my_dist = ctx.ball().distance();
-                let closer_teammate = ctx.players().teammates().all()
-                    .any(|t| t.id != ctx.player.id && (t.position - ball_pos).magnitude() < my_dist - 5.0);
-
-                if !closer_teammate {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::TakeBall,
-                    ));
-                }
-            }
-        }
+        // Loose-ball claim lives in the dispatcher.
 
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
@@ -52,9 +36,6 @@ impl StateProcessingHandler for ForwardWalkingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>>  {
         if ctx.player.should_follow_waypoints(ctx) {

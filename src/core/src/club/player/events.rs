@@ -1,4 +1,5 @@
 use crate::club::player::adaptation::PendingSigning;
+use crate::club::player::calculators::WageCalculator;
 use crate::club::player::injury::InjuryType;
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::player::Player;
@@ -48,6 +49,14 @@ pub struct TransferCompletion<'a> {
     pub date: NaiveDate,
     pub selling_club_id: u32,
     pub buying_club_id: u32,
+    /// Annual wage agreed during PersonalTerms. None = compute from context.
+    pub agreed_wage: Option<u32>,
+    /// Buying club's league reputation (0–10000), for fallback wage computation
+    /// when `agreed_wage` is absent.
+    pub buying_league_reputation: u16,
+    /// Sell-on percentage pledged by the buyer to the current seller. Added
+    /// to `player.sell_on_obligations` so the next sale pays the seller out.
+    pub record_sell_on: Option<f32>,
 }
 
 pub struct LoanCompletion<'a> {
@@ -69,14 +78,29 @@ impl Player {
         self.on_transfer(t.from, t.to, t.fee, t.date);
         self.sold_from = Some((t.selling_club_id, t.fee));
         self.reset_on_club_change();
-        self.install_permanent_contract(t.fee, t.date);
+        self.install_permanent_contract(t.date, t.to.reputation, t.buying_league_reputation, t.agreed_wage);
         self.plan = Some(PlayerPlan::from_signing(self.age(t.date), t.fee, t.date));
+        if let Some(pct) = t.record_sell_on {
+            if pct > 0.0 && self.sell_on_obligations.len() < 3 {
+                self.sell_on_obligations.push(crate::club::player::player::SellOnObligation {
+                    beneficiary_club_id: t.selling_club_id,
+                    percentage: pct,
+                });
+            }
+        }
         self.pending_signing = Some(PendingSigning {
             previous_salary,
             fee: t.fee,
             is_loan: false,
             destination_club_id: t.buying_club_id,
         });
+    }
+
+    /// Take and return all active sell-on obligations, clearing the list on
+    /// the player. Used by execution to route money to past beneficiaries
+    /// before crediting the current seller.
+    pub fn drain_sell_on_obligations(&mut self) -> Vec<crate::club::player::player::SellOnObligation> {
+        std::mem::take(&mut self.sell_on_obligations)
     }
 
     /// React to a completed loan. The parent contract is preserved; the
@@ -137,13 +161,22 @@ fn stats_bucket_mut(player: &mut Player, is_cup: bool, is_friendly: bool) -> &mu
 }
 
 impl Player {
-    fn install_permanent_contract(&mut self, fee: f64, date: NaiveDate) {
+    fn install_permanent_contract(
+        &mut self,
+        date: NaiveDate,
+        buying_club_reputation: u16,
+        buying_league_reputation: u16,
+        agreed_wage: Option<u32>,
+    ) {
         let age = self.age(date);
         let years = if age < 24 { 5 } else if age < 28 { 4 } else if age < 32 { 3 } else { 2 };
         let expiry = date
             .checked_add_signed(chrono::Duration::days(years * 365))
             .unwrap_or(date);
-        let salary = (fee * 0.05).max(500.0) as u32;
+        let salary = agreed_wage.unwrap_or_else(|| {
+            let club_score = (buying_club_reputation as f32 / 10_000.0).clamp(0.0, 1.0);
+            WageCalculator::expected_annual_wage(self, age, club_score, buying_league_reputation)
+        });
         self.contract = Some(PlayerClubContract::new(salary, expiry));
         self.contract_loan = None;
     }

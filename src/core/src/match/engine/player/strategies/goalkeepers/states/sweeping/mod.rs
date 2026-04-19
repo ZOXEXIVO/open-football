@@ -12,7 +12,7 @@ const SWEEPING_SPEED_MULTIPLIER: f32 = 1.2; // Multiplier for sweeping speed
 pub struct GoalkeeperSweepingState {}
 
 impl StateProcessingHandler for GoalkeeperSweepingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the ball is within the sweeping distance threshold
         let ball_distance = ctx.ball().distance_to_own_goal();
         if ball_distance > SWEEPING_DISTANCE_THRESHOLD {
@@ -32,10 +32,6 @@ impl StateProcessingHandler for GoalkeeperSweepingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the ball to sweep it away

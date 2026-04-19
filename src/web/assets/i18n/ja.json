@@ -736,5 +736,11 @@
   "watchlist": "ウォッチリスト",
   "work_rate": "運動量",
   "yc": "黄",
-  "years_old": "歳"
+  "years_old": "歳",
+  "search": "検索",
+  "search_placeholder": "国、クラブ、選手を検索...",
+  "search_countries": "国",
+  "search_clubs": "クラブ",
+  "search_players": "選手",
+  "search_no_results": "該当なし"
 }

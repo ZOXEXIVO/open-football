@@ -131,7 +131,8 @@ impl PipelineProcessor {
             .as_ref()
             .map(|b| b.amount)
             .unwrap_or_else(|| (club.finance.balance.balance.max(0) as f64) * 0.3);
-        let budget = if club.finance.is_ffp_breach(date) {
+        let ffp_breach = club.finance.is_ffp_breach(date);
+        let budget = if ffp_breach {
             raw_budget * 0.5
         } else {
             raw_budget
@@ -164,13 +165,17 @@ impl PipelineProcessor {
         let rep_level = team.reputation.level();
 
         // Determine max concurrent negotiations by reputation
-        let max_concurrent = match rep_level {
+        let base_max_concurrent = match rep_level {
             ReputationLevel::Elite => 6,
             ReputationLevel::Continental => 5,
             ReputationLevel::National => 3,
             ReputationLevel::Regional => 2,
             _ => 2,
         };
+        // FFP breach forces discipline — cap at 1 open negotiation. A real
+        // "transfer ban" in everything but name: budget already halved above,
+        // and now the club can't spread what it has across multiple targets.
+        let max_concurrent = if ffp_breach { 1 } else { base_max_concurrent };
 
         // Build squad info for analysis
         let squad: Vec<SquadPlayerInfo> = players

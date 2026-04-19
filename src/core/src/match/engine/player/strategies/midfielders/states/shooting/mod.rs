@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct MidfielderShootingState {}
 
 impl StateProcessingHandler for MidfielderShootingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the midfielder still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Pressing
@@ -47,10 +47,6 @@ impl StateProcessingHandler for MidfielderShootingState {
         ))))
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // No slow processing needed
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Midfielder remains stationary while taking the shot

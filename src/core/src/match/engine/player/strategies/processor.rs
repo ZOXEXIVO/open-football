@@ -18,15 +18,16 @@ use log::debug;
 use nalgebra::Vector3;
 
 pub trait StateProcessingHandler {
-    // Try fast processing
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult>;
-    // Try slow processing with neural network
-    fn process_slow(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult>;
-    // Calculate velocity
-    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>>;
-
-    // Calculate changind conditions
-    fn process_conditions(&self, ctx: ConditionContext);
+    /// Decide whether the state should transition or emit an event this tick.
+    fn process(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        None
+    }
+    /// Per-tick velocity contribution. Default: no movement from this state.
+    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        None
+    }
+    /// Side-effects after the state resolves. Default: no-op.
+    fn process_conditions(&self, _ctx: ConditionContext) {}
 }
 
 impl PlayerFieldPositionGroup {
@@ -37,9 +38,33 @@ impl PlayerFieldPositionGroup {
         context: &MatchContext,
         tick_context: &GameTickContext,
     ) -> StateProcessingResult {
-        let player_state = player.state;
+        // Universal loose-ball override. Applied once at dispatch time so
+        // every state benefits without needing its own copy of the guard.
+        // Without this, the "designated chaser" selected by distance could
+        // be in a state (Shooting, Finishing, Pressing, Dribbling, …) that
+        // had no idea to abandon its current job and claim the ball — and
+        // the ball would sit untouched while everyone assumed someone else
+        // was going for it.
+        //
+        // The symmetric case also matters: a player already IN TakeBall
+        // who's no longer the closest (ball rolled past them, teammate
+        // got closer) should yield back to Running. Without the yield,
+        // chasers pile up over time because TakeBall only exits on
+        // ownership, not on "someone else is a better chaser now".
+        let override_state_time =
+            if Self::should_yield_takeball(*self, player, tick_context) {
+                player.state = Self::yield_state_for(*self);
+                0
+            } else if Self::should_force_takeball(*self, player, tick_context) {
+                player.state = Self::takeball_state_for(*self);
+                0
+            } else {
+                in_state_time
+            };
+        let _ = context; // all needed state lives in player + tick_context
 
-        let state_processor = StateProcessor::new(in_state_time, player, context, tick_context);
+        let player_state = player.state;
+        let state_processor = StateProcessor::new(override_state_time, player, context, tick_context);
 
         match player_state {
             // Common states
@@ -50,6 +75,172 @@ impl PlayerFieldPositionGroup {
             Midfielder(state) => MidfielderStrategies::process(state, state_processor),
             Forward(state) => ForwardStrategies::process(state, state_processor),
         }
+    }
+
+    /// TakeBall variant for this position group. Outfield players commit
+    /// to claiming a loose ball the same way; goalkeepers get their own
+    /// TakeBall which handles the "only if near my box" rules internally.
+    #[inline]
+    fn takeball_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::TakeBall),
+            PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::TakeBall),
+            PlayerFieldPositionGroup::Midfielder => PlayerState::Midfielder(MidfielderState::TakeBall),
+            PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::TakeBall),
+        }
+    }
+
+    /// Default state to drop into when yielding TakeBall back to the pack.
+    /// Outfield players go to Running — their off-ball velocity reshapes
+    /// the defensive block with the new chaser designated. GK returns to
+    /// Attentive — back to reading the game.
+    #[inline]
+    fn yield_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
+        match group {
+            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::Attentive),
+            PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::Running),
+            PlayerFieldPositionGroup::Midfielder => PlayerState::Midfielder(MidfielderState::Running),
+            PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::Running),
+        }
+    }
+
+    /// True when this player is in TakeBall but another teammate is
+    /// strictly-closer to the ball. Releases the chase so the pack doesn't
+    /// accumulate ex-chasers who overshot or got passed by the ball.
+    fn should_yield_takeball(
+        _group: PlayerFieldPositionGroup,
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+    ) -> bool {
+        if !matches!(
+            player.state,
+            PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+                | PlayerState::Defender(DefenderState::TakeBall)
+                | PlayerState::Midfielder(MidfielderState::TakeBall)
+                | PlayerState::Forward(ForwardState::TakeBall)
+        ) {
+            return false;
+        }
+        // If the ball has been claimed, TakeBall's own `process` will
+        // handle the transition to Running. Don't front-run it.
+        if tick_context.ball.is_owned {
+            return false;
+        }
+        let Some(my_side) = player.side else { return false; };
+        // Use landing_position here to match `should_force_takeball`.
+        // If yield used the current aerial position and force used
+        // landing, a designated chaser could get yielded mid-flight
+        // because a teammate happens to be closer to the ball's apex
+        // — and nobody converges on the bounce.
+        let ball_pos = tick_context.positions.ball.landing_position;
+        let my_dist_sq = (ball_pos - player.position).norm_squared();
+        // Hysteresis: only yield if a teammate is MEANINGFULLY closer
+        // (by at least HYSTERESIS units). Otherwise tick-to-tick jitter
+        // in movement swaps the "closest" designation between teammates
+        // every tick, turning the chase into a ping-pong where each
+        // player keeps yielding to the other and nobody commits long
+        // enough to cover the final few units into the claim radius.
+        const HYSTERESIS: f32 = 8.0;
+        let yield_threshold_sq = {
+            let my_dist = my_dist_sq.sqrt();
+            let threshold = (my_dist - HYSTERESIS).max(0.0);
+            threshold * threshold
+        };
+        for tm in tick_context.positions.players.as_slice() {
+            if tm.player_id == player.id || tm.side != my_side {
+                continue;
+            }
+            let d_sq = (ball_pos - tm.position).norm_squared();
+            if d_sq < yield_threshold_sq {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// True when this player should ignore their current-state logic and
+    /// sprint to claim a loose ball. Fires when:
+    ///   - The ball is not owned (free, not in-flight-with-intent),
+    ///   - The ball is within meaningful chase range (saves compute on
+    ///     balls that have rolled into the far corner — someone closer
+    ///     will handle them),
+    ///   - This player is the strictly-closest teammate by raw distance
+    ///     (no ability weighting — we want exactly one claimant, not the
+    ///     tolerance band of `is_best_player_to_chase_ball`),
+    ///   - Not already in TakeBall (don't re-trigger and reset timers).
+    fn should_force_takeball(
+        group: PlayerFieldPositionGroup,
+        player: &MatchPlayer,
+        tick_context: &GameTickContext,
+    ) -> bool {
+        // Already chasing — leave the state alone.
+        if matches!(
+            player.state,
+            PlayerState::Goalkeeper(GoalkeeperState::TakeBall)
+                | PlayerState::Defender(DefenderState::TakeBall)
+                | PlayerState::Midfielder(MidfielderState::TakeBall)
+                | PlayerState::Forward(ForwardState::TakeBall)
+        ) {
+            return false;
+        }
+
+        // Ball must actually be loose.
+        if tick_context.ball.is_owned {
+            return false;
+        }
+
+        // See `should_yield_takeball` for why landing position is
+        // preferred: lofted clearances need their chaser to converge on
+        // the bounce, not the apex. `landing_position == position` for
+        // ground balls, so this doesn't change ground-ball behaviour.
+        let ball_pos = tick_context.positions.ball.landing_position;
+
+        // Goalkeepers only claim balls near their box — the outfield
+        // claimants handle anything further. Prevents the GK sprinting
+        // 80m for a loose ball when a defender is 2m from it. GK will
+        // transition to TakeBall via their own Standing/Walking guard
+        // when the ball actually threatens their area.
+        if group == PlayerFieldPositionGroup::Goalkeeper {
+            let gk_dist_sq = (ball_pos - player.position).norm_squared();
+            if gk_dist_sq > 60.0 * 60.0 {
+                return false;
+            }
+        }
+
+        let my_dist_sq = (ball_pos - player.position).norm_squared();
+
+        // Am I the strictly-closest teammate? Tie-break by player id so
+        // two players at exactly equal distance don't both trigger.
+        //
+        // CRITICAL: use `tick_context.positions.players` (live, updated
+        // every tick) rather than `context.players` (a static snapshot
+        // taken at match start, frozen thereafter). With the snapshot,
+        // every player compared their *current* position against every
+        // teammate's *match-start* position — all of them thought they
+        // were closest, all of them flipped to TakeBall at once.
+        //
+        // Team membership is derived from `side` because the live store
+        // doesn't carry team_id. Sent-off players are stashed at
+        // (-500, -500), so they naturally fail any distance comparison
+        // — no explicit filter needed.
+        let my_side = match player.side {
+            Some(s) => s,
+            None => return false,
+        };
+        for tm in tick_context.positions.players.as_slice() {
+            if tm.player_id == player.id || tm.side != my_side {
+                continue;
+            }
+            let d_sq = (ball_pos - tm.position).norm_squared();
+            if d_sq < my_dist_sq {
+                return false;
+            }
+            if d_sq == my_dist_sq && tm.player_id < player.id {
+                return false;
+            }
+        }
+
+        true
     }
 }
 
@@ -113,12 +304,8 @@ impl<'p> StateProcessor<'p> {
             result
         };
 
-        if let Some(fast_result) = handler.try_fast(&processing_ctx) {
-            return complete_result(fast_result, result);
-        }
-
-        if let Some(slow_result) = handler.process_slow(&processing_ctx) {
-            return complete_result(slow_result, result);
+        if let Some(state_result) = handler.process(&processing_ctx) {
+            return complete_result(state_result, result);
         }
 
         result

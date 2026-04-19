@@ -1,7 +1,8 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
@@ -18,7 +19,7 @@ const SWITCH_OPPONENT_THRESHOLD: f32 = 50.0; // Distance to consider switching m
 pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(
@@ -105,11 +106,6 @@ impl StateProcessingHandler for DefenderMarkingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        // For now, return None to indicate no state change
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move to maintain goal-side position relative to the opponent being marked
@@ -170,7 +166,7 @@ impl StateProcessingHandler for DefenderMarkingState {
 impl DefenderMarkingState {
     /// Find the best marking target using coordination system
     /// Prefers unmarked opponents to avoid double-marking
-    fn find_best_marking_target(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
+    fn find_best_marking_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         // First, try to find an unmarked dangerous opponent
         if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(100.0) {
             return Some(unmarked);
@@ -192,7 +188,7 @@ impl DefenderMarkingState {
     }
 
     /// Find the most dangerous opponent to mark based on multiple factors
-    fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<crate::r#match::MatchPlayerLite> {
+    fn find_most_dangerous_opponent(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
         let player_ops = ctx.player();
         let own_goal_position = ctx.ball().direction_to_own_goal();
         let ball_position = ctx.tick_context.positions.ball.position;

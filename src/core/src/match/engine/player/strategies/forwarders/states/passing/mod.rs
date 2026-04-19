@@ -3,8 +3,8 @@ use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondi
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext,
-    StateProcessingHandler, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult,
+    StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -16,7 +16,7 @@ const MAX_POSITION_ADJUSTMENT_TIME: u64 = 20; // Maximum ticks to spend adjustin
 pub struct ForwardPassingState {}
 
 impl StateProcessingHandler for ForwardPassingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the forward still has the ball
         if !ctx.player.has_ball(ctx) {
             // Lost possession, transition to Running state
@@ -81,9 +81,6 @@ impl StateProcessingHandler for ForwardPassingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // If the player should adjust position to find better passing angles
@@ -299,8 +296,8 @@ impl ForwardPassingState {
 
         // Strong penalty for backwards passes unless under heavy pressure
         let is_backward_pass = match ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
-            Some(crate::r#match::PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
+            Some(PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
+            Some(PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
             None => false,
         };
         if is_backward_pass && !self.is_under_heavy_pressure(ctx) {
@@ -402,8 +399,8 @@ impl ForwardPassingState {
         // Passing backwards is generally not a good option for forwards
         // unless under heavy pressure
         let is_backward = match ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
-            Some(crate::r#match::PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
+            Some(PlayerSide::Left) => teammate.position.x < ctx.player.position.x,
+            Some(PlayerSide::Right) => teammate.position.x > ctx.player.position.x,
             None => false,
         };
         if is_backward {

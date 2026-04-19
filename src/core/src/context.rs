@@ -3,8 +3,9 @@ pub use chrono::prelude::*;
 use crate::ai::Ai;
 use crate::club::{BoardContext, ClubContext, ClubFinanceContext, PlayerContext, StaffContext};
 use crate::continent::ContinentContext;
-use crate::country::CountryContext;
+use crate::country::{CountryContext, SeasonDates};
 use crate::league::LeagueContext;
+use crate::PeopleNameGeneratorData;
 use crate::TeamContext;
 
 #[derive(Clone)]
@@ -52,7 +53,7 @@ impl<'gc> GlobalContext<'gc> {
         ctx
     }
 
-    pub fn with_country_and_names(&self, country_id: u32, country_code: String, people_names: crate::PeopleNameGeneratorData, season_dates: crate::country::SeasonDates) -> Self {
+    pub fn with_country_and_names(&self, country_id: u32, country_code: String, people_names: PeopleNameGeneratorData, season_dates: SeasonDates) -> Self {
         let mut ctx = GlobalContext::clone(self);
         ctx.country = Some(CountryContext::with_people_names(country_id, people_names).with_code(country_code).with_season_dates(season_dates));
         ctx
@@ -185,7 +186,7 @@ impl SimulationContext {
     }
 
     #[inline]
-    pub fn is_season_start(&self, season: &crate::country::SeasonDates) -> bool {
+    pub fn is_season_start(&self, season: &SeasonDates) -> bool {
         self.hour == 0
             && self.day == season.start_day
             && self.date.month() as u8 == season.start_month

@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 pub struct ForwardRunningInBehindState {}
 
 impl StateProcessingHandler for ForwardRunningInBehindState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
         if ctx.player.has_ball(ctx) {
             // Transition to Dribbling or Shooting based on position
@@ -57,9 +57,6 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Forward should sprint toward goal, behind the defensive line

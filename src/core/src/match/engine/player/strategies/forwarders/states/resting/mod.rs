@@ -14,7 +14,7 @@ const OPPONENT_THREAT_THRESHOLD: usize = 2;
 pub struct ForwardRestingState {}
 
 impl StateProcessingHandler for ForwardRestingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Stamina recovered enough - get back in the game
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina >= STAMINA_RECOVERY_THRESHOLD {
@@ -48,9 +48,6 @@ impl StateProcessingHandler for ForwardRestingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

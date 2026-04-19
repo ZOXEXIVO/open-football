@@ -1,4 +1,4 @@
-use crate::loaders::{OdbHistoryItem, OdbPlayer, OdbPosition};
+use crate::loaders::{CountryLoader, OdbHistoryItem, OdbPlayer, OdbPosition};
 use crate::DatabaseEntity;
 use chrono::{Datelike, NaiveDate, Utc};
 use core::shared::FullName;
@@ -480,7 +480,7 @@ impl PlayerGenerator {
         let positions = Self::generate_positions(position, potential_ability);
 
         // Skills target a CA appropriate for this PA and age, not just team rep
-        let country_code = crate::loaders::CountryLoader::code_for_id(country_id);
+        let country_code = CountryLoader::code_for_id(country_id);
         let skills = Self::generate_skills(&position, age, rep_factor, potential_ability, continent_id, &country_code);
         let player_attributes =
             Self::generate_player_attributes(rep_factor, age, potential_ability, &skills, &positions);
@@ -541,7 +541,7 @@ impl PlayerGenerator {
 
         // Native languages based on player's nationality
         let native_languages: Vec<core::PlayerLanguage> = core::Language::from_country_code(
-            &crate::loaders::CountryLoader::code_for_id(country_id)
+            &CountryLoader::code_for_id(country_id)
         )
             .into_iter()
             .map(|lang| core::PlayerLanguage::native(lang))

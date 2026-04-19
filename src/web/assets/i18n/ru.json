@@ -736,5 +736,11 @@
   "watchlist": "Список наблюдения",
   "work_rate": "Работоспособность",
   "yc": "ЖК",
-  "years_old": "лет"
+  "years_old": "лет",
+  "search": "Поиск",
+  "search_placeholder": "Поиск стран, клубов, игроков...",
+  "search_countries": "Страны",
+  "search_clubs": "Клубы",
+  "search_players": "Игроки",
+  "search_no_results": "Ничего не найдено"
 }

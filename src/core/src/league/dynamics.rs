@@ -1,4 +1,4 @@
-use crate::r#match::{MatchResultOutcome, MatchResult};
+use crate::r#match::{MatchResult, MatchResultOutcome, Score};
 use crate::league::LeagueTable;
 use log::debug;
 use std::collections::HashMap;
@@ -63,7 +63,7 @@ impl LeagueDynamics {
         self.team_momentum.insert(away_id, new_away);
     }
 
-    pub fn update_team_streaks(&mut self, home_id: u32, away_id: u32, score: &crate::r#match::Score) {
+    pub fn update_team_streaks(&mut self, home_id: u32, away_id: u32, score: &Score) {
         let outcome = score.outcome();
 
         let home_streak = self.team_streaks.entry(home_id).or_insert(TeamStreak::default());

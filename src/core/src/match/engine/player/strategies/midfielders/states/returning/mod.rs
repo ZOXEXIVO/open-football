@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct MidfielderReturningState {}
 
 impl StateProcessingHandler for MidfielderReturningState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -73,9 +73,6 @@ impl StateProcessingHandler for MidfielderReturningState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let dist_to_start = (ctx.player.position - ctx.player.start_position).magnitude();

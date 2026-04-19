@@ -3,13 +3,14 @@ use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperC
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 #[derive(Default, Clone)]
 pub struct GoalkeeperKickingState {}
 
 impl StateProcessingHandler for GoalkeeperKickingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the goalkeeper has the ball
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -34,9 +35,6 @@ impl StateProcessingHandler for GoalkeeperKickingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))
@@ -85,7 +83,7 @@ impl GoalkeeperKickingState {
             // Check if receiver is a forward
             let is_forward = matches!(
                 teammate.tactical_positions.position_group(),
-                crate::PlayerFieldPositionGroup::Forward
+                PlayerFieldPositionGroup::Forward
             );
 
             // Check space around receiver
@@ -141,7 +139,7 @@ impl GoalkeeperKickingState {
 
             // Position bonus
             let position_bonus = match teammate.tactical_positions.position_group() {
-                crate::PlayerFieldPositionGroup::Forward => {
+                PlayerFieldPositionGroup::Forward => {
                     if distance > 300.0 && prefers_extreme {
                         2.5 // Extreme clearance to striker
                     } else if distance > 200.0 {
@@ -150,15 +148,15 @@ impl GoalkeeperKickingState {
                         1.5
                     }
                 }
-                crate::PlayerFieldPositionGroup::Midfielder => {
+                PlayerFieldPositionGroup::Midfielder => {
                     if distance > 200.0 {
                         0.7 // Avoid ultra-long to midfield
                     } else {
                         1.2
                     }
                 }
-                crate::PlayerFieldPositionGroup::Defender => 0.3, // Avoid kicking to defenders
-                crate::PlayerFieldPositionGroup::Goalkeeper => 0.1,
+                PlayerFieldPositionGroup::Defender => 0.3, // Avoid kicking to defenders
+                PlayerFieldPositionGroup::Goalkeeper => 0.1,
             };
 
             // Combine all factors with vision-based weighting and recency penalty

@@ -1,3 +1,5 @@
+use crate::league::LeagueResult;
+use crate::utils::IntegerUtils;
 use crate::Club;
 use std::collections::HashMap;
 
@@ -27,7 +29,7 @@ impl MediaCoverage {
         self.intensity
     }
 
-    pub fn update_from_results(&mut self, _results: &[crate::league::LeagueResult]) {
+    pub fn update_from_results(&mut self, _results: &[LeagueResult]) {
         // Update media intensity based on exciting results
         self.intensity = (self.intensity * 0.9 + 0.1).min(1.0);
     }
@@ -36,8 +38,6 @@ impl MediaCoverage {
         self.trending_stories.clear();
 
         // Generate stories based on club performance, transfers, etc.
-        use crate::utils::IntegerUtils;
-
         for club in clubs {
             if IntegerUtils::random(0, 100) > 80 {
                 self.trending_stories.push(MediaStory {

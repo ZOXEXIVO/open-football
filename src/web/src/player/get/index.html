@@ -9,7 +9,7 @@
             <div class="fm-ph-photo">
                 <div class="fm-ph-photo-frame">
                     <div class="fm-ph-photo-img">{% if player.generated %}<img src="/api/players/{{ player.id }}/face.svg?age={{ player.age }}&cc={{ player.country_code }}" alt="Player face">{% else %}<img src="https://open-football.org/player/{{ player.id }}.png" onerror="this.onerror=null;this.src='/api/players/{{ player.id }}/face.svg?age={{ player.age }}&cc={{ player.country_code }}';var w=this.closest('.fm-ph-photo-frame').querySelector('.fm-ph-watermark');if(w)w.style.display='none';" alt="Player face">{% endif %}</div>
-                    {% if !player.generated %}<a class="fm-ph-watermark" href="https://www.df11faces.com/" target="_blank" rel="nofollow noopener noreferrer">Image by DF11 Faces</a>{% endif %}
+                    {% if !player.generated %}<a class="fm-ph-watermark" href="https://www.df11faces.com/" target="_blank" rel="nofollow noopener noreferrer">DF11 Faces</a>{% endif %}
                 </div>
             </div>
             <div class="fm-ph-identity">

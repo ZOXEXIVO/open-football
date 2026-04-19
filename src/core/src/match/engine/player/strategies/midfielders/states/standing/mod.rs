@@ -11,7 +11,7 @@ const PRESSING_DISTANCE_THRESHOLD: f32 = 80.0; // Midfielders press from further
 pub struct MidfielderStandingState {}
 
 impl StateProcessingHandler for MidfielderStandingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             // Go directly to Passing state — it has the best pass evaluation logic
             // Only hold possession if under no pressure and no teammates nearby
@@ -26,12 +26,7 @@ impl StateProcessingHandler for MidfielderStandingState {
             };
         }
         else {
-            // Emergency: take ball only if best positioned to prevent swarming
-            if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::TakeBall,
-                ));
-            }
+            // Loose-ball claim lives in the dispatcher.
 
             if ctx.team().is_control_ball() {
                 // If teammates are clustered nearby, create space instead of running
@@ -110,10 +105,6 @@ impl StateProcessingHandler for MidfielderStandingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Standing = completely still. No separation, no drift.

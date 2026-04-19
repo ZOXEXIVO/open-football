@@ -11,7 +11,7 @@ use nalgebra::Vector3;
 pub struct MidfielderWalkingState {}
 
 impl StateProcessingHandler for MidfielderWalkingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Running,
@@ -36,15 +36,7 @@ impl StateProcessingHandler for MidfielderWalkingState {
             ));
         }
 
-        // Loose ball nearby — only chase if best positioned teammate
-        if ctx.ball().distance() < 50.0 && !ctx.ball().is_owned() {
-            let ball_velocity = ctx.tick_context.positions.ball.velocity.norm();
-            if ball_velocity < 3.0 && ctx.team().is_best_player_to_chase_ball() {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::TakeBall,
-                ));
-            }
-        }
+        // Loose-ball claim lives in the dispatcher.
 
         // Notification: take ball only if best positioned
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
@@ -124,10 +116,6 @@ impl StateProcessingHandler for MidfielderWalkingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Impl ement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.should_follow_waypoints(ctx) {

@@ -12,7 +12,7 @@ use nalgebra::Vector3;
 pub struct ForwardCrossReceivingState {}
 
 impl StateProcessingHandler for ForwardCrossReceivingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
 
         if !ball_ops.is_towards_player_with_angle(0.8) || ctx.ball().distance() > 100.0 {
@@ -36,9 +36,6 @@ impl StateProcessingHandler for ForwardCrossReceivingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

@@ -12,7 +12,7 @@ const MAX_HOLDING_DURATION: u64 = 60;
 pub struct GoalkeeperHoldingState {}
 
 impl StateProcessingHandler for GoalkeeperHoldingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If for some reason we no longer have the ball, return to standing
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -36,9 +36,6 @@ impl StateProcessingHandler for GoalkeeperHoldingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

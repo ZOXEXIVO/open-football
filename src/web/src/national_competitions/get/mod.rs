@@ -1,7 +1,8 @@
 pub mod routes;
 
+use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
-use crate::{ApiResult, GameAppData};
+use crate::{ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -27,7 +28,7 @@ pub struct NationalCompetitionsGetTemplate {
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub i18n: crate::I18n,
+    pub i18n: I18n,
     pub lang: String,
     pub competitions: Vec<CompetitionDto>,
 }
@@ -178,8 +179,8 @@ pub async fn national_competitions_get_action(
     let current_path = format!("/{}/national-competitions", &route_params.lang);
 
     Ok(NationalCompetitionsGetTemplate {
-        css_version: crate::common::default_handler::CSS_VERSION,
-        computer_name: &crate::common::default_handler::COMPUTER_NAME,
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
         title: i18n.t("national_competitions").to_string(),
         sub_title_prefix: String::new(),
         sub_title_suffix: String::new(),

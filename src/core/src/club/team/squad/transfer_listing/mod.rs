@@ -1,7 +1,7 @@
 use crate::club::player::player::Player;
 use crate::club::team::squad::MIN_FIRST_TEAM_SQUAD;
 use crate::shared::{Currency, CurrencyValue};
-use crate::{PlayerStatusType, Team, TeamType, TransferItem};
+use crate::{PlayerSquadStatus, PlayerStatusType, Team, TeamType, TransferItem};
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 
@@ -502,8 +502,6 @@ fn is_protected_from_listing(
     indices: &[(usize, &str)],
     player_id: u32,
 ) -> bool {
-    use crate::PlayerSquadStatus;
-
     for &(idx, _) in indices {
         if let Some(p) = teams[idx].players.find(player_id) {
             let wants_out = p.statuses.get().iter().any(|s| {

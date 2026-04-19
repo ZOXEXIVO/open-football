@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::player::events::PlayerEvent;
 use crate::r#match::player::state::PlayerState;
+use crate::r#match::player::PlayerSide;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
     SteeringBehavior,
@@ -12,7 +13,7 @@ use nalgebra::Vector3;
 pub struct DefenderClearingState {}
 
 impl StateProcessingHandler for DefenderClearingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Wait a few ticks before clearing to allow the player to reach the ball
         if ctx.in_state_time < 5 {
             return None;
@@ -36,7 +37,7 @@ impl StateProcessingHandler for DefenderClearingState {
         let at_boundary = at_left_boundary || at_right_boundary || at_top_boundary || at_bottom_boundary;
 
         // Determine clearance direction based on player's side (always clear AWAY from own goal)
-        let is_left_side = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+        let is_left_side = ctx.player.side == Some(PlayerSide::Left);
 
         // Clearance distance upfield
         const CLEAR_DISTANCE: f32 = 25.0;
@@ -83,9 +84,6 @@ impl StateProcessingHandler for DefenderClearingState {
         Some(state)
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

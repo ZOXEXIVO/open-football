@@ -30,7 +30,7 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.6; // Reduced from 0.7 - wider angle detectio
 pub struct DefenderStandingState {}
 
 impl StateProcessingHandler for DefenderStandingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
 
         if ctx.player.has_ball(ctx) {
@@ -39,12 +39,7 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Take ball only if best positioned — prevents swarming
-        if ball_ops.should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::TakeBall,
-            ));
-        }
+        // Loose-ball claim lives in the dispatcher.
 
         // COUNTER-PRESS: If we just lost the ball, immediately press to win it back
         // Intensity depends on tactical instructions from staff
@@ -231,9 +226,6 @@ impl StateProcessingHandler for DefenderStandingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Check if player should follow waypoints even when standing

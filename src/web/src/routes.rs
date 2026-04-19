@@ -11,6 +11,7 @@ use crate::i18n::{detect_language, SUPPORTED_LANG_CODES};
 use crate::leagues::league_routes;
 use crate::player::player_routes;
 use crate::r#match::routes::match_routes;
+use crate::search::search_routes;
 use crate::staff::staff_routes;
 use crate::teams::team_routes;
 use crate::watchlist::watchlist_routes;
@@ -127,6 +128,7 @@ impl ServerRoutes {
             .merge(current_date_routes())
             .merge(face_routes())
             .merge(watchlist_routes())
+            .merge(search_routes())
             .merge(ai_routes())
             .fallback(default_handler)
             .layer(axum::middleware::from_fn(redirect_on_error))

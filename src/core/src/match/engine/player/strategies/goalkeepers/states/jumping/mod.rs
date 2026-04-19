@@ -13,7 +13,7 @@ const MAX_DIVING_DISTANCE: f32 = 8.0; // Maximum distance to dive (extended reac
 pub struct GoalkeeperJumpingState {}
 
 impl StateProcessingHandler for GoalkeeperJumpingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if jump duration is complete
         if ctx.in_state_time >= JUMP_DURATION {
             // After jump, transition to appropriate state
@@ -42,9 +42,6 @@ impl StateProcessingHandler for GoalkeeperJumpingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate base jump vector

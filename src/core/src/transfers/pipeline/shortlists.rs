@@ -7,7 +7,7 @@ use crate::transfers::pipeline::{
     TransferShortlist,
 };
 use crate::transfers::pipeline::processor::PipelineProcessor;
-use crate::{Club, Country, PlayerFieldPositionGroup, TeamType};
+use crate::{Club, Country, PlayerFieldPositionGroup, StaffPosition, TeamType};
 
 struct ShortlistResult {
     club_id: u32,
@@ -380,7 +380,7 @@ impl PipelineProcessor {
                         if let Some(main_team) = club.teams.main_mut() {
                             if let Some(mgr) = main_team
                                 .staffs
-                                .find_mut_by_position(crate::StaffPosition::Manager)
+                                .find_mut_by_position(StaffPosition::Manager)
                             {
                                 mgr.job_satisfaction =
                                     (mgr.job_satisfaction + d.satisfaction_delta)

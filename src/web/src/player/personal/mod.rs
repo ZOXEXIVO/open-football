@@ -1,7 +1,8 @@
 pub mod routes;
 
+use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData};
+use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -30,7 +31,7 @@ pub struct PlayerPersonalTemplate {
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub i18n: crate::I18n,
+    pub i18n: I18n,
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
@@ -189,8 +190,8 @@ pub async fn player_personal_action(
     let reputation = get_reputation(player, &i18n);
 
     Ok(PlayerPersonalTemplate {
-        css_version: crate::common::default_handler::CSS_VERSION,
-        computer_name: &crate::common::default_handler::COMPUTER_NAME,
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
@@ -306,7 +307,7 @@ fn get_personality(player: &Player) -> PersonalityDto {
     }
 }
 
-fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
+fn get_player_info(player: &Player, i18n: &I18n) -> PlayerInfoDto {
     use core::{PlayerPreferredFoot, PlayerSquadStatus};
 
     let preferred_foot = match player.preferred_foot {
@@ -368,7 +369,7 @@ fn get_player_info(player: &Player, i18n: &crate::I18n) -> PlayerInfoDto {
     }
 }
 
-fn get_morale(player: &Player, i18n: &crate::I18n) -> MoraleDto {
+fn get_morale(player: &Player, i18n: &I18n) -> MoraleDto {
     let m = player.happiness.morale;
     let label = if m >= 80.0 {
         i18n.t("morale_superb")
@@ -387,7 +388,7 @@ fn get_morale(player: &Player, i18n: &crate::I18n) -> MoraleDto {
     }
 }
 
-fn get_happiness_factors(player: &Player, i18n: &crate::I18n) -> Vec<HappinessFactorDto> {
+fn get_happiness_factors(player: &Player, i18n: &I18n) -> Vec<HappinessFactorDto> {
     let f = &player.happiness.factors;
     let factors = [
         ("factor_playing_time", f.playing_time),
@@ -421,7 +422,7 @@ fn get_happiness_factors(player: &Player, i18n: &crate::I18n) -> Vec<HappinessFa
         .collect()
 }
 
-fn get_concerns(player: &Player, i18n: &crate::I18n) -> Vec<String> {
+fn get_concerns(player: &Player, i18n: &I18n) -> Vec<String> {
     use core::PlayerStatusType;
 
     let statuses = player.statuses.get();
@@ -461,7 +462,7 @@ fn get_concerns(player: &Player, i18n: &crate::I18n) -> Vec<String> {
     concerns
 }
 
-fn get_manager_relationship(player: &Player, head_coach: &core::Staff, i18n: &crate::I18n) -> Option<ManagerRelationshipDto> {
+fn get_manager_relationship(player: &Player, head_coach: &core::Staff, i18n: &I18n) -> Option<ManagerRelationshipDto> {
     let rel = player.relations.get_staff(head_coach.id)?;
     let level = rel.level.round().clamp(-100.0, 100.0) as i8;
     let label = if level > 50 {
@@ -489,7 +490,7 @@ fn get_manager_relationship(player: &Player, head_coach: &core::Staff, i18n: &cr
     })
 }
 
-fn reputation_label(value: i16, i18n: &crate::I18n) -> String {
+fn reputation_label(value: i16, i18n: &I18n) -> String {
     if value >= 8000 {
         i18n.t("rep_world_class")
     } else if value >= 6000 {
@@ -505,7 +506,7 @@ fn reputation_label(value: i16, i18n: &crate::I18n) -> String {
     }.to_string()
 }
 
-fn get_reputation(player: &Player, i18n: &crate::I18n) -> ReputationDto {
+fn get_reputation(player: &Player, i18n: &I18n) -> ReputationDto {
     let pa = &player.player_attributes;
     // Scale 0-10000 to 0-100 for progress bar percentage
     let current_pct = (pa.current_reputation as f32 / 100.0).round().clamp(0.0, 100.0) as u8;
@@ -525,7 +526,7 @@ fn get_reputation(player: &Player, i18n: &crate::I18n) -> ReputationDto {
 fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
-    i18n: &crate::I18n,
+    i18n: &I18n,
 ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
     let club = data
         .club(club_id)

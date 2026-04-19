@@ -13,7 +13,7 @@ const PUNCH_SUCCESS_PROBABILITY: f32 = 0.8; // Probability of a successful punch
 pub struct GoalkeeperPunchingState {}
 
 impl StateProcessingHandler for GoalkeeperPunchingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.ball().distance() > PUNCHING_DISTANCE_THRESHOLD {
             // Ball is too far to punch, transition to appropriate state (e.g., Jumping)
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -45,10 +45,6 @@ impl StateProcessingHandler for GoalkeeperPunchingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Remain stationary while punching

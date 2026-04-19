@@ -15,7 +15,7 @@ const STAMINA_THRESHOLD: f32 = 20.0; // Slide tackle even when tired — it's a 
 pub struct DefenderSlidingTackleState {}
 
 impl StateProcessingHandler for DefenderSlidingTackleState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check defender's stamina
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina < STAMINA_THRESHOLD {
@@ -100,10 +100,6 @@ impl StateProcessingHandler for DefenderSlidingTackleState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the opponent to attempt the sliding tackle

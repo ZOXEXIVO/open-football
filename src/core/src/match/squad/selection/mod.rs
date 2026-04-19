@@ -8,7 +8,7 @@ mod tests;
 
 use crate::club::{ClubPhilosophy, PlayerPositionType, Staff};
 use crate::r#match::player::MatchPlayer;
-use crate::{MatchTacticType, Player, PlayerStatusType, Tactics};
+use crate::{MatchTacticType, Player, PlayerStatusType, Tactics, Team};
 use chrono::NaiveDate;
 use log::debug;
 use std::borrow::Borrow;
@@ -54,12 +54,12 @@ impl Default for SelectionContext {
 impl SquadSelector {
     // ========== PUBLIC API ==========
 
-    pub fn select(team: &crate::Team, staff: &Staff) -> PlayerSelectionResult {
+    pub fn select(team: &Team, staff: &Staff) -> PlayerSelectionResult {
         Self::select_with_reserves(team, staff, &[])
     }
 
     pub fn select_with_reserves(
-        team: &crate::Team,
+        team: &Team,
         staff: &Staff,
         reserve_players: &[&Player],
     ) -> PlayerSelectionResult {
@@ -67,7 +67,7 @@ impl SquadSelector {
     }
 
     pub fn select_with_context(
-        team: &crate::Team,
+        team: &Team,
         staff: &Staff,
         reserve_players: &[&Player],
         ctx: &SelectionContext,
@@ -158,12 +158,12 @@ impl SquadSelector {
 
     // ========== ROTATION SELECTION ==========
 
-    pub fn select_for_rotation(team: &crate::Team, staff: &Staff) -> PlayerSelectionResult {
+    pub fn select_for_rotation(team: &Team, staff: &Staff) -> PlayerSelectionResult {
         Self::select_for_rotation_with_reserves(team, staff, &[])
     }
 
     pub fn select_for_rotation_with_reserves(
-        team: &crate::Team,
+        team: &Team,
         staff: &Staff,
         reserve_players: &[&Player],
     ) -> PlayerSelectionResult {
@@ -174,7 +174,7 @@ impl SquadSelector {
     }
 
     pub fn select_for_rotation_with_context(
-        team: &crate::Team,
+        team: &Team,
         staff: &Staff,
         reserve_players: &[&Player],
         ctx: &SelectionContext,

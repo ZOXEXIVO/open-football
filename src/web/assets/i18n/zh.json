@@ -736,5 +736,11 @@
   "watchlist": "關注名單",
   "work_rate": "勤奮度",
   "yc": "黃牌",
-  "years_old": "歲"
+  "years_old": "歲",
+  "search": "搜尋",
+  "search_placeholder": "搜尋國家、俱樂部、球員...",
+  "search_countries": "國家",
+  "search_clubs": "俱樂部",
+  "search_players": "球員",
+  "search_no_results": "無結果"
 }

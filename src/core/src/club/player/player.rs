@@ -27,6 +27,15 @@ use crate::{
 use chrono::NaiveDate;
 use std::fmt::{Display, Formatter, Result};
 
+/// A sell-on promise owed to a previous seller on the next permanent sale.
+/// Stacks: a player can accumulate multiple obligations from different past
+/// clubs. Capped at 3 to prevent unbounded growth over long careers.
+#[derive(Debug, Clone)]
+pub struct SellOnObligation {
+    pub beneficiary_club_id: u32,
+    pub percentage: f32,
+}
+
 #[derive(Debug, Clone)]
 pub struct Player {
     //person data
@@ -77,6 +86,12 @@ pub struct Player {
     /// Prevents unrealistic buy-back scenarios where a club sells a player
     /// cheaply and then buys them back at a huge markup one season later.
     pub sold_from: Option<(u32, f64)>, // (club_id, fee_paid)
+
+    /// Active sell-on clauses attached to this player. On the next permanent
+    /// sale, each entry routes `percentage * fee` back to `club_id` before
+    /// the selling club banks its income. Populated by `complete_transfer`
+    /// when the inbound offer carried a `SellOnClause`; drained on sale.
+    pub sell_on_obligations: Vec<SellOnObligation>,
 
     /// Signature moves — trained traits that bias in-match decisions.
     pub traits: Vec<PlayerTrait>,

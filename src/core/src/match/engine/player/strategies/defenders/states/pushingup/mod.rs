@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::player::PlayerSide;
 use crate::r#match::{
     ConditionContext, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -17,7 +18,7 @@ const PUSH_UP_HYSTERESIS: f32 = 0.05; // Hysteresis to prevent rapid state chang
 pub struct DefenderPushingUpState {}
 
 impl StateProcessingHandler for DefenderPushingUpState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_ops = ctx.ball();
 
         if ball_ops.on_own_side() {
@@ -63,9 +64,6 @@ impl StateProcessingHandler for DefenderPushingUpState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // OVERLAPPING RUN: If wide defender with teammate on ball on same flank,
@@ -127,7 +125,7 @@ impl DefenderPushingUpState {
         let field_height = ctx.context.field_size.height as f32;
         let field_width = ctx.context.field_size.width as f32;
         let ball_pos = ctx.tick_context.positions.ball.position;
-        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+        let is_left = ctx.player.side == Some(PlayerSide::Left);
 
         // Target is ahead of ball position, on the touchline
         let wing_y = if ctx.player.start_position.y < field_height * 0.5 {
@@ -148,7 +146,7 @@ impl DefenderPushingUpState {
 
     fn should_retreat(&self, ctx: &StateProcessingContext) -> bool {
         let field_width = ctx.context.field_size.width as f32;
-        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+        let is_left = ctx.player.side == Some(PlayerSide::Left);
 
         if is_left {
             // Left team pushes right: retreat if past max push-up line
@@ -162,7 +160,7 @@ impl DefenderPushingUpState {
     }
 
     fn is_last_defender(&self, ctx: &StateProcessingContext) -> bool {
-        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+        let is_left = ctx.player.side == Some(PlayerSide::Left);
 
         if is_left {
             // Left team: last defender is the one furthest back (smallest x)
@@ -184,7 +182,7 @@ impl DefenderPushingUpState {
         let player_position = ctx.player.position;
         let field_width = ctx.context.field_size.width as f32;
         let field_height = ctx.context.field_size.height as f32;
-        let is_left = ctx.player.side == Some(crate::r#match::player::PlayerSide::Left);
+        let is_left = ctx.player.side == Some(PlayerSide::Left);
 
         let (attacking_third_x, mid_x, clamp_min, clamp_max) = if is_left {
             (

@@ -11,7 +11,7 @@ const OFFSIDE_TRAP_SPEED_MULTIPLIER: f32 = 1.2; // Speed multiplier when executi
 pub struct DefenderOffsideTrapState {}
 
 impl StateProcessingHandler for DefenderOffsideTrapState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the team is defending a lead and there is limited time remaining
         let defending_lead = ctx.team().is_leading() && ctx.context.time.is_running_out();
 
@@ -47,10 +47,6 @@ impl StateProcessingHandler for DefenderOffsideTrapState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network logic if necessary
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move forward smoothly to execute the offside trap

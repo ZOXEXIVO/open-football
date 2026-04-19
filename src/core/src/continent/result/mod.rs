@@ -8,6 +8,7 @@ mod awards;
 pub use types::*;
 
 use crate::country::CountryResult;
+use crate::r#match::MatchResult;
 use crate::simulator::SimulatorData;
 use crate::utils::DateUtils;
 use crate::SimulationResult;
@@ -23,11 +24,11 @@ pub struct ContinentResult {
     pub economic_impact: Option<EconomicZoneImpact>,
 
     /// Match results from national team competitions (for global match_store)
-    pub national_match_results: Vec<crate::r#match::MatchResult>,
+    pub national_match_results: Vec<MatchResult>,
 }
 
 impl ContinentResult {
-    pub fn new(continent_id: u32, countries: Vec<CountryResult>, national_match_results: Vec<crate::r#match::MatchResult>) -> Self {
+    pub fn new(continent_id: u32, countries: Vec<CountryResult>, national_match_results: Vec<MatchResult>) -> Self {
         ContinentResult {
             continent_id,
             countries,

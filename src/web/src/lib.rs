@@ -13,6 +13,7 @@ mod national_competitions;
 mod r#match;
 mod player;
 mod routes;
+mod search;
 mod staff;
 mod teams;
 mod views;

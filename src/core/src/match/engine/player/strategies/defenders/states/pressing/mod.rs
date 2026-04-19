@@ -18,7 +18,7 @@ const FIELD_THIRD_THRESHOLD: f32 = 0.33;
 pub struct DefenderPressingState {}
 
 impl StateProcessingHandler for DefenderPressingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 1. Check if the defender has enough stamina to continue pressing
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
         if stamina < STAMINA_THRESHOLD {
@@ -102,10 +102,6 @@ impl StateProcessingHandler for DefenderPressingState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the opponent with the ball

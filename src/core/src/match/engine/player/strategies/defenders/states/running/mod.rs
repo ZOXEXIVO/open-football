@@ -6,7 +6,7 @@ use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
-use crate::IntegerUtils;
+use crate::{IntegerUtils, PlayerFieldPositionGroup};
 use nalgebra::Vector3;
 
 const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only from very close
@@ -15,7 +15,7 @@ const MAX_SHOOTING_DISTANCE: f32 = 30.0; // Defenders almost never shoot, only f
 pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             let coach = ctx.team().coach_instruction();
 
@@ -158,14 +158,7 @@ impl StateProcessingHandler for DefenderRunningState {
                 }
             }
 
-            // Loose ball nearby — chase it if we're the closest teammate
-            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
-                && ctx.team().is_best_player_to_chase_ball()
-            {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::TakeBall,
-                ));
-            }
+            // Loose-ball claim lives in the dispatcher.
 
             // Also respond to ball system notifications
             if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
@@ -240,9 +233,6 @@ impl StateProcessingHandler for DefenderRunningState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         if ctx.player.should_follow_waypoints(ctx) {
@@ -859,7 +849,6 @@ impl DefenderRunningState {
     /// Find a safe backward/lateral pass target for tempo control.
     /// Prefers: GK, other defenders, defensive midfielders — prioritizes safety over progression.
     fn find_safe_backward_pass(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        use crate::PlayerFieldPositionGroup;
         let player_pos = ctx.player.position;
         let own_goal = ctx.ball().direction_to_own_goal();
 

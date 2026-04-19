@@ -1,3 +1,5 @@
+use crate::transfers::ScoutingRegion;
+
 #[derive(Debug, Clone)]
 pub struct StaffAttributes {
     pub coaching: StaffCoaching,
@@ -45,7 +47,7 @@ pub struct StaffKnowledge {
     /// Ivory Coast, Cameroon, Senegal, etc. — the entire region.
     /// Scouting in known regions has normal accuracy; unknown regions have
     /// increased error and fewer observations per day.
-    pub known_regions: Vec<crate::transfers::ScoutingRegion>,
+    pub known_regions: Vec<ScoutingRegion>,
     /// Per-region familiarity score (0-100). Grows over time as the scout
     /// spends assignment days in a region, boosting report accuracy and
     /// expanding the effective player pool they consider.
@@ -54,7 +56,7 @@ pub struct StaffKnowledge {
 
 #[derive(Debug, Clone)]
 pub struct RegionFamiliarity {
-    pub region: crate::transfers::ScoutingRegion,
+    pub region: ScoutingRegion,
     pub level: u8,
     /// Total days spent scouting in the region over the scout's career.
     pub days_scouted: u32,
@@ -63,7 +65,7 @@ pub struct RegionFamiliarity {
 impl StaffKnowledge {
     /// Advance this scout's familiarity with a given region by one day.
     /// Returns the new familiarity level. Cap at 100.
-    pub fn accrue_region_day(&mut self, region: crate::transfers::ScoutingRegion) -> u8 {
+    pub fn accrue_region_day(&mut self, region: ScoutingRegion) -> u8 {
         if let Some(entry) = self
             .region_familiarity
             .iter_mut()
@@ -86,7 +88,7 @@ impl StaffKnowledge {
     }
 
     /// Familiarity score (0-100) for a region. Returns 0 if never scouted.
-    pub fn familiarity_for(&self, region: crate::transfers::ScoutingRegion) -> u8 {
+    pub fn familiarity_for(&self, region: ScoutingRegion) -> u8 {
         self.region_familiarity
             .iter()
             .find(|r| r.region == region)

@@ -13,7 +13,7 @@ const PICKUP_SUCCESS_PROBABILITY: f32 = 0.9; // Probability of successfully pick
 pub struct GoalkeeperPickingUpState {}
 
 impl StateProcessingHandler for GoalkeeperPickingUpState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // 0. CRITICAL: Goalkeeper can only pick up balls that are NOT flying away from them
         // If the ball is flying away, they cannot pick it up (e.g., their own pass/kick)
         // Check if ball has significant velocity (not just rolling)
@@ -57,10 +57,6 @@ impl StateProcessingHandler for GoalkeeperPickingUpState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the ball to pick it up

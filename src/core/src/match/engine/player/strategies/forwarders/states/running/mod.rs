@@ -36,7 +36,7 @@ const SPRINT_DURATION_THRESHOLD: u64 = 150; // Ticks before considering fatigue
 pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
@@ -224,14 +224,7 @@ impl StateProcessingHandler for ForwardRunningState {
         }
         // Handle cases when player doesn't have the ball
         else {
-            // Priority 0: Loose ball — chase it if unowned and we're closest
-            if !ctx.ball().is_owned() && ctx.ball().distance() < 150.0
-                && ctx.team().is_best_player_to_chase_ball()
-            {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::TakeBall,
-                ));
-            }
+            // Loose-ball claim lives in the dispatcher.
 
             // Also respond to ball system notifications
             if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
@@ -334,9 +327,6 @@ impl StateProcessingHandler for ForwardRunningState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Fatigue-aware velocity calculation
@@ -1006,7 +996,7 @@ impl ForwardRunningState {
     }
 
     /// Check if a teammate has a MUCH better shot opportunity (vision/teamwork-aware)
-    /// Used in try_fast() to distribute goals across team
+    /// Used in process() to distribute goals across team
     #[allow(dead_code)]
     fn has_teammate_with_much_better_shot(
         &self,

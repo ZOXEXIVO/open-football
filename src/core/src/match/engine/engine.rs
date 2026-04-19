@@ -1,5 +1,6 @@
 use crate::r#match::engine::events::dispatcher::EventCollection;
-use crate::r#match::engine::goal::handle_goal_reset;
+use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
+use crate::r#match::PlayerSide;
 use crate::r#match::engine::rating::calculate_match_rating;
 use crate::r#match::engine::substitutions::process_substitutions;
 use crate::r#match::events::EventDispatcher;
@@ -7,7 +8,7 @@ use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
 use crate::r#match::PlayerMatchEndStats;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, MatchResultRaw, MatchSquad, MatchState, Score, StateManager, SubstitutionInfo};
-use crate::{PlayerPositionType, Tactics};
+use crate::{PlayerFieldPositionGroup, PlayerPositionType, Tactics};
 use rand::RngExt;
 use std::collections::HashMap;
 
@@ -50,6 +51,12 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         }
 
         let mut state_manager = StateManager::new();
+
+        // Match kickoff — home team (playing Left in the first half)
+        // starts the game with possession on the centre spot. Without
+        // this the ball sits at centre until the emergency chaser
+        // override fires, producing a ~14-second dead patch.
+        assign_kickoff(&mut field, PlayerSide::Left);
 
         while let Some(state) = state_manager.next(&context.score, context.is_knockout) {
             context.state.set(state);
@@ -324,8 +331,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         events.clear();
 
         field.ball.update_light(context, &field.players, events);
+        Self::apply_pending_set_piece_teleport(field);
 
-        for player in field.players.iter_mut() {
+        // Skip sent-off players: they've been stashed at (-500, -500). A
+        // boundary clamp here would drag them to (0, 0) — the pitch's
+        // top-left corner — which then gets recorded as a ghost sample
+        // by `write_match_positions`.
+        for player in field.players.iter_mut().filter(|p| !p.is_sent_off) {
             player.check_boundary_collision(context);
             player.move_to();
         }
@@ -350,6 +362,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         events.clear();
 
         Self::play_ball(field, context, tick_ctx, events);
+        Self::apply_pending_set_piece_teleport(field);
+        // Ownership may have changed inside play_ball (new claim, pass
+        // target receive, etc.). Refresh the ball view so player state
+        // dispatch sees the current owner — without this, the
+        // TakeBall force-override fires for a player who already has
+        // the ball.
+        tick_ctx.refresh_ball(field);
         Self::play_players(field, context, tick_ctx, events);
 
         EventDispatcher::dispatch(events, field, context, match_data, true);
@@ -357,6 +376,23 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         handle_goal_reset(field, context);
 
         Self::write_match_positions(field, context.total_match_time, match_data);
+    }
+
+    /// Corner kicks and goal kicks rewrite ball ownership inside `ball.update`,
+    /// but ball.rs only has `&[MatchPlayer]` — it can't teleport the designated
+    /// taker to the ball. Instead it stashes the teleport intent on the Ball;
+    /// we drain it here, now that we have `&mut field.players`. Without this,
+    /// the ball sits at the corner flag / goal area with ownership assigned
+    /// to a player 30-200 units away, and `move_to`'s 15-unit distance check
+    /// nulls ownership on the very next tick — ball stalls for seconds.
+    fn apply_pending_set_piece_teleport(field: &mut MatchField) {
+        if let Some((player_id, ball_pos)) = field.ball.pending_set_piece_teleport.take() {
+            if let Some(p) = field.players.iter_mut().find(|p| p.id == player_id) {
+                p.position = ball_pos;
+                p.velocity = nalgebra::Vector3::zeros();
+                p.in_state_time = 0;
+            }
+        }
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -382,7 +418,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let track_events = match_data.is_tracking_events();
 
-        field.players.iter().for_each(|player| {
+        // Don't record sent-off players — their state doesn't advance and
+        // their position is a dummy off-pitch stash. A recorded sample
+        // would show them as a ghost sprite in the replay viewer.
+        field.players.iter().filter(|p| !p.is_sent_off).for_each(|player| {
+            // Diagnostic: catch players pinned at ANY field boundary.
+            // `check_boundary_collision` clamps to 0..=field_width and
+            // 0..=field_height; a steering error that consistently
+            // points off-pitch leaves the player stuck there.
+            // Rate-limit to once per 30s of match time per player so a
+            // persistent stall doesn't spam the log every 30ms sample.
+            let field_w = field.size.width as f32;
+            let field_h = field.size.height as f32;
+            let near_left = player.position.x < 1.0;
+            let near_right = player.position.x > field_w - 1.0;
+            let near_top = player.position.y < 1.0;
+            let near_bottom = player.position.y > field_h - 1.0;
+            if (near_left || near_right) && (near_top || near_bottom)
+                && timestamp % 30_000 < Self::POSITION_RECORD_INTERVAL_MS
+            {
+                log::warn!(
+                    "player at corner: t={}ms id={} team={} state={:?} tactical={:?} pos=({:.1}, {:.1}) velocity=({:.2}, {:.2})",
+                    timestamp,
+                    player.id,
+                    player.team_id,
+                    player.state,
+                    player.tactical_position.current_position,
+                    player.position.x,
+                    player.position.y,
+                    player.velocity.x,
+                    player.velocity.y,
+                );
+            }
             match_data.add_player_positions(player.id, timestamp, player.position);
             if track_events {
                 match_data.add_player_state(player.id, timestamp, player.state.compact_id(), &player.state);
@@ -426,7 +493,6 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
     fn run_penalty_shootout(field: &mut MatchField, context: &mut MatchContext) {
         use rand::RngExt;
-        use crate::PlayerFieldPositionGroup;
 
         let mut rng = rand::rng();
         let home_id = context.field_home_team_id;

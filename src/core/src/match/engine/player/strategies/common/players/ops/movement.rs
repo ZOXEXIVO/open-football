@@ -1,4 +1,4 @@
-use crate::r#match::{MatchPlayerLite, StateProcessingContext};
+use crate::r#match::{MatchPlayerLite, PlayerSide, StateProcessingContext};
 use nalgebra::Vector3;
 
 /// Operations for movement and space-finding
@@ -158,8 +158,8 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Stay ahead of ball carrier (increased distance to prevent clustering)
         let target_x = match self.ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => holder_pos.x + 80.0,
-            Some(crate::r#match::PlayerSide::Right) => holder_pos.x - 80.0,
+            Some(PlayerSide::Left) => holder_pos.x + 80.0,
+            Some(PlayerSide::Right) => holder_pos.x - 80.0,
             None => holder_pos.x,
         };
 
@@ -173,8 +173,8 @@ impl<'p> MovementOperationsImpl<'p> {
 
         // Move into space between defenders (increased distance)
         let target_x = match self.ctx.player.side {
-            Some(crate::r#match::PlayerSide::Left) => holder_pos.x + 90.0,
-            Some(crate::r#match::PlayerSide::Right) => holder_pos.x - 90.0,
+            Some(PlayerSide::Left) => holder_pos.x + 90.0,
+            Some(PlayerSide::Right) => holder_pos.x - 90.0,
             None => holder_pos.x,
         };
 

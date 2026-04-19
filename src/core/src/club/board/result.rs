@@ -1,6 +1,7 @@
 use crate::simulator::SimulatorData;
 use crate::club::board::BoardMoodState;
 use crate::club::{StaffClubContract, StaffPosition, StaffStatus};
+use crate::TeamType;
 use chrono::Datelike;
 use log::{debug, info};
 
@@ -210,7 +211,7 @@ impl BoardResult {
             let world_rep = club
                 .teams
                 .iter()
-                .find(|t| matches!(t.team_type, crate::TeamType::Main))
+                .find(|t| matches!(t.team_type, TeamType::Main))
                 .map(|t| t.reputation.world as u16)
                 .unwrap_or(0);
 

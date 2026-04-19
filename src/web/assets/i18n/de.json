@@ -736,5 +736,11 @@
   "watchlist": "Beobachtungsliste",
   "work_rate": "Einsatzbereitschaft",
   "yc": "GK",
-  "years_old": "Jahre alt"
+  "years_old": "Jahre alt",
+  "search": "Suche",
+  "search_placeholder": "Länder, Vereine, Spieler suchen...",
+  "search_countries": "Länder",
+  "search_clubs": "Vereine",
+  "search_players": "Spieler",
+  "search_no_results": "Keine Ergebnisse"
 }

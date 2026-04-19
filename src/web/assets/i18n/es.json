@@ -736,5 +736,11 @@
   "watchlist": "Lista de seguimiento",
   "work_rate": "Capacidad de trabajo",
   "yc": "TA",
-  "years_old": "años"
+  "years_old": "años",
+  "search": "Buscar",
+  "search_placeholder": "Buscar países, clubes, jugadores...",
+  "search_countries": "Países",
+  "search_clubs": "Clubes",
+  "search_players": "Jugadores",
+  "search_no_results": "Sin resultados"
 }

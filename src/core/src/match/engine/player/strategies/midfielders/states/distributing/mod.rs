@@ -12,7 +12,7 @@ use nalgebra::Vector3;
 pub struct MidfielderDistributingState {}
 
 impl StateProcessingHandler for MidfielderDistributingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Lost possession — transition out
         if !ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -44,9 +44,6 @@ impl StateProcessingHandler for MidfielderDistributingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

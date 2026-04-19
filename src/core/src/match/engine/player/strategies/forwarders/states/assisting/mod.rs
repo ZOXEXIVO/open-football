@@ -7,7 +7,7 @@ use nalgebra::Vector3;
 pub struct ForwardAssistingState {}
 
 impl StateProcessingHandler for ForwardAssistingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_forward_state(
@@ -70,9 +70,6 @@ impl StateProcessingHandler for ForwardAssistingState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(

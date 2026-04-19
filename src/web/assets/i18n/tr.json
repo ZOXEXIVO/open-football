@@ -736,5 +736,11 @@
   "watchlist": "İzleme Listesi",
   "work_rate": "Çalışkanlık",
   "yc": "SK",
-  "years_old": "yaşında"
+  "years_old": "yaşında",
+  "search": "Ara",
+  "search_placeholder": "Ülke, kulüp, oyuncu ara...",
+  "search_countries": "Ülkeler",
+  "search_clubs": "Kulüpler",
+  "search_players": "Oyuncular",
+  "search_no_results": "Sonuç bulunamadı"
 }

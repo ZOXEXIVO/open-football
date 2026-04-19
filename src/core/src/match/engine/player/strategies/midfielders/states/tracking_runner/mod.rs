@@ -14,7 +14,7 @@ const BALL_INTERCEPTION_DISTANCE: f32 = 25.0; // Wider interception range
 pub struct MidfielderTrackingRunnerState {}
 
 impl StateProcessingHandler for MidfielderTrackingRunnerState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check for ball interception opportunities first
         let ball_distance = ctx.ball().distance();
         if ball_distance < BALL_INTERCEPTION_DISTANCE && ctx.ball().is_towards_player() {
@@ -71,9 +71,6 @@ impl StateProcessingHandler for MidfielderTrackingRunnerState {
         }
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let nearest_forward = ctx.players().opponents().forwards().min_by(|a, b| {

@@ -1,5 +1,6 @@
-use crate::r#match::{SquadSelector, TacticalSquadAnalyzer};
-use crate::{Player, Team};
+use crate::r#match::squad::PlayerSelectionResult;
+use crate::r#match::{MatchPlayer, SquadSelector, TacticalSquadAnalyzer};
+use crate::{MatchTacticType, Player, Staff, Team};
 
 pub struct TacticalDecisionEngine;
 
@@ -35,7 +36,7 @@ impl TacticalDecisionEngine {
 
     /// Analyze the quality of squad selection
     fn analyze_squad_selection(
-        squad_result: &crate::r#match::squad::PlayerSelectionResult,
+        squad_result: &PlayerSelectionResult,
         team: &Team,
     ) -> SquadAnalysis {
         let tactics = team.tactics();
@@ -86,7 +87,7 @@ impl TacticalDecisionEngine {
 
     /// Calculate the quality of substitutes
     fn calculate_bench_quality(
-        substitutes: &[crate::r#match::MatchPlayer],
+        substitutes: &[MatchPlayer],
         team: &Team,
     ) -> f32 {
         if substitutes.is_empty() {
@@ -107,7 +108,7 @@ impl TacticalDecisionEngine {
     }
 
     /// Generate tactical recommendations for the team
-    fn generate_tactical_recommendations(team: &Team, staff: &crate::Staff) -> Vec<TacticalRecommendation> {
+    fn generate_tactical_recommendations(team: &Team, staff: &Staff) -> Vec<TacticalRecommendation> {
         let mut recommendations = Vec::new();
 
         // Check if coach tactical knowledge matches formation complexity
@@ -115,7 +116,7 @@ impl TacticalDecisionEngine {
         let coach_knowledge = staff.staff_attributes.knowledge.tactical_knowledge;
 
         match current_tactics.tactic_type {
-            crate::MatchTacticType::T4312 | crate::MatchTacticType::T343 if coach_knowledge < 15 => {
+            MatchTacticType::T4312 | MatchTacticType::T343 if coach_knowledge < 15 => {
                 recommendations.push(TacticalRecommendation {
                     priority: RecommendationPriority::High,
                     category: RecommendationCategory::Formation,
@@ -179,8 +180,8 @@ impl TacticalDecisionResult {
 /// Suggested formation change
 #[derive(Debug, Clone)]
 pub struct FormationChange {
-    pub from: Option<crate::MatchTacticType>,
-    pub to: crate::MatchTacticType,
+    pub from: Option<MatchTacticType>,
+    pub to: MatchTacticType,
     pub reason: String,
     pub confidence: f32,
 }

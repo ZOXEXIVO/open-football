@@ -81,7 +81,7 @@ pub use club::{
     // Transfers exports
     ClubTransferStrategy,
     // Player exports
-    Player, PlayerCollection, PlayerBuilder,
+    Player, PlayerCollection, PlayerBuilder, SellOnObligation,
     PlayerAttributes, PlayerContext,
     PlayerPreferredFoot, PlayerPositionType, PlayerFieldPositionGroup, PlayerStatusType,
     PlayerSkills, Technical, Mental, Physical, Goalkeeping,
@@ -96,7 +96,7 @@ pub use club::{
     PlayerDecisionHistory, PlayerDecision,
     PlayerTraining, PlayerTrainingHistory, TrainingRecord, PlayerTrainingResult,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
-    PlayerValueCalculator, PlayerGenerator, PlayerUtils,
+    PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
     PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
     InjuryType, InjurySeverity,

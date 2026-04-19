@@ -1,7 +1,8 @@
 use crate::continent::continent::Continent;
 use crate::r#match::MatchSquad;
-use crate::NationalTeam;
+use crate::Club;
 use crate::NationalCompetitionFixture;
+use crate::NationalTeam;
 use chrono::NaiveDate;
 
 impl Continent {
@@ -45,7 +46,7 @@ impl Continent {
         }
 
         // Collect clubs from ALL countries — squad members may play abroad
-        let all_clubs: Vec<&crate::Club> = self.countries.iter()
+        let all_clubs: Vec<&Club> = self.countries.iter()
             .flat_map(|c| &c.clubs)
             .collect();
         let country = &self.countries[country_idx];

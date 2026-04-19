@@ -14,7 +14,7 @@ const PUNCH_DISTANCE: f32 = 18.0; // Distance to attempt punching
 pub struct GoalkeeperPreparingForSaveState {}
 
 impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // If goalkeeper has the ball, transition to passing
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
@@ -79,9 +79,6 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;

@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 pub struct ForwardOffsideTrapBreakingState {}
 
 impl StateProcessingHandler for ForwardOffsideTrapBreakingState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let mut result = StateChangeResult::new();
 
         let player_ops = ctx.player();
@@ -44,9 +44,6 @@ impl StateProcessingHandler for ForwardOffsideTrapBreakingState {
         Some(result)
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         Some(Vector3::new(0.0, 0.0, 0.0))

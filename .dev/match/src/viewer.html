@@ -18,9 +18,17 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
 .controls button { background: #1c2830; border: 1px solid #3a4f5c; color: #c8d6e0; padding: 6px 16px; border-radius: 3px; cursor: pointer; font-size: 12px; }
 .controls button:hover { background: #2a3a46; }
 .controls button.active { background: #2a5a3a; border-color: #4a9d5b; }
-#time-slider { flex: 1; max-width: 600px; accent-color: #4a9d5b; }
+.slider-wrap { position: relative; flex: 1; max-width: 600px; height: 22px; }
+#time-slider { width: 100%; accent-color: #4a9d5b; position: absolute; left: 0; top: 8px; margin: 0; }
+.goal-markers { position: absolute; left: 0; right: 0; top: 0; height: 100%; pointer-events: none; }
+.goal-marker { position: absolute; top: 0; width: 12px; height: 22px; margin-left: -6px; font-size: 12px; line-height: 22px; text-align: center; text-shadow: 0 0 2px #000; }
+.goal-marker-home { color: #6ba3d6; }
+.goal-marker-away { color: #d6836b; }
 #time-display { font-size: 13px; font-variant-numeric: tabular-nums; min-width: 50px; text-align: center; }
-#speed-display { font-size: 11px; color: #7a8c98; }
+#status { font-size: 11px; color: #7a8c98; min-width: 80px; }
+#ball-coords { font-size: 12px; color: #7a8c98; font-variant-numeric: tabular-nums; min-width: 160px; text-align: center; letter-spacing: 0.5px; }
+#ball-coords .label { color: #4a5a66; margin-right: 4px; }
+#ball-coords .val { color: #c8d6e0; }
 </style>
 </head>
 <body>
@@ -35,8 +43,14 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
     <div class="controls">
         <button id="btn-play">Play</button>
         <button id="btn-speed">1x</button>
-        <input type="range" id="time-slider" min="0" max="1000" value="0">
+        <button id="btn-states" class="active">States</button>
+        <div class="slider-wrap">
+            <input type="range" id="time-slider" min="0" max="1000" value="0">
+            <div class="goal-markers" id="goal-markers"></div>
+        </div>
         <span id="time-display">0'</span>
+        <span id="ball-coords"><span class="label">ball</span><span class="val" id="ball-coords-val">—</span></span>
+        <span id="status"></span>
     </div>
 </div>
 <div id="match-container">
@@ -66,81 +80,190 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
     const fieldTop = 60;
     const fieldWidth = 1260;
     const fieldHeight = 810;
-    const chunkDurationMs = 300000;
+
+    // Chunk duration is read from metadata — don't duplicate the constant
+    // on both sides of the wire.
+    let chunkDurationMs = 300000;
+    let totalChunks = 0;
 
     let app = null;
-    let background = null;
     let gameContainer = null;
     let playerSprites = {};
     let playerMap = {};
     let ballSprite = null;
-    let positionData = { ball: [], players: {}, states: {} };
-    let loadedChunks = new Set();
-    let loadingChunks = new Set();
-    let totalChunks = 0;
+
+    // Position data buffers: each entry is [timestamp, x, y] or
+    // [timestamp, x, y, z]. States: [timestamp, "StateName"].
+    let ballData = [];
+    const playerData = {};
+    const stateData = {};
+
+    // Hint indices for cache-friendly sequential lookups (web viewer pattern).
+    // Time advances monotonically during playback, so last-found index is a
+    // near-perfect starting point for the next frame — O(1) amortised.
+    let lastBallIdx = 0;
+    const lastPlayerIdx = {};
+    const lastStateIdx = {};
+
+    const loadedChunks = new Set();
+    const loadingChunks = new Set();
 
     let playing = false;
+    let showStates = true;
     let currentTime = 0;
     let playbackSpeed = 1;
     const speeds = [1, 2, 4, 8, 16];
     let speedIdx = 0;
     let lastFrameTime = 0;
 
+    // Gap threshold: if two samples are more than this far apart, snap
+    // instead of interpolating. Otherwise goal resets (ball teleport to
+    // centre spot) render as a 60m glide over 30ms.
+    const INTERPOLATION_GAP_MS = 200;
+
     function getChunkNumber(time) {
         return Math.floor(time / chunkDurationMs);
     }
 
     async function loadChunk(chunkNum) {
-        if (!Number.isFinite(chunkNum) || loadedChunks.has(chunkNum) || loadingChunks.has(chunkNum) || chunkNum < 0 || chunkNum >= totalChunks) return;
+        if (!Number.isFinite(chunkNum)
+            || chunkNum < 0
+            || chunkNum >= totalChunks
+            || loadedChunks.has(chunkNum)
+            || loadingChunks.has(chunkNum))
+        {
+            return;
+        }
         loadingChunks.add(chunkNum);
         try {
             const res = await fetch('/api/match/' + matchId + '/chunk/' + chunkNum);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
             const data = await res.json();
-            mergeData(data, chunkNum);
+            mergeData(data);
             loadedChunks.add(chunkNum);
+        } catch (err) {
+            console.error('chunk ' + chunkNum + ' load failed:', err);
+            setStatus('chunk ' + chunkNum + ' failed');
         } finally {
             loadingChunks.delete(chunkNum);
         }
     }
 
-    // Compact format: positions = [timestamp, x, y, z?], states = [timestamp, "StateName"]
-    function mergeData(data) {
-        if (data.ball) {
-            for (let i = 0; i < data.ball.length; i++) positionData.ball.push(data.ball[i]);
-            positionData.ball.sort(function(a, b) { return a[0] - b[0]; });
+    // Chunks arrive in time-order, so appending is the common case and an
+    // O(n) merge is only needed for out-of-order loads (rare: user scrub
+    // back while a later chunk is still in flight).
+    function mergeSorted(existing, incoming) {
+        if (incoming.length === 0) return existing;
+        if (existing.length === 0) return incoming;
+        if (incoming[0][0] >= existing[existing.length - 1][0]) {
+            // Fast path: append in-place.
+            for (let i = 0; i < incoming.length; i++) existing.push(incoming[i]);
+            return existing;
         }
+        const merged = new Array(existing.length + incoming.length);
+        let i = 0, j = 0, k = 0;
+        while (i < existing.length && j < incoming.length) {
+            merged[k++] = existing[i][0] <= incoming[j][0] ? existing[i++] : incoming[j++];
+        }
+        while (i < existing.length) merged[k++] = existing[i++];
+        while (j < incoming.length) merged[k++] = incoming[j++];
+        return merged;
+    }
+
+    function mergeData(data) {
+        if (data.ball) ballData = mergeSorted(ballData, data.ball);
         if (data.players) {
-            for (const [id, positions] of Object.entries(data.players)) {
-                if (!positionData.players[id]) positionData.players[id] = [];
-                for (let i = 0; i < positions.length; i++) positionData.players[id].push(positions[i]);
-                positionData.players[id].sort(function(a, b) { return a[0] - b[0]; });
+            const entries = Object.entries(data.players);
+            for (let e = 0; e < entries.length; e++) {
+                const id = entries[e][0];
+                const positions = entries[e][1];
+                if (!playerData[id]) {
+                    playerData[id] = positions.slice();
+                    // Lazy sprite creation — handles substitutes appearing
+                    // after the match has started. The first chunk won't
+                    // contain their positions; a later chunk will.
+                    ensurePlayerSprite(id, positions);
+                } else {
+                    playerData[id] = mergeSorted(playerData[id], positions);
+                }
             }
         }
         if (data.states) {
-            for (const [id, states] of Object.entries(data.states)) {
-                if (!positionData.states[id]) positionData.states[id] = [];
-                for (let i = 0; i < states.length; i++) positionData.states[id].push(states[i]);
-                positionData.states[id].sort(function(a, b) { return a[0] - b[0]; });
+            const entries = Object.entries(data.states);
+            for (let e = 0; e < entries.length; e++) {
+                const id = entries[e][0];
+                const states = entries[e][1];
+                stateData[id] = stateData[id]
+                    ? mergeSorted(stateData[id], states)
+                    : states.slice();
             }
         }
     }
 
-    function findPosition(arr, time) {
-        if (!arr || arr.length === 0) return null;
-        // Use the closest recorded frame (before or after) to requested time
-        let lo = 0, hi = arr.length - 1;
+    function ensurePlayerSprite(id, initialPositions) {
+        if (playerSprites[id] || !gameContainer) return;
+        const player = playerMap[id];
+        if (!player || !initialPositions || initialPositions.length === 0) return;
+        const sprite = createPlayerGraphic(player);
+        const [px, py] = engineToPixel(initialPositions[0][1], initialPositions[0][2]);
+        sprite.x = px;
+        sprite.y = py;
+        gameContainer.addChild(sprite);
+        playerSprites[id] = sprite;
+    }
+
+    // Hint-based lookup — scans forward/back from the last-found index.
+    // Time advances monotonically, so the answer is almost always `hint`
+    // or `hint+1`. Falls back to binary search if the hint is useless
+    // (e.g. after a scrub jump).
+    function findIndexNear(arr, time, hint) {
+        const len = arr.length;
+        if (len === 0) return -1;
+        if (hint >= 0 && hint < len) {
+            if (arr[hint][0] <= time) {
+                let i = hint;
+                while (i + 1 < len && arr[i + 1][0] <= time) i++;
+                return i;
+            } else {
+                let i = hint - 1;
+                while (i >= 0 && arr[i][0] > time) i--;
+                return Math.max(i, 0);
+            }
+        }
+        let lo = 0, hi = len - 1;
         while (lo < hi) {
             const mid = (lo + hi + 1) >> 1;
             if (arr[mid][0] <= time) lo = mid; else hi = mid - 1;
         }
-        // If next frame is closer in time, prefer it (handles goal resets better)
-        if (lo + 1 < arr.length) {
-            const curDt = time - arr[lo][0];
-            const nextDt = arr[lo + 1][0] - time;
-            if (nextDt < curDt) { const e = arr[lo + 1]; return [e[1], e[2], e[3] || 0]; }
+        return lo;
+    }
+
+    function interpolate(arr, idx, time) {
+        const a = arr[idx];
+        if (idx + 1 < arr.length) {
+            const b = arr[idx + 1];
+            const dt = b[0] - a[0];
+            // Snap across big gaps (goal resets, half-time) instead of
+            // gliding the ball 60m over 30ms.
+            if (dt > 0 && dt <= INTERPOLATION_GAP_MS) {
+                const t = (time - a[0]) / dt;
+                return [
+                    a[1] + (b[1] - a[1]) * t,
+                    a[2] + (b[2] - a[2]) * t,
+                    (a[3] || 0) + ((b[3] || 0) - (a[3] || 0)) * t,
+                ];
+            }
         }
-        const e = arr[lo];
-        return [e[1], e[2], e[3] || 0];
+        return [a[1], a[2], a[3] || 0];
+    }
+
+    function findState(stateArr, time, id) {
+        if (!stateArr || stateArr.length === 0) return '';
+        const idx = findIndexNear(stateArr, time, lastStateIdx[id] || 0);
+        lastStateIdx[id] = idx;
+        const full = stateArr[idx][1];
+        const colon = full.indexOf(': ');
+        return colon >= 0 ? full.substring(colon + 2) : full;
     }
 
     function createPlayerGraphic(player) {
@@ -163,7 +286,6 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         nameText.y = 28;
         container.addChild(nameText);
 
-        // State label — shown below the name
         const stateText = new PIXI.Text({ text: '', style: new PIXI.TextStyle({ fontSize: 16, fill: '#ffff66', fontFamily: 'Arial' }) });
         stateText.anchor.set(0.5, 0);
         stateText.y = 50;
@@ -171,20 +293,6 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         container._stateText = stateText;
 
         return container;
-    }
-
-    // Find current state for a player at given time (binary search on state entries)
-    function findState(stateArr, time) {
-        if (!stateArr || stateArr.length === 0) return '';
-        let lo = 0, hi = stateArr.length - 1;
-        while (lo < hi) {
-            const mid = (lo + hi + 1) >> 1;
-            if (stateArr[mid][0] <= time) lo = mid; else hi = mid - 1;
-        }
-        // Strip "Forward: " / "Midfielder: " etc prefix for brevity
-        const full = stateArr[lo][1];
-        const colon = full.indexOf(': ');
-        return colon >= 0 ? full.substring(colon + 2) : full;
     }
 
     function engineToPixel(ex, ey) {
@@ -195,38 +303,100 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
     }
 
     function updatePositions(time) {
-        // Ball
-        const bp = findPosition(positionData.ball, time);
-        if (bp && ballSprite) {
-            const [px, py] = engineToPixel(bp[0], bp[1]);
+        // Ball — interpolate + scale for height
+        lastBallIdx = findIndexNear(ballData, time, lastBallIdx);
+        if (lastBallIdx >= 0 && ballSprite) {
+            const [bx, by, bz] = interpolate(ballData, lastBallIdx, time);
+            const [px, py] = engineToPixel(bx, by);
             ballSprite.x = px;
             ballSprite.y = py;
+            // Lofted balls visually bigger — matches production viewer.
+            const heightScale = 1.0 + Math.min((bz || 0) / 15.0, 0.4);
+            ballSprite.scale.set(heightScale);
+            document.getElementById('ball-coords-val').textContent =
+                `${bx.toFixed(1)}, ${by.toFixed(1)}, ${(bz || 0).toFixed(1)}`;
         }
 
-        // Players
-        for (const [id, sprite] of Object.entries(playerSprites)) {
-            const pp = findPosition(positionData.players[id], time);
-            if (pp) {
-                const [px, py] = engineToPixel(pp[0], pp[1]);
-                sprite.x = px;
-                sprite.y = py;
-                sprite.visible = true;
-                // Update state label
-                if (sprite._stateText) {
-                    sprite._stateText.text = findState(positionData.states[id], time);
+        // Players — interpolate + hide off-field substitutes
+        const currentChunk = getChunkNumber(time);
+        const chunkIsLoaded = loadedChunks.has(currentChunk);
+        for (const id in playerSprites) {
+            const positions = playerData[id];
+            const sprite = playerSprites[id];
+            if (!positions || positions.length === 0) {
+                sprite.visible = false;
+                continue;
+            }
+            const hint = lastPlayerIdx[id] || 0;
+            const idx = findIndexNear(positions, time, hint);
+            lastPlayerIdx[id] = idx;
+            const firstTs = positions[0][0];
+            const lastTs = positions[positions.length - 1][0];
+            // Before their first sample → haven't come on yet. Hide.
+            if (time + 1000 < firstTs) {
+                sprite.visible = false;
+                continue;
+            }
+            // Past their last sample — two cases:
+            //  a) The chunk covering `time` has loaded and they still
+            //     have no sample there → genuinely absent (subbed off,
+            //     sent off, match ended). Hide.
+            //  b) The chunk is still fetching → don't flash an empty
+            //     field while the user scrubs. Freeze sprite at its
+            //     last known position until data arrives.
+            if (time > lastTs + 1000) {
+                if (chunkIsLoaded) {
+                    sprite.visible = false;
+                    continue;
+                }
+                // Fall through — show at last-known position.
+            }
+            sprite.visible = true;
+            const [px_e, py_e] = interpolate(positions, idx, time);
+            const [px, py] = engineToPixel(px_e, py_e);
+            sprite.x = px;
+            sprite.y = py;
+            if (sprite._stateText) {
+                sprite._stateText.visible = showStates;
+                if (showStates) {
+                    sprite._stateText.text = findState(stateData[id], time, id);
                 }
             }
         }
     }
 
-    function gameLoop() {
-        if (!playing) { requestAnimationFrame(gameLoop); return; }
+    // Preload current + 2 chunks ahead. If a tab was backgrounded and dt
+    // jumped across multiple chunks, all of them get queued — no silent
+    // "positions freeze" gap.
+    function preloadAround(time) {
+        const current = getChunkNumber(time);
+        for (let k = 0; k <= 2; k++) loadChunk(current + k);
+    }
 
-        const now = performance.now();
+    function setStatus(text) {
+        const el = document.getElementById('status');
+        if (el) el.textContent = text || '';
+    }
+
+    function formatTime(ms) {
+        // Show real match time, not a scaled 0–90'. A debug build runs
+        // a 10-minute match (5 min per half); scaling to 90' hides that
+        // and makes scrub positions misleading ("30'" on the slider is
+        // actually minute 3.3 of the sim, so chunks for min 30 never
+        // get requested because they don't exist).
+        const totalSecs = Math.floor(ms / 1000);
+        const m = Math.floor(totalSecs / 60);
+        const s = totalSecs % 60;
+        return m + ":" + (s < 10 ? "0" + s : s);
+    }
+
+    function gameLoop(now) {
+        requestAnimationFrame(gameLoop);
+        if (!playing) return;
+
         if (lastFrameTime === 0) lastFrameTime = now;
         const dt = (now - lastFrameTime) * playbackSpeed;
         lastFrameTime = now;
-
         currentTime += dt;
         if (currentTime >= matchTimeMsTotal) {
             currentTime = matchTimeMsTotal;
@@ -234,38 +404,59 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
             document.getElementById('btn-play').textContent = 'Play';
         }
 
-        // Preload chunks
-        const needed = getChunkNumber(currentTime);
-        loadChunk(needed);
-        loadChunk(needed + 1);
-
+        preloadAround(currentTime);
         updatePositions(currentTime);
 
         const slider = document.getElementById('time-slider');
         slider.value = (currentTime / matchTimeMsTotal) * 1000;
-        document.getElementById('time-display').textContent = Math.floor(currentTime / matchTimeMsTotal * 90) + "'";
+        document.getElementById('time-display').textContent = formatTime(currentTime);
+    }
 
-        requestAnimationFrame(gameLoop);
+    function renderGoalMarkers() {
+        const markersDiv = document.getElementById('goal-markers');
+        markersDiv.innerHTML = '';
+        for (let i = 0; i < goalsData.length; i++) {
+            const goal = goalsData[i];
+            const player = playerMap[goal.player_id];
+            const isHome = player ? player.is_home : true;
+            // Auto-goals go to the other team; flip the color to match.
+            const sideIsHome = goal.is_auto_goal ? !isHome : isHome;
+            const pct = (goal.time / matchTimeMsTotal) * 100;
+            const marker = document.createElement('div');
+            marker.className = 'goal-marker ' + (sideIsHome ? 'goal-marker-home' : 'goal-marker-away');
+            marker.style.left = pct + '%';
+            marker.textContent = '\u26BD';
+            marker.title = (player ? player.last_name : 'P' + goal.player_id)
+                + ' ' + Math.floor(goal.time / matchTimeMsTotal * 90) + "'"
+                + (goal.is_auto_goal ? ' (OG)' : '');
+            markersDiv.appendChild(marker);
+        }
     }
 
     async function init() {
-        const metaRes = await fetch('/api/match/' + matchId + '/metadata');
-        const metadata = await metaRes.json();
-        totalChunks = metadata.chunk_count || 0;
+        try {
+            const metaRes = await fetch('/api/match/' + matchId + '/metadata');
+            if (!metaRes.ok) throw new Error('metadata HTTP ' + metaRes.status);
+            const metadata = await metaRes.json();
+            totalChunks = metadata.chunk_count || 0;
+            // Read from server, don't hard-code on both sides.
+            if (metadata.chunk_duration_ms) chunkDurationMs = metadata.chunk_duration_ms;
+        } catch (err) {
+            console.error('metadata load failed:', err);
+            setStatus('metadata failed');
+            return;
+        }
 
-        // Load first chunk
-        const chunkRes = await fetch('/api/match/' + matchId + '/chunk/0');
-        const firstChunk = await chunkRes.json();
-        mergeData(firstChunk);
-        loadedChunks.add(0);
+        // Build player map BEFORE first chunk merges so lazy sprite creation
+        // in mergeData has the lookup available.
+        for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
 
         app = new PIXI.Application();
         await app.init({ antialias: true, background: '#1a472a', width: canvasWidth, height: canvasHeight });
-
         document.getElementById('pixi-container').appendChild(app.canvas);
 
         const bgTexture = await PIXI.Assets.load('/static/images/match/field.svg');
-        background = new PIXI.Sprite(bgTexture);
+        const background = new PIXI.Sprite(bgTexture);
         background.width = canvasWidth;
         background.height = canvasHeight;
         app.stage.addChild(background);
@@ -273,21 +464,8 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         gameContainer = new PIXI.Container();
         app.stage.addChild(gameContainer);
 
-        // Build player map
-        for (let i = 0; i < playersData.length; i++) playerMap[playersData[i].id] = playersData[i];
-
-        // Create player sprites from chunk data
-        const chunkPlayers = Object.entries(firstChunk.players || {});
-        for (let i = 0; i < chunkPlayers.length; i++) {
-            const id = chunkPlayers[i][0];
-            const player = playerMap[id];
-            if (!player) continue;
-            const sprite = createPlayerGraphic(player);
-            gameContainer.addChild(sprite);
-            playerSprites[id] = sprite;
-        }
-
-        // Ball
+        // Ball sprite — create before loading first chunk so mergeData can
+        // position it on the first render.
         const ballContainer = new PIXI.Container();
         const ballCircle = new PIXI.Graphics();
         ballCircle.circle(0, 0, 6).fill(0xffffff).stroke({ width: 2, color: 0x000000 });
@@ -295,14 +473,32 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         gameContainer.addChild(ballContainer);
         ballSprite = ballContainer;
 
+        await loadChunk(0);
+        renderGoalMarkers();
         updatePositions(0);
 
-        // Controls
+        function rewindToStart() {
+            currentTime = 0;
+            lastBallIdx = 0;
+            for (const id in lastPlayerIdx) lastPlayerIdx[id] = 0;
+            for (const id in lastStateIdx) lastStateIdx[id] = 0;
+            // Defensive: the end-of-match updatePositions call may have
+            // set some sprites invisible (sent-off / subbed-off past
+            // their lastTs + 1s). Reset them here so updatePositions(0)
+            // starts from a clean state — the visibility check will
+            // flip them back off if needed.
+            for (const id in playerSprites) playerSprites[id].visible = true;
+            if (ballSprite) ballSprite.visible = true;
+            document.getElementById('time-slider').value = 0;
+            document.getElementById('time-display').textContent = formatTime(0);
+            updatePositions(currentTime);
+        }
+
         document.getElementById('btn-play').addEventListener('click', function() {
+            if (currentTime >= matchTimeMsTotal) rewindToStart();
             playing = !playing;
             this.textContent = playing ? 'Pause' : 'Play';
-            if (playing) lastFrameTime = performance.now();
-            if (currentTime >= matchTimeMsTotal) currentTime = 0;
+            lastFrameTime = playing ? performance.now() : 0;
         });
 
         document.getElementById('btn-speed').addEventListener('click', function() {
@@ -311,12 +507,22 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
             this.textContent = playbackSpeed + 'x';
         });
 
+        document.getElementById('btn-states').addEventListener('click', function() {
+            showStates = !showStates;
+            this.classList.toggle('active', showStates);
+            // Force redraw so state labels hide/show on next tick
+            updatePositions(currentTime);
+        });
+
         const slider = document.getElementById('time-slider');
         slider.addEventListener('input', function() {
             currentTime = (this.value / 1000) * matchTimeMsTotal;
-            document.getElementById('time-display').textContent = Math.floor(currentTime / matchTimeMsTotal * 90) + "'";
-            const needed = getChunkNumber(currentTime);
-            loadChunk(needed);
+            document.getElementById('time-display').textContent = formatTime(currentTime);
+            // Scrub: invalidate hints (time jumped non-monotonically)
+            lastBallIdx = 0;
+            for (const id in lastPlayerIdx) lastPlayerIdx[id] = 0;
+            for (const id in lastStateIdx) lastStateIdx[id] = 0;
+            preloadAround(currentTime);
             updatePositions(currentTime);
         });
 

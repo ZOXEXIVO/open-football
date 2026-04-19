@@ -1,8 +1,8 @@
 use crate::r#match::goalkeepers::states::common::{ActivityIntensity, GoalkeeperCondition};
 use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::{
-    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
-    SteeringBehavior,
+    ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
+    StateProcessingHandler, SteeringBehavior,
 };
 use nalgebra::Vector3;
 
@@ -13,7 +13,7 @@ const MAX_COMING_OUT_DISTANCE: f32 = 60.0; // Maximum distance to pursue ball
 pub struct GoalkeeperComingOutState {}
 
 impl StateProcessingHandler for GoalkeeperComingOutState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         let ball_distance = ctx.ball().distance();
 
         if self.should_dive(ctx) {
@@ -134,10 +134,6 @@ impl StateProcessingHandler for GoalkeeperComingOutState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         let ball_position = ctx.tick_context.positions.ball.position;
@@ -226,7 +222,7 @@ impl GoalkeeperComingOutState {
     fn can_reach_ball_first(
         &self,
         ctx: &StateProcessingContext,
-        opponent: &crate::r#match::MatchPlayerLite,
+        opponent: &MatchPlayerLite,
     ) -> bool {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;

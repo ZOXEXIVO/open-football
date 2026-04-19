@@ -1,4 +1,5 @@
 use crate::continent::Continent;
+use crate::r#match::MatchSquad;
 use crate::SimulatorData;
 use log::info;
 
@@ -100,7 +101,7 @@ impl GlobalCompetitionSimulator {
         continents: &mut [Continent],
         country_id: u32,
         date: chrono::NaiveDate,
-    ) -> Option<crate::r#match::MatchSquad> {
+    ) -> Option<MatchSquad> {
         for continent in continents.iter_mut() {
             if continent.countries.iter().any(|c| c.id == country_id) {
                 return continent.build_country_match_squad(country_id, date);

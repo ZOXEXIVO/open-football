@@ -1,16 +1,16 @@
 use crate::club::player::load::PlayerLoad;
 use crate::club::player::rapport::PlayerRapport;
 use crate::country::PeopleNameGeneratorData;
-use crate::r#match::{MatchPlayer, MatchSquad};
+use crate::r#match::{MatchPlayer, MatchResultRaw, MatchSquad};
 use crate::shared::FullName;
 use crate::utils::IntegerUtils;
 use crate::{
-    Club, MatchTacticType, Mental, PersonAttributes, PersonBehaviour, PersonBehaviourState,
-    Physical, Player, PlayerAttributes, PlayerDecisionHistory, PlayerFieldPositionGroup,
-    PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType, PlayerPositions,
-    PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory, PlayerStatus,
-    PlayerStatusType, PlayerTraining, PlayerTrainingHistory, Relations, Tactics, TeamType,
-    Technical,
+    Club, HappinessEventType, MatchTacticType, Mental, PersonAttributes, PersonBehaviour,
+    PersonBehaviourState, Physical, Player, PlayerAttributes, PlayerDecisionHistory,
+    PlayerFieldPositionGroup, PlayerHappiness, PlayerMailbox, PlayerPosition, PlayerPositionType,
+    PlayerPositions, PlayerPreferredFoot, PlayerSkills, PlayerStatistics, PlayerStatisticsHistory,
+    PlayerStatus, PlayerStatusType, PlayerTraining, PlayerTrainingHistory, Relations, Tactics,
+    TeamType, Technical,
 };
 use crate::Country;
 use chrono::{Datelike, NaiveDate};
@@ -237,7 +237,7 @@ impl NationalTeam {
         &mut self,
         clubs: &mut [Club],
         fixture_idx: usize,
-        match_result: &crate::r#match::MatchResultRaw,
+        match_result: &MatchResultRaw,
         date: NaiveDate,
     ) {
         let fixture = &self.schedule[fixture_idx];
@@ -508,7 +508,6 @@ impl NationalTeam {
         // Set Int status on called-up players in own clubs. Fire morale
         // events on transitions: a fresh call-up is a big moment, being
         // dropped after recent caps hurts pride.
-        use crate::HappinessEventType;
         for club in own_clubs.iter_mut() {
             for team in club.teams.iter_mut() {
                 for player in team.players.iter_mut() {
@@ -1037,6 +1036,7 @@ impl NationalTeam {
             plan: None,
             favorite_clubs: Vec::new(),
             sold_from: None,
+            sell_on_obligations: Vec::new(),
             traits: Vec::new(),
             rapport: PlayerRapport::new(),
             promises: Vec::new(),

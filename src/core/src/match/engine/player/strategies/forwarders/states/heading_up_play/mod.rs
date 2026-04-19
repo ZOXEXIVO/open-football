@@ -9,7 +9,7 @@ use nalgebra::Vector3;
 pub struct ForwardHeadingUpPlayState {}
 
 impl StateProcessingHandler for ForwardHeadingUpPlayState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if the player has the ball
         if !ctx.player.has_ball(ctx) {
             // Transition to Running state if the player doesn't have the ball
@@ -27,9 +27,6 @@ impl StateProcessingHandler for ForwardHeadingUpPlayState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Instead of standing completely still, shield the ball with subtle movement

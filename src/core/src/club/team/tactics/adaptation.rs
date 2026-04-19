@@ -1,5 +1,5 @@
 use crate::r#match::EnhancedTacticsSelector;
-use crate::{Player, RecommendationPriority, Tactics, TacticsSelector, Team};
+use crate::{Player, RecommendationPriority, TacticSelectionReason, Tactics, TacticsSelector, Team};
 use log::{debug, info};
 
 impl Team {
@@ -12,7 +12,7 @@ impl Team {
         team_morale: f32,
     ) -> Option<Tactics> {
         let current_tactic = &self.tactics().tactic_type;
-        let available_players: Vec<&crate::Player> = self
+        let available_players: Vec<&Player> = self
             .players
             .players()
             .into_iter()
@@ -88,7 +88,7 @@ impl Team {
 
                 self.tactics = Some(Tactics::with_reason(
                     change.to,
-                    crate::TacticSelectionReason::TeamComposition,
+                    TacticSelectionReason::TeamComposition,
                     change.confidence,
                 ));
             }

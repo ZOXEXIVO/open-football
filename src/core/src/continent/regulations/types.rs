@@ -1,4 +1,4 @@
-use crate::continent::EconomicZone;
+use crate::continent::{ContinentalRankings, EconomicZone};
 
 #[derive(Debug, Clone)]
 pub struct ContinentalRegulations {
@@ -22,7 +22,7 @@ impl ContinentalRegulations {
             .update_thresholds(economic_zone.get_overall_health());
     }
 
-    pub fn review_foreign_player_rules(&mut self, _rankings: &crate::continent::ContinentalRankings) {
+    pub fn review_foreign_player_rules(&mut self, _rankings: &ContinentalRankings) {
         // Potentially adjust foreign player rules
     }
 

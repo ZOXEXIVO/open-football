@@ -1,4 +1,5 @@
-use crate::r#match::{MatchContext, MatchField, MatchState, PlayMatchStateResult, Score, TeamsTactics};
+use crate::r#match::engine::goal::assign_kickoff;
+use crate::r#match::{MatchContext, MatchField, MatchState, PlayMatchStateResult, PlayerSide, Score, TeamsTactics};
 
 pub struct StateManager {
     current_state: MatchState,
@@ -90,6 +91,9 @@ impl StateManager {
                 context.reset_period_time();
                 field.reset_players_positions();
                 field.ball.reset();
+                // Second half kicks off — Away team (now playing Left
+                // after the halftime swap) takes it.
+                assign_kickoff(field, PlayerSide::Left);
             }
             MatchState::SecondHalf => {
                 // Second half finished. If the tie rolls to extra time the
@@ -99,6 +103,8 @@ impl StateManager {
                     context.reset_period_time();
                     field.reset_players_positions();
                     field.ball.reset();
+                    // Extra time kicks off — pick Left by convention.
+                    assign_kickoff(field, PlayerSide::Left);
                 }
             }
             MatchState::ExtraTime => {

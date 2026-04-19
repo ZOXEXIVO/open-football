@@ -3,7 +3,7 @@ use crate::club::staff::perception::{CoachDecisionState, date_to_week};
 use crate::club::team::squad::{ContractRenewalManager, SquadComposition, SquadManager, TransferListManager};
 use crate::context::GlobalContext;
 use crate::utils::Logging;
-use crate::{Team, TeamResult, TeamType};
+use crate::{HappinessEventType, Team, TeamResult, TeamType};
 use chrono::NaiveDate;
 use rayon::iter::IntoParallelRefMutIterator;
 use rayon::iter::ParallelIterator;
@@ -174,7 +174,6 @@ impl TeamCollection {
     }
 
     fn fire_manager_departure_events(teams: &mut [Team], outgoing_coach_id: u32) {
-        use crate::HappinessEventType;
         for team in teams.iter_mut() {
             if !matches!(team.team_type, TeamType::Main) {
                 continue;

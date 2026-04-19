@@ -12,7 +12,7 @@ const PRESSURE_DISTANCE_THRESHOLD: f32 = 20.0; // Maximum distance from the goal
 pub struct GoalkeeperPressureState {}
 
 impl StateProcessingHandler for GoalkeeperPressureState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing
@@ -38,10 +38,6 @@ impl StateProcessingHandler for GoalkeeperPressureState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // Implement neural network processing if needed
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Move towards the start position (goal) using steering behavior

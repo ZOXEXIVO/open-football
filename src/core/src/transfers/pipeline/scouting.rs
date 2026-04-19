@@ -11,7 +11,7 @@ use crate::transfers::window::PlayerValuationCalculator;
 use crate::transfers::ScoutingRegion;
 use crate::utils::IntegerUtils;
 use crate::{
-    ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, TeamType,
+    ClubPhilosophy, Country, Person, PlayerStatusType, StaffEventType, StaffPosition, TeamType,
 };
 
 struct ScoutAssignmentAction {
@@ -1176,7 +1176,7 @@ impl PipelineProcessor {
                         .map(|c| {
                             matches!(
                                 c.position,
-                                crate::StaffPosition::Scout | crate::StaffPosition::ChiefScout,
+                                StaffPosition::Scout | StaffPosition::ChiefScout,
                             )
                         })
                         .unwrap_or(false)

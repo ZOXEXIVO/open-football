@@ -4,6 +4,7 @@ use crate::r#match::{
     ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult,
     StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
+use crate::TacticalStyle;
 use nalgebra::Vector3;
 
 const MAX_DISTANCE_FROM_BALL: f32 = 120.0;
@@ -16,7 +17,7 @@ const HALF_SPACE_WIDTH: f32 = 15.0;
 pub struct MidfielderCreatingSpaceState {}
 
 impl StateProcessingHandler for MidfielderCreatingSpaceState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Check if player has the ball
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_midfielder_state(
@@ -63,9 +64,6 @@ impl StateProcessingHandler for MidfielderCreatingSpaceState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Use consistent target: scan every 15 ticks, hold direction otherwise
@@ -445,7 +443,7 @@ impl MidfielderCreatingSpaceState {
 
         // Adjust based on tactical style
         match player_tactics.tactical_style() {
-            crate::TacticalStyle::WidePlay | crate::TacticalStyle::WingPlay => {
+            TacticalStyle::WidePlay | TacticalStyle::WingPlay => {
                 // Push wider in wide formations
                 let field_height = ctx.context.field_size.height as f32;
                 if position.y < field_height / 2.0 {
@@ -454,7 +452,7 @@ impl MidfielderCreatingSpaceState {
                     position.y = (position.y + 15.0).min(field_height - 10.0);
                 }
             }
-            crate::TacticalStyle::Possession => {
+            TacticalStyle::Possession => {
                 // Stay more central for passing options
                 let field_height = ctx.context.field_size.height as f32;
                 let center_y = field_height / 2.0;

@@ -6,7 +6,7 @@ mod loan_market;
 mod recommendations;
 mod helpers;
 
-use crate::PlayerPositionType;
+use crate::{PlayerFieldPositionGroup, PlayerPositionType};
 use chrono::NaiveDate;
 
 // Re-export PipelineProcessor and PlayerSummary for external use
@@ -307,7 +307,6 @@ impl RoleProfile {
     /// Default profile by position group, scaled with the requested ability bar.
     /// Higher min_ability requests stricter profiles.
     pub fn for_position(position: PlayerPositionType, min_ability: u8) -> Self {
-        use crate::PlayerFieldPositionGroup;
         let scale = (min_ability as f32 / 20.0).clamp(0.2, 1.0);
         let (t, m, p) = match position.position_group() {
             PlayerFieldPositionGroup::Goalkeeper => (8.0, 12.0, 10.0),
@@ -636,7 +635,7 @@ pub struct ClubTransferPlan {
 #[derive(Debug, Clone)]
 pub struct ShadowReport {
     pub report: DetailedScoutingReport,
-    pub position_group: crate::PlayerFieldPositionGroup,
+    pub position_group: PlayerFieldPositionGroup,
     pub observed_ability: u8,
     pub recorded_on: NaiveDate,
 }
@@ -776,7 +775,6 @@ impl ClubTransferPlan {
         }
 
         // Cap per position group: keep best by assessed_ability × confidence
-        use crate::PlayerFieldPositionGroup;
         for group in [
             PlayerFieldPositionGroup::Goalkeeper,
             PlayerFieldPositionGroup::Defender,
@@ -817,7 +815,7 @@ impl ClubTransferPlan {
         if self.shadow_reports.is_empty() || self.scouting_assignments.is_empty() {
             return;
         }
-        let assignments: Vec<(u32, crate::PlayerFieldPositionGroup)> = self
+        let assignments: Vec<(u32, PlayerFieldPositionGroup)> = self
             .scouting_assignments
             .iter()
             .map(|a| (a.id, a.target_position.position_group()))

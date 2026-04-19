@@ -1,7 +1,8 @@
 pub mod routes;
 
+use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
-use crate::{ApiError, ApiResult, GameAppData};
+use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
@@ -35,7 +36,7 @@ pub struct PlayerGetTemplate {
     pub header_color: String,
     pub foreground_color: String,
     pub menu_sections: Vec<MenuSection>,
-    pub i18n: crate::I18n,
+    pub i18n: I18n,
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
@@ -305,8 +306,8 @@ pub async fn player_get_action(
         let is_injured = player.player_attributes.is_injured;
 
         return Ok(PlayerGetTemplate {
-            css_version: crate::common::default_handler::CSS_VERSION,
-            computer_name: &crate::common::default_handler::COMPUTER_NAME,
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
@@ -376,8 +377,8 @@ pub async fn player_get_action(
         let sub_title = i18n.t("player_status_retired").to_string();
 
         return Ok(PlayerGetTemplate {
-            css_version: crate::common::default_handler::CSS_VERSION,
-            computer_name: &crate::common::default_handler::COMPUTER_NAME,
+            css_version: CSS_VERSION,
+            computer_name: &COMPUTER_NAME,
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
@@ -474,7 +475,7 @@ fn get_skills(player: &Player) -> PlayerSkillsDto {
 fn get_neighbor_teams(
     club_id: u32,
     data: &SimulatorData,
-    i18n: &crate::I18n,
+    i18n: &I18n,
 ) -> Result<(Vec<(String, String)>, Vec<(String, String)>), ApiError> {
     let club = data
         .club(club_id)

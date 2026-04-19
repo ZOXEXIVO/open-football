@@ -3,7 +3,7 @@ use crate::r#match::goalkeepers::states::state::GoalkeeperState;
 use crate::r#match::player::strategies::processor::StateChangeResult;
 use crate::r#match::player::strategies::processor::{StateProcessingContext, StateProcessingHandler};
 use crate::r#match::{
-    ConditionContext, PlayerSide, SteeringBehavior,
+    ConditionContext, MatchPlayerLite, PlayerSide, SteeringBehavior,
     VectorExtensions,
 };
 use nalgebra::Vector3;
@@ -12,7 +12,7 @@ use nalgebra::Vector3;
 pub struct GoalkeeperAttentiveState {}
 
 impl StateProcessingHandler for GoalkeeperAttentiveState {
-    fn try_fast(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+    fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
         // Direct catch for close slow balls
         if ctx.ball().distance() < 10.0
             && !ctx.ball().is_owned()
@@ -73,9 +73,6 @@ impl StateProcessingHandler for GoalkeeperAttentiveState {
         None
     }
 
-    fn process_slow(&self, _ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        None
-    }
 
     fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
         // Calculate optimal position based on ball and goal geometry
@@ -207,7 +204,7 @@ impl GoalkeeperAttentiveState {
     fn can_reach_before_opponent(
         &self,
         ctx: &StateProcessingContext,
-        opponent: &crate::r#match::MatchPlayerLite,
+        opponent: &MatchPlayerLite,
     ) -> bool {
         let ball_pos = ctx.tick_context.positions.ball.position;
         let keeper_pos = ctx.player.position;
