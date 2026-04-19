@@ -42,9 +42,8 @@ impl ContinentResult {
     pub fn process(self, data: &mut SimulatorData, result: &mut SimulationResult) {
         let current_date = data.date.date();
 
-        // Store national team match results in global match store
         for match_result in &self.national_match_results {
-            data.match_store.push(match_result.clone());
+            data.match_store.push(match_result.clone(), current_date);
         }
 
         // Phase 2: Update Continental Rankings (monthly)

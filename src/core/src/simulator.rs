@@ -8,11 +8,13 @@ use crate::league::{LeagueTable, MatchStorage};
 use crate::r#match::MatchResult;
 use crate::shared::SimulatorDataIndexes;
 use crate::transfers::TransferPool;
+use crate::utils::random::engine as rng_engine;
 use crate::{Player, TeamInfo, TeamType};
-use chrono::{Duration, NaiveDateTime};
+use chrono::{Datelike, Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::panic::{self, AssertUnwindSafe};
+use std::time::{Duration as StdDuration, Instant};
 
 /// Lightweight country info for nationality lookups.
 /// Covers ALL countries (not just simulation participants).
@@ -22,6 +24,21 @@ pub struct CountryInfo {
     pub code: String,
     pub slug: String,
     pub name: String,
+}
+
+/// Upper bound on one Phase-B AI batch. Long enough for a cross-continent
+/// monthly run with a slow provider; short enough that a hung service
+/// still yields within a minute and the sim keeps ticking.
+const AI_BATCH_TIMEOUT: StdDuration = StdDuration::from_secs(60);
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &'static str {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        s
+    } else if payload.downcast_ref::<String>().is_some() {
+        "<String panic>"
+    } else {
+        "<non-string panic>"
+    }
 }
 
 pub struct FootballSimulator;
@@ -45,24 +62,51 @@ impl FootballSimulator {
         // Phase A: simulate all continents in parallel. Each call mutates its
         // own continent and pushes AI requests into the shared (Arc<Mutex>) Ai
         // collector. Continents are independent during this phase.
+        //
+        // A panic inside one continent must not kill the whole tick — a
+        // single buggy state machine or malformed save row would otherwise
+        // unwind the Rayon pool and dump the player's save. We catch,
+        // log, and substitute an empty result so the surviving continents
+        // still advance.
         let phase_a = Instant::now();
         let results: Vec<ContinentResult> = data
             .continents
             .par_iter_mut()
             .map(|continent| {
                 let cid = continent.id;
-                continent.simulate(ctx.with_continent(cid))
+                let name = continent.name.clone();
+                let ctx_ref = &ctx;
+                panic::catch_unwind(AssertUnwindSafe(|| {
+                    continent.simulate(ctx_ref.with_continent(cid))
+                }))
+                .unwrap_or_else(|payload| {
+                    let msg = panic_message(&payload);
+                    log::error!(
+                        "continent {} ({}) panicked during simulate: {}. tick continues with empty result.",
+                        cid, name, msg
+                    );
+                    ContinentResult::new(cid, Vec::new(), Vec::new())
+                })
             })
             .collect();
         let phase_a_ms = phase_a.elapsed().as_millis();
 
-        // Phase B: collect and batch-execute all AI requests
+        // Phase B: collect and batch-execute all AI requests. Guarded by
+        // a timeout so a hung upstream provider can't stall the whole
+        // simulation forever — on timeout, responses are dropped and the
+        // tick advances without applying AI decisions.
         let phase_b = Instant::now();
         let all_requests = ctx.ai.drain();
         let ai_count = all_requests.len();
         if !all_requests.is_empty() {
-            let completed = AiBatchProcessor::execute(all_requests).await;
-            apply_ai_responses(completed, data);
+            let fut = AiBatchProcessor::execute(all_requests);
+            match tokio::time::timeout(AI_BATCH_TIMEOUT, fut).await {
+                Ok(completed) => apply_ai_responses(completed, data),
+                Err(_) => log::error!(
+                    "AI batch timed out after {:?} ({} requests dropped), tick continues",
+                    AI_BATCH_TIMEOUT, ai_count
+                ),
+            }
         }
         let phase_b_ms = phase_b.elapsed().as_millis();
 
@@ -94,6 +138,12 @@ impl FootballSimulator {
         // Seed history for any players created today that haven't been seeded
         // (youth intake, regens, new clubs) — catches them within one tick.
         data.seed_missing_player_histories();
+
+        // Once a month, prune the global match store to its retention window.
+        // Cheap — BTreeMap range walk over evicted dates only.
+        if current_date.day() == 1 {
+            data.match_store.trim(current_date.date());
+        }
 
         data.next_date();
 
@@ -139,6 +189,20 @@ pub struct SimulatorData {
 }
 
 impl SimulatorData {
+    /// Build a SimulatorData with the deterministic sim RNG pinned to `seed`.
+    /// Passing a non-zero seed makes the util-layer RNG stream reproducible
+    /// per worker thread; Rayon scheduling still reorders draws across
+    /// threads, so this is a debugging aid, not a replay tool.
+    pub fn new_seeded(
+        date: NaiveDateTime,
+        continents: Vec<Continent>,
+        global_competitions: GlobalCompetitions,
+        seed: u64,
+    ) -> Self {
+        rng_engine::set_seed(seed);
+        Self::new(date, continents, global_competitions)
+    }
+
     pub fn new(date: NaiveDateTime, continents: Vec<Continent>, global_competitions: GlobalCompetitions) -> Self {
         // Build country_info from simulation participants
         let country_info: HashMap<u32, CountryInfo> = continents.iter()
@@ -230,14 +294,19 @@ impl SimulatorData {
 
         for continent in &mut self.continents {
             for country in &mut continent.countries {
-                // Lookup by reference to the league's name/slug — avoids
-                // cloning the full HashMap every call.
-                let leagues = &country.leagues.leagues;
-                let league_info = |league_id: u32| -> (&str, &str) {
-                    leagues
-                        .iter()
-                        .find(|l| l.id == league_id)
-                        .map(|l| (l.name.as_str(), l.slug.as_str()))
+                // Pre-compute league (name, slug) lookup once per country.
+                // Before: per-club closure did a linear scan of leagues,
+                // costing ~N_clubs × N_leagues per country on affected days.
+                let league_info: HashMap<u32, (String, String)> = country
+                    .leagues
+                    .leagues
+                    .iter()
+                    .map(|l| (l.id, (l.name.clone(), l.slug.clone())))
+                    .collect();
+                let lookup = |league_id: u32| -> (&str, &str) {
+                    league_info
+                        .get(&league_id)
+                        .map(|(n, s)| (n.as_str(), s.as_str()))
                         .unwrap_or(("", ""))
                 };
 
@@ -261,7 +330,7 @@ impl SimulatorData {
                     let (main_league_name, main_league_slug) = main_team
                         .and_then(|t| t.league_id)
                         .map(|lid| {
-                            let (n, s) = league_info(lid);
+                            let (n, s) = lookup(lid);
                             (n.to_owned(), s.to_owned())
                         })
                         .unwrap_or_default();

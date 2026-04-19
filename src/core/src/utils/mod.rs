@@ -2,7 +2,7 @@ mod date;
 mod estimation;
 pub mod formatting;
 mod logging;
-mod random;
+pub mod random;
 mod strings;
 
 pub use date::*;

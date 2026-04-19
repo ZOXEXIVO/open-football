@@ -18,7 +18,7 @@ impl League {
         self.table.update_from_results(match_results);
 
         match_results.iter().for_each(|mr| {
-            self.matches.push(mr.copy_without_data_positions());
+            self.matches.push(mr.copy_without_data_positions(), current_date);
         });
 
         self.update_league_dynamics(match_results, clubs, current_date);

@@ -1,13 +1,11 @@
-extern crate rand;
-use rand::*;
+use crate::utils::random::engine;
 
 pub struct IntegerUtils;
 
 impl IntegerUtils {
     #[inline]
     pub fn random(min: i32, max: i32) -> i32 {
-        let random_val: f64 = random();
-
+        let random_val: f64 = engine::gen_f64();
         min + (random_val * ((max - min) as f64)) as i32
     }
 }
