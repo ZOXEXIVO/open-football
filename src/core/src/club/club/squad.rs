@@ -298,21 +298,38 @@ impl Club {
         }
     }
 
-    /// Release excess players at over-represented positions across all teams.
-    pub(super) fn trim_positional_surplus(&mut self, _date: NaiveDate) {
-        // Positional limits across ALL teams combined
+    /// Release excess players at over-represented positions. Caps scale
+    /// per-team so a club with main + reserve + U18 is allowed the depth a
+    /// real club carries; previously a flat cross-club cap deleted
+    /// legitimate squad members every season start.
+    ///
+    /// Released players become free agents on the same roster (contract
+    /// cleared, Frt status set) — the country-level free-agent pipeline
+    /// then matches them to interested clubs. Crucially the player is
+    /// never dropped: the previous version deleted them from the world
+    /// entirely, with no transfer record, no free-agent pool entry.
+    pub(super) fn trim_positional_surplus(&mut self, date: NaiveDate) {
+        // Per-team caps. Total ~30 per team covers a realistic first-team
+        // squad + cover depth; multiplied across main + reserve + U18
+        // (typically 3 teams) this is ~90, in line with real clubs.
+        let team_count = self.teams.teams.len().max(1);
         let limits: [(PlayerFieldPositionGroup, usize); 4] = [
-            (PlayerFieldPositionGroup::Goalkeeper, 4),
-            (PlayerFieldPositionGroup::Defender, 20),
-            (PlayerFieldPositionGroup::Midfielder, 20),
-            (PlayerFieldPositionGroup::Forward, 16),
+            (PlayerFieldPositionGroup::Goalkeeper, 4 * team_count),
+            (PlayerFieldPositionGroup::Defender, 10 * team_count),
+            (PlayerFieldPositionGroup::Midfielder, 10 * team_count),
+            (PlayerFieldPositionGroup::Forward, 7 * team_count),
         ];
 
         for (group, max_count) in &limits {
-            // Collect all players at this position across all teams
-            let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new(); // (team_idx, player_id, ability)
+            // Active players only: if a player has already been released
+            // (no contract, Frt) they shouldn't count against the cap, or
+            // we'd re-release them every season until someone signs.
+            let mut players_at_pos: Vec<(usize, u32, u8)> = Vec::new();
             for (ti, team) in self.teams.iter().enumerate() {
                 for p in team.players.iter() {
+                    if p.contract.is_none() || p.is_on_loan() {
+                        continue;
+                    }
                     if p.position().position_group() == *group {
                         players_at_pos.push((ti, p.id, p.player_attributes.current_ability));
                     }
@@ -328,20 +345,29 @@ impl Club {
 
             let to_release = players_at_pos.len() - max_count;
             for &(team_idx, player_id, _) in players_at_pos.iter().take(to_release) {
-                // Don't drain youth teams below minimum viable squad
                 if self.teams.teams[team_idx].team_type.max_age().is_some()
                     && self.teams.teams[team_idx].players.players.len() <= MIN_YOUTH_SQUAD
                 {
                     continue;
                 }
-                if let Some(player) = self.teams.teams[team_idx].players.take_player(&player_id) {
-                    log::debug!(
+                let team_name = self.teams.teams[team_idx].name.clone();
+                if let Some(player) = self.teams.teams[team_idx]
+                    .players
+                    .players
+                    .iter_mut()
+                    .find(|p| p.id == player_id)
+                {
+                    debug!(
                         "positional surplus release: {} ({:?}, CA={}) from {}",
-                        player.full_name, group, player.player_attributes.current_ability,
-                        self.teams.teams[team_idx].name
+                        player.full_name,
+                        group,
+                        player.player_attributes.current_ability,
+                        team_name
                     );
-                    // Player is simply removed — becomes a free agent
-                    drop(player);
+                    player.contract = None;
+                    if !player.statuses.get().contains(&PlayerStatusType::Frt) {
+                        player.statuses.add(date, PlayerStatusType::Frt);
+                    }
                 }
             }
         }
