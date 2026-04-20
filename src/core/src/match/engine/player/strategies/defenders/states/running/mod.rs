@@ -3,7 +3,7 @@ use crate::r#match::defenders::states::common::{DefenderCondition, ActivityInten
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use crate::{IntegerUtils, PlayerFieldPositionGroup};
@@ -16,6 +16,14 @@ pub struct DefenderRunningState {}
 
 impl StateProcessingHandler for DefenderRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Phase-first dispatch — defenders need the team signal most of
+        // all. In a settled phase (LowBlock / MidBlock / Attack) they
+        // default to HoldingLine; in transitions they recover or press.
+        // Ball-handling falls through.
+        if let Some(phase_action) = self.phase_dispatch(ctx) {
+            return Some(phase_action);
+        }
+
         if ctx.player.has_ball(ctx) {
             let coach = ctx.team().coach_instruction();
 
@@ -117,6 +125,28 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
+            // SHAPE GATE: if a teammate is already engaging the ball carrier and
+            // I'm not the best defender for this opponent, drop into Covering
+            // instead of also racing to the ball. Without this, the whole back
+            // line collapses onto one attacker every time — losing the shape
+            // that made `HoldingLine` / `Covering` worth having as states.
+            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
+                let ball_dist = ctx.ball().distance();
+                let teammate_already_engaging = ctx
+                    .players()
+                    .teammates()
+                    .nearby(30.0)
+                    .any(|t| (t.position - opponent.position).magnitude() < 15.0);
+                if teammate_already_engaging
+                    && ball_dist > 30.0
+                    && !ctx.player().defensive().is_best_defender_for_opponent(&opponent)
+                {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Covering,
+                    ));
+                }
+            }
+
             // Only tackle if an opponent has the ball nearby AND we're best positioned
             if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let ball_dist = ctx.ball().distance();
@@ -177,6 +207,22 @@ impl StateProcessingHandler for DefenderRunningState {
             if self.should_overlap(ctx) {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::PushingUp,
+                ));
+            }
+
+            // DEFAULT SHAPE: nothing reactive to do — drop into HoldingLine so
+            // the back four holds a coherent defensive line instead of idling
+            // in Running (which keeps evaluating chase triggers every tick and
+            // pulls shape apart). HoldingLine's own transitions will bring the
+            // defender back out if an opponent actually advances on goal.
+            // Gated on "near start position" so a defender caught upfield
+            // doesn't stall there; the earlier `Returning` branch handles Big
+            // displacement and this covers the Small/Medium idle case.
+            if ctx.in_state_time > 20
+                && ctx.player().position_to_distance() != PlayerDistanceFromStartPosition::Big
+            {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::HoldingLine,
                 ));
             }
         }
@@ -312,6 +358,71 @@ impl StateProcessingHandler for DefenderRunningState {
 }
 
 impl DefenderRunningState {
+    /// Phase-first dispatch for defenders. Defenders hold shape most
+    /// of the time — the big wins from phase awareness are "do we
+    /// hold a line, drop into a low block, or push up".
+    fn phase_dispatch(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        let phase = ctx.team().phase();
+        let has_ball = ctx.player.has_ball(ctx);
+        if has_ball {
+            return None; // Ball-carrying defenders use build-up logic.
+        }
+        let ball_dist = ctx.ball().distance();
+        let near_start = ctx.player().position_to_distance()
+            != PlayerDistanceFromStartPosition::Big;
+        match phase {
+            // Settled defence in a low block — four defenders form a
+            // compact horizontal line. Route to HoldingLine if we're
+            // roughly in place; Returning if we're out of position.
+            GamePhase::LowBlock => {
+                if !near_start {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Returning,
+                    ));
+                }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::HoldingLine,
+                ));
+            }
+            // Mid-block: similar to low block but higher up. Same
+            // shape-first defaults.
+            GamePhase::MidBlock => {
+                if !near_start {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Returning,
+                    ));
+                }
+                // Only the closest defender tracks the ball; the rest
+                // hold the line.
+                if ball_dist < 60.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return None; // fall through to the tackling logic
+                }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::HoldingLine,
+                ));
+            }
+            // Defensive transition — the one closest defender engages,
+            // others recover shape.
+            GamePhase::DefensiveTransition => {
+                if ball_dist < 40.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                if !near_start {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::TrackingBack,
+                    ));
+                }
+            }
+            // Attacking phases: wide defenders may overlap; centre-backs
+            // hold the line. Falls through to the overlap check below.
+            GamePhase::Attack | GamePhase::AttackingTransition | GamePhase::Progression => {}
+            _ => {}
+        }
+        None
+    }
+
     /// Determine if the defender should carry the ball forward instead of passing immediately.
     /// Useful for time-wasting, letting teammates recover, and advancing play when safe.
     fn should_carry_ball(&self, ctx: &StateProcessingContext) -> bool {

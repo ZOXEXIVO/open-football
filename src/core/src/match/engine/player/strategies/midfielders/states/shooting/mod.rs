@@ -20,6 +20,15 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
+        // Per-player cooldown — same reasoning as the forward
+        // Shooting state. A midfielder who struck recently isn't
+        // balanced to strike again within 1.5 s.
+        if !ctx.player().can_shoot() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         // Only abort for long range with no clear shot

@@ -4,7 +4,7 @@ use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
 use crate::r#match::{
-    ConditionContext, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
+    ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
 };
 use crate::IntegerUtils;
@@ -37,44 +37,95 @@ pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Team phase — consulted BEFORE any local context. This is what
+        // turns eleven independent-agent decisions into something that
+        // looks like football. Only the short-window transitions and
+        // explicit pressing cues short-circuit the existing logic; the
+        // "settled in possession" phases fall through to the rich
+        // ball-handling decision tree below.
+        if let Some(phase_action) = self.phase_dispatch(ctx) {
+            return Some(phase_action);
+        }
+
         // Handle cases when player has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
-            let can_shoot = ctx.team().can_shoot();
+            // Team-level cooldown (~500 ms between any team shot).
+            let can_shoot_team = ctx.team().can_shoot();
+            // Per-player cooldown (~1.5 s between this player's shots) —
+            // a striker's balance is disrupted after striking and the
+            // ball has left their feet; they can't fire again instantly.
+            // Without this, a forward camped at the post could fire on
+            // every AI tick and accumulate 30-50 shots per match.
+            let can_shoot_self = ctx.player().can_shoot();
+            let can_shoot = can_shoot_team && can_shoot_self;
+            let gm_intensity = ctx.team().game_management_intensity();
+            // Treat "we're protecting a result" as a possession preference:
+            // same mechanic the coach uses via WasteTime / ParkTheBus, now
+            // driven automatically by score+minute+ability.
+            let prefer_possession = coach.prefer_possession() || gm_intensity > 0.35;
 
-            // Coach tempo: if wasting time or slowing down, prefer possession over shooting
-            if coach.prefer_possession() && distance_to_goal > POINT_BLANK_DISTANCE {
-                // Only shoot from point-blank when coach says keep possession
+            if prefer_possession && distance_to_goal > POINT_BLANK_DISTANCE {
+                // Longer hold when game management is high — stretches
+                // possessions 50–120 ticks (5–12 s) at full intensity.
+                let base_hold = coach.min_possession_ticks();
+                let gm_hold = (gm_intensity * 80.0) as u32;
+                let min_hold = base_hold.max(gm_hold);
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
-                if ownership_ticks < coach.min_possession_ticks() {
-                    // Hold the ball longer before making any decision
+                if ownership_ticks < min_hold {
                     return None;
                 }
             }
 
-            // Priority 0: Point-blank range — MUST shoot to avoid running into the goalkeeper
+            // Priority 0: Point-blank range — MUST shoot to avoid running into the goalkeeper.
+            // Still gated on the player's own cooldown: if this striker
+            // just fired a second ago, they pass instead of striking
+            // again. Otherwise two rebounds in a row = two shots from
+            // the same player = unrealistic tap-in spam.
             if distance_to_goal <= POINT_BLANK_DISTANCE {
-                let finishing = ctx.player.skills.technical.finishing / 20.0;
-                // Even at point blank, very poor finishers may try to pass
-                if finishing > 0.3 || !ctx.players().teammates().nearby(50.0).any(|_| true) {
-                    return Some(StateChangeResult::with_forward_state(
-                        ForwardState::Shooting,
-                    ));
+                if can_shoot_self {
+                    let finishing = ctx.player.skills.technical.finishing / 20.0;
+                    // Even at point blank, very poor finishers may try to pass
+                    if finishing > 0.3 || !ctx.players().teammates().nearby(50.0).any(|_| true) {
+                        return Some(StateChangeResult::with_forward_state(
+                            ForwardState::Shooting,
+                        ));
+                    }
                 }
+                // Point-blank but cooldown is active (just shot, balance
+                // disturbed). The striker can't fire again and must NOT
+                // continue running — they'd collide with the keeper. In
+                // real football a rebound situation like this becomes a
+                // cut-back / squared pass to a supporting runner. If no
+                // teammate is nearby, lay the ball off sideways via the
+                // pass state; it'll pick the best available target.
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Passing,
+                ));
             }
 
-            // Priority 0.5: Clear shot within 120 units — ALWAYS shoot.
-            // Forwards are strikers — if they see the goal, they shoot.
-            // No skill gating. The GK save mechanics handle the rest.
-            if distance_to_goal <= 120.0 && ctx.player().has_clear_shot() {
+            // Priority 0.5: Clear shot within realistic long-range — shoot.
+            // `prefer_possession` (WasteTime / SlowDown / ParkTheBus) skips
+            // this branch so a leading side keeps the ball rather than
+            // piling goals on. Team shot cooldown (`can_shoot`) prevents
+            // the whole front line from rifling shots every tick during
+            // sustained pressure.
+            if can_shoot
+                && !prefer_possession
+                && distance_to_goal <= 90.0
+                && ctx.player().has_clear_shot()
+            {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
             }
 
-            // Priority 0.6: Inside 100 units (~50m) — shoot regardless
-            if distance_to_goal < 100.0 {
+            // Priority 0.6: Inside realistic shooting range (~30m) — shoot.
+            // Same `prefer_possession` guard: a 4-0 team with the ball in
+            // the opponent box on 80th minute should not be adding to the
+            // scoreline; they should recycle possession.
+            if can_shoot && !prefer_possession && distance_to_goal < 60.0 {
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Shooting,
                 ));
@@ -466,6 +517,50 @@ impl StateProcessingHandler for ForwardRunningState {
 }
 
 impl ForwardRunningState {
+    /// Phase-first dispatch — returns `Some` when the team's current
+    /// phase has a strong, short-circuiting behaviour for this player.
+    /// Returns `None` for settled phases (BuildUp, Progression, Attack,
+    /// MidBlock, LowBlock) so the rich existing decision tree handles
+    /// ball-handling and off-ball positioning as before.
+    fn phase_dispatch(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        let phase = ctx.team().phase();
+        let has_ball = ctx.player.has_ball(ctx);
+        match phase {
+            // We just won possession — this is the fast-break window.
+            // The carrier is someone else (usually a midfielder). The
+            // forward sprints in behind to offer a direct pass target.
+            GamePhase::AttackingTransition if !has_ball => {
+                if ctx.ball().distance_to_opponent_goal() > 30.0 {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::RunningInBehind,
+                    ));
+                }
+            }
+            // We just lost possession — counter-press window. Only the
+            // nearest forward to the ball engages; the rest fall back
+            // through normal defensive logic below.
+            GamePhase::DefensiveTransition if !has_ball => {
+                let ball_dist = ctx.ball().distance();
+                if ball_dist < 35.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Pressing,
+                    ));
+                }
+            }
+            // Coach called for a high press and ball is in opposition's
+            // own half — forwards hunt the ball carrier.
+            GamePhase::HighPress if !has_ball => {
+                let ball_dist = ctx.ball().distance();
+                if ball_dist < 80.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Pressing,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        None
+    }
 
     /// Check if there's open space ahead toward the opponent goal
     fn has_open_space_ahead(&self, ctx: &StateProcessingContext) -> bool {

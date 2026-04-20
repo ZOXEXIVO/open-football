@@ -61,6 +61,7 @@ pub use player::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
+    seed_player_id_sequence,
     PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
     InjuryType, InjurySeverity,

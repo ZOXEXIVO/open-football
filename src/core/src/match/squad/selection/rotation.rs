@@ -33,7 +33,7 @@ pub(crate) fn select_rotation_starting_eleven(
         let best = available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
-            .filter(|p| !helpers::is_goalkeeper_player(p))
+            .filter(|p| !p.positions.is_goalkeeper())
             .max_by(|a, b| {
                 let sa = rotation_score_for_slot(a, pos, target_group, staff, tactics);
                 let sb = rotation_score_for_slot(b, pos, target_group, staff, tactics);
@@ -51,7 +51,7 @@ pub(crate) fn select_rotation_starting_eleven(
         let best = available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
-            .filter(|p| !helpers::is_goalkeeper_player(p))
+            .filter(|p| !p.positions.is_goalkeeper())
             .max_by(|a, b| {
                 let sa = rotation_overall_quality(a);
                 let sb = rotation_overall_quality(b);
@@ -189,7 +189,7 @@ fn pick_rotation_goalkeeper<'p>(
     available
         .iter()
         .filter(|p| !used_ids.contains(&p.id))
-        .filter(|p| helpers::is_goalkeeper_player(p))
+        .filter(|p| p.positions.is_goalkeeper())
         .filter(|p| p.player_attributes.condition_percentage() >= 20)
         .max_by(|a, b| {
             let ca = a.player_attributes.condition_percentage();

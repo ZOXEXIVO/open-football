@@ -14,6 +14,16 @@ pub struct GoalkeeperComingOutState {}
 
 impl StateProcessingHandler for GoalkeeperComingOutState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Shot in flight at our goal — abandon the rush and prepare
+        // for the save. Staying in ComingOut leaves the goal wide open.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            if Some(target.defending_side) == ctx.player.side {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
+        }
+
         let ball_distance = ctx.ball().distance();
 
         if self.should_dive(ctx) {

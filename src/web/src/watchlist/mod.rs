@@ -152,7 +152,7 @@ pub async fn watchlist_page_action(
                     current_ability: get_current_ability_stars(player),
                     potential_ability: get_potential_ability_stars(player),
                     conditions: 0,
-                    team_name: "Retired".to_string(),
+                    team_name: i18n.t("retired").to_string(),
                     team_slug: String::new(),
                     league_name: String::new(),
                     league_slug: String::new(),

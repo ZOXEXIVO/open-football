@@ -113,7 +113,7 @@ pub async fn player_decisions_action(
         sub_title_suffix: String::new(),
         sub_title: team_opt
             .map(|t| t.name.clone())
-            .unwrap_or_else(|| "Retired".to_string()),
+            .unwrap_or_else(|| i18n.t("retired").to_string()),
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
             .unwrap_or_default(),

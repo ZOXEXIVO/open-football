@@ -1,8 +1,8 @@
 use crate::r#match::forwarders::states::{
     ForwardAssistingState, ForwardCreatingSpaceState, ForwardCrossingState,
     ForwardCrossReceivingState, ForwardDribblingState, ForwardFinishingState,
-    ForwardHeadingState, ForwardHeadingUpPlayState, ForwardInterceptingState,
-    ForwardOffsideTrapBreakingState, ForwardPassingState, ForwardPressingState,
+    ForwardHeadingState, ForwardInterceptingState,
+    ForwardPassingState, ForwardPressingState,
     ForwardRestingState, ForwardReturningState, ForwardRunningInBehindState,
     ForwardRunningState, ForwardShootingState, ForwardStandingState, ForwardTacklingState,
     ForwardTakeBallState, ForwardWalkingState,
@@ -18,7 +18,6 @@ pub enum ForwardState {
     Dribbling,           // Dribbling the ball past opponents
     Shooting,            // Taking a shot on goal
     Heading,             // Heading the ball, often during crosses or set pieces
-    HoldingUpPlay,       // Holding up the ball to allow teammates to join the attack
     RunningInBehind,     // Making a run behind the defense to receive a pass
     Running,             // Running in the direction of the ball
     Pressing,            // Pressing defenders to force a mistake or regain possession
@@ -26,7 +25,6 @@ pub enum ForwardState {
     CreatingSpace,       // Creating space for teammates by pulling defenders away
     CrossReceiving,      // Positioning to receive a cross
     Crossing,            // Delivering a cross from a wide position
-    OffsideTrapBreaking, // Trying to beat the offside trap by timing runs
     Tackling,            // Tackling the ball
     Assisting,           // Providing an assist by passing or crossing to a teammate
     TakeBall,            // Take the ball,
@@ -46,9 +44,6 @@ impl ForwardStrategies {
             ForwardState::Dribbling => state_processor.process(ForwardDribblingState::default()),
             ForwardState::Shooting => state_processor.process(ForwardShootingState::default()),
             ForwardState::Heading => state_processor.process(ForwardHeadingState::default()),
-            ForwardState::HoldingUpPlay => {
-                state_processor.process(ForwardHeadingUpPlayState::default())
-            }
             ForwardState::RunningInBehind => {
                 state_processor.process(ForwardRunningInBehindState::default())
             }
@@ -61,9 +56,6 @@ impl ForwardStrategies {
                 state_processor.process(ForwardCrossReceivingState::default())
             }
             ForwardState::Crossing => state_processor.process(ForwardCrossingState::default()),
-            ForwardState::OffsideTrapBreaking => {
-                state_processor.process(ForwardOffsideTrapBreakingState::default())
-            }
             ForwardState::Tackling => state_processor.process(ForwardTacklingState::default()),
             ForwardState::Assisting => state_processor.process(ForwardAssistingState::default()),
             ForwardState::Running => state_processor.process(ForwardRunningState::default()),
@@ -85,14 +77,12 @@ impl Display for ForwardState {
             ForwardState::Dribbling => write!(f, "Dribbling"),
             ForwardState::Shooting => write!(f, "Shooting"),
             ForwardState::Heading => write!(f, "Heading"),
-            ForwardState::HoldingUpPlay => write!(f, "Holding Up Play"),
             ForwardState::RunningInBehind => write!(f, "Running In Behind"),
             ForwardState::Pressing => write!(f, "Pressing"),
             ForwardState::Finishing => write!(f, "Finishing"),
             ForwardState::CreatingSpace => write!(f, "Creating Space"),
             ForwardState::CrossReceiving => write!(f, "Cross Receiving"),
             ForwardState::Crossing => write!(f, "Crossing"),
-            ForwardState::OffsideTrapBreaking => write!(f, "Offside Trap Breaking"),
             ForwardState::Assisting => write!(f, "Assisting"),
             ForwardState::Passing => write!(f, "Passing"),
             ForwardState::Tackling => write!(f, "Tackling"),

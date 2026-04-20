@@ -1,5 +1,5 @@
 use crate::r#match::{
-    MatchField, MatchObjectsPositions, SpatialGrid, Space
+    MatchField, MatchObjectsPositions, ShotTarget, SpatialGrid, Space
 };
 
 pub struct GameTickContext {
@@ -55,6 +55,11 @@ pub struct BallMetadata {
 
     recent_buf: [u32; 5],
     recent_len: u8,
+
+    /// Projected goal-line crossing for the current shot, if a shot is
+    /// in flight. Read by the keeper's `PreparingForSave` /
+    /// `Catching` states to commit to an intercept line.
+    pub cached_shot_target: Option<ShotTarget>,
 }
 
 impl BallMetadata {
@@ -84,6 +89,8 @@ impl BallMetadata {
         for (i, &id) in field.ball.recent_passers.iter().take(5).enumerate() {
             self.recent_buf[i] = id;
         }
+
+        self.cached_shot_target = field.ball.cached_shot_target;
     }
 }
 
@@ -99,6 +106,7 @@ impl From<&MatchField> for BallMetadata {
             ownership_duration: 0,
             recent_buf: [0; 5],
             recent_len: 0,
+            cached_shot_target: None,
         };
         meta.update(field);
         meta

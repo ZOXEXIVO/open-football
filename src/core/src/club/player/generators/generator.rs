@@ -15,6 +15,28 @@ use std::sync::LazyLock;
 
 static PLAYER_ID_SEQUENCE: LazyLock<AtomicU32> = LazyLock::new(|| AtomicU32::new(100_000));
 
+/// Bump the procedural id sequence so the next generated player gets an id
+/// strictly greater than `min_exclusive`. No-op if the counter is already
+/// past it. The database crate seeds its own generator past the ODB max
+/// before world generation; this lets the host do the same for the core
+/// generator (academy intake, U18/U19 fallback) so procedurally assigned
+/// ids cannot collide with hand-curated records in `players.odb`.
+pub fn seed_player_id_sequence(min_exclusive: u32) {
+    let target = min_exclusive.saturating_add(1);
+    let mut current = PLAYER_ID_SEQUENCE.load(Ordering::SeqCst);
+    while current < target {
+        match PLAYER_ID_SEQUENCE.compare_exchange(
+            current,
+            target,
+            Ordering::SeqCst,
+            Ordering::SeqCst,
+        ) {
+            Ok(_) => break,
+            Err(actual) => current = actual,
+        }
+    }
+}
+
 const SKILL_COUNT: usize = 37;
 
 // Skill index constants (flat array order)

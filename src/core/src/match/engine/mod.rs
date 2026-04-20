@@ -10,6 +10,7 @@ pub mod raycast;
 pub mod result;
 pub mod state;
 pub mod substitutions;
+pub mod tactical;
 pub mod tactics;
 pub mod context;
 
@@ -22,6 +23,7 @@ pub use rating::*;
 pub use raycast::*;
 pub use result::*;
 pub use state::*;
+pub use tactical::*;
 pub use context::*;
 
 // Re-export player items except conflicting ones

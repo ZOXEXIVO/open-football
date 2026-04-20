@@ -1,4 +1,4 @@
-use crate::r#match::{CoachInstruction, MatchCoach, PlayerSide, StateProcessingContext};
+use crate::r#match::{CoachInstruction, GamePhase, MatchCoach, PlayerSide, StateProcessingContext, TeamTacticalState};
 use crate::{PlayerFieldPositionGroup, Tactics};
 use nalgebra::Vector3;
 
@@ -31,6 +31,27 @@ impl<'b> TeamOperationsImpl<'b> {
     /// Get the coach state for this player's team
     pub fn coach(&self) -> &MatchCoach {
         self.ctx.context.coach_for_team(self.ctx.player.team_id)
+    }
+
+    /// Team-level tactical state for this player's side (phase,
+    /// possession timers, defensive line height). All eleven players on
+    /// a team read the same value — that's the point, it's the shared
+    /// context that pulls their individual decisions into a coherent
+    /// pattern. Recomputed every 10 sim ticks.
+    pub fn tactical(&self) -> &TeamTacticalState {
+        self.ctx.context.tactical_for_team(self.ctx.player.team_id)
+    }
+
+    /// Shortcut — most branching just needs the phase.
+    pub fn phase(&self) -> GamePhase {
+        self.tactical().phase
+    }
+
+    /// Game-management intensity from this team's perspective. Rises
+    /// when we are leading, late in the game, and/or the weaker side —
+    /// drives safe-pass / hold-the-ball / don't-shoot behaviour.
+    pub fn game_management_intensity(&self) -> f32 {
+        self.tactical().game_management_intensity
     }
 
     /// Whether the team's coach allows shooting right now (team-level cooldown)

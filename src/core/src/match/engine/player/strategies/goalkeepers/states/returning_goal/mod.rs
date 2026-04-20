@@ -11,6 +11,16 @@ pub struct GoalkeeperReturningGoalState {}
 
 impl StateProcessingHandler for GoalkeeperReturningGoalState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Shot in flight at our goal — stop the jog back and commit
+        // to the save.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            if Some(target.defending_side) == ctx.player.side {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
+        }
+
         if ctx.player.has_ball(ctx) {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Distributing,

@@ -120,7 +120,7 @@ pub async fn player_contract_action(
         title,
         sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
         sub_title_suffix: String::new(),
-        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| "Retired".to_string()),
+        sub_title: team_opt.map(|t| t.name.clone()).unwrap_or_else(|| i18n.t("retired").to_string()),
         sub_title_link: team_opt.map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug)).unwrap_or_default(),
         sub_title_country_code: String::new(),
         header_color: team_opt.and_then(|t| simulator_data.club(t.club_id).map(|c| c.colors.background.clone())).unwrap_or_else(|| "#808080".to_string()),

@@ -14,6 +14,16 @@ pub struct GoalkeeperWalkingState {}
 
 impl StateProcessingHandler for GoalkeeperWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Shot in flight at our goal — break off walking and commit
+        // to the save.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            if Some(target.defending_side) == ctx.player.side {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
+        }
+
         // Direct catch for very close slow balls
         if ctx.ball().distance() < 5.0
             && !ctx.ball().is_owned()
@@ -56,10 +66,12 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
         // Improved threat assessment using goalkeeper skills
         let threat_level = self.assess_threat_level(ctx);
 
-        // Transition to Attentive if ball is on own side and moderately close
+        // Ball on own side while walking — switch to Standing so the
+        // threat logic can drive a PreparingForSave transition. Attentive
+        // was a redundant mid-state between Walking and PreparingForSave.
         if ball_on_own_side {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Attentive,
+                GoalkeeperState::Standing,
             ));
         }
 
@@ -90,10 +102,12 @@ impl StateProcessingHandler for GoalkeeperWalkingState {
             ));
         }
 
-        // Check for immediate threats using concentration skill
+        // High threat while walking — go straight to PreparingForSave.
+        // UnderPressure was a pass-through that looked for Catching
+        // /Distributing next tick anyway.
         if threat_level > 0.7 {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::UnderPressure,
+                GoalkeeperState::PreparingForSave,
             ));
         }
 

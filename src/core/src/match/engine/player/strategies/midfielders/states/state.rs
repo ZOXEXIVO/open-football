@@ -1,4 +1,4 @@
-use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderGuardingState, MidfielderHoldingPossessionState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderRestingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderTrackingRunnerState, MidfielderWalkingState};
+use crate::r#match::midfielders::states::{MidfielderAttackSupportingState, MidfielderCreatingSpaceState, MidfielderCrossingState, MidfielderDistanceShootingState, MidfielderDistributingState, MidfielderDribblingState, MidfielderGuardingState, MidfielderInterceptingState, MidfielderPassingState, MidfielderPressingState, MidfielderRestingState, MidfielderReturningState, MidfielderRunningState, MidfielderShootingState, MidfielderStandingState, MidfielderSwitchingPlayState, MidfielderTacklingState, MidfielderTakeBallState, MidfielderWalkingState};
 use crate::r#match::{StateProcessingResult, StateProcessor};
 use std::fmt::{Display, Formatter};
 
@@ -8,14 +8,12 @@ pub enum MidfielderState {
     Distributing,      // Distributing the ball to teammates
     Dribbling,         // Dribbling the ball
     AttackSupporting,  // Supporting the attack, moving forward
-    HoldingPossession, // Holding possession of the ball, maintaining control
     SwitchingPlay,     // Switching the play to the other side of the field
     Crossing,          // Delivering a cross into the box
     Passing,           // Executing a  pass
     Running,           // Running in the direction of the ball
     DistanceShooting,  // Taking a shot from a long distance
     Pressing,          // Pressing the opponent to regain possession
-    TrackingRunner,    // Tracking a runner to prevent a break
     Tackling,          // Tackling to win the ball
     Returning,         // Returning the ball,
     Resting,           // Resting
@@ -44,9 +42,6 @@ impl MidfielderStrategies {
             MidfielderState::AttackSupporting => {
                 state_processor.process(MidfielderAttackSupportingState::default())
             }
-            MidfielderState::HoldingPossession => {
-                state_processor.process(MidfielderHoldingPossessionState::default())
-            }
             MidfielderState::SwitchingPlay => {
                 state_processor.process(MidfielderSwitchingPlayState::default())
             }
@@ -59,9 +54,6 @@ impl MidfielderStrategies {
             }
             MidfielderState::Pressing => {
                 state_processor.process(MidfielderPressingState::default())
-            }
-            MidfielderState::TrackingRunner => {
-                state_processor.process(MidfielderTrackingRunnerState::default())
             }
             MidfielderState::Tackling => {
                 state_processor.process(MidfielderTacklingState::default())
@@ -102,12 +94,10 @@ impl Display for MidfielderState {
             MidfielderState::Standing => write!(f, "Standing"),
             MidfielderState::Distributing => write!(f, "Distributing"),
             MidfielderState::AttackSupporting => write!(f, "Supporting Attack"),
-            MidfielderState::HoldingPossession => write!(f, "Holding Possession"),
             MidfielderState::SwitchingPlay => write!(f, "Switching Play"),
             MidfielderState::Crossing => write!(f, "Crossing"),
             MidfielderState::Passing => write!(f, "Passing"),
             MidfielderState::Pressing => write!(f, "Pressing"),
-            MidfielderState::TrackingRunner => write!(f, "Tracking Runner"),
             MidfielderState::Tackling => write!(f, "Tackling"),
             MidfielderState::DistanceShooting => write!(f, "DistanceShooting"),
             MidfielderState::Returning => write!(f, "Returning"),

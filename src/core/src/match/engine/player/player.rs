@@ -18,7 +18,7 @@ use nalgebra::Vector3;
 use std::fmt::*;
 
 #[cfg(debug_assertions)]
-use log::warn;
+use log::debug;
 
 #[derive(Debug, Clone)]
 pub struct MatchPlayer {
@@ -220,7 +220,7 @@ impl MatchPlayer {
             const MAX_REASONABLE_POSITION_CHANGE: f32 = 20.0;
 
             if position_change > MAX_REASONABLE_POSITION_CHANGE {
-                warn!(
+                debug!(
                     "Player {:?} position jumped abnormally! {} from: ({:.2}, {:.2}) to: ({:.2}, {:.2}), delta: ({:.2}, {:.2}), distance: {:.2}, velocity: ({:.2}, {:.2})",
                     self.state,
                     self.id,

@@ -180,7 +180,119 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             result.player_stats.insert(player_id, stats);
         }
 
+        // Blowout diagnostic: when a match produces 8+ total goals,
+        // dump the squad's aggregate skill profile so we can identify
+        // which attribute patterns in the real-data squads are bypassing
+        // the shot-mechanics / GK-save fixes. Behind a log level (info)
+        // so normal runs aren't noisy.
+        let total_goals = home_goals + away_goals;
+        if total_goals >= 8 {
+            let away_team_id = if field.home_team_id == home_team_id {
+                field.away_team_id
+            } else {
+                field.home_team_id
+            };
+            Self::log_blowout_profile(
+                &field.players,
+                &result,
+                home_team_id,
+                away_team_id,
+                home_goals,
+                away_goals,
+            );
+        }
+
         result
+    }
+
+    /// Aggregate per-team skill dump for post-match analysis. Runs only
+    /// on 8+ goal matches (rare tail) so it adds no cost to normal play.
+    fn log_blowout_profile(
+        players: &[MatchPlayer],
+        result: &MatchResultRaw,
+        home_team_id: u32,
+        away_team_id: u32,
+        home_goals: u8,
+        away_goals: u8,
+    ) {
+        struct TeamAgg {
+            fwd_finishing: f32,
+            fwd_technique: f32,
+            fwd_composure: f32,
+            fwd_count: u32,
+            def_marking: f32,
+            def_tackling: f32,
+            def_positioning: f32,
+            def_count: u32,
+            gk_handling: f32,
+            gk_reflexes: f32,
+            gk_agility: f32,
+            gk_count: u32,
+            total_shots: u16,
+            total_on_target: u16,
+        }
+        impl TeamAgg {
+            fn new() -> Self {
+                Self {
+                    fwd_finishing: 0.0, fwd_technique: 0.0, fwd_composure: 0.0, fwd_count: 0,
+                    def_marking: 0.0, def_tackling: 0.0, def_positioning: 0.0, def_count: 0,
+                    gk_handling: 0.0, gk_reflexes: 0.0, gk_agility: 0.0, gk_count: 0,
+                    total_shots: 0, total_on_target: 0,
+                }
+            }
+        }
+
+        let mut home_agg = TeamAgg::new();
+        let mut away_agg = TeamAgg::new();
+
+        for player in players {
+            let agg = if player.team_id == home_team_id { &mut home_agg } else { &mut away_agg };
+            match player.tactical_position.current_position.position_group() {
+                PlayerFieldPositionGroup::Forward => {
+                    agg.fwd_finishing += player.skills.technical.finishing;
+                    agg.fwd_technique += player.skills.technical.technique;
+                    agg.fwd_composure += player.skills.mental.composure;
+                    agg.fwd_count += 1;
+                }
+                PlayerFieldPositionGroup::Defender => {
+                    agg.def_marking += player.skills.technical.marking;
+                    agg.def_tackling += player.skills.technical.tackling;
+                    agg.def_positioning += player.skills.mental.positioning;
+                    agg.def_count += 1;
+                }
+                PlayerFieldPositionGroup::Goalkeeper => {
+                    agg.gk_handling += player.skills.goalkeeping.handling;
+                    agg.gk_reflexes += player.skills.goalkeeping.reflexes;
+                    agg.gk_agility += player.skills.physical.agility;
+                    agg.gk_count += 1;
+                }
+                _ => {}
+            }
+            if let Some(stats) = result.player_stats.get(&player.id) {
+                agg.total_shots += stats.shots_total;
+                agg.total_on_target += stats.shots_on_target;
+            }
+        }
+
+        let fmt_team = |tag: &str, team_id: u32, goals: u8, agg: &TeamAgg| {
+            let fc = agg.fwd_count.max(1) as f32;
+            let dc = agg.def_count.max(1) as f32;
+            let gc = agg.gk_count.max(1) as f32;
+            format!(
+                "{} team={} gls={} shots={} ot={} | FWD fin={:.1} tec={:.1} com={:.1} | DEF mrk={:.1} tck={:.1} pos={:.1} | GK hnd={:.1} ref={:.1} agi={:.1}",
+                tag, team_id, goals, agg.total_shots, agg.total_on_target,
+                agg.fwd_finishing / fc, agg.fwd_technique / fc, agg.fwd_composure / fc,
+                agg.def_marking / dc, agg.def_tackling / dc, agg.def_positioning / dc,
+                agg.gk_handling / gc, agg.gk_reflexes / gc, agg.gk_agility / gc,
+            )
+        };
+
+        log::info!(
+            "BLOWOUT {}-{} (total {}g)",
+            home_goals, away_goals, home_goals + away_goals
+        );
+        log::info!("  {}", fmt_team("HOME", home_team_id, home_goals, &home_agg));
+        log::info!("  {}", fmt_team("AWAY", away_team_id, away_goals, &away_agg));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -203,15 +315,28 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         let mut tick_parity: u32 = 0;
         let mut coach_eval_counter: u32 = 0;
+        let mut tactical_eval_counter: u32 = 0;
+        const TACTICAL_INTERVAL_TICKS: u32 = 10;
 
         while context.increment_time() {
             tick_parity += 1;
             coach_eval_counter += 1;
+            tactical_eval_counter += 1;
 
             // Coach evaluates every 500 ticks (~5 seconds of match time)
             if coach_eval_counter >= 500 {
                 coach_eval_counter = 0;
                 Self::evaluate_coaches(field, context);
+            }
+
+            // Team-level tactical state (phase, possession timers, line
+            // height) refreshes every 10 ticks — too fast and we chase
+            // flicker in the ball-owner signal; too slow and transition
+            // windows (≤50 ticks) lose resolution.
+            if tactical_eval_counter >= TACTICAL_INTERVAL_TICKS {
+                let interval = tactical_eval_counter;
+                tactical_eval_counter = 0;
+                Self::refresh_tactical_states(field, context, interval);
             }
 
             // Full tick: ball + player AI + events
@@ -307,6 +432,59 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         );
     }
 
+    /// Refresh the team-level tactical state (phase, possession timers,
+    /// defensive-line height) for both sides. Reads only the ball and
+    /// players; mutates the `tactical_home` / `tactical_away` fields on
+    /// `MatchContext`. `tick_interval` is how many ticks elapsed since
+    /// the last refresh — rolling counters scale with it.
+    fn refresh_tactical_states(
+        field: &MatchField,
+        context: &mut MatchContext,
+        tick_interval: u32,
+    ) {
+        use crate::r#match::CoachInstruction;
+        let home_high_press = matches!(
+            context.coach_home.instruction,
+            CoachInstruction::PushForward | CoachInstruction::AllOutAttack
+        );
+        let away_high_press = matches!(
+            context.coach_away.instruction,
+            CoachInstruction::PushForward | CoachInstruction::AllOutAttack
+        );
+
+        let (home_sum, home_count, away_sum, away_count) = field.players.iter().fold(
+            (0u32, 0u32, 0u32, 0u32),
+            |(hs, hc, as_, ac), p| {
+                let ca = p.player_attributes.current_ability as u32;
+                if p.team_id == context.field_home_team_id {
+                    (hs + ca, hc + 1, as_, ac)
+                } else {
+                    (hs, hc, as_ + ca, ac + 1)
+                }
+            },
+        );
+        let home_avg = if home_count > 0 { (home_sum / home_count) as u16 } else { 0 };
+        let away_avg = if away_count > 0 { (away_sum / away_count) as u16 } else { 0 };
+
+        let home_goals = context.score.home_team.get() as i16;
+        let away_goals = context.score.away_team.get() as i16;
+        let home_score_diff = (home_goals - away_goals).clamp(-100, 100) as i8;
+
+        crate::r#match::update_tactical_states(
+            &mut context.tactical_home,
+            &mut context.tactical_away,
+            field,
+            context.field_home_team_id,
+            tick_interval,
+            home_high_press,
+            away_high_press,
+            home_score_diff,
+            context.total_match_time,
+            home_avg,
+            away_avg,
+        );
+    }
+
     // ───────────────────────────────────────────────────────────────────────
     // Tick processing
     // ───────────────────────────────────────────────────────────────────────
@@ -332,6 +510,16 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
 
         field.ball.update_light(context, &field.players, events);
         Self::apply_pending_set_piece_teleport(field);
+
+        // Shot-flight GK reactivity: normally light ticks skip player
+        // AI to save CPU, but during a shot the keeper needs continuous
+        // decisions to close on the intercept line. Run just the two
+        // goalkeepers (cheap, ~2 of 22 players) when a shot is in flight.
+        if field.ball.cached_shot_target.is_some() {
+            let mut tick_ctx = GameTickContext::new(field);
+            tick_ctx.update(field);
+            Self::play_goalkeepers(field, context, &tick_ctx, events);
+        }
 
         // Skip sent-off players: they've been stashed at (-500, -500). A
         // boundary clamp here would drag them to (0, 0) — the pitch's
@@ -437,7 +625,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if (near_left || near_right) && (near_top || near_bottom)
                 && timestamp % 30_000 < Self::POSITION_RECORD_INTERVAL_MS
             {
-                log::warn!(
+                log::debug!(
                     "player at corner: t={}ms id={} team={} state={:?} tactical={:?} pos=({:.1}, {:.1}) velocity=({:.2}, {:.2})",
                     timestamp,
                     player.id,
@@ -484,6 +672,29 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             .players
             .iter_mut()
             .filter(|player| !player.is_sent_off)
+            .for_each(|player| player.update(context, tick_context, events));
+    }
+
+    /// Run the AI for *only* the goalkeepers this tick. Used during
+    /// shot flight on light ticks: the 50% AI cadence across all 22
+    /// players was fine for normal play, but during a ~10 tick shot
+    /// window the GK missed half their decisions and never closed on
+    /// the intercept. This fills in those ticks without re-evaluating
+    /// 20 outfielders for zero behavioural gain.
+    fn play_goalkeepers(
+        field: &mut MatchField,
+        context: &mut MatchContext,
+        tick_context: &GameTickContext,
+        events: &mut EventCollection,
+    ) {
+        field
+            .players
+            .iter_mut()
+            .filter(|player| !player.is_sent_off)
+            .filter(|player| {
+                player.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+            })
             .for_each(|player| player.update(context, tick_context, events));
     }
 

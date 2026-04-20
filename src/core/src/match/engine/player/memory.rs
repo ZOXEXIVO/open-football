@@ -132,8 +132,26 @@ impl PlayerMemory {
         }
     }
 
-    pub fn can_shoot(&self, _current_tick: u64) -> bool {
-        true
+    /// Can this player take a shot right now?
+    ///
+    /// After shooting, a player is physically unable to strike again
+    /// instantly — their momentum carries them forward, the ball is
+    /// gone from their feet, and their stance has broken down. Real
+    /// football: a striker effectively takes at most 3-5 shots per
+    /// match; back-to-back strikes (<1 s apart) only happen on
+    /// rebounds, which are a different state entirely. The engine
+    /// previously let a striker camped at the post fire a shot every
+    /// AI tick (~100 ms), producing 55-167 shots per team in the rare
+    /// "one side dominates" matches and ballooning scores to 8-14.
+    ///
+    /// Cooldown: 150 ticks (1.5 sim seconds), which matches the real
+    /// minimum between one player's shots in broken play.
+    pub fn can_shoot(&self, current_tick: u64) -> bool {
+        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 150;
+        if self.shots_taken == 0 {
+            return true;
+        }
+        current_tick.saturating_sub(self.last_shot_tick) >= PLAYER_SHOT_COOLDOWN_TICKS
     }
 
     pub fn record_shot(&mut self, tick: u64, on_target: bool) {

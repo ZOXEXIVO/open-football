@@ -19,6 +19,17 @@ impl StateProcessingHandler for ForwardShootingState {
             ));
         }
 
+        // Per-player shot cooldown. A forward who struck within the
+        // last 1.5 s is still recovering — balance disturbed, ball
+        // gone, stance reset. Abort the shot and drop back to Running;
+        // next tick they'll reassess and most often pass or reposition.
+        // Prevents "same striker camps at post, shoots every tick."
+        if !ctx.player().can_shoot() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Running,
+            ));
+        }
+
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
 
         // Abort for very long range with no clear shot

@@ -42,10 +42,13 @@ impl StateProcessingHandler for ForwardDribblingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
         }
 
-        // Prevent infinite dribbling - timeout after 40 ticks to reassess
+      // Prevent infinite dribbling - timeout after 40 ticks to reassess.
+        // Only force a shot if we're in a genuine shooting range (~30m).
+        // The previous 300-unit fallback routed dribblers into Shooting from
+        // the halfway line, which then bounced back to Running without firing
+        // but kept the front line churning states instead of redistributing.
         if ctx.in_state_time > 40 {
-            // Prefer shooting when close to goal
-            if distance_to_goal < 300.0 {
+            if distance_to_goal < 60.0 {
                 return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
             }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
@@ -58,11 +61,12 @@ impl StateProcessingHandler for ForwardDribblingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
-        // Check if there's space to dribble forward
+        // No space to dribble — lay off with a pass instead. Previously
+        // dropped into HoldingUpPlay (a dead state); Passing is the
+        // right football call.
         if !self.has_space_to_dribble(ctx) {
-            // No space - transition to holding up play
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::HoldingUpPlay,
+                ForwardState::Passing,
             ));
         }
 

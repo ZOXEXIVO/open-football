@@ -97,6 +97,8 @@ pub use club::{
     PlayerTraining, PlayerTrainingHistory, TrainingRecord, PlayerTrainingResult,
     PlayerResult, PlayerCollectionResult, PlayerContractResult,
     PlayerValueCalculator, WageCalculator, PlayerGenerator, PlayerUtils,
+    seed_player_id_sequence as seed_core_player_id_sequence,
+
     PlayerPlan, PlayerPlanRole,
     Language, PlayerLanguage,
     InjuryType, InjurySeverity,

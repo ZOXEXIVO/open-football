@@ -984,9 +984,33 @@ impl PassEvaluator {
                 evaluation.is_recommended || (evaluation.factors.receiver_positioning > 0.5 && evaluation.success_probability > 0.42)
             };
 
+            // Game-management bias: a team protecting a lead (especially
+            // late, or as the weaker side) prefers sideways / backward
+            // balls over risky forward ones — real "hold the score"
+            // football.
+            let gm_intensity = ctx.context
+                .tactical_for_team(ctx.player.team_id)
+                .game_management_intensity;
+            let gm_modifier = if gm_intensity > 0.05 {
+                let forward_direction_multiplier = match ctx.player.side {
+                    Some(PlayerSide::Left) => 1.0,
+                    Some(PlayerSide::Right) => -1.0,
+                    None => 1.0,
+                };
+                let forward_progress = (teammate.position.x - ctx.player.position.x)
+                    * forward_direction_multiplier;
+                if forward_progress > 5.0 {
+                    (1.0 - gm_intensity * 0.45).max(0.3)
+                } else {
+                    1.0 + gm_intensity * 0.60
+                }
+            } else {
+                1.0
+            };
+
             // Apply graduated recency penalty to discourage ping-pong passing
             // Apply congestion penalty to force ball out of huddles
-            let score = score * recency_penalty * congestion_penalty;
+            let score = score * recency_penalty * congestion_penalty * gm_modifier;
 
             if score > best_score && is_acceptable {
                 best_score = score;

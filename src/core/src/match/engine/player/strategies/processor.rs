@@ -97,7 +97,7 @@ impl PlayerFieldPositionGroup {
     #[inline]
     fn yield_state_for(group: PlayerFieldPositionGroup) -> PlayerState {
         match group {
-            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::Attentive),
+            PlayerFieldPositionGroup::Goalkeeper => PlayerState::Goalkeeper(GoalkeeperState::Standing),
             PlayerFieldPositionGroup::Defender => PlayerState::Defender(DefenderState::Running),
             PlayerFieldPositionGroup::Midfielder => PlayerState::Midfielder(MidfielderState::Running),
             PlayerFieldPositionGroup::Forward => PlayerState::Forward(ForwardState::Running),

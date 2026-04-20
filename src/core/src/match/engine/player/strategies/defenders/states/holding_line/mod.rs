@@ -2,7 +2,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
-use crate::r#match::{ConditionContext, MatchPlayerLite, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler};
+use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
 const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0;  // Tighter line — less room for attackers
 const BALL_PROXIMITY_THRESHOLD: f32 = 150.0; // React to ball from further out
@@ -201,13 +201,11 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             }));
         }
 
-        // 6. Check if we should set up an offside trap
-        if self.should_set_offside_trap(ctx) {
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::OffsideTrap,
-            ));
-        }
-
+        // Offside-trap detection used to transition into a dedicated
+        // DefenderState::OffsideTrap that was a pass-through — it just
+        // bounced back to HoldingLine. Staying in HoldingLine with the
+        // same zonal-line logic is the simpler model; if we want trap
+        // pressing later, reintroduce as a team-level flag (Phase 2).
         None
     }
 
@@ -393,25 +391,4 @@ impl DefenderHoldingLineState {
             })
     }
 
-    /// Determines if the team should set up an offside trap.
-    fn should_set_offside_trap(&self, ctx: &StateProcessingContext) -> bool {
-        // Check if opponents are positioned ahead of the defensive line
-        let defensive_line_position = self.calculate_defensive_line_position(ctx);
-
-        let opponents_ahead = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                if ctx.player.side == Some(PlayerSide::Left) {
-                    opponent.position.x < defensive_line_position
-                } else {
-                    opponent.position.x > defensive_line_position
-                }
-            })
-            .count();
-
-        // If multiple opponents are ahead, consider setting up an offside trap
-        opponents_ahead >= 2
-    }
 }

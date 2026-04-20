@@ -229,7 +229,7 @@ pub async fn player_history_action(
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
-            sub_title: "Retired".to_string(),
+            sub_title: i18n.t("retired").to_string(),
             sub_title_link: String::new(),
             sub_title_country_code: String::new(),
             header_color: "#808080".to_string(),

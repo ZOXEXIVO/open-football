@@ -38,14 +38,6 @@ pub fn is_adjacent_group(a: PlayerFieldPositionGroup, b: PlayerFieldPositionGrou
     )
 }
 
-pub fn is_goalkeeper_player(player: &Player) -> bool {
-    player
-        .positions
-        .positions
-        .iter()
-        .any(|p| p.position == PlayerPositionType::Goalkeeper)
-}
-
 /// Calculate how well a player fits a target position (0..20)
 pub fn position_fit_score(
     player: &Player,

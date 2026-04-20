@@ -47,13 +47,10 @@ impl StateProcessingHandler for ForwardRunningInBehindState {
             ));
         }
 
-        // Check if there's an opportunity to break the offside trap
-        if self.can_break_offside_trap(ctx) {
-            return Some(StateChangeResult::with_forward_state(
-                ForwardState::OffsideTrapBreaking,
-            ));
-        }
-
+        // OffsideTrapBreaking used to be a separate state here but it
+        // duplicated RunningInBehind's movement logic exactly. The
+        // offside-trap detection now stays inside this state; we just
+        // keep running in behind as the single "beat the line" behaviour.
         None
     }
 
@@ -182,38 +179,4 @@ impl ForwardRunningInBehindState {
         true
     }
 
-    fn can_break_offside_trap(&self, ctx: &StateProcessingContext) -> bool {
-        let player_ops = ctx.player();
-        let ball_ops = ctx.ball();
-
-        // Check if the player is currently offside
-        if player_ops.on_own_side() {
-            return false;
-        }
-
-        // Check if the ball is moving towards the player
-        if !ball_ops.is_towards_player() {
-            return false;
-        }
-
-        // Check if the player has enough space to run into
-        if !self.space_ahead(ctx) {
-            return false;
-        }
-
-        // Check if the player has the speed to break the offside trap
-        let player_speed = ctx.player.skills.physical.acceleration;
-        let speed_threshold = 80.0; // Adjust based on your game's balance
-        if player_speed < speed_threshold {
-            return false;
-        }
-
-        // Check if the player's team is losing
-        if !ctx.team().is_loosing() {
-            return false;
-        }
-
-        // If all conditions are met, the player can break the offside trap
-        true
-    }
 }

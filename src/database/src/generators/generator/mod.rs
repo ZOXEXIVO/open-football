@@ -9,7 +9,7 @@ use core::context::NaiveTime;
 use core::continent::Continent;
 use core::competitions::GlobalCompetitions;
 use core::{
-    CompetitionScope, NationalCompetitionConfig, SimulatorData,
+    seed_core_player_id_sequence, CompetitionScope, NationalCompetitionConfig, SimulatorData,
 };
 use crate::DatabaseEntity;
 use crate::generators::convert::convert_national_competition;
@@ -21,9 +21,15 @@ impl DatabaseGenerator {
     pub fn generate(data: &DatabaseEntity) -> SimulatorData {
         // Seed the procedural id sequence past every ODB-supplied player id
         // so generated players for non-ODB clubs cannot collide with the
-        // hand-curated records in `players.odb`.
+        // hand-curated records in `players.odb`. Both generators share the
+        // same namespace (the simulator indexes all players by global id),
+        // so both must be seeded — otherwise the core generator's counter
+        // still starts at 100_000 and collides with ODB ids above that,
+        // producing "click Giovanni Pavone, see Ibrahim Al-Hafith" bugs
+        // when the global index resolves the shared id to the ODB record.
         if let Some(max_odb_id) = data.players_odb.as_ref().and_then(|o| o.max_player_id()) {
             seed_player_id_sequence(max_odb_id);
+            seed_core_player_id_sequence(max_odb_id);
         }
 
         let current_date = NaiveDateTime::new(

@@ -361,6 +361,19 @@ impl<'p> PlayerOperationsImpl<'p> {
         ray_cast_result.is_none()
     }
 
+    /// Can this player physically strike the ball right now? Gated by
+    /// the player's per-shot cooldown in `PlayerMemory::can_shoot` — a
+    /// forward who just shot needs ~1.5 s to reset before striking
+    /// again. Consulted by the running/dribbling shot-trigger paths so
+    /// the same striker can't fire a shot every AI tick while camped
+    /// at the post.
+    pub fn can_shoot(&self) -> bool {
+        self.ctx
+            .player
+            .memory
+            .can_shoot(self.ctx.context.current_tick())
+    }
+
     pub fn has_clear_shot(&self) -> bool {
         let player_position = self.ctx.player.position;
         let goal_position = self.opponent_goal_position();
@@ -371,7 +384,6 @@ impl<'p> PlayerOperationsImpl<'p> {
         // The GK is handled by save mechanics after the shot is taken.
         // Skip the last 20% of distance to goal (GK zone).
         let check_distance = distance_to_goal * 0.80;
-        let corridor_half_width = 5.0;
 
         let has_blocker = self.ctx.players().opponents().all()
             .any(|opp| {
@@ -392,6 +404,21 @@ impl<'p> PlayerOperationsImpl<'p> {
                 let perp_distance = ((opp.position.x - closest_point.x).powi(2)
                     + (opp.position.y - closest_point.y).powi(2))
                     .sqrt();
+
+                // Corridor width scales with this defender's marking +
+                // tackling. A world-class CB (both at 18-20) casts a
+                // wide shadow — 9u ≈ 4.5m, realistic for a close-down;
+                // a replacement-level defender at 8-10 only blocks a
+                // 4u shadow, so elite strikers find gaps against poor
+                // back lines. Previously flat at 5u for every defender,
+                // which is why a CB with Marking 20 and one with
+                // Marking 8 both blocked the same shots.
+                let opp_skills = self.skills(opp.id);
+                let def_quality = (opp_skills.technical.marking
+                    + opp_skills.technical.tackling
+                    + opp_skills.mental.positioning)
+                    / 60.0; // 0..1
+                let corridor_half_width = 3.5 + def_quality * 6.0; // 3.5..9.5
 
                 perp_distance < corridor_half_width
             });

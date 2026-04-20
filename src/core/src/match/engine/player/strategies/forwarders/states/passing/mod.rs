@@ -74,8 +74,9 @@ impl StateProcessingHandler for ForwardPassingState {
         }
 
         if ctx.in_state_time > MAX_PASS_DURATION {
-            // Timeout - redirect to holding up play, not shooting
-            return Some(StateChangeResult::with_forward_state(ForwardState::HoldingUpPlay));
+            // Timeout — drop back to Running to reassess; HoldingUpPlay
+            // was a dead state that only proxied Passing behaviour.
+            return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
         None

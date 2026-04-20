@@ -89,9 +89,35 @@ impl SquadSelector {
             }
         }
 
+        // Keeper-fallback recovery. If the normal `is_available` filter
+        // excluded every goalkeeper on the roster (all injured or on
+        // international duty or low-condition), we'd then press an
+        // outfielder into goal — but an outfielder has `Goalkeeping`
+        // defaulted to zero, so their save rate is effectively 0% and
+        // the team concedes 8-12 goals repeatably. Real football: if
+        // all first-team keepers are unavailable, a walking-wounded /
+        // low-condition keeper still starts over an outfielder. Add
+        // them back here, skipping only keepers who physically can't
+        // play (actively banned or absent).
+        let has_fit_keeper = available.iter().any(|p| p.positions.is_goalkeeper());
+        if !has_fit_keeper {
+            for p in team.players.players().iter().copied() {
+                if !p.positions.is_goalkeeper() {
+                    continue;
+                }
+                if p.player_attributes.is_banned && !ctx.is_friendly {
+                    continue;
+                }
+                if available.iter().any(|q| q.id == p.id) {
+                    continue;
+                }
+                available.push(p);
+            }
+        }
+
         let outfield_count = available
             .iter()
-            .filter(|p| !is_goalkeeper_player(p))
+            .filter(|p| !p.positions.is_goalkeeper())
             .count();
         let gk_count = available.len() - outfield_count;
 
@@ -108,7 +134,7 @@ impl SquadSelector {
                 }).count()
             } else { 0 };
 
-            log::warn!(
+            log::debug!(
                 "Squad selection for team {}: only {} available out of {} registered \
                 (injured={}, international={}, low_condition={}, banned={}, lst_loa={}, \
                 {} outfield, {} GK, {} reserves offered)",

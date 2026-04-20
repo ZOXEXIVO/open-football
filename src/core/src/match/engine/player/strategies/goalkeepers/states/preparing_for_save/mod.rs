@@ -39,6 +39,18 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let distance_from_goal = ctx.player().distance_from_start_position();
         const MAX_DISTANCE_FROM_GOAL_TO_CATCH: f32 = 50.0; // Only catch near goal area
 
+        // Shot in flight: enter Catching immediately — we need to be
+        // moving toward the intercept line every tick, not waiting for
+        // the ball to come within 35u first (by which point it's
+        // already past the keeper).
+        if ctx.tick_context.ball.cached_shot_target.is_some()
+            && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH
+        {
+            return Some(StateChangeResult::with_goalkeeper_state(
+                GoalkeeperState::Catching,
+            ));
+        }
+
         if ball_distance < CATCH_DISTANCE && distance_from_goal < MAX_DISTANCE_FROM_GOAL_TO_CATCH {
             return Some(StateChangeResult::with_goalkeeper_state(
                 GoalkeeperState::Catching,
@@ -52,10 +64,12 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
             ));
         }
 
-        // If our team has control, switch to attentive
+        // Our team now has the ball — drop back to Standing; no save
+        // is imminent. (Previously routed to Attentive, which was a
+        // no-op Standing.)
         if ctx.team().is_control_ball() {
             return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Attentive,
+                GoalkeeperState::Standing,
             ));
         }
 
@@ -84,44 +98,66 @@ impl StateProcessingHandler for GoalkeeperPreparingForSaveState {
         let ball_position = ctx.tick_context.positions.ball.position;
         let ball_velocity = ctx.tick_context.positions.ball.velocity;
         let ball_speed = ball_velocity.norm();
-        let ball_distance = ctx.ball().distance();
 
-        // GK should position between ball trajectory and goal, not just chase the ball
-        let goal_pos = ctx.ball().direction_to_own_goal();
-
-        // Predict where ball will be shortly
+        let agility = ctx.player.skills.physical.agility / 20.0;
         let reflexes = ctx.player.skills.goalkeeping.reflexes / 20.0;
+
+        // Sprint speed boost — GK must react explosively to shots.
+        // Reflexes + agility determine reaction speed.
+        let speed_boost = 1.8 + agility * 0.6 + reflexes * 0.5; // 1.8x - 2.9x
+
+        // If a shot has been fired, the projected goal-line crossing is
+        // cached on the ball. Commit to that line instead of chasing
+        // the ball's current position — a real keeper picks a spot on
+        // the line and dives there. Without this the keeper lost ground
+        // tick-by-tick to the 5.6 u/tick shot and never saved anything.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            let goal_pos = ctx.ball().direction_to_own_goal();
+            // Arrive at (goal_line_x, target_y) — i.e. the post-to-post
+            // line, Y offset is where the shot is going. Z ignored: we
+            // move on the ground.
+            let intercept_point = Vector3::new(
+                goal_pos.x,
+                target.goal_line_y,
+                0.0,
+            );
+            return Some(
+                SteeringBehavior::Arrive {
+                    target: intercept_point,
+                    slowing_distance: 3.0,
+                }
+                .calculate(ctx.player)
+                .velocity
+                    * speed_boost,
+            );
+        }
+
+        // No shot cached — slow ball / through ball / loose ball: fall
+        // back to the angle-narrowing behaviour.
+        let ball_distance = ctx.ball().distance();
+        let goal_pos = ctx.ball().direction_to_own_goal();
         let prediction_time = 0.2 + reflexes * 0.4;
         let predicted_ball = ball_position + ball_velocity * prediction_time;
-
-        // Position on the line between goal and predicted ball position
         let goal_to_predicted = predicted_ball - goal_pos;
-        let agility = ctx.player.skills.physical.agility / 20.0;
         let intercept_distance = if ball_speed > 1.2 {
-            // Shot-speed ball — skilled keepers narrow angle more aggressively
             10.0 + reflexes * 8.0 + agility * 3.0
         } else {
-            // Slow ball — come out more, positioning skill matters
             18.0 + reflexes * 10.0 + agility * 4.0
         };
-
         let target = if goal_to_predicted.norm() > 1.0 {
             goal_pos + goal_to_predicted.normalize() * intercept_distance.min(ball_distance * 0.5)
         } else {
             goal_pos
         };
 
-        // Sprint speed boost — GK must react explosively to shots
-        // Reflexes + agility determine reaction speed
-        let speed_boost = 1.8 + agility * 0.6 + reflexes * 0.5; // 1.8x - 2.9x
-
         Some(
             SteeringBehavior::Pursuit {
                 target,
-                target_velocity: ball_velocity * 0.3, // Slight lead on ball trajectory
+                target_velocity: ball_velocity * 0.3,
             }
-                .calculate(ctx.player)
-                .velocity * speed_boost,
+            .calculate(ctx.player)
+            .velocity
+                * speed_boost,
         )
     }
 

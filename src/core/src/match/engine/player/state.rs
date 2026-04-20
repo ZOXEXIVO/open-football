@@ -80,12 +80,10 @@ impl PlayerMatchState {
                         GoalkeeperSpeedContext::Explosive
                     }
                     PlayerState::Goalkeeper(GoalkeeperState::Catching)
-                    | PlayerState::Goalkeeper(GoalkeeperState::ComingOut)
-                    | PlayerState::Goalkeeper(GoalkeeperState::UnderPressure) => {
+                    | PlayerState::Goalkeeper(GoalkeeperState::ComingOut) => {
                         GoalkeeperSpeedContext::Active
                     }
-                    PlayerState::Goalkeeper(GoalkeeperState::Attentive)
-                    | PlayerState::Goalkeeper(GoalkeeperState::Standing)
+                    PlayerState::Goalkeeper(GoalkeeperState::Standing)
                     | PlayerState::Goalkeeper(GoalkeeperState::ReturningToGoal) => {
                         GoalkeeperSpeedContext::Positioning
                     }

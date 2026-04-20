@@ -28,24 +28,29 @@ impl FullName {
     }
 
     pub fn with_nickname(first_name: String, last_name: String, nickname: String) -> Self {
+        // An empty nickname string is the same as no nickname at all — source
+        // data (odb / generator tables) sometimes carries `Some("")`, which
+        // would otherwise render the player as a blank name in every view
+        // that goes through `display_last_name()`.
+        let nickname = if nickname.is_empty() { None } else { Some(nickname) };
         FullName {
             first_name,
             last_name,
             middle_name: None,
-            nickname: Some(nickname),
+            nickname,
         }
+    }
+
+    fn effective_nickname(&self) -> Option<&str> {
+        self.nickname.as_deref().filter(|n| !n.is_empty())
     }
 
     pub fn display_last_name(&self) -> &str {
-        if let Some(ref nickname) = self.nickname {
-            nickname
-        } else {
-            &self.last_name
-        }
+        self.effective_nickname().unwrap_or(&self.last_name)
     }
 
     pub fn display_first_name(&self) -> &str {
-        if self.nickname.is_some() {
+        if self.effective_nickname().is_some() {
             ""
         } else {
             &self.first_name
@@ -55,7 +60,7 @@ impl FullName {
 
 impl Display for FullName {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
-        if let Some(ref nickname) = self.nickname {
+        if let Some(nickname) = self.effective_nickname() {
             return write!(f, "{}", nickname);
         }
         let mut name = format!("{} {}", self.last_name, self.first_name);

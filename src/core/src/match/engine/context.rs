@@ -1,5 +1,5 @@
 use nalgebra::Vector3;
-use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamsTactics, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS};
+use crate::r#match::{GameState, GoalDetail, GoalPosition, MatchCoach, MatchField, MatchFieldSize, MatchPlayerCollection, MatchState, MatchTime, Score, TeamTacticalState, TeamsTactics, MATCH_EXTRA_TIME_MS, MATCH_HALF_TIME_MS};
 use crate::r#match::engine::result::PlayerMatchEndStats;
 
 const MATCH_TIME_INCREMENT_MS: u64 = 10;
@@ -43,6 +43,14 @@ pub struct MatchContext {
     pub coach_home: MatchCoach,
     pub coach_away: MatchCoach,
 
+    /// Team-level tactical state (phase, possession timers, defensive
+    /// line height) shared across every player on that side. Keyed the
+    /// same way as `coach_home/away`. Updated by
+    /// `tactical::update_tactical_states` every ~10 ticks from the
+    /// engine tick loop.
+    pub tactical_home: TeamTacticalState,
+    pub tactical_away: TeamTacticalState,
+
     /// Knockout-format match — enables extra time + penalty shootout when
     /// the score is level at the end of regulation.
     pub is_knockout: bool,
@@ -70,7 +78,17 @@ impl MatchContext {
             substituted_out_stats: Vec::new(),
             coach_home: MatchCoach::new(),
             coach_away: MatchCoach::new(),
+            tactical_home: TeamTacticalState::initial(),
+            tactical_away: TeamTacticalState::initial(),
             is_knockout,
+        }
+    }
+
+    pub fn tactical_for_team(&self, team_id: u32) -> &TeamTacticalState {
+        if team_id == self.field_home_team_id {
+            &self.tactical_home
+        } else {
+            &self.tactical_away
         }
     }
 

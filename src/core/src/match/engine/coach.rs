@@ -124,12 +124,16 @@ impl MatchCoach {
         let team_tired = avg_team_condition < 0.45;
 
         self.instruction = match score_diff {
-            // Leading by 3+ goals
+            // Leading by 5+ goals — shut the game down. Previously even a
+            // 0-6 leader stayed on `SlowDown` early in the match, which
+            // still lets forwards take shots and convert against an
+            // already-collapsing defence. `WasteTime` at any clock time
+            // strips the attacking urge and keeps the ball at the back.
+            d if d >= 5 => CoachInstruction::WasteTime,
+            // Leading by 3-4 goals
             d if d >= 3 => {
                 if is_late_game {
                     CoachInstruction::WasteTime
-                } else if team_tired {
-                    CoachInstruction::SlowDown
                 } else {
                     CoachInstruction::SlowDown
                 }
@@ -195,14 +199,20 @@ impl MatchCoach {
                     CoachInstruction::Normal
                 }
             }
-            // Losing by 3+
-            _ => {
+            // Losing by 3-4 — push hard, go all-out late
+            d if d >= -4 => {
                 if is_late_game {
                     CoachInstruction::AllOutAttack
                 } else {
                     CoachInstruction::PushForward
                 }
             }
+            // Losing by 5+ — the game is gone. `AllOutAttack` from here
+            // just kept conceding more because defenders pushed forward
+            // into space the leader then counter-attacked through. Accept
+            // the damage and hold shape (`PushForward` for chance creation
+            // without gutting the back line).
+            _ => CoachInstruction::PushForward,
         };
     }
 

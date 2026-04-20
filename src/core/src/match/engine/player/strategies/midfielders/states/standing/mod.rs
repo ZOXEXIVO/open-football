@@ -15,14 +15,15 @@ impl StateProcessingHandler for MidfielderStandingState {
         if ctx.player.has_ball(ctx) {
             // Go directly to Passing state — it has the best pass evaluation logic
             // Only hold possession if under no pressure and no teammates nearby
+            // With the ball and no passing options, stay in Standing —
+            // the top-of-function idle logic will refresh next tick.
+            // HoldingPossession did nothing extra beyond that.
             return if self.has_passing_options(ctx) {
                 Some(StateChangeResult::with_midfielder_state(
                     MidfielderState::Passing,
                 ))
             } else {
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::HoldingPossession,
-                ))
+                None
             };
         }
         else {

@@ -3,7 +3,7 @@ use crate::r#match::midfielders::states::common::{ActivityIntensity, MidfielderC
 use crate::r#match::midfielders::states::MidfielderState;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
 use crate::r#match::player::strategies::common::players::MatchPlayerIteratorExt;
-use crate::r#match::{ConditionContext, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
+use crate::r#match::{ConditionContext, GamePhase, MatchPlayerLite, PassEvaluator, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior};
 use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
@@ -18,6 +18,13 @@ pub struct MidfielderRunningState {}
 
 impl StateProcessingHandler for MidfielderRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Phase-first dispatch — midfielders are the engine's pivot
+        // between defence and attack, so the phase signal matters most
+        // for them. See `phase_dispatch` for behaviour per phase.
+        if let Some(phase_action) = self.phase_dispatch(ctx) {
+            return Some(phase_action);
+        }
+
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             let coach = ctx.team().coach_instruction();
@@ -415,9 +422,13 @@ impl StateProcessingHandler for MidfielderRunningState {
                         alignment > 0.5
                     });
 
+                // Dangerous runner detected — close them down via Guarding.
+                // TrackingRunner was a single-entry ghost state that did the
+                // same "stay goal-side of the runner" thing Guarding already
+                // does; keeping Guarding removes the duplicate.
                 if has_dangerous_runner {
                     return Some(StateChangeResult::with_midfielder_state(
-                        MidfielderState::TrackingRunner,
+                        MidfielderState::Guarding,
                     ));
                 }
             }
@@ -665,6 +676,67 @@ impl StateProcessingHandler for MidfielderRunningState {
 }
 
 impl MidfielderRunningState {
+    /// Phase-first dispatch. Midfielders sit in the spine of the team,
+    /// so the phase cue drives more of their behaviour than any other
+    /// role. Settled phases fall through to the existing decision tree.
+    fn phase_dispatch(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        let phase = ctx.team().phase();
+        let has_ball = ctx.player.has_ball(ctx);
+        let ball_dist = ctx.ball().distance();
+        match phase {
+            // Counter-press window after losing the ball. The closest
+            // midfielder to the ball engages; others drop into
+            // Returning to rebuild shape. Without this window the
+            // engine had no concept of "hunt the ball back now" —
+            // every press was reactive to distance alone.
+            GamePhase::DefensiveTransition if !has_ball => {
+                if ball_dist < 45.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
+                // Further-away midfielders reset shape rather than
+                // ball-chase into space.
+                if ball_dist > 80.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Returning,
+                    ));
+                }
+            }
+            // Fast-break window after winning the ball. Midfielder not
+            // on the ball makes a forward run to support. The carrier
+            // falls through to passing/dribbling below.
+            GamePhase::AttackingTransition if !has_ball => {
+                if ctx.ball().distance_to_opponent_goal() > 40.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::AttackSupporting,
+                    ));
+                }
+            }
+            // Coach-triggered high press — midfielders hunt the ball in
+            // the opposition half alongside the forwards.
+            GamePhase::HighPress if !has_ball => {
+                if ball_dist < 70.0 && ctx.team().is_best_player_to_chase_ball() {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    ));
+                }
+            }
+            // Low-block: cut passing lanes by dropping into the gap
+            // between defenders and the ball. Midfielders shouldn't
+            // continue chasing upfield in this phase.
+            GamePhase::LowBlock if !has_ball => {
+                if ball_dist > 50.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Returning,
+                    ));
+                }
+            }
+            _ => {}
+        }
+        None
+    }
+
     fn find_best_pass_option<'a>(
         &self,
         ctx: &StateProcessingContext<'a>,

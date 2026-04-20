@@ -21,6 +21,15 @@ impl StateProcessingHandler for MidfielderDistanceShootingState {
             ));
         }
 
+        // Per-player cooldown — same reasoning as forwards. A long
+        // shot requires planted feet and clean contact; a player who
+        // just struck the ball hasn't reset yet.
+        if !ctx.player().can_shoot() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Running,
+            ));
+        }
+
         if ctx.player().goal_distance() > 250.0 {
             // Too far from the goal, consider other options
             if self.should_pass(ctx) {

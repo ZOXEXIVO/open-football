@@ -23,8 +23,26 @@ pub(crate) fn select_starting_eleven(
     let mut selected_players: Vec<&Player> = Vec::new();
     let required = tactics.positions();
 
-    // STEP 1: Goalkeeper
-    if let Some(gk) = pick_best_goalkeeper(available, &used_ids, engine, staff, is_friendly) {
+    // STEP 1: Goalkeeper. Fallback order:
+    //   1. Best available keeper (fit, not injured, not on int duty).
+    //   2. Any keeper in the available pool, even if low-condition — we
+    //      normally reject those, but a tired keeper still has real
+    //      goalkeeping skills and saves far more than an outfielder
+    //      pressed into goal. Skipped only if the keeper is actively
+    //      injured or banned (those shouldn't play at all).
+    //   3. Last resort: outfielder as emergency keeper. Real football
+    //      does this but the result is a 5+ goal concession — so we
+    //      reach this only when the club has literally no keeper on
+    //      the roster.
+    //
+    // The Goalkeeping struct on an outfielder defaults to all zeros
+    // (never trained as a keeper), which previously produced hnd=1
+    // ref=1 after the (x-1)/19 scaling clamp — save rate effectively
+    // 0%, and the league generated repeatable 10+ goal blowouts. This
+    // order keeps a real keeper in goal whenever possible.
+    let picked_gk = pick_best_goalkeeper(available, &used_ids, engine, staff, is_friendly)
+        .or_else(|| pick_any_goalkeeper_fallback(available, &used_ids));
+    if let Some(gk) = picked_gk {
         squad.push(MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false));
         used_ids.push(gk.id);
         selected_players.push(gk);
@@ -48,7 +66,7 @@ pub(crate) fn select_starting_eleven(
         let best = available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
-            .filter(|p| !helpers::is_goalkeeper_player(p))
+            .filter(|p| !p.positions.is_goalkeeper())
             .max_by(|a, b| {
                 let sa = engine.score_player_for_slot(a, pos, target_group, staff, tactics, date, is_friendly, &selected_players)
                     + engine.development_minutes_bonus(a, match_importance)
@@ -72,7 +90,7 @@ pub(crate) fn select_starting_eleven(
         let best = available
             .iter()
             .filter(|p| !used_ids.contains(&p.id))
-            .filter(|p| !helpers::is_goalkeeper_player(p))
+            .filter(|p| !p.positions.is_goalkeeper())
             .max_by(|a, b| {
                 let sa = engine.overall_quality(a, staff, tactics, date, is_friendly)
                     + engine.development_minutes_bonus(a, match_importance)
@@ -211,6 +229,32 @@ pub(crate) fn select_substitutes(
     subs
 }
 
+/// Skill-blind keeper fallback. `pick_best_goalkeeper` uses a full
+/// scoring pipeline (ability × age × form × staff opinion) which can
+/// theoretically return None if every scored keeper produces NaN or
+/// similar edge values. This variant just picks any player in the
+/// available pool whose registered positions include Goalkeeper —
+/// preferring the one with highest combined handling+reflexes so the
+/// walking-wounded keeper with a real goalkeeping profile is picked
+/// over the fresh outfielder with a zeroed one. Used as the second
+/// line of the keeper fallback chain before the outfielder-as-GK
+/// emergency path.
+fn pick_any_goalkeeper_fallback<'p>(
+    available: &[&'p Player],
+    used_ids: &[u32],
+) -> Option<&'p Player> {
+    available
+        .iter()
+        .filter(|p| !used_ids.contains(&p.id))
+        .filter(|p| p.positions.is_goalkeeper())
+        .max_by(|a, b| {
+            let sa = a.skills.goalkeeping.handling + a.skills.goalkeeping.reflexes;
+            let sb = b.skills.goalkeeping.handling + b.skills.goalkeeping.reflexes;
+            sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied()
+}
+
 fn pick_best_goalkeeper<'p>(
     available: &[&'p Player],
     used_ids: &[u32],
@@ -221,7 +265,7 @@ fn pick_best_goalkeeper<'p>(
     available
         .iter()
         .filter(|p| !used_ids.contains(&p.id))
-        .filter(|p| helpers::is_goalkeeper_player(p))
+        .filter(|p| p.positions.is_goalkeeper())
         .max_by(|a, b| {
             let score_a = engine.goalkeeper_score(a, staff, is_friendly);
             let score_b = engine.goalkeeper_score(b, staff, is_friendly);

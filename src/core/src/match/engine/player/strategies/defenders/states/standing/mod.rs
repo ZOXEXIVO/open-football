@@ -130,10 +130,13 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Check for shots requiring blocking
+        // Shot incoming — jump into the passing lane via Intercepting.
+        // Previously transitioned to Blocking, a dead state that just
+        // bounced straight back to Standing; Intercepting actually moves
+        // the defender toward the ball.
         if self.should_block_shot(ctx) {
             return Some(StateChangeResult::with_defender_state(
-                DefenderState::Blocking,
+                DefenderState::Intercepting,
             ));
         }
 

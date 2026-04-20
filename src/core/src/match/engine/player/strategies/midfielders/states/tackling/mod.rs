@@ -61,10 +61,14 @@ impl StateProcessingHandler for MidfielderTacklingState {
                 let (tackle_success, committed_foul, foul_severity) =
                     self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
-                    // Double-check ball is not in flight before claiming
+                    // Double-check ball is not in flight before claiming.
+                    // After winning the tackle, drop to Standing (with the
+                    // ball claimed) and let the top-level decision tree pick
+                    // the next action. HoldingPossession was a pass-through
+                    // state that offered no behaviour beyond Standing.
                     if !ctx.ball().is_in_flight() {
                         return Some(StateChangeResult::with_midfielder_state_and_event(
-                            MidfielderState::HoldingPossession,
+                            MidfielderState::Standing,
                             Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
                         ));
                     }

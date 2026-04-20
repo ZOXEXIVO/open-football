@@ -1,7 +1,9 @@
 use std::collections::VecDeque;
 use crate::r#match::ball::events::{BallEvent, BallGoalEventMetadata, GoalSide};
 use crate::r#match::events::EventCollection;
+use crate::r#match::engine::goal::GOAL_WIDTH;
 use crate::r#match::{GameTickContext, MatchContext, MatchPlayer, PlayerSide};
+use crate::PlayerFieldPositionGroup;
 use nalgebra::Vector3;
 
 pub struct Ball {
@@ -62,6 +64,33 @@ pub struct Ball {
     /// who "owns" it at any given instant.
     pub stall_anchor_pos: Vector3<f32>,
     pub stall_anchor_tick: u32,
+
+    /// Trajectory projection cached at the moment a shot is fired. Lets
+    /// the goalkeeper commit to an intercept line instead of re-chasing
+    /// the ball's current position every tick (which lost ground vs a
+    /// 5.6 u/tick shot). `None` whenever the ball isn't a shot in
+    /// flight; cleared on catch, goal, or any ownership event.
+    pub cached_shot_target: Option<ShotTarget>,
+}
+
+/// Projection of a shot at the moment it's taken. The `PreparingForSave`
+/// and `Catching` goalkeeper states read this to know where the ball
+/// will actually arrive rather than chasing its current position — a
+/// diving keeper commits to a spot on the line, they don't track the
+/// ball every frame.
+#[derive(Debug, Clone, Copy)]
+pub struct ShotTarget {
+    /// y-coordinate at which the shot is projected to cross the goal
+    /// line, in field units. Falls outside the posts if the shot is
+    /// going wide — the keeper should still attempt the save, the
+    /// post-vs-net check happens in `check_goal`.
+    pub goal_line_y: f32,
+    /// z-coordinate (height) at projected crossing. Above `GOAL_HEIGHT`
+    /// (2.44) is an over-the-bar ball the keeper shouldn't commit to.
+    pub goal_line_z: f32,
+    /// Goal the ball is heading for — left (x=0) or right (x=field_w).
+    /// Used so the correct keeper reads the cache.
+    pub defending_side: PlayerSide,
 }
 
 #[derive(Default, Clone)]
@@ -112,6 +141,7 @@ impl Ball {
             owned_stuck_logged: false,
             stall_anchor_pos: Vector3::new(x, y, 0.0),
             stall_anchor_tick: 0,
+            cached_shot_target: None,
         }
     }
 
@@ -136,6 +166,8 @@ impl Ball {
         self.update_velocity();
 
         self.try_intercept(players, events);
+        self.try_block_shot(players, events);
+        self.try_save_shot(context, players, events);
         self.try_notify_standing_ball(players, events);
 
         // NUCLEAR OPTION: Force claiming if ball unowned and stopped for too long
@@ -448,14 +480,306 @@ impl Ball {
         // This avoids needing RNG in the match engine
         if best_chance > 0.04 {
             if let Some(interceptor_id) = best_interceptor {
+                // Snap the ball to the interceptor and zero the
+                // velocity. Before this, velocity was just scaled to
+                // 0.3× — a pass aimed deep into the defending team's
+                // penalty area would be "intercepted" by a defender
+                // who then rolled the ball the remaining few units
+                // into their own net (ownership drops at 15u owner
+                // distance, ball crosses the goal line unowned, OG is
+                // registered). That produced the "20-0 with 7 shots"
+                // pattern in blowouts: 13+ own goals per match from
+                // defenders winning possession in their own box and
+                // the ball continuing forward. Snapping + stopping
+                // matches what a real interception does — the
+                // defender has the ball, not a half-tackled rolling
+                // mess.
+                if let Some(interceptor) = players.iter().find(|p| p.id == interceptor_id) {
+                    self.position = interceptor.position;
+                    self.position.z = 0.0;
+                }
                 self.current_owner = Some(interceptor_id);
                 self.pass_target_player_id = None;
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;
-                self.velocity *= 0.3; // Ball slows down on interception
+                self.velocity = Vector3::zeros();
                 events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
+    }
+
+    /// Shot-block check. Runs only when the ball is a shot in flight
+    /// (has a cached goal-line target). A defender whose body is in
+    /// the shot's corridor between the current ball position and the
+    /// goal line has a skill-weighted chance to block — the ball
+    /// deflects to a loose state rather than reaching the keeper.
+    /// Real football blocks ~6-10% of shots; we aim for that band.
+    ///
+    /// Distinct from `try_intercept`:
+    /// - Intercept: ≤ 2.5u radius, pass-targeted; tiny per-tick chance
+    /// - Block:     ≤ 4u radius, shot-targeted; higher per-event chance
+    /// Both are scoped to unowned balls with `in_flight_state > 0`.
+    pub fn try_block_shot(&mut self, players: &[MatchPlayer], events: &mut EventCollection) {
+        // Only live shots — no cache means no shot in flight, no block.
+        let shot_target = match self.cached_shot_target {
+            Some(t) => t,
+            None => return,
+        };
+        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+            return;
+        }
+        // Ball above defender reach — aerial shots aren't blocked at
+        // chest height, only grounders and waist-high strikes.
+        if self.position.z > 2.0 {
+            return;
+        }
+
+        let shooter_team = match self.previous_owner {
+            Some(prev_id) => players.iter().find(|p| p.id == prev_id).map(|p| p.team_id),
+            None => return,
+        };
+        let shooter_team = match shooter_team {
+            Some(t) => t,
+            None => return,
+        };
+
+        // Defender must be in the shot's path: between the ball and
+        // the goal line, in the corridor defined by the shot direction.
+        let ball_velocity_2d =
+            (self.velocity.x * self.velocity.x + self.velocity.y * self.velocity.y).sqrt();
+        if ball_velocity_2d < 0.5 {
+            return; // Ball has stopped / nearly — not a live shot.
+        }
+        let shot_dir_x = self.velocity.x / ball_velocity_2d;
+        let shot_dir_y = self.velocity.y / ball_velocity_2d;
+
+        // How far ahead (along the shot line) we still look for a
+        // blocker. Capped so a defender 40u upfield isn't considered
+        // in the path for a shot from 20u out — realistic close-down
+        // distance for a block is ≤ 15m (~30u).
+        const BLOCK_LOOKAHEAD: f32 = 30.0;
+        const BLOCK_CORRIDOR: f32 = 4.0; // body + reach of an arm/leg
+
+        let mut best_blocker: Option<u32> = None;
+        let mut best_chance: f32 = 0.0;
+
+        for player in players {
+            // Only opposing outfielders block (GK save pipeline handles
+            // shots that reach the line; a GK blocking a shot at 5u
+            // out is already Catching/Diving).
+            if player.team_id == shooter_team {
+                continue;
+            }
+            if player.tactical_position.current_position.position_group()
+                == PlayerFieldPositionGroup::Goalkeeper
+            {
+                continue;
+            }
+
+            // Project defender position onto the shot line.
+            let dx = player.position.x - self.position.x;
+            let dy = player.position.y - self.position.y;
+            let projection = dx * shot_dir_x + dy * shot_dir_y;
+            // Must be ahead of the ball along the shot line, within
+            // the lookahead window. 1u minimum so a defender level
+            // with the ball (who's already been passed) doesn't count.
+            if projection < 1.0 || projection > BLOCK_LOOKAHEAD {
+                continue;
+            }
+            // Perpendicular distance to the line.
+            let perp = (dx - projection * shot_dir_x).powi(2)
+                + (dy - projection * shot_dir_y).powi(2);
+            let perp_dist = perp.sqrt();
+            if perp_dist > BLOCK_CORRIDOR {
+                continue;
+            }
+
+            // Skill mix: bravery (willingness to step into shot),
+            // positioning (read the angle), anticipation (read the
+            // cue), jumping/agility (get the body in the way).
+            let bravery = player.skills.mental.bravery;
+            let positioning = player.skills.mental.positioning;
+            let anticipation = player.skills.mental.anticipation;
+            let agility = player.skills.physical.agility;
+            let skill_factor =
+                (bravery + positioning + anticipation + agility) / (4.0 * 20.0);
+
+            // Closer along the line (less reaction time for the
+            // shooter too, but also less time for defender to step)
+            // and closer to the line centre both boost chance.
+            let line_factor = 1.0 - (projection / BLOCK_LOOKAHEAD) * 0.5;
+            let perp_factor = 1.0 - (perp_dist / BLOCK_CORRIDOR) * 0.6;
+            // Fast shots are harder to get in front of.
+            let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.12);
+
+            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.35;
+
+            if chance > best_chance {
+                best_chance = chance;
+                best_blocker = Some(player.id);
+            }
+        }
+
+        if best_chance > 0.08 {
+            if let Some(blocker_id) = best_blocker {
+                // Ball deflects off the defender.
+                //
+                // Critical correction from the first version of this
+                // code: previously we just scaled velocity by 0.2 and
+                // made the blocker owner. That kept the ball moving
+                // toward the defender's own goal at ~1.1 u/tick — and
+                // since the ball owner can drift up to 15u from the
+                // ball before ownership drops, a block inside the
+                // penalty box would see the ball escape ownership and
+                // cross the goal line as an unowned ball → registered
+                // as a goal from the attacker's side. That produced
+                // matches like "9 goals from 6 shots" in real-data
+                // sims and was the source of the remaining blowout
+                // outliers.
+                //
+                // Fix: snap the ball to the blocker's position and
+                // reverse it along the shot direction. Real deflected
+                // shots rebound away from the defender's goal, not
+                // through it. Small random angle + outward component
+                // so the ball doesn't reliably come back on the same
+                // line.
+                if let Some(blocker) = players.iter().find(|p| p.id == blocker_id) {
+                    self.position = blocker.position;
+                    self.position.z = 0.0;
+                }
+                let reverse_speed = ball_velocity_2d * 0.25;
+                // Random deflection: ±45° off the reverse direction.
+                let angle: f32 = (rand::random::<f32>() - 0.5) * 1.56;
+                let rev_x = -shot_dir_x * angle.cos() - (-shot_dir_y) * angle.sin();
+                let rev_y = -shot_dir_x * angle.sin() + (-shot_dir_y) * angle.cos();
+                self.velocity.x = rev_x * reverse_speed;
+                self.velocity.y = rev_y * reverse_speed;
+                self.velocity.z = 0.0;
+
+                self.previous_owner = self.current_owner.or(self.previous_owner);
+                self.current_owner = Some(blocker_id);
+                self.pass_target_player_id = None;
+                self.flags.in_flight_state = 0;
+                self.claim_cooldown = 20;
+                self.cached_shot_target = None;
+                events.add_ball_event(BallEvent::Intercepted(blocker_id, self.previous_owner));
+                let _ = shot_target;
+            }
+        }
+    }
+
+    /// Goalkeeper save check. Runs during shot flight: when the ball
+    /// approaches the goal line and the defending keeper's body is
+    /// within reach of the shot's trajectory, roll a skill-weighted
+    /// save. The keeper state machine's `is_catch_successful` path
+    /// timed saves to player-state ticks that didn't line up with the
+    /// ball's physics step — saves fired too early or too late, and
+    /// shots past the keeper cleared into the net. A physics-level
+    /// save runs every ball tick with fresh ball position and commits
+    /// the ball to the keeper at the moment of contact.
+    pub fn try_save_shot(
+        &mut self,
+        context: &MatchContext,
+        players: &[MatchPlayer],
+        events: &mut EventCollection,
+    ) {
+        let shot_target = match self.cached_shot_target {
+            Some(t) => t,
+            None => return,
+        };
+        if self.current_owner.is_some() || self.flags.in_flight_state == 0 {
+            return;
+        }
+
+        // Ball well over the bar — not a save situation.
+        if self.position.z > 2.8 {
+            return;
+        }
+
+        // Only consider the shot once it's close to the goal line —
+        // the save resolves at the moment of contact. Distance in
+        // x-units the ball will cover in a single tick determines the
+        // window: we check within ~2 ticks of arrival.
+        let (goal_x, goal_y) = match shot_target.defending_side {
+            PlayerSide::Left => (context.goal_positions.left.x, context.goal_positions.left.y),
+            PlayerSide::Right => (context.goal_positions.right.x, context.goal_positions.right.y),
+        };
+        let dist_to_goal_x = (self.position.x - goal_x).abs();
+        let ball_vx = self.velocity.x.abs().max(0.5);
+        if dist_to_goal_x > ball_vx * 2.5 {
+            return;
+        }
+
+        // Ball must still be traveling toward that goal line.
+        let moving_toward_goal = match shot_target.defending_side {
+            PlayerSide::Left => self.velocity.x < -0.2,
+            PlayerSide::Right => self.velocity.x > 0.2,
+        };
+        if !moving_toward_goal {
+            return;
+        }
+
+        // Ball must be within goal width (else it's wide and the
+        // post / out-of-play handler catches it).
+        if (self.position.y - goal_y).abs() > GOAL_WIDTH + 1.0 {
+            return;
+        }
+
+        // Find the defending keeper.
+        let keeper = players.iter().find(|p| {
+            p.side == Some(shot_target.defending_side)
+                && p.tactical_position.current_position.position_group()
+                    == PlayerFieldPositionGroup::Goalkeeper
+                && !p.is_sent_off
+        });
+        let keeper = match keeper {
+            Some(k) => k,
+            None => return,
+        };
+
+        let handling = keeper.skills.goalkeeping.handling;
+        let reflexes = keeper.skills.goalkeeping.reflexes;
+        let agility = keeper.skills.physical.agility;
+        let scaled_handling = ((handling - 1.0) / 19.0).max(0.0);
+        let scaled_reflexes = ((reflexes - 1.0) / 19.0).max(0.0);
+        let scaled_agility = ((agility - 1.0) / 19.0).max(0.0);
+
+        // Diving reach. Elite GK ~9.5u (4.7m), mediocre ~6.7u (3.3m),
+        // outfielder-in-goal ~4.5u (2.2m). Matches real-world lateral
+        // reach while diving.
+        let reach = 4.5 + scaled_agility * 3.0 + scaled_reflexes * 2.0;
+        let lateral_error = (keeper.position.y - shot_target.goal_line_y).abs();
+        if lateral_error > reach {
+            return;
+        }
+
+        // Base save chance. Centered shot ~0.95; full-stretch ~0.30.
+        let reach_ratio = (lateral_error / reach).clamp(0.0, 1.0);
+        let base = 0.95 - reach_ratio * reach_ratio * 0.65;
+
+        // Shot-speed penalty — elite shots beat keepers more often.
+        let ball_speed = self.velocity.norm();
+        let speed_excess = (ball_speed - 3.0).max(0.0);
+        let speed_penalty = (speed_excess * 0.08 * (1.0 - scaled_reflexes * 0.5)).min(0.40);
+
+        let skill = scaled_handling * 0.4 + scaled_reflexes * 0.4 + scaled_agility * 0.2;
+        let save_prob = ((base - speed_penalty) * (0.6 + skill * 0.5)).clamp(0.05, 0.95);
+
+        if rand::random::<f32>() >= save_prob {
+            return; // Keeper beaten — shot goes on.
+        }
+
+        // Save made. Snap ball to keeper and claim it.
+        self.position = keeper.position;
+        self.position.z = 0.0;
+        self.velocity = Vector3::zeros();
+        self.previous_owner = self.current_owner.or(self.previous_owner);
+        self.current_owner = Some(keeper.id);
+        self.pass_target_player_id = None;
+        self.flags.in_flight_state = 0;
+        self.cached_shot_target = None;
+        self.claim_cooldown = 30;
+        events.add_ball_event(BallEvent::Claimed(keeper.id));
     }
 
     /// Calculate where an aerial ball will land (when z reaches 0).
@@ -649,7 +973,7 @@ impl Ball {
                 // whole stall is reported in one log line: start-state
                 // + duration + who resolved it.
                 let snapshot = self.stall_start_snapshot.as_deref().unwrap_or("<no snapshot>");
-                log::warn!(
+                log::debug!(
                     "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
                     self.unowned_ticks,
                     claimed_by,
@@ -685,82 +1009,7 @@ impl Ball {
             }
         }
     }
-
-    /// Serialise the current tick's ball + player state into a compact
-    /// human-readable block. Used by the stall-resolution log to explain
-    /// "what did the pitch look like when this got stuck".
-    /// Owned-ball stall detector + resolver. The unowned warning misses
-    /// this: owner is set, `unowned_ticks` stays 0, but visually the
-    /// ball is glued to a player who isn't moving, passing, or
-    /// dribbling. After the threshold we warn AND force-release the
-    /// ball with a small forward velocity so the pack can reset.
-    /// Without the force-release the stall persists indefinitely —
-    /// state-machine bugs don't self-heal.
-    fn detect_owned_stuck(&mut self, players: &[MatchPlayer]) {
-        // 600 ticks = 6 seconds of match time. Real football has
-        // legitimate pauses up to ~2-3 sec (set-piece setup, holding
-        // under pressure); only log/force-release above that.
-        const OWNED_STUCK_THRESHOLD: u32 = 600;
-        const MIN_MOTION: f32 = 0.5;
-        const MIN_MOTION_SQ: f32 = MIN_MOTION * MIN_MOTION;
-
-        let Some(owner_id) = self.current_owner else {
-            self.owned_stuck_ticks = 0;
-            self.owned_stuck_logged = false;
-            return;
-        };
-
-        let Some(owner) = players.iter().find(|p| p.id == owner_id) else {
-            self.owned_stuck_ticks = 0;
-            self.owned_stuck_logged = false;
-            return;
-        };
-
-        let owner_speed_sq = owner.velocity.norm_squared();
-        let ball_speed_sq = self.velocity.norm_squared();
-        let stationary = owner_speed_sq < MIN_MOTION_SQ && ball_speed_sq < MIN_MOTION_SQ;
-
-        if !stationary {
-            self.owned_stuck_ticks = 0;
-            self.owned_stuck_logged = false;
-            return;
-        }
-
-        self.owned_stuck_ticks += 1;
-
-        if self.owned_stuck_ticks >= OWNED_STUCK_THRESHOLD && !self.owned_stuck_logged {
-            log::warn!(
-                "owned-ball stuck: player {} (team {}) has held still for {} ticks at ({:.1}, {:.1}) state={:?} — force-releasing",
-                owner.id,
-                owner.team_id,
-                self.owned_stuck_ticks,
-                owner.position.x,
-                owner.position.y,
-                owner.state,
-            );
-            self.owned_stuck_logged = true;
-
-            // Force-release with protected flight — a small push gets
-            // re-claimed the same tick by the nearest player (usually
-            // the stuck owner themselves). `in_flight_state` blocks
-            // normal claims for 40 ticks so the ball physically
-            // leaves the stall zone.
-            let push_x: f32 = match owner.side {
-                Some(PlayerSide::Left) => 7.0,
-                Some(PlayerSide::Right) => -7.0,
-                None => 7.0,
-            };
-            self.velocity = Vector3::new(push_x, 0.0, 1.5);
-            self.previous_owner = self.current_owner;
-            self.current_owner = None;
-            self.ownership_duration = 0;
-            self.claim_cooldown = 0;
-            self.flags.in_flight_state = 40;
-            self.pass_target_player_id = None;
-            self.owned_stuck_ticks = 0;
-        }
-    }
-
+    
     /// Position-based stall: the ball hasn't left a small region in N
     /// ticks, regardless of who owns it. Catches the case where
     /// ownership rapidly flips between teammates (each flip resets
@@ -796,7 +1045,7 @@ impl Ball {
                 .and_then(|id| players.iter().find(|p| p.id == id))
                 .map(|p| format!("{:?}", p.state))
                 .unwrap_or_else(|| "-".to_string());
-            log::warn!(
+            log::debug!(
                 "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
                 STALL_RADIUS,
                 self.stall_anchor_pos.x,
@@ -1762,6 +2011,8 @@ impl Ball {
 
         self.update_velocity();
         self.try_intercept(players, events);
+        self.try_block_shot(players, events);
+        self.try_save_shot(context, players, events);
         self.process_ownership(context, players, events);
 
         // Move ball: find owner position from players slice directly
@@ -1843,6 +2094,7 @@ impl Ball {
         self.owned_stuck_logged = false;
         self.stall_anchor_pos = self.position;
         self.stall_anchor_tick = 0;
+        self.cached_shot_target = None;
     }
 
     pub fn clear_player_reference(&mut self, player_id: u32) {

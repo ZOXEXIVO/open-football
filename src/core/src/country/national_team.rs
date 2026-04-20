@@ -1084,8 +1084,14 @@ impl NationalTeam {
         let mut main_squad: Vec<MatchPlayer> = Vec::with_capacity(11);
         let mut used_ids: Vec<u32> = Vec::new();
 
-        // Pick goalkeeper
-        if let Some(gk) = all_players
+        // Pick goalkeeper. If the squad has NO natural keeper (some
+        // smaller national pools end up this way — sim generated only
+        // outfielders, or injuries removed the real GKs), fall back to
+        // the least-valuable outfielder so we never field an empty
+        // goal. Without this fallback the squad played 10-a-side with
+        // an open net, which is exactly where the "17-0 / 29-0" CA/EC
+        // international scorelines were coming from.
+        let natural_gk = all_players
             .iter()
             .filter(|p| {
                 p.positions
@@ -1093,8 +1099,19 @@ impl NationalTeam {
                     .iter()
                     .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
             })
-            .max_by_key(|p| p.player_attributes.current_ability)
-        {
+            .max_by_key(|p| p.player_attributes.current_ability);
+
+        let gk_choice = natural_gk.copied().or_else(|| {
+            // No natural keeper — draft the lowest-ability outfielder.
+            // Weakest-outfielder-as-GK is realistic: managers sacrifice
+            // a fringe player rather than a first-teamer.
+            all_players
+                .iter()
+                .min_by_key(|p| p.player_attributes.current_ability)
+                .copied()
+        });
+
+        if let Some(gk) = gk_choice {
             main_squad.push(MatchPlayer::from_player(
                 team_id,
                 gk,
@@ -1236,13 +1253,19 @@ impl NationalTeam {
         let mut main_squad: Vec<MatchPlayer> = Vec::with_capacity(11);
         let mut used_ids: Vec<u32> = Vec::new();
 
-        // GK
-        if let Some(gk) = players.iter().find(|p| {
-            p.positions
-                .positions
-                .iter()
-                .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
-        }) {
+        // GK — fall back to any player if no natural keeper so we never
+        // field an empty goal (see `build_match_squad_from_refs` for the
+        // same bug when natural pool was exhausted).
+        let gk_choice = players
+            .iter()
+            .find(|p| {
+                p.positions
+                    .positions
+                    .iter()
+                    .any(|pos| pos.position == PlayerPositionType::Goalkeeper)
+            })
+            .or_else(|| players.first());
+        if let Some(gk) = gk_choice {
             main_squad.push(MatchPlayer::from_player(
                 team_id,
                 gk,

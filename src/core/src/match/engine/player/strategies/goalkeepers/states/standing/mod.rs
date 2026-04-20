@@ -8,7 +8,6 @@ use nalgebra::Vector3;
 
 const DANGER_ZONE_RADIUS: f32 = 35.0;
 const CLOSE_DANGER_DISTANCE: f32 = 100.0;
-const MEDIUM_THREAT_DISTANCE: f32 = 180.0;
 const FAR_THREAT_DISTANCE: f32 = 300.0;
 
 #[derive(Default, Clone)]
@@ -16,6 +15,20 @@ pub struct GoalkeeperStandingState {}
 
 impl StateProcessingHandler for GoalkeeperStandingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Shot in flight at our goal — react immediately. The
+        // `is_towards_player_with_angle` check below would miss shots
+        // aimed at the corners (angle between ball velocity and
+        // ball→keeper can be ~30°, cosine < 0.6). The cached target is
+        // set precisely so the keeper has a deterministic intercept
+        // line; honour it.
+        if let Some(target) = &ctx.tick_context.ball.cached_shot_target {
+            if Some(target.defending_side) == ctx.player.side {
+                return Some(StateChangeResult::with_goalkeeper_state(
+                    GoalkeeperState::PreparingForSave,
+                ));
+            }
+        }
+
         // Direct catch for close slow balls
         let ball_distance = ctx.ball().distance();
         if ball_distance < 10.0
@@ -59,12 +72,10 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                 }
             }
 
-            // Opponent approaching - be attentive
-            if opponent_distance < MEDIUM_THREAT_DISTANCE && ball_on_own_side {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Attentive,
-                ));
-            }
+            // Opponent approaching at medium range — the dedicated
+            // Attentive state added no behaviour over Standing (both
+            // repositioned and rechecked threats every tick), so we stay
+            // put and let the next-tick threat scan drive the response.
         }
 
         // Check if ball is coming toward goal — react faster to shots
@@ -81,12 +92,9 @@ impl StateProcessingHandler for GoalkeeperStandingState {
                 }
             }
 
-            // Ball coming slowly - be attentive
-            if ball_distance < FAR_THREAT_DISTANCE {
-                return Some(StateChangeResult::with_goalkeeper_state(
-                    GoalkeeperState::Attentive,
-                ));
-            }
+            // Ball coming slowly — stay in Standing; PreparingForSave
+            // will fire above once the ball is close enough and fast
+            // enough to matter.
         }
 
         // Check for loose ball in dangerous area
@@ -96,20 +104,18 @@ impl StateProcessingHandler for GoalkeeperStandingState {
             ));
         }
 
-        // Ball on own side - be attentive
-        if ball_on_own_side && ball_distance < FAR_THREAT_DISTANCE {
-            return Some(StateChangeResult::with_goalkeeper_state(
-                GoalkeeperState::Attentive,
-            ));
-        }
+        // Ball on own side but no immediate threat — Standing is the
+        // right rest state; Attentive was an identical idle state with
+        // slightly different thresholds.
 
         // Check positioning
         match ctx.player().position_to_distance() {
             PlayerDistanceFromStartPosition::Small => {
-                // Good positioning - check for specific threats
+                // Good positioning + opponent in danger zone → prepare for save.
+                // UnderPressure was a pass-through to Catching/Distributing.
                 if self.is_opponent_in_danger_zone(ctx) {
                     return Some(StateChangeResult::with_goalkeeper_state(
-                        GoalkeeperState::UnderPressure,
+                        GoalkeeperState::PreparingForSave,
                     ));
                 }
             }
