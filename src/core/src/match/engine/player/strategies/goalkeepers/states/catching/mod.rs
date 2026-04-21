@@ -140,10 +140,16 @@ impl GoalkeeperCatchingState {
             let scaled_reflexes = (reflexes - 1.0) / 19.0;
             let scaled_agility = (agility - 1.0) / 19.0;
 
-            // Diving reach. Elite keeper: 4.5 + 3 + 2 = 9.5 u (~4.7 m
-            // lateral, matches real-world). Mediocre: 4.5 + 1.2 + 1 ≈
-            // 6.7 u (~3.3 m).
-            let reach = 4.5 + scaled_agility * 3.0 + scaled_reflexes * 2.0;
+            // Diving reach in game units. Field is 840u = 105m, so 1u =
+            // 0.126m. Real-world keeper diving reach is 2.0-3.0m (16-24u);
+            // the previous 4.5-9.5u formula assumed "1u ≈ 0.5m" and left
+            // keepers physically unable to reach corner shots aimed ±20u
+            // from centre — which the targeting code generates as the
+            // dominant outcome for any half-skilled finisher.
+            //   skills 1   → 10u (1.26m)
+            //   skills 10  → 17u (2.14m)
+            //   skills 20  → 25u (3.15m, elite)
+            let reach = 10.0 + scaled_agility * 10.0 + scaled_reflexes * 5.0;
             let lateral_error = (ctx.player.position.y - target.goal_line_y).abs();
             if lateral_error > reach {
                 return false; // Out of reach — shot beats the keeper.

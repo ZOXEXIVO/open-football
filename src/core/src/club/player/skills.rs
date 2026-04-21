@@ -91,8 +91,14 @@ impl PlayerSkills {
     }
 
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
-    /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch)
-    /// pace=1 → ~0.255 (~3.2 m/s), pace=20 → ~0.68 (~8.5 m/s)
+    /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch).
+    /// At 1u = 0.125m and 100 ticks/s:
+    ///   pace=1  → 0.48 u/tick = ~6.0 m/s  (slowest pro sprint)
+    ///   pace=20 → 0.84 u/tick = ~10.5 m/s (Mbappé/Davies range)
+    /// Old range (0.217–0.578) assumed "1u ≈ 0.5m" and produced 2.7–7.2 m/s
+    /// (walking pace at the low end). That left defenders unable to close down
+    /// attackers and goalkeepers unable to track laterally during shot flight,
+    /// which fed the blowout pattern.
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
         let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
@@ -103,9 +109,8 @@ impl PlayerSkills {
             + 0.2 * acceleration_factor
             + 0.1 * agility_factor;
 
-        // Linear scale: min 0.217 (pace=1) to max 0.578 (pace=20)
-        let min_speed = 0.217;
-        let max_speed = 0.578;
+        let min_speed = 0.48;
+        let max_speed = 0.84;
 
         min_speed + skill_blend * (max_speed - min_speed)
     }
@@ -136,6 +141,14 @@ impl PlayerSkills {
 
     /// Calculate maximum speed for a goalkeeper with state-dependent boost.
     /// GKs need explosive speed from agility/acceleration rather than raw pace.
+    /// Boosts halved relative to the prior values because the base
+    /// `max_speed` was bumped ~1.9× to match real-world sprint speed —
+    /// the old multipliers compensated for an undersized base and would
+    /// otherwise produce 25+ m/s GK lateral movement.
+    ///   Explosive: 1.0–2.0× → elite ~21 m/s peak dive (matches today's effective)
+    ///   Active:    0.85–1.5× → typical GK chase speed
+    ///   Positioning: 0.75–1.0× → tracking play, reading the game
+    ///   Casual:    0.65× → idle/recovery
     pub fn goalkeeper_max_speed(&self, condition: i16, speed_context: GoalkeeperSpeedContext) -> f32 {
         let base = self.max_speed_with_condition(condition);
 
@@ -143,10 +156,10 @@ impl PlayerSkills {
         let acceleration = self.physical.acceleration / 20.0;
 
         let boost = match speed_context {
-            GoalkeeperSpeedContext::Explosive => 1.8 + agility * 0.6 + acceleration * 0.4,
-            GoalkeeperSpeedContext::Active => 1.5 + agility * 0.4 + acceleration * 0.3,
-            GoalkeeperSpeedContext::Positioning => 1.3 + agility * 0.2,
-            GoalkeeperSpeedContext::Casual => 1.1,
+            GoalkeeperSpeedContext::Explosive => 1.0 + agility * 0.5 + acceleration * 0.5,
+            GoalkeeperSpeedContext::Active => 0.85 + agility * 0.4 + acceleration * 0.25,
+            GoalkeeperSpeedContext::Positioning => 0.75 + agility * 0.25,
+            GoalkeeperSpeedContext::Casual => 0.65,
         };
 
         base * boost

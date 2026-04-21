@@ -424,8 +424,18 @@ impl Ball {
             return; // Ball too slow, normal claiming handles it
         }
 
-        // Interception corridor: how close a player must be to the ball's path
-        const INTERCEPT_RADIUS: f32 = 2.5;
+        // Interception reach in game units. Field is 840u = 105m, so 1u =
+        // 0.125m. Old 2.5u = 0.31m left defenders only able to intercept
+        // passes they were essentially touching — real defender reach
+        // (step + lean + leg extension) is ~1m = 8u. With the prior
+        // calibration, the maximum achievable interception score for an
+        // average defender (skill 0.5) at the centre of the corridor was
+        // 0.5 × 1.0 × 0.97 × 0.08 = 0.039 — JUST under the 0.04 threshold,
+        // so average defenders mathematically could not intercept anything.
+        // That fed the 50+ shots-per-team blowout pattern: passes
+        // completed unrealistically often, attackers strung together
+        // possessions in the final third indefinitely.
+        const INTERCEPT_RADIUS: f32 = 8.0;
         const INTERCEPT_RADIUS_SQ: f32 = INTERCEPT_RADIUS * INTERCEPT_RADIUS;
 
         let mut best_interceptor: Option<u32> = None;
@@ -464,11 +474,20 @@ impl Ball {
             let dist = dist_sq.sqrt();
             let proximity_factor = 1.0 - (dist / INTERCEPT_RADIUS) * 0.7;
 
-            // Fast passes are harder to intercept
-            let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.02);
+            // Fast passes are harder to intercept. The 0.02 coefficient
+            // barely penalised even cosmic-speed passes (0.97 at 2 u/tick,
+            // 0.93 at 7 u/tick); raised so a 5 u/tick pass loses a third
+            // of its interception window — matches the real-world fact
+            // that a 30 m/s drilled pass is much harder to step in front
+            // of than a slow square ball.
+            let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.10);
 
-            // Final interception chance (very low per tick — happens across many ticks)
-            let chance = skill_factor * proximity_factor * speed_penalty * 0.08;
+            // Final interception chance (very low per tick — happens across many ticks).
+            // Multiplier raised from 0.08 to 0.18 so the score range
+            // (avg defender perfectly placed: ~0.087) actually exceeds the
+            // detection threshold below, restoring real-football
+            // interception rates of ~25-35% in the defensive third.
+            let chance = skill_factor * proximity_factor * speed_penalty * 0.18;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -476,9 +495,13 @@ impl Ball {
             }
         }
 
-        // Deterministic threshold: only intercept if chance exceeds threshold
-        // This avoids needing RNG in the match engine
-        if best_chance > 0.04 {
+        // Deterministic threshold: only intercept if chance exceeds threshold.
+        // Lowered from 0.04 to 0.025 so an average-skilled defender
+        // (skill 0.5) at half-reach (proximity 0.65) clears the bar
+        // (0.5 × 0.65 × 0.83 × 0.18 = 0.049). Below that, defenders are
+        // either too poorly skilled or too far off the corridor to credibly
+        // step in.
+        if best_chance > 0.025 {
             if let Some(interceptor_id) = best_interceptor {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to
@@ -744,10 +767,17 @@ impl Ball {
         let scaled_reflexes = ((reflexes - 1.0) / 19.0).max(0.0);
         let scaled_agility = ((agility - 1.0) / 19.0).max(0.0);
 
-        // Diving reach. Elite GK ~9.5u (4.7m), mediocre ~6.7u (3.3m),
-        // outfielder-in-goal ~4.5u (2.2m). Matches real-world lateral
-        // reach while diving.
-        let reach = 4.5 + scaled_agility * 3.0 + scaled_reflexes * 2.0;
+        // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
+        // (half-goal 29u = 3.66m matches real 3.66m). Real-world keeper
+        // diving reach is 2.0-3.0m (Buffon/Neuer ~3.1m, journeyman ~2.0m),
+        // i.e. 16-24u. The previous formula (4.5-9.5u = 0.57-1.20m) was
+        // calibrated against a wrong "1u ≈ 0.5m" assumption — keepers
+        // physically couldn't reach corner shots, so 60%+ of attempts
+        // targeting ±20u from centre bypassed the save check entirely.
+        //   skills 1   → 10u (1.26m, standing arms-out)
+        //   skills 10  → 17u (2.14m, journeyman dive)
+        //   skills 20  → 25u (3.15m, elite dive — Neuer/Buffon range)
+        let reach = 10.0 + scaled_agility * 10.0 + scaled_reflexes * 5.0;
         let lateral_error = (keeper.position.y - shot_target.goal_line_y).abs();
         if lateral_error > reach {
             return;

@@ -937,7 +937,16 @@ impl PlayerEventDispatcher {
         const GOAL_WIDTH: f32 = 29.0; // Half-width of goal in game units (matches engine GOAL_WIDTH)
         #[allow(dead_code)]
         const GOAL_HEIGHT: f32 = 8.0; // Height of crossbar
-        const MAX_SHOT_VELOCITY: f32 = 5.6; // Maximum realistic shot velocity per tick
+        // Shot velocity cap. Field is 840u = 105m, so 1u = 0.125m, and at
+        // 100-tick/s simulation a cap of 5.6 u/tick meant 70 m/s (~252 km/h)
+        // — about 2× the real-world top shot speed (~35 m/s = 2.8 u/tick).
+        // Keepers covering 1.16 u/tick laterally had only 9 ticks of shot
+        // flight from 50u out (~10u of coverage) against a 29u half-goal:
+        // any shot aimed outside the central 15u bypassed the save check.
+        // Calibrated to real-world peak shot speed — elite piledrivers now
+        // arrive in ~18 ticks instead of ~9, matching the ~3.75× shot/player
+        // speed ratio observed in real football (vs. the engine's prior ~10×).
+        const MAX_SHOT_VELOCITY: f32 = 3.2;
         const MIN_SHOT_DISTANCE: f32 = 1.0; // Minimum distance to prevent NaN from normalization
 
         let mut rng = rand::rng();

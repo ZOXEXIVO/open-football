@@ -2,6 +2,7 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
 use crate::r#match::PlayerSide;
 use crate::r#match::engine::rating::calculate_match_rating;
+use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::substitutions::process_substitutions;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
@@ -194,6 +195,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             };
             Self::log_blowout_profile(
                 &field.players,
+                &context.substitutions,
                 &result,
                 home_team_id,
                 away_team_id,
@@ -209,6 +211,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
     /// on 8+ goal matches (rare tail) so it adds no cost to normal play.
     fn log_blowout_profile(
         players: &[MatchPlayer],
+        substitutions: &[SubstitutionRecord],
         result: &MatchResultRaw,
         home_team_id: u32,
         away_team_id: u32,
@@ -245,6 +248,8 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
         let mut home_agg = TeamAgg::new();
         let mut away_agg = TeamAgg::new();
 
+        // Skill profile aggregation runs over the current XI only — sub-out
+        // players' skills aren't retained on the field after they leave.
         for player in players {
             let agg = if player.team_id == home_team_id { &mut home_agg } else { &mut away_agg };
             match player.tactical_position.current_position.position_group() {
@@ -268,10 +273,24 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                 }
                 _ => {}
             }
-            if let Some(stats) = result.player_stats.get(&player.id) {
-                agg.total_shots += stats.shots_total;
-                agg.total_on_target += stats.shots_on_target;
-            }
+        }
+
+        // Shot/OT aggregation must include sub-out players: their goals
+        // count toward the team total, so their attempts must too.
+        // Otherwise the log shows "7 goals from 2 OT" simply because the
+        // hat-trick scorer was substituted off and their stats fell out
+        // of the field.players iteration.
+        let team_for = |player_id: u32| -> Option<u32> {
+            players.iter().find(|p| p.id == player_id).map(|p| p.team_id)
+                .or_else(|| substitutions.iter()
+                    .find(|s| s.player_out_id == player_id)
+                    .map(|s| s.team_id))
+        };
+        for (player_id, stats) in result.player_stats.iter() {
+            let Some(team_id) = team_for(*player_id) else { continue };
+            let agg = if team_id == home_team_id { &mut home_agg } else { &mut away_agg };
+            agg.total_shots += stats.shots_total;
+            agg.total_on_target += stats.shots_on_target;
         }
 
         let fmt_team = |tag: &str, team_id: u32, goals: u8, agg: &TeamAgg| {
