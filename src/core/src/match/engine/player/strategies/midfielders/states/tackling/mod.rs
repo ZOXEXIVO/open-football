@@ -10,7 +10,6 @@ use nalgebra::Vector3;
 use rand::RngExt;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 20.0; // Midfielders engage tackles aggressively
-const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained midfielders foul less
 
 #[derive(Default, Clone)]
 pub struct MidfielderTacklingState {}
@@ -52,6 +51,16 @@ impl StateProcessingHandler for MidfielderTacklingState {
             };
         }
 
+        // Per-player tackle cooldown. Midfielders re-enter Tackling via
+        // Pressing, Running, and Standing roles; without a shared cooldown
+        // each one re-fires a tackle attempt next tick, driving fouls and
+        // successful tackles 5-10× above real-football rates.
+        if !ctx.player.can_attempt_tackle() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Pressing,
+            ));
+        }
+
         let opponents = ctx.players().opponents();
         let mut opponents_with_ball = opponents.with_ball();
 
@@ -62,24 +71,32 @@ impl StateProcessingHandler for MidfielderTacklingState {
                     self.attempt_tackle(ctx, &opponent);
                 if tackle_success {
                     // Double-check ball is not in flight before claiming.
-                    // After winning the tackle, drop to Standing (with the
-                    // ball claimed) and let the top-level decision tree pick
-                    // the next action. HoldingPossession was a pass-through
-                    // state that offered no behaviour beyond Standing.
                     if !ctx.ball().is_in_flight() {
-                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                        let mut result = StateChangeResult::with_midfielder_state_and_event(
                             MidfielderState::Standing,
-                            Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                        ));
+                            Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                        );
+                        result.start_tackle_cooldown = true;
+                        return Some(result);
                     }
                 } else if committed_foul {
-                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                    let mut result = StateChangeResult::with_midfielder_state_and_event(
                         MidfielderState::Standing,
                         Event::PlayerEvent(PlayerEvent::CommitFoul(
                             ctx.player.id,
                             foul_severity,
                         )),
-                    ));
+                    );
+                    result.start_tackle_cooldown = true;
+                    return Some(result);
+                } else {
+                    // Missed tackle, no foul — still cooldown so we don't
+                    // re-attempt next tick
+                    let mut result = StateChangeResult::with_midfielder_state(
+                        MidfielderState::Pressing,
+                    );
+                    result.start_tackle_cooldown = true;
+                    return Some(result);
                 }
             }
         } else if self.can_intercept_ball(ctx) {
@@ -142,10 +159,19 @@ impl MidfielderTacklingState {
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
+        // Skill-driven foul rate — see defender tackling for the rationale.
+        // Same curve, applied to midfielders because they also tackle
+        // frequently during pressing.
+        let base_foul = 0.02
+            + aggression * 0.10
+            - composure * 0.05
+            - tackling_skill * 0.03;
+        let base_foul = base_foul.max(0.005);
+
         let foul_chance = if tackle_success {
-            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
+            base_foul * 0.40
         } else {
-            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
+            base_foul * 1.60
         };
 
         let committed_foul = rng.random::<f32>() < foul_chance;

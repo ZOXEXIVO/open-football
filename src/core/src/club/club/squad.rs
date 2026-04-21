@@ -108,32 +108,50 @@ impl Club {
             }
         }
 
-        // ── Phase 1b: demote young main-team players below first-team level
+        // ── Phase 1b: positional-surplus demotion from main ──────────
         //
-        // Loan arrivals (and premature promotions) land on teams[0].
-        // Move young players whose ability doesn't match the first team
-        // to the most appropriate youth team so they get development time.
-        for p in &self.teams.teams[main_idx].players.players {
-            let age = p.age(date);
-            let ca = p.player_attributes.current_ability;
+        // Enforce a depth cap per position group on the main team.
+        // Players ranked beyond the cap (by current ability) are
+        // surplus: stamp Loa and push them down the progression so
+        // they can get match practice in reserve/youth. Loan-ins
+        // count against the cap (they occupy a slot) but are never
+        // demoted — they belong to another club.
+        const MAIN_DEPTH: &[(PlayerFieldPositionGroup, usize)] = &[
+            (PlayerFieldPositionGroup::Goalkeeper, 3),
+            (PlayerFieldPositionGroup::Defender, 9),
+            (PlayerFieldPositionGroup::Midfielder, 9),
+            (PlayerFieldPositionGroup::Forward, 6),
+        ];
 
-            if ca >= main_ability_floor {
-                continue;
+        let mut surplus: Vec<(u32, u8)> = Vec::new();
+        for (group, depth) in MAIN_DEPTH {
+            let mut ranked: Vec<(u32, u8, u8, bool)> = self.teams.teams[main_idx]
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == *group)
+                .map(|p| (p.id, p.player_attributes.current_ability, p.age(date), p.is_on_loan()))
+                .collect();
+            ranked.sort_by(|a, b| b.1.cmp(&a.1));
+            for (player_id, _, age, is_loan_in) in ranked.into_iter().skip(*depth) {
+                if is_loan_in {
+                    continue;
+                }
+                surplus.push((player_id, age));
             }
+        }
 
-            let statuses = p.statuses.get();
-            let listed = statuses.contains(&PlayerStatusType::Lst)
-                || statuses.contains(&PlayerStatusType::Loa);
-            if listed {
-                continue;
+        for &(player_id, age) in &surplus {
+            if let Some(p) = self.teams.teams[main_idx].players.find_mut(player_id) {
+                if !p.statuses.get().contains(&PlayerStatusType::Loa) {
+                    p.statuses.add(date, PlayerStatusType::Loa);
+                }
             }
-
-            if let Some(youth_idx) = self.find_youth_team_for_age(age) {
+            if let Some(dest) = self.find_demotion_target(age) {
                 moves.push(PendingMove {
                     from: main_idx,
-                    to: youth_idx,
-                    player_id: p.id,
-                    reason: "young player better suited to youth team",
+                    to: dest,
+                    player_id,
+                    reason: "surplus at position",
                 });
             }
         }
@@ -157,9 +175,12 @@ impl Club {
             let already_taken = taken[m.from];
 
             // Don't drain any team below its minimum viable squad,
-            // unless the player is overage (must leave regardless)
+            // unless the player is overage or a positional-surplus
+            // demotion (both must leave regardless — backfill will
+            // restore the size from youth).
             let min_for_source = if m.from == main_idx { MIN_MAIN_SQUAD } else { MIN_YOUTH_SQUAD };
             if m.reason != "overage for current team"
+                && m.reason != "surplus at position"
                 && source_size.saturating_sub(already_taken) <= min_for_source
             {
                 continue;
@@ -244,6 +265,19 @@ impl Club {
         }
 
         None
+    }
+
+    /// Best non-main destination for a demoted main-team player.
+    /// Adult teams (Reserve, B) come first so surplus seniors keep
+    /// playing competitive matches; absent those, fall back to the
+    /// youth team that fits the player's age.
+    fn find_demotion_target(&self, age: u8) -> Option<usize> {
+        for t in [TeamType::Reserve, TeamType::B] {
+            if let Some(idx) = self.teams.index_of_type(t) {
+                return Some(idx);
+            }
+        }
+        self.find_youth_team_for_age(age)
     }
 
     /// Find the best-fitting youth team for a player of the given age.

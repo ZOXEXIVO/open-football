@@ -1,14 +1,21 @@
 use crate::r#match::forwarders::states::common::{ActivityIntensity, ForwardCondition};
 use crate::r#match::forwarders::states::ForwardState;
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
-const STAMINA_RECOVERY_THRESHOLD: f32 = 90.0;
+// Lowered from 90% — with the tuned fatigue/recovery rates a forward
+// may never reach 90% mid-match, which left them stuck in Resting
+// indefinitely. 60% matches the second-wind point other roles use and
+// still forces a real recovery before re-engaging.
+const STAMINA_RECOVERY_THRESHOLD: f32 = 60.0;
+/// Hard timeout — even below the stamina threshold, after 500 ticks
+/// (5 s) the forward walks. Stops them literally standing still if
+/// condition recovery stalls near the threshold.
+const MAX_REST_TICKS: u64 = 500;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
 const OPPONENT_NEARBY_THRESHOLD: f32 = 10.0;
-const OPPONENT_THREAT_THRESHOLD: usize = 2;
 
 #[derive(Default, Clone)]
 pub struct ForwardRestingState {}
@@ -37,10 +44,15 @@ impl StateProcessingHandler for ForwardRestingState {
             }
         }
 
-        // 3. Team is under defensive threat - must help
-        if self.is_team_under_threat(ctx) {
+        // 3. Hard timeout — can't rest forever. Previously the "team
+        // under threat" check tried to force an exit but caused
+        // Resting ↔ Pressing flickering. A duration cap is cleaner:
+        // after 5 s you're jogging regardless of stamina, just at
+        // reduced intensity. The fatigue curve will keep penalising
+        // their pace so it's still a meaningful rest.
+        if ctx.in_state_time > MAX_REST_TICKS {
             return Some(StateChangeResult::with_forward_state(
-                ForwardState::Pressing,
+                ForwardState::Walking,
             ));
         }
 
@@ -58,22 +70,3 @@ impl StateProcessingHandler for ForwardRestingState {
     }
 }
 
-impl ForwardRestingState {
-    fn is_team_under_threat(&self, ctx: &StateProcessingContext) -> bool {
-        let opponents_in_defensive_third = ctx
-            .players()
-            .opponents()
-            .all()
-            .filter(|opponent| {
-                let field_length = ctx.context.field_size.width as f32;
-                if ctx.player.side == Some(PlayerSide::Left) {
-                    opponent.position.x < field_length / 3.0
-                } else {
-                    opponent.position.x > (2.0 / 3.0) * field_length
-                }
-            })
-            .count();
-
-        opponents_in_defensive_third >= OPPONENT_THREAT_THRESHOLD
-    }
-}

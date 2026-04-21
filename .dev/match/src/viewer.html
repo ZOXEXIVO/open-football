@@ -462,6 +462,12 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         app.stage.addChild(background);
 
         gameContainer = new PIXI.Container();
+        // Enable z-ordering so the ball always renders on top of players.
+        // Default Pixi draw order is insertion order — since players get
+        // added to the container lazily as chunks load (after the ball),
+        // the ball ended up behind any player on top of it and was
+        // invisible whenever someone dribbled.
+        gameContainer.sortableChildren = true;
         app.stage.addChild(gameContainer);
 
         // Ball sprite — create before loading first chunk so mergeData can
@@ -470,6 +476,8 @@ body { background: #0e1419; color: #c8d6e0; font-family: -apple-system, BlinkMac
         const ballCircle = new PIXI.Graphics();
         ballCircle.circle(0, 0, 6).fill(0xffffff).stroke({ width: 2, color: 0x000000 });
         ballContainer.addChild(ballCircle);
+        // High zIndex puts the ball above every player sprite (default 0).
+        ballContainer.zIndex = 1000;
         gameContainer.addChild(ballContainer);
         ballSprite = ballContainer;
 

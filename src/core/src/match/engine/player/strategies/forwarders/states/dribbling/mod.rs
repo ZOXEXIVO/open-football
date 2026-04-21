@@ -21,50 +21,71 @@ impl StateProcessingHandler for ForwardDribblingState {
         }
 
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+        let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
         // PRIORITY 0: Near opponent goalkeeper - shoot
         if let Some(gk) = ctx.players().opponents().goalkeeper().next() {
             let distance_to_gk = (ctx.player.position - gk.position).magnitude();
-            if distance_to_gk < 25.0 && distance_to_goal < 120.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            if distance_to_gk < 25.0 && distance_to_goal < 120.0 && can_shoot {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_DRIB_NEAR_GK"),
+                );
             }
         }
 
-        // PRIORITY 1: In shooting range — shoot
-        if ctx.player().shooting().in_shooting_range() {
-            if ctx.player().has_clear_shot() || distance_to_goal < 60.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
-            }
+        // PRIORITY 1: In shooting range with a clear lane — shoot.
+        if can_shoot
+            && ctx.player().shooting().in_shooting_range()
+            && ctx.player().has_clear_shot()
+        {
+            return Some(
+                StateChangeResult::with_forward_state(ForwardState::Shooting)
+                    .with_shot_reason("FWD_DRIB_CLEAR"),
+            );
         }
 
-        // PRIORITY 1b: xG-based fallback (should_attempt_shot already checks both cooldowns)
-        if ctx.player().should_attempt_shot() {
-            return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+        // PRIORITY 1b: Range-based fallback with lane check.
+        if can_shoot
+            && ctx.player().should_attempt_shot()
+            && ctx.player().has_clear_shot()
+        {
+            return Some(
+                StateChangeResult::with_forward_state(ForwardState::Shooting)
+                    .with_shot_reason("FWD_DRIB_RANGE"),
+            );
         }
 
       // Prevent infinite dribbling - timeout after 40 ticks to reassess.
-        // Only force a shot if we're in a genuine shooting range (~30m).
-        // The previous 300-unit fallback routed dribblers into Shooting from
-        // the halfway line, which then bounced back to Running without firing
-        // but kept the front line churning states instead of redistributing.
         if ctx.in_state_time > 40 {
-            if distance_to_goal < 60.0 {
-                return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+            if can_shoot && distance_to_goal < 60.0 && ctx.player().has_clear_shot() {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_DRIB_TIMEOUT"),
+                );
             }
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
-        // Check if the player is under pressure from multiple defenders
+        // Under REAL pressure from multiple defenders — pass.
+        // The flicker bug: the old "no space to dribble" check below
+        // (opponents within 15u) fired against Passing's "opponents
+        // within 20u → back to Dribbling" rule, so a lone chaser at
+        // 17u produced Dribbling → Passing → Dribbling every few
+        // ticks. Now we require two real pressers OR a long commit
+        // window before abandoning the dribble.
         let close_defenders = ctx.players().opponents().nearby(8.0).count();
         if close_defenders >= 2 {
-            // Under heavy pressure - pass instead of forcing a shot
             return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
         }
 
-        // No space to dribble — lay off with a pass instead. Previously
-        // dropped into HoldingUpPlay (a dead state); Passing is the
-        // right football call.
-        if !self.has_space_to_dribble(ctx) {
+        // Only abandon dribbling for a pass when genuinely boxed in —
+        // opponent within 10u AND we've been dribbling long enough to
+        // commit to the decision (≥15 ticks). The old `has_space_to_dribble`
+        // (15u threshold) fired too eagerly against a single chaser.
+        if ctx.in_state_time >= 15
+            && ctx.players().opponents().nearby(10.0).next().is_some()
+        {
             return Some(StateChangeResult::with_forward_state(
                 ForwardState::Passing,
             ));

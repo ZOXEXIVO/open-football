@@ -56,6 +56,20 @@ pub struct MatchPlayer {
     pub fouls_committed: u8,
     /// Player has been sent off — skip state processing, treat as off field.
     pub is_sent_off: bool,
+    /// Ticks remaining before this player may attempt another tackle.
+    /// Decremented each tick in `update()`. Blocks Tackling-state entry
+    /// via `can_attempt_tackle()`. Prevents the Tackling-state machine
+    /// from re-firing attempts via Standing/Running/Covering/etc. paths
+    /// within the same second, which would otherwise produce 40+ fouls
+    /// per team in the first 5 minutes of every match.
+    pub tackle_cooldown: u16,
+    /// Tagged reason for the next Shoot event. Set by each transition
+    /// point that routes into the Shooting state (e.g. "FWD_RUN_PRIO05",
+    /// "FWD_POINT_BLANK", "MID_POINT_BLANK_RUN"). The Shooting state
+    /// reads this and attaches it to the emitted Shoot event so the
+    /// per-match shot-reason log shows which code path fired the shot.
+    /// Cleared after consumption.
+    pub pending_shot_reason: Option<&'static str>,
 }
 
 impl MatchPlayer {
@@ -102,7 +116,38 @@ impl MatchPlayer {
             yellow_cards: 0,
             fouls_committed: 0,
             is_sent_off: false,
+            tackle_cooldown: 0,
+            pending_shot_reason: None,
         }
+    }
+
+    /// Consumes the tackle cooldown (ticks it down by 1). Called once per
+    /// simulation tick from `update()`.
+    #[inline]
+    pub fn tick_tackle_cooldown(&mut self) {
+        self.tackle_cooldown = self.tackle_cooldown.saturating_sub(1);
+    }
+
+    /// Can this player currently attempt a sliding tackle? False while the
+    /// post-attempt cooldown is still counting down — regardless of which
+    /// state routed them into Tackling.
+    #[inline]
+    pub fn can_attempt_tackle(&self) -> bool {
+        self.tackle_cooldown == 0
+    }
+
+    /// Start the post-tackle cooldown. Called right after any attempt
+    /// resolves (success, miss, or foul).
+    #[inline]
+    pub fn start_tackle_cooldown(&mut self) {
+        // 400 ticks ≈ 4 seconds. Real football: a player makes 2-4
+        // successful tackles per 90 minutes — one every ~25 minutes
+        // of game time. Shorter cooldowns let the Tackling state
+        // re-fire every 1.5 s across the whole back line and front
+        // line combined, which exploded the tackle count to 700+ per
+        // team per match. 4 s is the realistic cadence of "commit,
+        // either secure or retreat, reposition before the next duel."
+        self.tackle_cooldown = 400;
     }
 
     pub fn rebuild_waypoint_cache(&mut self) {
@@ -121,6 +166,8 @@ impl MatchPlayer {
         tick_context: &GameTickContext,
         events: &mut EventCollection,
     ) {
+        self.tick_tackle_cooldown();
+
         let player_events = PlayerMatchState::process(self, context, tick_context);
 
         events.add_from_collection(player_events);
@@ -203,12 +250,25 @@ impl MatchPlayer {
         #[cfg(debug_assertions)]
         let old_position = self.position;
 
-        if !self.velocity.x.is_nan() {
+        // Apply velocity only if finite. `is_finite` rules out both NaN
+        // and ±Infinity — either poisons the position, and a corrupt
+        // position is excluded from the viewer recording so the player
+        // literally disappears mid-match.
+        if self.velocity.x.is_finite() {
             self.position.x += self.velocity.x;
         }
 
-        if !self.velocity.y.is_nan() {
+        if self.velocity.y.is_finite() {
             self.position.y += self.velocity.y;
+        }
+
+        // Last-resort salvage: if position is already corrupt from an
+        // earlier tick (before the velocity guard was in place, or from
+        // external code paths), reset to the player's tactical start
+        // position. The player briefly teleports rather than vanishing.
+        if !self.position.x.is_finite() || !self.position.y.is_finite() {
+            self.position = self.start_position;
+            self.velocity = nalgebra::Vector3::zeros();
         }
 
         #[cfg(debug_assertions)]
@@ -269,6 +329,29 @@ impl MatchPlayer {
         // Best chaser pursues the ball, not waypoints
         if !ctx.ball().is_owned() && ctx.team().is_best_player_to_chase_ball() {
             return false;
+        }
+
+        // If any teammate is too close (< 12u, the natural "shoulder-
+        // to-shoulder" bunching distance), follow waypoints back to
+        // formation. This is the anti-grouping reinforcement: the
+        // moment two of our players are crammed into one yard, one
+        // of them peels off to their assigned tactical position. The
+        // shorter of them (by id) peels, to avoid both trying to move
+        // simultaneously.
+        let me_id = self.id;
+        let me_pos = self.position;
+        let teammate_crowding = ctx.players().teammates().all()
+            .any(|t| {
+                if t.id == me_id { return false; }
+                let d_sq = (t.position - me_pos).norm_squared();
+                if d_sq >= 144.0 { return false; } // 12² = 144
+                // Only one of the pair peels (the lower id). Keeps the
+                // behaviour deterministic per-tick and avoids both
+                // leaving their post simultaneously.
+                t.id > me_id
+            });
+        if teammate_crowding {
+            return true;
         }
 
         // Everyone else follows waypoints to maintain tactical shape

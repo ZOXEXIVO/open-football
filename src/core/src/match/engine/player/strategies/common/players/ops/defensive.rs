@@ -6,6 +6,28 @@ pub struct DefensiveOperationsImpl<'p> {
     ctx: &'p StateProcessingContext<'p>,
 }
 
+/// Role a defender plays relative to the current ball carrier.
+///
+/// Computed per-tick from geometry (no flag storage), so when the
+/// ball carrier moves or the primary presser is dribbled past, roles
+/// reassign naturally — the old cover becomes the new primary, the
+/// beaten primary drops into help or hold. Every defender computes
+/// its own role consistently because the ranking is deterministic
+/// (distance to carrier + player-id tiebreak).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefensiveRole {
+    /// Closest defender to the ball carrier — engage (press/tackle).
+    Primary,
+    /// Second-closest — hold a safety position on the line between
+    /// ball carrier and own goal, ready to step up if Primary is beaten.
+    Cover,
+    /// There's a dangerous unmarked non-carrier opponent within reach —
+    /// pick them up (close pass lane / mark shadow runner).
+    Help,
+    /// No immediate individual responsibility — maintain shape.
+    Hold,
+}
+
 const THREAT_SCAN_DISTANCE: f32 = 100.0;
 const DANGEROUS_RUN_SPEED: f32 = 2.0;
 const DANGEROUS_RUN_ANGLE: f32 = 0.5;
@@ -14,6 +36,11 @@ const DANGEROUS_RUN_ANGLE: f32 = 0.5;
 const ENGAGEMENT_DISTANCE: f32 = 20.0; // Distance at which a defender is considered "engaging" an opponent
 #[allow(dead_code)]
 const MIN_MARKING_SEPARATION: f32 = 15.0; // Minimum distance between defenders marking different opponents
+
+// Role assignment thresholds
+const COVER_MAX_DISTANCE: f32 = 45.0; // Too far from carrier to be useful as cover
+const HELP_SCAN_RADIUS: f32 = 28.0; // Range in which Help defender looks for a pass option
+const COVER_GOAL_SIDE_OFFSET: f32 = 12.0; // Cover sits this far goal-side of carrier
 
 impl<'p> DefensiveOperationsImpl<'p> {
     pub fn new(ctx: &'p StateProcessingContext<'p>) -> Self {
@@ -65,7 +92,19 @@ impl<'p> DefensiveOperationsImpl<'p> {
                     opp.position.x > defender_x - 20.0
                 };
 
-                alignment >= DANGEROUS_RUN_ANGLE && is_in_dangerous_position
+                if !is_in_dangerous_position {
+                    return false;
+                }
+
+                // Skip runners already being engaged by a teammate
+                // defender. Without this filter, two defenders both
+                // identify the same runner and both mark them,
+                // double-teaming while secondary runners go free.
+                if self.is_opponent_being_engaged(opp) {
+                    return false;
+                }
+
+                true
             })
             .min_by(|a, b| {
                 let dist_a = a.distance(self.ctx);
@@ -199,6 +238,108 @@ impl<'p> DefensiveOperationsImpl<'p> {
             })
     }
 
+    /// True when this attacker is sitting beyond the opposing defensive
+    /// line AND their team doesn't have possession — i.e. stranded in an
+    /// offside position with nothing to do. Forwards use this to trigger
+    /// a drop back; otherwise they camp near the opponent goal, the ball
+    /// gets cleared upfield, and every subsequent pass reaches them
+    /// offside. Needs an `OFFSIDE_MARGIN` so a forward holding the line
+    /// on the shoulder of the last defender isn't forced to retreat
+    /// unnecessarily — only steps back when clearly stranded.
+    pub fn is_stranded_offside(&self) -> bool {
+        if self.ctx.team().is_control_ball() {
+            return false;
+        }
+        const OFFSIDE_MARGIN: f32 = 8.0; // ~1m, the shoulder-of-last-defender tolerance
+        let line = self.find_defensive_line();
+        let my_x = self.ctx.player.position.x;
+        match self.ctx.player.side {
+            Some(PlayerSide::Left) => my_x > line + OFFSIDE_MARGIN,
+            Some(PlayerSide::Right) => my_x < line - OFFSIDE_MARGIN,
+            None => false,
+        }
+    }
+
+    /// The opposing team has the ball in our defensive third — every
+    /// defender, regardless of fatigue/position/current state, must drop
+    /// every passive duty (Resting, Returning, Guarding) and engage.
+    /// Without this, the passive-state transition logic kept defenders
+    /// stuck "returning to position" or "resting until 90% stamina"
+    /// while red attackers were literally inside the penalty box.
+    pub fn is_defensive_crisis(&self) -> bool {
+        if !self.ctx.ball().on_own_side() {
+            return false;
+        }
+        if self.ctx.players().opponents().with_ball().next().is_none() {
+            return false;
+        }
+        let own_goal = self.ctx.ball().direction_to_own_goal();
+        let ball_to_goal = (self.ctx.tick_context.positions.ball.position - own_goal).magnitude();
+        // Defensive third distance from own goal — third of the field length.
+        let third = self.ctx.context.field_size.width as f32 / 3.0;
+        ball_to_goal < third
+    }
+
+    /// Box emergency — the ball is being carried by an opponent
+    /// INSIDE our penalty area. Every defender close enough to make a
+    /// difference should abandon their shape-holding duties and engage
+    /// immediately. Previously defenders stuck to Cover/Hold roles and
+    /// let attackers dribble through the 18-yard box unopposed; real
+    /// football: once the ball is in your box, position and coordination
+    /// stop mattering — stop the shot NOW.
+    ///
+    /// Returns `true` if THIS defender should break shape and press the
+    /// carrier. Two nearest defenders engage; the rest stay put so we
+    /// don't leave the other side of the box open.
+    pub fn is_box_emergency_for_me(&self) -> bool {
+        if !self.ctx.ball().in_own_penalty_area() {
+            return false;
+        }
+        let Some(carrier) = self.ctx.players().opponents().with_ball().next() else {
+            return false;
+        };
+        let my_id = self.ctx.player.id;
+        let my_dist = (self.ctx.player.position - carrier.position).magnitude();
+        // Only the two closest defenders engage. The rest hold shape
+        // so the box isn't emptied. Rank by distance, tiebreak on id.
+        let closer_defenders = self.ctx.players().teammates().defenders()
+            .filter(|d| d.id != my_id)
+            .filter(|d| {
+                let dist = (d.position - carrier.position).magnitude();
+                dist < my_dist || (dist == my_dist && d.id < my_id)
+            })
+            .count();
+        closer_defenders < 2
+    }
+
+    /// Attacker is approaching our penalty area and is in our zone —
+    /// step out to meet them BEFORE they reach the box. Real football:
+    /// a deep block doesn't mean waiting motionless at the edge of the
+    /// 6-yard line; defenders hold a line at the 18-yard box and step
+    /// to the carrier as they cross some trigger distance.
+    pub fn should_step_up_to_meet_attacker(&self) -> bool {
+        let Some(carrier) = self.ctx.players().opponents().with_ball().next() else {
+            return false;
+        };
+        let own_goal = self.ctx.ball().direction_to_own_goal();
+        let carrier_to_goal = (carrier.position - own_goal).magnitude();
+        let field_width = self.ctx.context.field_size.width as f32;
+        // Trigger zone: carrier within ~20% of field length from our goal
+        // (the edge of our defensive third, approaching the box).
+        let trigger = field_width * 0.22;
+        if carrier_to_goal > trigger {
+            return false;
+        }
+        // Only the closest defender to the carrier steps up — others hold
+        // shape and track secondary runners.
+        let my_id = self.ctx.player.id;
+        let my_dist = (self.ctx.player.position - carrier.position).magnitude();
+        let closer = self.ctx.players().teammates().defenders()
+            .filter(|d| d.id != my_id)
+            .any(|d| (d.position - carrier.position).magnitude() < my_dist);
+        !closer
+    }
+
     /// Calculate optimal covering position
     pub fn calculate_covering_position(&self) -> Vector3<f32> {
         let goal_position = self.ctx.ball().direction_to_own_goal();
@@ -263,57 +404,84 @@ impl<'p> DefensiveOperationsImpl<'p> {
             })
     }
 
-    /// Check if this defender is the best positioned to engage a specific opponent
-    /// Considers distance, angle to goal coverage, and whether others are already engaged
-    pub fn is_best_defender_for_opponent(&self, opponent: &MatchPlayerLite) -> bool {
-        let my_distance = (self.ctx.player.position - opponent.position).magnitude();
-        let own_goal = self.ctx.ball().direction_to_own_goal();
+    /// Assign a defensive role to this defender relative to the current
+    /// ball carrier. Single source of truth for defender coordination —
+    /// every role decision flows from this. Recomputed each tick, so
+    /// role changes with geometry (e.g. primary gets dribbled past →
+    /// old cover promotes to primary next tick).
+    pub fn defensive_role_for_ball_carrier(&self) -> DefensiveRole {
+        let Some(ball_carrier) = self.ctx.players().opponents().with_ball().next() else {
+            return DefensiveRole::Hold;
+        };
 
-        // Calculate how well positioned we are to cut off the goal angle
-        let my_goal_coverage = self.calculate_goal_coverage_score(opponent, own_goal);
+        let my_id = self.ctx.player.id;
+        let my_dist = (self.ctx.player.position - ball_carrier.position).magnitude();
 
-        // Check all other defenders
-        for teammate in self.ctx.players().teammates().defenders() {
-            if teammate.id == self.ctx.player.id {
-                continue;
-            }
+        // Rank among defender teammates by distance to ball carrier.
+        // Tiebreak on id so every defender agrees on the ranking.
+        let rank = self
+            .ctx
+            .players()
+            .teammates()
+            .defenders()
+            .filter(|d| d.id != my_id)
+            .filter(|d| {
+                let dist = (d.position - ball_carrier.position).magnitude();
+                dist < my_dist || (dist == my_dist && d.id < my_id)
+            })
+            .count();
 
-            let teammate_distance = (teammate.position - opponent.position).magnitude();
-            let teammate_goal_coverage = {
-                let to_opponent = opponent.position - teammate.position;
-                let opponent_to_goal = own_goal - opponent.position;
-                let alignment = to_opponent.normalize().dot(&opponent_to_goal.normalize());
-                alignment.max(0.0) * 0.3 + (1.0 / (teammate_distance + 1.0)) * 0.7
-            };
-
-            // Teammate is significantly closer — they're better positioned
-            if teammate_distance < my_distance * 0.75 {
-                return false;
-            }
-
-            // Teammate has better goal coverage AND is at least as close
-            if teammate_goal_coverage > my_goal_coverage * 1.2 && teammate_distance < my_distance * 1.05 {
-                return false;
+        match rank {
+            0 => DefensiveRole::Primary,
+            1 if my_dist < COVER_MAX_DISTANCE => DefensiveRole::Cover,
+            _ => {
+                let carrier_id = ball_carrier.id;
+                let has_help_target = self
+                    .ctx
+                    .players()
+                    .opponents()
+                    .nearby(HELP_SCAN_RADIUS)
+                    .any(|opp| opp.id != carrier_id && !self.is_opponent_being_engaged(&opp));
+                if has_help_target {
+                    DefensiveRole::Help
+                } else {
+                    DefensiveRole::Hold
+                }
             }
         }
-
-        true
     }
 
-    /// Calculate how well positioned a defender is to cover the goal against an opponent
-    fn calculate_goal_coverage_score(&self, opponent: &MatchPlayerLite, goal: Vector3<f32>) -> f32 {
-        let to_opponent = opponent.position - self.ctx.player.position;
-        let opponent_to_goal = goal - opponent.position;
-        let distance = to_opponent.magnitude();
+    /// Target position for a Cover-role defender: on the line between
+    /// ball carrier and own goal, `COVER_GOAL_SIDE_OFFSET` units behind
+    /// the carrier. If Primary is beaten, this defender is the next
+    /// body between attacker and goal.
+    pub fn cover_target_position(&self) -> Option<Vector3<f32>> {
+        let ball_carrier = self.ctx.players().opponents().with_ball().next()?;
+        let own_goal = self.ctx.ball().direction_to_own_goal();
+        let to_goal = own_goal - ball_carrier.position;
+        let to_goal_dist = to_goal.magnitude();
+        if to_goal_dist < 0.1 {
+            return Some(own_goal);
+        }
+        let dir = to_goal / to_goal_dist;
+        Some(ball_carrier.position + dir * COVER_GOAL_SIDE_OFFSET)
+    }
 
-        // How well aligned we are between opponent and goal
-        let alignment = to_opponent.normalize().dot(&opponent_to_goal.normalize());
-        let alignment_score = alignment.max(0.0);
-
-        // Closer is better
-        let distance_score = 1.0 / (distance + 1.0);
-
-        alignment_score * 0.3 + distance_score * 0.7
+    /// Most dangerous non-ball-carrier opponent within Help scan radius
+    /// that isn't already being engaged. Target for a Help-role defender.
+    pub fn find_help_target(&self) -> Option<MatchPlayerLite> {
+        let ball_carrier_id = self.ctx.players().opponents().with_ball().next()?.id;
+        let own_goal = self.ctx.ball().direction_to_own_goal();
+        self.ctx
+            .players()
+            .opponents()
+            .nearby(HELP_SCAN_RADIUS)
+            .filter(|opp| opp.id != ball_carrier_id && !self.is_opponent_being_engaged(opp))
+            .max_by(|a, b| {
+                let score_a = self.calculate_opponent_danger_score(a, own_goal);
+                let score_b = self.calculate_opponent_danger_score(b, own_goal);
+                score_a.partial_cmp(&score_b).unwrap()
+            })
     }
 
     /// Find an unmarked dangerous opponent that this defender should cover
@@ -361,44 +529,6 @@ impl<'p> DefensiveOperationsImpl<'p> {
         score += (100.0 - ball_distance.min(100.0)) / 2.0;
 
         score
-    }
-
-    /// Check if this defender can support the press as a second presser
-    /// Allows a second defender to press when within range and ball is in own/middle third
-    pub fn can_support_press(&self, opponent: &MatchPlayerLite) -> bool {
-        let my_distance = (self.ctx.player.position - opponent.position).magnitude();
-
-        // Must be within support pressing range
-        if my_distance > 40.0 {
-            return false;
-        }
-
-        // Ball must not be deep in opponent's third — support pressing in own and middle third
-        let field_width = self.ctx.context.field_size.width as f32;
-        let ball_dist_to_opp_goal = self.ctx.ball().distance_to_opponent_goal();
-        if ball_dist_to_opp_goal < field_width * 0.25 {
-            return false;
-        }
-
-        // Count how many defenders are already pressing this opponent
-        let pressing_count = self.ctx.players().teammates().defenders()
-            .filter(|d| d.id != self.ctx.player.id)
-            .filter(|d| {
-                let d_distance = (d.position - opponent.position).magnitude();
-                let d_velocity = d.velocity(self.ctx);
-                let to_opponent = (opponent.position - d.position).normalize();
-                let alignment = if d_velocity.norm() > 1.0 {
-                    d_velocity.normalize().dot(&to_opponent)
-                } else {
-                    0.0
-                };
-                // Teammate is close AND moving toward opponent
-                d_distance < my_distance && d_distance < 35.0 && alignment > 0.5
-            })
-            .count();
-
-        // Allow at most 2 pressers total (1 primary + 1 support)
-        pressing_count < 2
     }
 
     /// Check if engaging this opponent would leave a dangerous space uncovered

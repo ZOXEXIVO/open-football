@@ -17,6 +17,14 @@ impl StateProcessingHandler for DefenderReturningState {
             ));
         }
 
+        // Crisis override — abandon return journey and engage. Standing
+        // will re-evaluate via the role block next tick.
+        if ctx.player().defensive().is_defensive_crisis() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(

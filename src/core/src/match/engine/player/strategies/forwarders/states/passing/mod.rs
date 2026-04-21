@@ -51,11 +51,15 @@ impl StateProcessingHandler for ForwardPassingState {
             }
         }
 
-        // No good pass option found - keep running toward goal
-        // Only dribble if opponents are actually nearby to beat
+        // No good pass option found. Hysteresis against Dribbling: we
+        // only route BACK to Dribbling if a defender is VERY close (<8u,
+        // tight enough that we need to beat them) AND we've had a real
+        // scan window. A single chaser at 15-20u isn't "close enough to
+        // need dribbling" — keep running with the ball. The old 20u
+        // trigger flickered against Dribbling's 15u "no space" rule.
         if distance_to_goal < 200.0 {
-            let opponents_nearby = ctx.players().opponents().exists(20.0);
-            return if opponents_nearby {
+            let very_close_defender = ctx.players().opponents().exists(8.0);
+            return if very_close_defender && ctx.in_state_time >= 15 {
                 Some(StateChangeResult::with_forward_state(ForwardState::Dribbling))
             } else {
                 Some(StateChangeResult::with_forward_state(ForwardState::Running))

@@ -20,13 +20,36 @@ impl StateProcessingHandler for MidfielderPassingState {
 
         // Check if should shoot instead
         if self.should_shoot_instead_of_pass(ctx) {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Shooting,
-            ));
+            return Some(
+                StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                    .with_shot_reason("MID_PASS_SHOOT_INSTEAD"),
+            );
+        }
+
+        // Emergency clearance — midfielder has the ball very close to
+        // our own goal AND under heavy pressure AND has no safe pass
+        // option. A blanket "clear when pressured in defensive third"
+        // trigger fired 80+ times per match per team — each clearance
+        // is a possession-flip at the halfway line, and each flip
+        // produces a counter-attack chance. Gating tight here brings
+        // the clearance rate down toward real football's ~15/team.
+        //
+        // Midfielders don't have a dedicated Clearing state, so emit
+        // the ClearBall event directly and transition to Running.
+        let under_pressure = self.is_under_heavy_pressure(ctx);
+        if under_pressure && self.in_box_danger_zone(ctx) {
+            let has_safe_pass = ctx.player().passing().find_safe_pass_option().is_some();
+            if !has_safe_pass {
+                if let Some(event) = self.emit_emergency_clearance(ctx) {
+                    return Some(StateChangeResult::with_midfielder_state_and_event(
+                        MidfielderState::Running,
+                        event,
+                    ));
+                }
+            }
         }
 
         // Brief scanning delay before executing pass (unless under pressure)
-        let under_pressure = self.is_under_heavy_pressure(ctx);
         let min_scan_time: u64 = if under_pressure { 2 } else { 5 };
 
         if ctx.in_state_time >= min_scan_time {
@@ -67,15 +90,33 @@ impl StateProcessingHandler for MidfielderPassingState {
         let bail_time = if self.is_under_heavy_pressure(ctx) { 10 } else { 20 };
         if ctx.in_state_time > bail_time {
             let goal_dist = ctx.ball().distance_to_opponent_goal();
-            return if goal_dist < 120.0 {
-                // Close to goal — shoot rather than cycling to dribbling
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ))
-            } else if goal_dist < 200.0 {
-                Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::DistanceShooting,
-                ))
+            // Shoot bailout ONLY when we're in a real shooting spot
+            // with a clear lane AND good angle. Tightened further: the
+            // "can't find a pass, so shoot" pivot at medium range was
+            // producing 14% of total shots. A midfielder who can't find
+            // a pass should DRIBBLE or HOLD — shooting in that spot is
+            // the desperation long-shot real football strictly limits
+            // to specialists in ideal conditions.
+            return if goal_dist < 30.0
+                && ctx.player().has_clear_shot()
+                && ctx.player().shooting().has_good_angle()
+            {
+                Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason("MID_PASS_BAILOUT_SHOOT"),
+                )
+            } else if goal_dist < 55.0
+                && ctx.player().has_clear_shot()
+                && ctx.player().shooting().has_good_angle()
+                && ctx.player.skills.technical.long_shots >= 14.0
+                && ctx.player.skills.technical.finishing >= 11.0
+            {
+                // Long-shot specialists (long_shots 13+) can try from
+                // 25-32m with a clear lane.
+                Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::DistanceShooting)
+                        .with_shot_reason("MID_PASS_BAILOUT_DISTANCE"),
+                )
             } else {
                 // Far from goal — dribble forward
                 Some(StateChangeResult::with_midfielder_state(
@@ -363,18 +404,95 @@ impl MidfielderPassingState {
     /// Determine if should shoot instead of pass
     fn should_shoot_instead_of_pass(&self, ctx: &StateProcessingContext) -> bool {
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        let shooting_skill = ctx.player.skills.technical.long_shots / 20.0;
-        let finishing_skill = ctx.player.skills.technical.finishing / 20.0;
+        let long_shots = ctx.player.skills.technical.long_shots;
+        let finishing = ctx.player.skills.technical.finishing;
 
-        let shooting_ability = (shooting_skill * 0.7) + (finishing_skill * 0.3);
-        let effective_shooting_range = 150.0 + (shooting_ability * 100.0);
+        // Midfielders pivot from Passing to Shooting only when they're
+        // ACTUALLY in a high-value shooting position. Tight gates:
+        //   * Elite long-shooter in the D (60u = 30m) — yes.
+        //   * Decent long-shooter at edge of box (35u) — yes.
+        //   * Average mid inside the box (20u = 10m) — yes.
+        //   * Anything else — pass.
+        // Previously any mid with fin≥8 and a clear lane from 30u
+        // would pivot — that path was 27% of all shots. Now only
+        // genuine shooting positions trigger the pivot.
+        let max_range = if long_shots >= 15.0 && finishing >= 13.0 {
+            50.0 // Elite long-shooter — top of the box
+        } else if long_shots >= 13.0 && finishing >= 11.0 {
+            35.0 // Decent shooter — edge of the 18-yard box
+        } else {
+            20.0 // Average — must be inside the box
+        };
 
-        distance_to_goal < effective_shooting_range && ctx.player().has_clear_shot()
+        // Additionally require the shooter not to be running across
+        // goal (velocity must be roughly goal-ward). Prevents passing-
+        // state pivot when the midfielder is moving laterally / back.
+        let player_pos = ctx.player.position;
+        let goal_pos = ctx.player().opponent_goal_position();
+        let to_goal = (goal_pos - player_pos).normalize();
+        let vel = ctx.player.velocity;
+        let body_facing_goal = if vel.magnitude() > 0.1 {
+            vel.normalize().dot(&to_goal) > 0.2 // within ~80° of goal
+        } else {
+            true // stationary is fine
+        };
+
+        distance_to_goal < max_range
+            && body_facing_goal
+            && ctx.player().has_clear_shot()
+            && ctx.player().shooting().has_good_angle()
     }
 
     /// Check if under heavy pressure
     fn is_under_heavy_pressure(&self, ctx: &StateProcessingContext) -> bool {
         ctx.player().pressure().is_under_heavy_pressure()
+    }
+
+    /// True if the midfielder is right next to our own goal — inside
+    /// ~18-yard-box distance. Tighter than "defensive third": a pass
+    /// from the third is still often the right call, but from 20m out
+    /// in front of our net it's safer to hoof.
+    fn in_box_danger_zone(&self, ctx: &StateProcessingContext) -> bool {
+        let own_goal = ctx.ball().direction_to_own_goal();
+        let ball_to_own_goal = (ctx.tick_context.positions.ball.position - own_goal).magnitude();
+        // ~18 yards = ~16.5m = ~130u on an 840u pitch.
+        ball_to_own_goal < 130.0
+    }
+
+    /// Hoof-clearance toward the halfway line. Mirrors the defender
+    /// Clearing state: lofted z, horizontal aimed at the centre of the
+    /// pitch at midfield, so the ball lands in contested zone instead
+    /// of rolling into opponents' feet near our goal.
+    fn emit_emergency_clearance(&self, ctx: &StateProcessingContext) -> Option<Event> {
+        let ball_pos = ctx.tick_context.positions.ball.position;
+        let field_width = ctx.context.field_size.width as f32;
+        let field_height = ctx.context.field_size.height as f32;
+        let halfway_x = field_width * 0.5;
+        let mid_y = field_height * 0.5;
+
+        // Target: halfway line, centre-ish. Pull Y toward centre so the
+        // ball doesn't drift to a sideline.
+        let target_x = match ctx.player.side {
+            Some(crate::r#match::PlayerSide::Left) => halfway_x.max(ball_pos.x + 40.0),
+            Some(crate::r#match::PlayerSide::Right) => halfway_x.min(ball_pos.x - 40.0),
+            None => halfway_x,
+        };
+        let target_y = ball_pos.y + (mid_y - ball_pos.y) * 0.6;
+
+        let to_target = Vector3::new(target_x - ball_pos.x, target_y - ball_pos.y, 0.0);
+        let dist = to_target.norm().max(0.1);
+        let dir = to_target / dist;
+
+        let horizontal_speed = 4.0_f32;
+        let z_velocity = 5.0_f32;
+
+        let ball_velocity = Vector3::new(
+            dir.x * horizontal_speed,
+            dir.y * horizontal_speed,
+            z_velocity,
+        );
+
+        Some(Event::PlayerEvent(PlayerEvent::ClearBall(ball_velocity)))
     }
 
     /// Check if should adjust position

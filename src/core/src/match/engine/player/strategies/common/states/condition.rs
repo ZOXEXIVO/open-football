@@ -81,11 +81,25 @@ impl<T: ActivityIntensityConfig> ConditionProcessor<T> {
         // Combine: 75% velocity + 25% intensity
         let combined_fatigue = velocity_fatigue * 0.75 + intensity_fatigue * 0.25;
 
+        // Match-progress fatigue curve. Real football: every minute
+        // costs more than the last — even the first half leaves legs
+        // feeling heavier by the time the whistle blows. Previously
+        // the curve only ramped after half-time, which meant the first
+        // 45 minutes were effectively fatigue-free. New curve:
+        //   minute  0 :  1.15× fatigue  /  0.95× recovery
+        //   minute 45 :  1.33× fatigue  /  0.80× recovery
+        //   minute 90 :  1.50× fatigue  /  0.65× recovery
+        // Linear ramp from kickoff gives every phase of the match a
+        // stamina cost — early pressing sides now actually tire out,
+        // and late substitutes enter a genuinely fatigued field.
+        let late_match_fatigue_mult = 1.15 + ctx.match_progress * 0.35;
+        let late_match_recovery_mult = 0.95 - ctx.match_progress * 0.30;
+
         // Apply rate multiplier based on whether it's fatigue or recovery
         let rate_multiplier = if combined_fatigue < 0.0 {
-            RECOVERY_RATE_MULTIPLIER
+            RECOVERY_RATE_MULTIPLIER * late_match_recovery_mult
         } else {
-            FATIGUE_RATE_MULTIPLIER
+            FATIGUE_RATE_MULTIPLIER * late_match_fatigue_mult
         };
 
         let condition_change_f = combined_fatigue * stamina_factor * fitness_factor * rate_multiplier;

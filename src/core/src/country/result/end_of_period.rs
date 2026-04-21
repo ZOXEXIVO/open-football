@@ -420,7 +420,7 @@ impl CountryResult {
         player.statuses.statuses.clear();
 
         // Place at parent club
-        info!("Loan return: player {} from club {} back to club {}",
+        debug!("Loan return: player {} from club {} back to club {}",
             event.player_id, event.borrowing_club_id, event.parent_club_id);
         data.continents[pci].countries[pcoi].clubs[pcli]
             .teams.teams[pti].players.add(player);

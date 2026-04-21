@@ -31,6 +31,17 @@ impl StateProcessingHandler for ForwardTacklingState {
             return Some(StateChangeResult::with_forward_state(ForwardState::Running));
         }
 
+        // Per-player tackle cooldown. Without it a forward in Tackling
+        // state attempts a fresh tackle every tick — 100 attempts × 15%
+        // base foul chance = 15 fouls per forward per match, and with
+        // three forwards on the field that compounds into the 150+
+        // team-foul counts seen in the metrics.
+        if !ctx.player.can_attempt_tackle() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Pressing,
+            ));
+        }
+
         let opponents = ctx.players().opponents();
         let opponents_with_ball: Vec<MatchPlayerLite> = opponents.with_ball().collect();
 
@@ -43,27 +54,33 @@ impl StateProcessingHandler for ForwardTacklingState {
                     self.attempt_tackle(ctx, opponent);
 
                 if committed_foul {
-                    return Some(StateChangeResult::with_forward_state_and_event(
+                    let mut result = StateChangeResult::with_forward_state_and_event(
                         ForwardState::Standing,
                         Event::PlayerEvent(PlayerEvent::CommitFoul(
                             ctx.player.id,
                             foul_severity,
                         )),
-                    ));
+                    );
+                    result.start_tackle_cooldown = true;
+                    return Some(result);
                 }
 
                 if tackle_success {
                     // Double-check ball is not in flight before claiming
                     if !ctx.ball().is_in_flight() {
-                        return Some(StateChangeResult::with_forward_state_and_event(
+                        let mut result = StateChangeResult::with_forward_state_and_event(
                             ForwardState::Running,
-                            Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                        ));
+                            Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                        );
+                        result.start_tackle_cooldown = true;
+                        return Some(result);
                     }
                 }
 
-                // Failed tackle - continue pressuring
-                return None;
+                // Failed tackle - cooldown before another attempt
+                let mut result = StateChangeResult::with_forward_state(ForwardState::Pressing);
+                result.start_tackle_cooldown = true;
+                return Some(result);
             }
 
             // If within tackle range but not close enough for immediate attempt
@@ -74,24 +91,33 @@ impl StateProcessingHandler for ForwardTacklingState {
                         self.attempt_tackle(ctx, opponent);
 
                     if committed_foul {
-                        return Some(StateChangeResult::with_forward_state_and_event(
+                        let mut result = StateChangeResult::with_forward_state_and_event(
                             ForwardState::Standing,
                             Event::PlayerEvent(PlayerEvent::CommitFoul(
                                 ctx.player.id,
                                 foul_severity,
                             )),
-                        ));
+                        );
+                        result.start_tackle_cooldown = true;
+                        return Some(result);
                     }
 
                     if tackle_success {
                         // Double-check ball is not in flight before claiming
                         if !ctx.ball().is_in_flight() {
-                            return Some(StateChangeResult::with_forward_state_and_event(
+                            let mut result = StateChangeResult::with_forward_state_and_event(
                                 ForwardState::Running,
-                                Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                            ));
+                                Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                            );
+                            result.start_tackle_cooldown = true;
+                            return Some(result);
                         }
                     }
+
+                    // Missed tackle — cooldown
+                    let mut result = StateChangeResult::with_forward_state(ForwardState::Pressing);
+                    result.start_tackle_cooldown = true;
+                    return Some(result);
                 }
 
                 // Continue positioning for tackle

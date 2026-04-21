@@ -10,7 +10,6 @@ use nalgebra::Vector3;
 use rand::RngExt;
 
 const TACKLE_DISTANCE_THRESHOLD: f32 = 25.0; // Close down earlier — aggressive defending
-const FOUL_CHANCE_BASE: f32 = 0.15; // Better-trained defenders foul less
 const PRESSING_DISTANCE: f32 = 80.0;
 const RETURN_DISTANCE: f32 = 120.0;
 
@@ -52,22 +51,44 @@ impl StateProcessingHandler for DefenderTacklingState {
                 ));
             }
 
-            // We're close enough to tackle!
+            // Per-player tackle cooldown: a single per-state-machine gate
+            // (e.g. Pressing→Tackling cadence) never held because the
+            // Tackling state can be re-entered from Standing / Running /
+            // Covering / Guarding / HoldingLine, each with its own
+            // distance trigger and no shared cooldown. The cooldown lives
+            // on the player itself — whatever path routed us here, if we
+            // just tackled, we can't tackle again for ~1 s.
+            if !ctx.player.can_attempt_tackle() {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+
+            // We're close enough to tackle! One shot per Tackling entry,
+            // enforced by the cooldown.
             let (tackle_success, committed_foul, foul_severity) =
                 self.attempt_sliding_tackle(ctx, &opponent);
 
             return if tackle_success {
-                Some(StateChangeResult::with_defender_state_and_event(
+                let mut result = StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
-                    Event::PlayerEvent(PlayerEvent::ClaimBall(ctx.player.id)),
-                ))
+                    Event::PlayerEvent(PlayerEvent::TacklingBall(ctx.player.id)),
+                );
+                result.start_tackle_cooldown = true;
+                Some(result)
             } else if committed_foul {
-                Some(StateChangeResult::with_defender_state_and_event(
+                let mut result = StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::CommitFoul(ctx.player.id, foul_severity)),
-                ))
+                );
+                result.start_tackle_cooldown = true;
+                Some(result)
             } else {
-                None
+                let mut result = StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                );
+                result.start_tackle_cooldown = true;
+                Some(result)
             };
         } else {
             // Ball is loose - check for interception
@@ -197,10 +218,33 @@ impl DefenderTacklingState {
 
         let tackle_success = rng.random::<f32>() < clamped_success_chance;
 
+        // Foul chance is skill-driven. Old formula produced 10-15% foul
+        // per tackle attempt, which combined with the engine's ~300+
+        // tackle-attempts-per-match rate meant 40+ fouls in the first
+        // five minutes (real football: ~12-14 fouls per team per whole
+        // match). New formula anchors at ~3-5% per attempt for average
+        // players, scaling up to ~10-12% for the most aggressive and
+        // down to <1% for composed, high-tackling defenders.
+        //
+        // Drivers (all 0..1 normalized):
+        //   aggression   — dominant positive factor
+        //   composure    — strong protective factor (picks the moment)
+        //   tackling     — clean technical tackler doesn't need to foul
+        // Clamped to a 0.5% floor so even an elite defender has some
+        // risk on a 50/50 challenge.
+        let base_foul = 0.02
+            + aggression * 0.10
+            - composure * 0.05
+            - tackling_skill * 0.03;
+        let base_foul = base_foul.max(0.005);
+
+        // Clean successful tackles rarely foul — you won the ball
+        // first. Missed tackles are the trailing-foot / mistimed-slide
+        // scenario where fouls mostly happen.
         let foul_chance = if tackle_success {
-            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.05
+            base_foul * 0.40
         } else {
-            (1.0 - overall_skill) * FOUL_CHANCE_BASE + aggression * 0.15
+            base_foul * 1.60
         };
 
         let committed_foul = rng.random::<f32>() < foul_chance;

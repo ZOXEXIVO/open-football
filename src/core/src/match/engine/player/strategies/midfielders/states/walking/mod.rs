@@ -36,6 +36,19 @@ impl StateProcessingHandler for MidfielderWalkingState {
             ));
         }
 
+        // Ball in flight (clearance, long pass) — anticipate the landing
+        // so midfielders contest it instead of letting opposing players
+        // collect every clearance. Same pattern as Standing: run the
+        // intercept state if predicted landing is inside our reach.
+        if !ctx.ball().is_owned() && ctx.ball().is_in_flight() {
+            let landing = ctx.tick_context.positions.ball.landing_position;
+            if (landing - ctx.player.position).magnitude() < 100.0 {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Intercepting,
+                ));
+            }
+        }
+
         // Loose-ball claim lives in the dispatcher.
 
         // Notification: take ball only if best positioned

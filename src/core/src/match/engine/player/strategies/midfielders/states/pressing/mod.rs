@@ -132,13 +132,35 @@ impl StateProcessingHandler for MidfielderPressingState {
         if let Some(opponent) = ctx.players().opponents().nearby(500.0).with_ball(ctx).next() {
             let distance_to_opponent = (opponent.position - ctx.player.position).magnitude();
 
-            // Smart pressing: cut off angle to goal instead of chasing directly
+            // Predictive pursuit — lead the carrier based on their
+            // current velocity. Aiming at their present position means
+            // arriving several ticks behind a running attacker. Same
+            // fix applied to defender pressing: estimate how long we'd
+            // take to close the gap at our own pace, project the
+            // carrier along their velocity by that many ticks, then bias
+            // the aim point slightly toward our own goal to close the
+            // shooting lane rather than just touch their back.
+            let opp_velocity = ctx.tick_context.positions.players.velocity(opponent.id);
+            let opp_speed = opp_velocity.magnitude();
+            let pace = ctx.player.skills.physical.pace;
+            let lead_ticks = if pace > 0.01 {
+                (distance_to_opponent / pace).min(30.0)
+            } else {
+                0.0
+            };
+            let predicted = opponent.position + opp_velocity * lead_ticks;
             let own_goal = ctx.ball().direction_to_own_goal();
-            let opp_to_goal = (own_goal - opponent.position).normalize();
-            let intercept_offset = 5.0_f32.min(distance_to_opponent * 0.3);
-            let intercept_target = opponent.position + opp_to_goal * intercept_offset;
-            let direction = (intercept_target - ctx.player.position).normalize();
-            let speed = ctx.player.skills.physical.pace;
+            let to_own_goal = (own_goal - predicted).normalize();
+            let goalside_bias = if opp_speed > 0.1 { 2.0 } else { 0.0 };
+            let intercept_target = predicted + to_own_goal * goalside_bias;
+
+            let to_target = intercept_target - ctx.player.position;
+            let direction = if to_target.magnitude() > 0.01 {
+                to_target.normalize()
+            } else {
+                Vector3::zeros()
+            };
+            let speed = pace;
 
             let pressing_velocity = direction * speed;
 

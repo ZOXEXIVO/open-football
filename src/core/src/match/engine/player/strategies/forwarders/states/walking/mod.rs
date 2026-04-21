@@ -12,6 +12,15 @@ pub struct ForwardWalkingState {}
 
 impl StateProcessingHandler for ForwardWalkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Offside discipline — a forward walking/jogging about with the
+        // opponents in possession must not stray beyond the defensive
+        // line, or every clearance lands offside. Drop back to Returning.
+        if ctx.player().defensive().is_stranded_offside() {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Returning,
+            ));
+        }
+
         if ctx.ball().is_owned() {
             if ctx.team().is_control_ball() {
                 return Some(StateChangeResult::with_forward_state(
@@ -23,7 +32,7 @@ impl StateProcessingHandler for ForwardWalkingState {
                 ));
             }
         }
-        
+
         // Loose-ball claim lives in the dispatcher.
 
         // Take ball only if best positioned — prevents swarming

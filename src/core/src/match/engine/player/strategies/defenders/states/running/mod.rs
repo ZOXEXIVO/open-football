@@ -2,6 +2,7 @@ use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::events::Event;
 use crate::r#match::player::events::{PassingEventContext, PlayerEvent};
+use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, GamePhase, MatchPlayerLite, PlayerDistanceFromStartPosition, PlayerSide,
     StateChangeResult, StateProcessingContext, StateProcessingHandler, SteeringBehavior,
@@ -101,16 +102,17 @@ impl StateProcessingHandler for DefenderRunningState {
                 return Some(result);
             }
         } else {
-            // COUNTER-PRESS: Just lost possession — press immediately to win ball back
+            // COUNTER-PRESS: Just lost possession — Primary role chases the
+            // ball carrier immediately; proximity override still fires if
+            // the ball is right in our face regardless of role.
             if ctx.team().has_just_lost_possession() {
                 let counter_press = ctx.team().tactics().counter_press_intensity();
                 let ball_dist = ctx.ball().distance();
                 let counter_press_range = 40.0 + counter_press * 60.0;
                 if ball_dist < counter_press_range {
                     if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                        if ctx.player().defensive().is_best_defender_for_opponent(&opponent)
-                            || opponent.distance(ctx) < 30.0
-                        {
+                        let role = ctx.player().defensive().defensive_role_for_ball_carrier();
+                        if role == DefensiveRole::Primary || opponent.distance(ctx) < 30.0 {
                             return Some(StateChangeResult::with_defender_state(
                                 DefenderState::Tackling,
                             ));
@@ -125,51 +127,72 @@ impl StateProcessingHandler for DefenderRunningState {
                 ));
             }
 
-            // SHAPE GATE: if a teammate is already engaging the ball carrier and
-            // I'm not the best defender for this opponent, drop into Covering
-            // instead of also racing to the ball. Without this, the whole back
-            // line collapses onto one attacker every time — losing the shape
-            // that made `HoldingLine` / `Covering` worth having as states.
+            // Role-based shape: only drop out of chase when a teammate
+            // has actually reached the ball carrier — otherwise everyone
+            // holding shape means nobody is contesting possession, and
+            // the attacker runs unopposed into shooting range.
             if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let ball_dist = ctx.ball().distance();
-                let teammate_already_engaging = ctx
-                    .players()
-                    .teammates()
-                    .nearby(30.0)
-                    .any(|t| (t.position - opponent.position).magnitude() < 15.0);
-                if teammate_already_engaging
-                    && ball_dist > 30.0
-                    && !ctx.player().defensive().is_best_defender_for_opponent(&opponent)
-                {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Covering,
-                    ));
+                let teammate_engaging = ctx.players().teammates().nearby(30.0)
+                    .any(|t| (t.position - opponent.position).magnitude() < 20.0);
+                if ball_dist > 30.0 && teammate_engaging {
+                    match ctx.player().defensive().defensive_role_for_ball_carrier() {
+                        DefensiveRole::Cover => {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Covering,
+                            ));
+                        }
+                        DefensiveRole::Help => {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::Marking,
+                            ));
+                        }
+                        DefensiveRole::Hold => {
+                            return Some(StateChangeResult::with_defender_state(
+                                DefenderState::HoldingLine,
+                            ));
+                        }
+                        DefensiveRole::Primary => {
+                            // Primary — fall through to tackle/press checks below.
+                        }
+                    }
                 }
             }
 
-            // Only tackle if an opponent has the ball nearby AND we're best positioned
+            // Only tackle when we're the designated closer — Primary role
+            // or box emergency. The reactive "any defender within 30u
+            // lunges" rule produced pileups of 3-4 defenders all
+            // attempting tackles simultaneously, each with an independent
+            // foul roll. One committing defender + the shape behind
+            // them is the right football picture.
             if let Some(opponent) = ctx.players().opponents().with_ball().next() {
                 let ball_dist = ctx.ball().distance();
-                // Very close — tackle reactively
-                if ball_dist < 30.0 {
+                let is_primary = matches!(
+                    ctx.player().defensive().defensive_role_for_ball_carrier(),
+                    DefensiveRole::Primary
+                );
+                let is_emergency = ctx.player().defensive().is_box_emergency_for_me();
+                // Very close — only the designated closer tackles
+                if ball_dist < 30.0 && (is_primary || is_emergency) {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
                 }
-                // Only the best-positioned defender chases further out
+                // Best-positioned chase at medium range
                 if ball_dist < 100.0 && ctx.team().is_best_player_to_chase_ball() {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Tackling,
                     ));
                 }
-                // Ball carrier running toward this defender — engage even if not "best" chaser
-                if ball_dist < 80.0 {
+                // Carrier running AT us — still engage (we're the wall).
+                // Gate this too so a carrier cutting across a line of
+                // defenders doesn't trigger all of them.
+                if ball_dist < 80.0 && (is_primary || is_emergency) {
                     let carrier_vel = ctx.tick_context.positions.players.velocity(opponent.id);
                     let carrier_speed = carrier_vel.magnitude();
                     if carrier_speed > 0.1 {
                         let to_defender = (ctx.player.position - opponent.position).normalize();
                         let approach = carrier_vel.normalize().dot(&to_defender);
-                        // Carrier is heading toward this defender (dot > 0.3)
                         if approach > 0.3 {
                             return Some(StateChangeResult::with_defender_state(
                                 DefenderState::Tackling,
@@ -565,16 +588,33 @@ impl DefenderRunningState {
             return Some(StateChangeResult::with_defender_state(DefenderState::Passing));
         }
 
-        // BUILD FROM BACK: emit pass directly (we find the specific target here)
+        // BUILD FROM BACK. Routing depends on whether we should play
+        // in possession mode (several real-football triggers — just
+        // won the ball, tired, leading, late game, attack not ready)
+        // or actively progress. `should_play_possession` is the single
+        // check; see its docs for the triggers.
+        //   * Possession mode → recycle through safe build-up.
+        //   * Otherwise        → find a progressive pass forward.
         if !opp_within_30 && ctx.team().is_control_ball() {
-            if let Some(target) = self.find_progressive_pass_target(ctx) {
+            let possession_mode = ctx.team().should_play_possession();
+            let target = if possession_mode {
+                self.find_safe_buildup_pass(ctx, 200.0)
+            } else {
+                self.find_progressive_pass_target(ctx)
+            };
+            if let Some(target) = target {
+                let reason = if possession_mode {
+                    "DEF_PATIENT_POSSESSION"
+                } else {
+                    "DEF_BUILD_FROM_BACK"
+                };
                 return Some(StateChangeResult::with_defender_state_and_event(
                     DefenderState::Standing,
                     Event::PlayerEvent(PlayerEvent::PassTo(
                         PassingEventContext::new()
                             .with_from_player_id(ctx.player.id)
                             .with_to_player_id(target.id)
-                            .with_reason("DEF_BUILD_FROM_BACK")
+                            .with_reason(reason)
                             .build(ctx),
                     )),
                 ));
@@ -806,80 +846,189 @@ impl DefenderRunningState {
         distance_to_goal <= MAX_SHOOTING_DISTANCE && ctx.player().has_clear_shot()
     }
 
-    /// Find a safe build-up pass target within max_distance.
-    /// Prefers midfielders in space, same-side or central players, with clear pass lanes.
-    /// Strongly favors forward/sideways passes and penalizes backward passes.
+    /// Find the best build-up pass target within `max_distance`.
+    ///
+    /// Scoring weighs six factors:
+    ///   A. **Space around receiver** — distance to the nearest opponent
+    ///      is a continuous signal (15u clearance scores better than 8u).
+    ///   B. **Pass-lane pressure** — fewer opponents in the passing lane
+    ///      means a safer delivery.
+    ///   C. **Forward progression** — dot-product toward opponent goal,
+    ///      weighted heavily since we want to move the ball up-field.
+    ///   D. **Third-man potential** — reward receivers who ALSO have
+    ///      forward passing options, because an outlet that can in turn
+    ///      progress the ball is strictly more valuable than a dead-end.
+    ///   E. **Tactical fit** — high-press response favours quick outlets
+    ///      to the goalkeeper or a free centre-back; normal play and
+    ///      low-block responses favour midfielders / forwards.
+    ///   F. **Coach override** — under WasteTime / ParkTheBus the
+    ///      scoring inverts: backward and lateral safe options win.
     fn find_safe_buildup_pass(&self, ctx: &StateProcessingContext, max_distance: f32) -> Option<MatchPlayerLite> {
         let player_pos = ctx.player.position;
         let goal_pos = ctx.player().opponent_goal_position();
-        let to_goal = (goal_pos - player_pos).normalize();
+        let to_goal_vec = goal_pos - player_pos;
+        let to_goal = to_goal_vec.normalize();
+
+        let coach = ctx.team().coach_instruction();
+        let prefer_safe = coach.prefer_possession();
+        // Count how many opponents are within pressing range of us —
+        // if we're being hunted, shorten the decision window and accept
+        // a backward outlet rather than try to play through the press.
+        let pressers_on_me = ctx.tick_context.grid
+            .opponents(ctx.player.id, 18.0).count();
+        let under_heavy_press = pressers_on_me >= 2;
+
+        // Skill signal: high passing + vision = attempt more ambitious
+        // diagonals; low passers stick to short safe options.
+        let pass_skill = ctx.player.skills.technical.passing / 20.0;
+        let vision_skill = ctx.player.skills.mental.vision / 20.0;
+        let creativity = (pass_skill + vision_skill) * 0.5;
 
         let mut best_target: Option<(MatchPlayerLite, f32)> = None;
 
         for teammate in ctx.players().teammates().nearby(max_distance) {
-            // Skip goalkeeper
-            if teammate.tactical_positions.is_goalkeeper() {
+            if teammate.tactical_positions.is_goalkeeper() && !under_heavy_press {
+                // GK is only a valid outlet under pressure — recycling
+                // to the keeper in open play kills tempo.
                 continue;
             }
 
             let pass_dist = (teammate.position - player_pos).magnitude();
             if pass_dist < 30.0 {
-                continue; // Too close — weak passes to nearby players create claim-pass loops
+                continue; // Too close — weak passes create ping-pong claim loops
             }
 
-            // Check pass lane is clear
             if !ctx.player().has_clear_pass(teammate.id) {
                 continue;
             }
 
-            // Check teammate is in space (use pre-computed distances)
-            let opponents_near = ctx.tick_context.grid
-                .opponents(teammate.id, 15.0).count();
-            if opponents_near >= 2 {
-                continue;
-            }
-
-            // Calculate forward component: 1.0 = directly toward opponent goal, -1.0 = toward own goal
-            let to_teammate = (teammate.position - player_pos).normalize();
-            let forward_component = to_teammate.dot(&to_goal);
-
-            // HARD REJECT: Never pass directly backward from defensive positions
-            // unless absolutely no other options exist (handled by fallback logic)
-            if forward_component < -0.5 {
-                continue;
-            }
-
-            // Score the pass option
-            let mut score: f32 = 0.0;
-
-            // Forward progression is the PRIMARY factor for defenders building up
-            // Range: [-20, +60] — strongly rewards forward passes
-            if forward_component > 0.0 {
-                score += forward_component * 60.0; // Up to +60 for direct forward
-            } else {
-                score += forward_component * 40.0; // -20 for slight backward (still allowed)
-            }
-
-            // Position group bonus — midfielders preferred but NOT overwhelming
-            if teammate.tactical_positions.is_midfielder() {
-                score += 25.0; // Reduced from 50 — direction matters more
-            } else if teammate.tactical_positions.is_forward() {
-                score += 35.0; // Forwards even better if in range
-            }
-
-            // Prefer teammates in space
-            if opponents_near == 0 {
-                score += 25.0;
-            }
-
-            // Prefer shorter passes (safer) but not too strongly
-            score += (max_distance - pass_dist) / max_distance * 15.0;
-
-            if let Some((_, best_score)) = &best_target {
-                if score > *best_score {
-                    best_target = Some((teammate, score));
+            // A. SPACE AROUND RECEIVER — continuous signal. Finds nearest
+            // opponent; closer = penalty. 20u of clearance is "in space",
+            // 5u is "tightly marked". Continuous scoring beats the old
+            // hard cut-off at 2 opponents.
+            let mut nearest_opp_dist = f32::MAX;
+            for (_opp_id, d) in ctx.tick_context.grid.opponents(teammate.id, 25.0) {
+                if d < nearest_opp_dist {
+                    nearest_opp_dist = d;
                 }
+            }
+            // Reject if receiver is literally being tackled
+            if nearest_opp_dist < 4.0 {
+                continue;
+            }
+            let space_score = (nearest_opp_dist / 25.0).clamp(0.0, 1.0) * 40.0;
+
+            // B. PASS-LANE PRESSURE — count opponents within 6u of the
+            // pass line. Three opponents in the lane is a turnover
+            // waiting to happen even if has_clear_pass passed.
+            let to_teammate = teammate.position - player_pos;
+            let pass_len = to_teammate.magnitude();
+            let lane_blockers = if pass_len > 0.1 {
+                let lane_dir = to_teammate / pass_len;
+                ctx.players().opponents().all()
+                    .filter(|opp| {
+                        let to_opp = opp.position - player_pos;
+                        let projection = to_opp.x * lane_dir.x + to_opp.y * lane_dir.y;
+                        if projection < 3.0 || projection > pass_len - 3.0 {
+                            return false;
+                        }
+                        let closest = player_pos + lane_dir * projection;
+                        let perp = ((opp.position.x - closest.x).powi(2)
+                            + (opp.position.y - closest.y).powi(2)).sqrt();
+                        perp < 6.0
+                    })
+                    .count()
+            } else { 0 };
+            let lane_penalty = (lane_blockers as f32) * 10.0;
+
+            // C. FORWARD PROGRESSION — dot product, heavily weighted.
+            let forward_component = if pass_len > 0.1 {
+                (to_teammate / pass_len).dot(&to_goal)
+            } else { 0.0 };
+
+            // Hard reject deep-backward passes unless under pressure
+            // (where the keeper / a covering centre-back is the right
+            // outlet regardless).
+            if forward_component < -0.4 && !under_heavy_press {
+                continue;
+            }
+
+            let progression_score = if prefer_safe {
+                // Coach wants tempo control — backward / lateral is FINE
+                forward_component.abs() * (-20.0) + 30.0
+            } else if under_heavy_press {
+                // Pressed — any safe outlet is good, slight forward bias
+                forward_component * 20.0 + 10.0
             } else {
+                // Open play — reward forward progression strongly
+                if forward_component > 0.0 {
+                    forward_component * 55.0
+                } else {
+                    forward_component * 35.0
+                }
+            };
+
+            // D. THIRD-MAN POTENTIAL — does the receiver have a forward
+            // option of their own? Cheap check: count teammates who are
+            // both ahead of the receiver AND in space. One such outlet
+            // is enough; more doesn't add much.
+            let receiver_ahead_options = ctx.players().teammates().all()
+                .filter(|t| t.id != teammate.id && t.id != ctx.player.id)
+                .filter(|t| {
+                    let to_t = (t.position - teammate.position).normalize();
+                    if to_t.dot(&to_goal) <= 0.25 { return false; }
+                    if (t.position - teammate.position).magnitude() < 15.0 { return false; }
+                    let opp_near_t = ctx.tick_context.grid
+                        .opponents(t.id, 12.0).count();
+                    opp_near_t < 2
+                })
+                .count();
+            let third_man_bonus = (receiver_ahead_options.min(2) as f32) * 10.0;
+
+            // E. TACTICAL / POSITION FIT
+            let position_bonus = if teammate.tactical_positions.is_midfielder() {
+                22.0
+            } else if teammate.tactical_positions.is_forward() {
+                if under_heavy_press {
+                    // Long ball to a forward under pressure is a
+                    // legitimate outlet — score boosted.
+                    28.0
+                } else if creativity > 0.7 {
+                    30.0 // Visionary passer can pick the forward
+                } else {
+                    15.0
+                }
+            } else if teammate.tactical_positions.is_goalkeeper() {
+                // Only reached if under_heavy_press (gate above). Keeper
+                // outlet under pressure is the safest possible option.
+                35.0
+            } else {
+                // Defender — useful as a side switch
+                if forward_component.abs() < 0.3 {
+                    18.0 // lateral → switch play
+                } else {
+                    8.0
+                }
+            };
+
+            // F. DISTANCE PREFERENCE — smooth, no sharp cliff
+            let distance_pref = if pass_dist < 80.0 {
+                10.0 // short safe pass
+            } else if pass_dist < 150.0 {
+                8.0
+            } else {
+                // Long pass costs accuracy; only skilled passers should pick it
+                (creativity - 0.5).max(0.0) * 20.0
+            };
+
+            let score = space_score
+                + progression_score
+                + third_man_bonus
+                + position_bonus
+                + distance_pref
+                - lane_penalty;
+
+            if best_target.as_ref().is_none_or(|(_, s)| score > *s) {
                 best_target = Some((teammate, score));
             }
         }

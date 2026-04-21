@@ -380,14 +380,48 @@ impl<'p> PlayerOperationsImpl<'p> {
         let direction_to_goal = (goal_position - player_position).normalize();
         let distance_to_goal = self.goal_distance();
 
-        // Only check outfield defenders — the goalkeeper is NOT a blocker.
-        // The GK is handled by save mechanics after the shot is taken.
-        // Skip the last 20% of distance to goal (GK zone).
+        // SHOOTING-ANGLE GATE. Real football: the angle the goal
+        // subtends from the shooter's position is the single best
+        // predictor of xG. From the edge of the 18-yard box at a
+        // steep diagonal, the visible goal opening is a few metres
+        // wide; forwards in that spot square the ball or cross,
+        // they don't shoot. Computed via the half-angle at which the
+        // shooter sees the goal: atan(goal_half_width / distance).
+        // Under 12° → pass or cross, not shoot. Matches real shot
+        // location data — almost no shots from Y>30m wide at <18m
+        // from the byline.
+        const GOAL_HALF_WIDTH: f32 = 29.0;
+        let player_y = player_position.y;
+        let goal_y = goal_position.y;
+        let lateral_offset = (player_y - goal_y).abs();
+        let x_offset = distance_to_goal.max(1.0);
+        // Effective opening: if the shooter is lateral, the goal
+        // opening they see shrinks. Use the narrower side.
+        let near_post_offset = (lateral_offset - GOAL_HALF_WIDTH).max(0.0);
+        let far_post_offset = lateral_offset + GOAL_HALF_WIDTH;
+        let visible_opening = (far_post_offset.atan2(x_offset)
+            - near_post_offset.atan2(x_offset)).abs();
+        const MIN_SHOOTING_ANGLE_RAD: f32 = 0.21; // ~12°
+        if visible_opening < MIN_SHOOTING_ANGLE_RAD {
+            return false;
+        }
+
+        // Close-pressure check: a defender within 8u of the shooter
+        // closes the shooting angle regardless of where they stand
+        // relative to the direct line.
+        let immediate_pressure = self.ctx.players().opponents().nearby(8.0)
+            .any(|opp| !opp.tactical_positions.is_goalkeeper());
+        if immediate_pressure {
+            return false;
+        }
+
+        // Only check outfield defenders — the GK is handled by save
+        // mechanics. Skip the last 20% of distance to goal.
         let check_distance = distance_to_goal * 0.80;
 
-        let has_blocker = self.ctx.players().opponents().all()
-            .any(|opp| {
-                // Skip goalkeepers entirely
+        // Count blockers along the shot path.
+        let blockers = self.ctx.players().opponents().all()
+            .filter(|opp| {
                 if opp.tactical_positions.is_goalkeeper() {
                     return false;
                 }
@@ -395,7 +429,6 @@ impl<'p> PlayerOperationsImpl<'p> {
                 let to_opp = opp.position - player_position;
                 let projection = to_opp.x * direction_to_goal.x + to_opp.y * direction_to_goal.y;
 
-                // Only check opponents between player and 80% of the way to goal
                 if projection < 5.0 || projection > check_distance {
                     return false;
                 }
@@ -405,34 +438,52 @@ impl<'p> PlayerOperationsImpl<'p> {
                     + (opp.position.y - closest_point.y).powi(2))
                     .sqrt();
 
-                // Corridor width scales with this defender's marking +
-                // tackling. A world-class CB (both at 18-20) casts a
-                // wide shadow — 9u ≈ 4.5m, realistic for a close-down;
-                // a replacement-level defender at 8-10 only blocks a
-                // 4u shadow, so elite strikers find gaps against poor
-                // back lines. Previously flat at 5u for every defender,
-                // which is why a CB with Marking 20 and one with
-                // Marking 8 both blocked the same shots.
                 let opp_skills = self.skills(opp.id);
                 let def_quality = (opp_skills.technical.marking
                     + opp_skills.technical.tackling
                     + opp_skills.mental.positioning)
                     / 60.0; // 0..1
-                let corridor_half_width = 3.5 + def_quality * 6.0; // 3.5..9.5
+                let corridor_half_width = 5.0 + def_quality * 9.0; // 5..14
 
                 perp_distance < corridor_half_width
-            });
+            })
+            .count();
 
-        !has_blocker
+        // DEFENDER-DENSITY GATE. Zero blockers = clearly clear. One
+        // blocker = contested — only elite finishers (finishing 15+)
+        // force through. Two or more = organised defence, shot is
+        // practically impossible and only a world-class striker
+        // attempts it. This is the second-biggest natural-logic shot
+        // filter: real football defences pack the box, and the
+        // shooter recognising "too many bodies" and passing
+        // instead is the behaviour we need.
+        match blockers {
+            0 => true,
+            1 => {
+                let finishing = self.ctx.player.skills.technical.finishing / 20.0;
+                finishing >= 0.75
+            }
+            _ => {
+                let finishing = self.ctx.player.skills.technical.finishing / 20.0;
+                finishing >= 0.90
+            }
+        }
     }
 
     pub fn separation_velocity(&self) -> Vector3<f32> {
-        // Separation parameters
-        const SEPARATION_RADIUS: f32 = 30.0;
-        const OPP_SEPARATION_RADIUS: f32 = SEPARATION_RADIUS * 0.8; // 24.0
-        const SEPARATION_STRENGTH: f32 = 20.0;
+        // Separation parameters. Boosted from the previous 20-radius,
+        // 20-strength, cubic-falloff setup — that configuration meant
+        // the force was near-zero beyond ~15u and states could pull
+        // teammates into the same yard without resistance. The widened
+        // radius + linear falloff + higher strength + higher cap
+        // produces a force teammates ACTUALLY respond to, so
+        // formations stay spread even when multiple state targets
+        // converge on the same ball area.
+        const SEPARATION_RADIUS: f32 = 40.0;
+        const OPP_SEPARATION_RADIUS: f32 = SEPARATION_RADIUS * 0.8; // 32.0
+        const SEPARATION_STRENGTH: f32 = 45.0;
         const MIN_SEPARATION_DISTANCE: f32 = 5.0;
-        const MAX_SEPARATION_FORCE: f32 = 20.0;
+        const MAX_SEPARATION_FORCE: f32 = 40.0;
 
         // Early exit: check if anyone is nearby before iterating
         let players = self.ctx.players();
@@ -446,16 +497,19 @@ impl<'p> PlayerOperationsImpl<'p> {
         let mut separation = Vector3::zeros();
         let player_pos = self.ctx.player.position;
 
-        // Apply separation from teammates
+        // Apply separation from teammates. Quadratic falloff rather
+        // than cubic — at d=20 (half of radius) strength is 11.25 vs
+        // 1.4 under cubic. Keeps the force meaningful across the whole
+        // "could bunch here" band, not just at the very-close edge.
         for other_player in teammates.nearby(SEPARATION_RADIUS) {
             let to_other = other_player.position - player_pos;
             let distance = to_other.magnitude();
 
             if distance > 0.0 {
                 let inv_dist = 1.0 / distance;
-                let direction = -to_other * inv_dist; // manual normalize
+                let direction = -to_other * inv_dist;
                 let t = 1.0 - distance / SEPARATION_RADIUS;
-                let strength = SEPARATION_STRENGTH * t * t * t; // manual cube instead of powf(3.0)
+                let strength = SEPARATION_STRENGTH * t * t; // quadratic
                 separation += direction * strength;
 
                 if distance < MIN_SEPARATION_DISTANCE {
@@ -465,21 +519,31 @@ impl<'p> PlayerOperationsImpl<'p> {
             }
         }
 
-        // Apply separation from opponents
-        for other_player in opponents.nearby(OPP_SEPARATION_RADIUS) {
-            let to_other = other_player.position - player_pos;
-            let distance = to_other.magnitude();
+        // Apply separation from opponents — but only if we DON'T have
+        // the ball. A ball carrier must face defenders, not flee via
+        // separation force. With the boosted strength, opponent
+        // separation was pushing the dribbler sideways around any
+        // chaser — causing the "player running around" circular
+        // motion the user saw. Ball carriers get zero opponent
+        // separation so state velocity (aim at goal / find a pass)
+        // controls their movement cleanly.
+        let i_have_ball = self.ctx.ball().owner_id() == Some(self.ctx.player.id);
+        if !i_have_ball {
+            for other_player in opponents.nearby(OPP_SEPARATION_RADIUS) {
+                let to_other = other_player.position - player_pos;
+                let distance = to_other.magnitude();
 
-            if distance > 0.0 {
-                let inv_dist = 1.0 / distance;
-                let direction = -to_other * inv_dist;
-                let t = 1.0 - distance / OPP_SEPARATION_RADIUS;
-                let strength = SEPARATION_STRENGTH * 0.8 * t * t * t;
-                separation += direction * strength;
+                if distance > 0.0 {
+                    let inv_dist = 1.0 / distance;
+                    let direction = -to_other * inv_dist;
+                    let t = 1.0 - distance / OPP_SEPARATION_RADIUS;
+                    let strength = SEPARATION_STRENGTH * 0.8 * t * t * t;
+                    separation += direction * strength;
 
-                if distance < MIN_SEPARATION_DISTANCE {
-                    let emergency_multiplier = (MIN_SEPARATION_DISTANCE * inv_dist).min(1.5);
-                    separation += direction * SEPARATION_STRENGTH * 0.4 * emergency_multiplier;
+                    if distance < MIN_SEPARATION_DISTANCE {
+                        let emergency_multiplier = (MIN_SEPARATION_DISTANCE * inv_dist).min(1.5);
+                        separation += direction * SEPARATION_STRENGTH * 0.4 * emergency_multiplier;
+                    }
                 }
             }
         }

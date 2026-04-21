@@ -1,24 +1,46 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
 use crate::r#match::{
-    ConditionContext, PlayerSide, StateChangeResult, StateProcessingContext, StateProcessingHandler,
+    ConditionContext, StateChangeResult, StateProcessingContext, StateProcessingHandler,
 };
 use nalgebra::Vector3;
 
-const STAMINA_RECOVERY_THRESHOLD: f32 = 90.0;
+// Lowered from 90% — a condition this high is rarely reached mid-match
+// (condition drifts through 40-80% band under active play), which kept
+// defenders stuck in Resting forever. 65% is a natural "second wind"
+// point for exiting a recovery jog back into active defending.
+const STAMINA_RECOVERY_THRESHOLD: f32 = 65.0;
+/// Minimum stamina required to abandon rest and engage a crisis.
+/// Hysteresis against Pressing's 25% exit threshold — the 25%–45%
+/// band is a "stay in Resting but walk toward the ball" zone, so a
+/// defender at 30% stamina doesn't flicker into Pressing and back.
+const CRISIS_ENGAGE_STAMINA: f32 = 45.0;
 const BALL_PROXIMITY_THRESHOLD: f32 = 10.0;
 const MARKING_DISTANCE_THRESHOLD: f32 = 10.0;
-const OPPONENT_THREAT_THRESHOLD: usize = 2;
 
 #[derive(Default, Clone)]
 pub struct DefenderRestingState {}
 
 impl StateProcessingHandler for DefenderRestingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
-        // 1. Check if player's stamina has recovered
         let stamina = ctx.player.player_attributes.condition_percentage() as f32;
+
+        // Crisis engage — only exit to Pressing if we have enough
+        // stamina to actually press (≥45%). Between Pressing's 25%
+        // exit and this 45% re-entry is a hysteresis band: during
+        // crisis we walk toward the ball (see `velocity`) but don't
+        // sprint into a press we'll immediately exit due to fatigue.
+        // Stops the Resting ↔ Pressing flicker the user was seeing.
+        if ctx.player().defensive().is_defensive_crisis()
+            && stamina >= CRISIS_ENGAGE_STAMINA
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Pressing,
+            ));
+        }
+
+        // 1. Stamina recovered enough — back to full defensive duties
         if stamina >= STAMINA_RECOVERY_THRESHOLD {
-            // Transition back to HoldingLine state
             return Some(StateChangeResult::with_defender_state(
                 DefenderState::HoldingLine,
             ));
@@ -37,21 +59,38 @@ impl StateProcessingHandler for DefenderRestingState {
             }));
         }
 
-        // 3. Check if the team is under threat
-        if self.is_team_under_threat(ctx) {
-            // Transition to Pressing state to help the team
-            return Some(StateChangeResult::with_defender_state(
-                DefenderState::Pressing,
-            ));
-        }
+        // Previous "team under threat" exit (fires if 2+ opponents in
+        // our defensive third) was causing Resting ↔ Pressing flicker:
+        // Pressing drains stamina to <30% → Resting → threat still
+        // present → Pressing again → drain → Resting. Hysteresis is
+        // now handled via `is_defensive_crisis` (ball in our third
+        // with an opposing carrier — a real emergency) and the
+        // ball-proximity check above. Everything else waits for
+        // stamina to recover.
 
-        // 4. Remain in Resting state
+        // Remain in Resting state
         None
     }
 
 
-    fn velocity(&self, _ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
-        // Defender remains stationary or moves minimally while resting
+    fn velocity(&self, ctx: &StateProcessingContext) -> Option<Vector3<f32>> {
+        // Crisis is active but we're too tired to press — walk toward
+        // the ball rather than standing still. Real football: a
+        // winded defender doesn't stop in place while the opposition
+        // attacks, they jog back into shape. This is the "not running
+        // to the player with ball" fix: the defender still moves
+        // toward the threat at ~35% pace, even while recovering.
+        if ctx.player().defensive().is_defensive_crisis() {
+            let to_ball = ctx.tick_context.positions.ball.position - ctx.player.position;
+            let dist = to_ball.magnitude();
+            if dist > 5.0 {
+                let direction = to_ball / dist;
+                let walk_speed = ctx.player.skills.physical.pace * 0.35;
+                return Some(direction * walk_speed);
+            }
+        }
+
+        // No crisis — full stop for maximum recovery.
         Some(Vector3::new(0.0, 0.0, 0.0))
     }
 
@@ -65,24 +104,5 @@ impl DefenderRestingState {
     /// Checks if an opponent player is nearby within the MARKING_DISTANCE_THRESHOLD.
     fn is_opponent_nearby(&self, ctx: &StateProcessingContext) -> bool {
         ctx.players().opponents().exists(MARKING_DISTANCE_THRESHOLD)
-    }
-
-    /// Determines if the team is under threat based on the number of opponents in the attacking third.
-    fn is_team_under_threat(&self, ctx: &StateProcessingContext) -> bool {
-        let opponents_in_attacking_third = ctx.players().opponents().all()
-            .filter(|opponent| self.is_in_defensive_third(opponent.position, ctx))
-            .count();
-
-        opponents_in_attacking_third >= OPPONENT_THREAT_THRESHOLD
-    }
-
-    /// Checks if a position is within the team's defensive third of the field.
-    fn is_in_defensive_third(&self, position: Vector3<f32>, ctx: &StateProcessingContext) -> bool {
-        let field_length = ctx.context.field_size.width as f32;
-        if ctx.player.side == Some(PlayerSide::Left) {
-            position.x < field_length / 3.0
-        } else {
-            position.x > (2.0 / 3.0) * field_length
-        }
     }
 }

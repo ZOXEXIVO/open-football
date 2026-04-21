@@ -105,10 +105,15 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
         let min_x = raw_min.min(raw_max);
         let target_x = forward_x.clamp(min_x, raw_max);
 
-        // Find the largest gap between defenders in the attacking zone
+        // Find gaps between defenders in the attacking zone — and
+        // assign a DIFFERENT gap to each of our forwards so they run
+        // into separate channels, not all into the single widest gap.
+        // Previously every forward aimed at `best_gap_y` which meant
+        // 3 forwards ran toward the same spot synchronously, visibly
+        // bunched and making the whole "creating space" movement
+        // useless.
         let mut opp_ys: Vec<f32> = ctx.players().opponents().all()
             .filter(|opp| {
-                // Only consider opponents in the zone between ball and goal
                 let opp_x_ok = if attacking_direction > 0.0 {
                     opp.position.x > ball_pos.x - 20.0
                 } else {
@@ -119,23 +124,38 @@ impl StateProcessingHandler for ForwardCreatingSpaceState {
             .map(|opp| opp.position.y)
             .collect();
 
-        // Add field boundaries as virtual defenders
+        // Virtual defenders at the touchlines so gaps near the wings exist.
         opp_ys.push(0.0);
         opp_ys.push(field_height);
         opp_ys.sort_by(|a, b| a.partial_cmp(b).unwrap());
 
-        // Find the widest gap
-        let mut best_gap_y = field_height / 2.0;
-        let mut best_gap_width = 0.0f32;
+        // Build (gap_width, gap_center_y) list and sort widest-first.
+        let mut gaps: Vec<(f32, f32)> = Vec::new();
         for i in 0..opp_ys.len() - 1 {
-            let gap = opp_ys[i + 1] - opp_ys[i];
-            if gap > best_gap_width {
-                best_gap_width = gap;
-                best_gap_y = (opp_ys[i] + opp_ys[i + 1]) / 2.0;
-            }
+            let width = opp_ys[i + 1] - opp_ys[i];
+            let center = (opp_ys[i] + opp_ys[i + 1]) / 2.0;
+            gaps.push((width, center));
         }
+        gaps.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
 
-        let target_y = best_gap_y.clamp(40.0, field_height - 40.0);
+        // Rank THIS forward among our forwards by id so each one picks
+        // a distinct gap (id-based so the assignment is stable tick
+        // to tick — forwards don't swap targets and swap back).
+        let my_id = ctx.player.id;
+        let slot_index = ctx.players().teammates().all()
+            .filter(|t| t.tactical_positions.is_forward() && t.id < my_id)
+            .count();
+
+        // Pick the gap matching my slot; fall back to the widest if
+        // there are fewer gaps than forwards. Also skew slightly
+        // toward a different gap than the nearest teammate would have
+        // picked (nearest forward might still be in my slot range).
+        let gap_idx = slot_index.min(gaps.len().saturating_sub(1));
+        let target_y = if gaps.is_empty() {
+            field_height / 2.0
+        } else {
+            gaps[gap_idx].1
+        }.clamp(40.0, field_height - 40.0);
 
         let target = Vector3::new(target_x, target_y, 0.0);
         let dist = (target - ctx.player.position).magnitude();

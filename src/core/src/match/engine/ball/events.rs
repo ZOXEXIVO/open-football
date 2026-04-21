@@ -7,6 +7,10 @@ use log::debug;
 pub enum BallEvent {
     Goal(BallGoalEventMetadata),
     Claimed(u32),
+    /// Pass reached its intended target: (receiver_id, passer_id).
+    /// Emitted by `try_pass_target_claim` so pass-completion stats
+    /// can be credited exactly once per successful pass.
+    PassCompleted(u32, u32),
     /// Pass intercepted by opponent: (interceptor_id, passer_id)
     Intercepted(u32, Option<u32>),
     Gained(u32),
@@ -85,17 +89,22 @@ impl BallEventDispatcher {
             BallEvent::Claimed(player_id) => {
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(player_id)));
             }
+            BallEvent::PassCompleted(receiver_id, passer_id) => {
+                if let Some(passer) = field.get_player_mut(passer_id) {
+                    passer.statistics.passes_completed += 1;
+                }
+                // Clear the pending-pass tag so the downstream ClaimBall
+                // handler doesn't also credit this pass (double-count).
+                field.ball.pending_pass_passer = None;
+                remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(receiver_id)));
+            }
             BallEvent::Intercepted(interceptor_id, passer_id) => {
-                // Credit the interceptor
+                // Credit the interceptor. Opponent touch ends the pass
+                // window — accuracy was NOT earned.
+                let _ = passer_id;
+                field.ball.pending_pass_passer = None;
                 if let Some(player) = field.get_player_mut(interceptor_id) {
                     player.statistics.interceptions += 1;
-                }
-                // Correct the passer's inflated pass completion count
-                if let Some(pid) = passer_id {
-                    if let Some(passer) = field.get_player_mut(pid) {
-                        passer.statistics.passes_completed =
-                            passer.statistics.passes_completed.saturating_sub(1);
-                    }
                 }
                 remaining_events.push(Event::PlayerEvent(PlayerEvent::ClaimBall(interceptor_id)));
             }

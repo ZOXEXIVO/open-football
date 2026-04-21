@@ -108,11 +108,6 @@ impl EuropaLeague {
         }
 
         self.current_stage = CompetitionStage::GroupStage;
-
-        info!(
-            "Europa League draw: {} clubs in {} groups, {} fixtures",
-            count, num_groups, self.matches.len()
-        );
     }
 
     pub fn generate_knockout_fixtures(&mut self, year: i32) {

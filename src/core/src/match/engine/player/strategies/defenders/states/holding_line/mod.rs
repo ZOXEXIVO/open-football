@@ -2,6 +2,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext, StateProcessingHandler};
 
 const MAX_DEFENSIVE_LINE_DEVIATION: f32 = 35.0;  // Tighter line — less room for attackers
@@ -17,6 +18,33 @@ pub struct DefenderHoldingLineState {}
 
 impl StateProcessingHandler for DefenderHoldingLineState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // BOX EMERGENCY — ball is in our penalty area with an opposing
+        // carrier. Break shape and engage. The two closest defenders
+        // attack; the rest hold line so the far side isn't exposed.
+        if ctx.player().defensive().is_box_emergency_for_me() {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                let d = carrier.distance(ctx);
+                if d < 25.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+        }
+
+        // STEP UP — attacker is approaching the penalty area and I'm
+        // the closest defender. Meet them outside the box instead of
+        // collapsing deep. Real football: defenders engage at the 18-yard
+        // line, not at the 6-yard line.
+        if ctx.player().defensive().should_step_up_to_meet_attacker() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Pressing,
+            ));
+        }
+
         // 1. Calculate the defensive line position (x-axis: goal-to-goal)
         let defensive_line_position = self.calculate_defensive_line_position(ctx);
 
@@ -30,58 +58,6 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // OPPONENT ADVANCING: Break from line when opponent has ball and is heading toward our goal
-        // This prevents defenders from watching attackers run at them from midfield
-        if !ctx.team().is_control_ball() {
-            if let Some(ball_carrier) = ctx.players().opponents().with_ball().next() {
-                let carrier_vel = ctx.tick_context.positions.players.velocity(ball_carrier.id);
-                let carrier_speed = carrier_vel.magnitude();
-                if carrier_speed > 0.1 {
-                    let own_goal = ctx.ball().direction_to_own_goal();
-                    let to_goal = (own_goal - ball_carrier.position).normalize();
-                    let advancing = carrier_vel.normalize().dot(&to_goal);
-                    // Opponent is advancing toward our goal
-                    if advancing > 0.3 {
-                        let dist = ball_carrier.distance(ctx);
-                        if dist < 25.0 {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::Tackling,
-                            ));
-                        }
-                        if dist < PRESSING_DISTANCE_THRESHOLD
-                            && ctx.player().defensive().is_best_defender_for_opponent(&ball_carrier)
-                        {
-                            return Some(StateChangeResult::with_defender_state(
-                                DefenderState::Pressing,
-                            ));
-                        }
-                        // Even from far away — drop into active defense
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Running,
-                        ));
-                    }
-                }
-            }
-        }
-
-        // COUNTER-PRESS: Break from line to immediately press when possession just lost
-        if ctx.team().has_just_lost_possession() {
-            let counter_press = ctx.team().tactics().counter_press_intensity();
-            let ball_dist = ctx.ball().distance();
-            let counter_press_range = 40.0 + counter_press * 60.0;
-            if ball_dist < counter_press_range {
-                if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
-                    if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball)
-                        || opponent_with_ball.distance(ctx) < 25.0
-                    {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Pressing,
-                        ));
-                    }
-                }
-            }
-        }
-
         // Loose ball nearby — go claim it directly
         if !ctx.ball().is_owned() && ctx.ball().distance() < 40.0 && ctx.ball().speed() < 3.0 {
             return Some(StateChangeResult::with_defender_state(
@@ -89,61 +65,77 @@ impl StateProcessingHandler for DefenderHoldingLineState {
             ));
         }
 
-        // Priority: Tackle or press opponent with ball aggressively
+        // Role-driven engagement: if the opponent has the ball, break
+        // from the line according to our defensive role. A counter-press
+        // window widens the trigger so even distant defenders commit to
+        // chasing just after we lose possession.
         if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
             let distance = opponent_with_ball.distance(ctx);
-            // Very close — tackle immediately, don't wait
-            if distance < 25.0 {
+
+            // Tackle range — but only if I'm the Primary closer than
+            // any teammate. Otherwise I hold the line while the closer
+            // defender engages. Stops the whole back four lunging at
+            // the same carrier.
+            let is_primary = matches!(
+                ctx.player().defensive().defensive_role_for_ball_carrier(),
+                DefensiveRole::Primary
+            );
+            if distance < 25.0 && is_primary {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));
             }
-            if distance < PRESSING_DISTANCE_THRESHOLD {
-                // Check if we're the best defender to press
-                if ctx.player().defensive().is_best_defender_for_opponent(&opponent_with_ball) {
+
+            let counter_press_active = ctx.team().has_just_lost_possession();
+            let counter_press_range = if counter_press_active {
+                40.0 + ctx.team().tactics().counter_press_intensity() * 60.0
+            } else {
+                0.0
+            };
+
+            match ctx.player().defensive().defensive_role_for_ball_carrier() {
+                DefensiveRole::Primary => {
+                    if distance < PRESSING_DISTANCE_THRESHOLD
+                        || (counter_press_active && ctx.ball().distance() < counter_press_range)
+                    {
+                        return Some(StateChangeResult::with_defender_state(
+                            DefenderState::Pressing,
+                        ));
+                    }
+                    // Primary but out of range — chase via Running so we
+                    // can close the gap instead of holding the line.
                     return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
+                        DefenderState::Running,
                     ));
                 }
-                // Support press if close enough
-                if ctx.player().defensive().can_support_press(&opponent_with_ball) {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-            }
-        }
-
-        // CRITICAL: Check for dangerous runs - break from line to track attackers
-        // This prevents defenders from standing still while attackers run past
-        if let Some(dangerous_runner) = self.scan_for_dangerous_runs(ctx) {
-            let distance_to_runner = dangerous_runner.distance(ctx);
-            // Track if we're the best positioned defender OR if runner is very close (< 25m)
-            // The close distance check ensures someone tracks even if coordination disagrees
-            if ctx.player().defensive().is_best_defender_for_opponent(&dangerous_runner)
-                || distance_to_runner < 25.0
-            {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Marking,
-                ));
-            }
-        }
-
-        // COVER COLLAPSE: When a teammate is pressing the ball carrier nearby,
-        // break from line to provide secondary cover — don't just stand and watch
-        if ctx.ball().on_own_side() {
-            if let Some(opponent_with_ball) = ctx.players().opponents().with_ball().next() {
-                let distance = opponent_with_ball.distance(ctx);
-                // Opponent is within range but we're not the one pressing
-                if distance < 100.0 && distance > PRESSING_DISTANCE_THRESHOLD {
-                    // Check if a teammate is already engaging this opponent
-                    if ctx.player().defensive().is_opponent_being_engaged(&opponent_with_ball) {
-                        // Provide cover — position between attacker and goal
+                DefensiveRole::Cover => {
+                    if distance < 100.0 && ctx.ball().on_own_side() {
                         return Some(StateChangeResult::with_defender_state(
                             DefenderState::Covering,
                         ));
                     }
                 }
+                DefensiveRole::Help => {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Marking,
+                    ));
+                }
+                DefensiveRole::Hold => {
+                    // Stay on the line — fall through to run/guard checks
+                    // for secondary threats below.
+                }
+            }
+        }
+
+        // Break line to track dangerous runners if we're the best
+        // positioned defender for them (no ball carrier scenario, or
+        // our role was Hold).
+        if let Some(dangerous_runner) = self.scan_for_dangerous_runs(ctx) {
+            let distance_to_runner = dangerous_runner.distance(ctx);
+            if distance_to_runner < 25.0 {
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Marking,
+                ));
             }
         }
 
@@ -151,8 +143,7 @@ impl StateProcessingHandler for DefenderHoldingLineState {
         if ctx.ball().on_own_side() {
             if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE_THRESHOLD * 2.0) {
                 let dist = unmarked.distance(ctx);
-                if dist < 60.0 && !ctx.player().defensive().is_best_defender_for_opponent(&unmarked) {
-                    // Another defender is closer but let's guard secondary threats
+                if dist < 60.0 {
                     return Some(StateChangeResult::with_defender_state(
                         DefenderState::Guarding,
                     ));

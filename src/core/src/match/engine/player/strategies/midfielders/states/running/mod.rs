@@ -18,6 +18,43 @@ pub struct MidfielderRunningState {}
 
 impl StateProcessingHandler for MidfielderRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Offside discipline — if we don't have the ball and we've run
+        // past the opposing defensive line, drop back before a teammate
+        // plays a pass that finds us offside.
+        if !ctx.player.has_ball(ctx)
+            && ctx.player().defensive().is_stranded_offside()
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Returning,
+            ));
+        }
+
+        // COUNTER-PRESS: we just lost the ball. The closest midfielder
+        // to the new carrier committing to an immediate press is the
+        // single biggest recovery mechanism in real football — it's
+        // why modern high-tempo sides look so relentless. Mirrors the
+        // defender counter-press in `defenders/running` line ~108. Only
+        // fires for the midfielder best positioned to chase (avoids
+        // whole midfield collapsing on one runner).
+        if !ctx.player.has_ball(ctx)
+            && ctx.team().has_just_lost_possession()
+            && !ctx.team().is_control_ball()
+        {
+            let ball_dist = ctx.ball().distance();
+            let intensity = ctx.team().tactics().counter_press_intensity();
+            let counter_press_range = 35.0 + intensity * 45.0;
+            if ball_dist < counter_press_range && ctx.team().is_best_player_to_chase_ball() {
+                if ball_dist < 25.0 {
+                    return Some(StateChangeResult::with_midfielder_state(
+                        MidfielderState::Tackling,
+                    ));
+                }
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Pressing,
+                ));
+            }
+        }
+
         // Phase-first dispatch — midfielders are the engine's pivot
         // between defence and attack, so the phase signal matters most
         // for them. See `phase_dispatch` for behaviour per phase.
@@ -30,6 +67,22 @@ impl StateProcessingHandler for MidfielderRunningState {
             let coach = ctx.team().coach_instruction();
             let can_shoot = ctx.team().can_shoot();
 
+            // Emergency clearance: under heavy pressure in our own box.
+            // Route to Passing so its emergency-clearance code path fires
+            // (Passing already has `emit_emergency_clearance` gated on
+            // `in_box_danger_zone` + `is_under_heavy_pressure`). Running
+            // previously had no such escape hatch — a midfielder under
+            // two-defender press in their own area kept trying to play
+            // out, lost the ball, and conceded via the ensuing turnover.
+            if ctx.player().pressure().is_under_heavy_pressure()
+                && ctx.ball().distance_to_own_goal()
+                    < ctx.context.field_size.width as f32 * 0.18
+            {
+                return Some(StateChangeResult::with_midfielder_state(
+                    MidfielderState::Passing,
+                ));
+            }
+
             // Coach tempo: if wasting time or slowing down, prefer possession
             if coach.prefer_possession() && distance_to_goal > POINT_BLANK_DISTANCE {
                 let ownership_ticks = ctx.tick_context.ball.ownership_duration;
@@ -38,12 +91,52 @@ impl StateProcessingHandler for MidfielderRunningState {
                 }
             }
 
+            // PATIENT POSSESSION: use the team-level
+            // `should_play_possession` check so all real-football
+            // triggers apply (just won ball, tired, leading, late
+            // game, no attack ready). See team/team.rs for the rules.
+            let under_pressure = ctx.players().opponents().exists(15.0);
+            if !under_pressure
+                && distance_to_goal > 70.0
+                && ctx.tick_context.ball.ownership_duration > 8
+                && ctx.team().should_play_possession()
+            {
+                if let Some(target) = self.find_best_pass_option(ctx).map(|(t, _)| t) {
+                    // Score the candidate: only pass if it's a safe,
+                    // sideways/backward option (we don't want to fire
+                    // the ball forward into a covered attacker).
+                    let player_pos = ctx.player.position;
+                    let goal_pos = ctx.player().opponent_goal_position();
+                    let to_goal = (goal_pos - player_pos).normalize();
+                    let to_t = (target.position - player_pos).normalize();
+                    let forward_component = to_t.dot(&to_goal);
+                    let target_in_space = ctx.tick_context.grid
+                        .opponents(target.id, 10.0).count() < 2;
+                    // Accept lateral, backward, or mildly-forward only
+                    if forward_component < 0.4 && target_in_space {
+                        return Some(StateChangeResult::with_midfielder_state_and_event(
+                            MidfielderState::Standing,
+                            Event::PlayerEvent(PlayerEvent::PassTo(
+                                PassingEventContext::new()
+                                    .with_from_player_id(ctx.player.id)
+                                    .with_to_player_id(target.id)
+                                    .with_reason("MID_PATIENT_POSSESSION")
+                                    .build(ctx),
+                            )),
+                        ));
+                    }
+                }
+                // No safe outlet yet — keep the ball, re-evaluate next tick
+                return None;
+            }
+
             // Priority 0: Point-blank range - MUST shoot regardless of clear shot check
             // This prevents players from colliding with goalkeeper instead of shooting
             if distance_to_goal <= POINT_BLANK_DISTANCE && distance_to_goal > MIN_SHOOTING_DISTANCE {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ));
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason("MID_RUN_POINT_BLANK"),
+                );
             }
 
             // Priority: Clear ball if congested anywhere (not just boundaries)
@@ -114,9 +207,10 @@ impl StateProcessingHandler for MidfielderRunningState {
                 && ctx.player().has_clear_shot()
                 && ctx.player().shooting().has_good_angle()
             {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ));
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason("MID_RUN_STANDARD"),
+                );
             }
 
             // Distance shooting - long range with good long shot skills
@@ -461,9 +555,10 @@ impl StateProcessingHandler for MidfielderRunningState {
             // Only shoot as fallback at point-blank range with clear shot
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
             if distance_to_goal < 25.0 && ctx.player().has_clear_shot() {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ));
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason("MID_RUN_ANTI_OSCILLATION"),
+                );
             }
             // Last resort: pass to any nearby teammate ahead of the ball (toward opponent goal)
             let player_pos = ctx.player.position;

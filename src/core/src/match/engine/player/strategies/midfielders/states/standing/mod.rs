@@ -12,6 +12,18 @@ pub struct MidfielderStandingState {}
 
 impl StateProcessingHandler for MidfielderStandingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Offside discipline — attack-minded midfielders (AM, wingers)
+        // can drift beyond the opposing defensive line. If our team
+        // doesn't have the ball, drop back to Returning or any pass
+        // upfield will catch us offside.
+        if !ctx.player.has_ball(ctx)
+            && ctx.player().defensive().is_stranded_offside()
+        {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Returning,
+            ));
+        }
+
         if ctx.player.has_ball(ctx) {
             // Go directly to Passing state — it has the best pass evaluation logic
             // Only hold possession if under no pressure and no teammates nearby
@@ -60,7 +72,26 @@ impl StateProcessingHandler for MidfielderStandingState {
                     }
                 }
 
-                // Only intercept if ball is loose (not owned by anyone)
+                // Ball in flight (clearance, long pass) — go contest the
+                // landing zone. Without this, clearances to midfield always
+                // end up at the opposing team's feet because we only
+                // intercept when the ball is already headed directly at
+                // us. Midfielders are the default contester of loose
+                // balls in the middle third; the predicted landing
+                // position gives them a runway to reach it.
+                if !ctx.ball().is_owned() && ctx.ball().is_in_flight() {
+                    let landing = ctx.tick_context.positions.ball.landing_position;
+                    let dist_to_landing = (landing - ctx.player.position).magnitude();
+                    if dist_to_landing < 100.0 {
+                        return Some(StateChangeResult::with_midfielder_state(
+                            MidfielderState::Intercepting,
+                        ));
+                    }
+                }
+
+                // Loose + heading toward us — stay with the original tight
+                // trigger (angle gate filters passes that aren't coming
+                // our way).
                 if !ctx.ball().is_owned()
                     && ctx.ball().distance() < 250.0
                     && ctx.ball().is_towards_player_with_angle(0.8) {

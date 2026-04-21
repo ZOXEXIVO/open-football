@@ -113,11 +113,6 @@ impl ChampionsLeague {
         }
 
         self.current_stage = CompetitionStage::GroupStage;
-
-        info!(
-            "Champions League draw: {} clubs in {} groups, {} fixtures",
-            count, num_groups, self.matches.len()
-        );
     }
 
     /// Generate knockout round fixtures after group stage completes.

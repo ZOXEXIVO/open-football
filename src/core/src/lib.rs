@@ -45,6 +45,9 @@ pub fn match_engine_pool() -> &'static r#match::MatchPlayEnginePool {
     })
 }
 
+#[macro_use]
+pub mod match_logs;
+
 pub mod simulator;
 pub use simulator::*;
 

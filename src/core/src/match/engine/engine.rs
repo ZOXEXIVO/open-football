@@ -2,8 +2,11 @@ use crate::r#match::engine::events::dispatcher::EventCollection;
 use crate::r#match::engine::goal::{assign_kickoff, handle_goal_reset};
 use crate::r#match::PlayerSide;
 use crate::r#match::engine::rating::calculate_match_rating;
+#[cfg(feature = "match-logs")]
 use crate::r#match::engine::context::SubstitutionRecord;
 use crate::r#match::engine::substitutions::process_substitutions;
+#[cfg(feature = "match-logs")]
+use crate::r#match::player::statistics::MatchStatisticType;
 use crate::r#match::events::EventDispatcher;
 use crate::r#match::field::MatchField;
 use crate::r#match::result::ResultMatchPositionData;
@@ -181,34 +184,38 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             result.player_stats.insert(player_id, stats);
         }
 
-        // Blowout diagnostic: when a match produces 8+ total goals,
-        // dump the squad's aggregate skill profile so we can identify
-        // which attribute patterns in the real-data squads are bypassing
-        // the shot-mechanics / GK-save fixes. Behind a log level (info)
-        // so normal runs aren't noisy.
-        let total_goals = home_goals + away_goals;
-        if total_goals >= 8 {
-            let away_team_id = if field.home_team_id == home_team_id {
-                field.away_team_id
-            } else {
-                field.home_team_id
-            };
-            Self::log_blowout_profile(
-                &field.players,
-                &context.substitutions,
-                &result,
-                home_team_id,
-                away_team_id,
-                home_goals,
-                away_goals,
-            );
+        // Blowout diagnostic — off by default (see `match-logs` feature).
+        // The aggregation itself is O(players × stats), so we skip the
+        // whole block in production. Enable with `--features match-logs`
+        // in `.dev/match` to analyse shot / goal sources.
+        #[cfg(feature = "match-logs")]
+        {
+            let total_goals = home_goals + away_goals;
+            if total_goals >= 8 {
+                let away_team_id = if field.home_team_id == home_team_id {
+                    field.away_team_id
+                } else {
+                    field.home_team_id
+                };
+                Self::log_blowout_profile(
+                    &field.players,
+                    &context.substitutions,
+                    &result,
+                    home_team_id,
+                    away_team_id,
+                    home_goals,
+                    away_goals,
+                );
+            }
         }
 
         result
     }
 
     /// Aggregate per-team skill dump for post-match analysis. Runs only
-    /// on 8+ goal matches (rare tail) so it adds no cost to normal play.
+    /// on 8+ goal matches when the `match-logs` feature is enabled.
+    /// Skipped entirely in production builds.
+    #[cfg(feature = "match-logs")]
     fn log_blowout_profile(
         players: &[MatchPlayer],
         substitutions: &[SubstitutionRecord],
@@ -233,6 +240,13 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             gk_count: u32,
             total_shots: u16,
             total_on_target: u16,
+            passes_attempted: u32,
+            passes_completed: u32,
+            tackles: u32,
+            interceptions: u32,
+            saves: u32,
+            fouls: u32,
+            xg_total: f32,
         }
         impl TeamAgg {
             fn new() -> Self {
@@ -241,6 +255,9 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
                     def_marking: 0.0, def_tackling: 0.0, def_positioning: 0.0, def_count: 0,
                     gk_handling: 0.0, gk_reflexes: 0.0, gk_agility: 0.0, gk_count: 0,
                     total_shots: 0, total_on_target: 0,
+                    passes_attempted: 0, passes_completed: 0,
+                    tackles: 0, interceptions: 0, saves: 0, fouls: 0,
+                    xg_total: 0.0,
                 }
             }
         }
@@ -291,27 +308,99 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             let agg = if team_id == home_team_id { &mut home_agg } else { &mut away_agg };
             agg.total_shots += stats.shots_total;
             agg.total_on_target += stats.shots_on_target;
+            agg.passes_attempted += stats.passes_attempted as u32;
+            agg.passes_completed += stats.passes_completed as u32;
+            agg.tackles += stats.tackles as u32;
+            agg.interceptions += stats.interceptions as u32;
+            agg.saves += stats.saves as u32;
+            agg.fouls += stats.fouls as u32;
+            agg.xg_total += stats.xg;
         }
 
-        let fmt_team = |tag: &str, team_id: u32, goals: u8, agg: &TeamAgg| {
+        // Goal source breakdown — distinguishes "proper" shot goals from
+        // own goals and from goals credited to a scorer who never actually
+        // took a shot in the match (so the goal came from a pass, a
+        // clearance-into-net, or a loose-ball scramble that the engine
+        // credits via the `current_owner.or(previous_owner)` fallback).
+        // The last bucket is the one we need to watch — goals should flow
+        // almost exclusively from shots.
+        let score_ref = result.score.as_ref().unwrap();
+        let mut home_own: u16 = 0;
+        let mut away_own: u16 = 0;
+        let mut home_nonshot: u16 = 0;
+        let mut away_nonshot: u16 = 0;
+        for g in score_ref.detail() {
+            if g.stat_type != MatchStatisticType::Goal {
+                continue;
+            }
+            let scorer_team = team_for(g.player_id);
+            let is_home_scorer = scorer_team == Some(home_team_id);
+            if g.is_auto_goal {
+                // Own goal — credited to opponent team
+                if is_home_scorer { away_own += 1; } else { home_own += 1; }
+                continue;
+            }
+            // Non-auto goal. Did this scorer take ANY shot in the match?
+            let took_shot = result.player_stats.get(&g.player_id)
+                .map(|s| s.shots_total > 0)
+                .unwrap_or(false);
+            if !took_shot {
+                if is_home_scorer { home_nonshot += 1; } else { away_nonshot += 1; }
+            }
+        }
+
+        let total_passes = (home_agg.passes_attempted + away_agg.passes_attempted).max(1) as f32;
+        let home_possession = home_agg.passes_attempted as f32 / total_passes * 100.0;
+        let away_possession = away_agg.passes_attempted as f32 / total_passes * 100.0;
+
+        let fmt_team = |tag: &str, team_id: u32, goals: u8, agg: &TeamAgg, own_against: u16, nonshot: u16, possession: f32| {
             let fc = agg.fwd_count.max(1) as f32;
             let dc = agg.def_count.max(1) as f32;
             let gc = agg.gk_count.max(1) as f32;
+            let pass_acc = if agg.passes_attempted > 0 {
+                agg.passes_completed as f32 / agg.passes_attempted as f32 * 100.0
+            } else { 0.0 };
+            // xG overperformance: goals above what the shot quality
+            // predicted. Real football: |diff| rarely exceeds xG by more
+            // than ~1.5. Big positive means clinical finishing or a
+            // generous finishing roll; big negative means wasted chances.
+            let xg_delta = goals as f32 - agg.xg_total;
+            // Shot volume per xG: a team that took 150 shots for only 4.5
+            // xG was firing from impossible angles / long range — a
+            // marker of blind shooting during desperation mode.
+            let shots_per_xg = if agg.xg_total > 0.01 {
+                agg.total_shots as f32 / agg.xg_total
+            } else { 0.0 };
             format!(
-                "{} team={} gls={} shots={} ot={} | FWD fin={:.1} tec={:.1} com={:.1} | DEF mrk={:.1} tck={:.1} pos={:.1} | GK hnd={:.1} ref={:.1} agi={:.1}",
-                tag, team_id, goals, agg.total_shots, agg.total_on_target,
+                "{} team={} gls={} (own-ag={} non-shot={}) shots={} ot={} xG={:.2} (Δ{:+.2}, s/xG={:.0}) | poss={:.0}% pass={}/{} ({:.0}%) tck={} int={} sv={} fl={} | FWD fin={:.1} tec={:.1} com={:.1} | DEF mrk={:.1} tck={:.1} pos={:.1} | GK hnd={:.1} ref={:.1} agi={:.1}",
+                tag, team_id, goals, own_against, nonshot,
+                agg.total_shots, agg.total_on_target,
+                agg.xg_total, xg_delta, shots_per_xg,
+                possession,
+                agg.passes_completed, agg.passes_attempted, pass_acc,
+                agg.tackles, agg.interceptions, agg.saves, agg.fouls,
                 agg.fwd_finishing / fc, agg.fwd_technique / fc, agg.fwd_composure / fc,
                 agg.def_marking / dc, agg.def_tackling / dc, agg.def_positioning / dc,
                 agg.gk_handling / gc, agg.gk_reflexes / gc, agg.gk_agility / gc,
             )
         };
 
-        log::info!(
+        crate::match_log_info!(
             "BLOWOUT {}-{} (total {}g)",
             home_goals, away_goals, home_goals + away_goals
         );
-        log::info!("  {}", fmt_team("HOME", home_team_id, home_goals, &home_agg));
-        log::info!("  {}", fmt_team("AWAY", away_team_id, away_goals, &away_agg));
+        // Notation:
+        //   own-ag   own goals (our player into our own net)
+        //   non-shot goals credited to a scorer who took zero shots — came
+        //            via pass/scramble/deflection path
+        //   xG       sum of expected-goals across all shots we took
+        //   Δ        goals minus xG (overperformance if positive)
+        //   s/xG     shots per xG — high = blind long-range spam
+        //   poss     share of total pass attempts (possession proxy)
+        //   pass     completed / attempted (acc %)
+        //   tck/int/sv/fl  tackles / interceptions / saves / fouls
+        crate::match_log_info!("  {}", fmt_team("HOME", home_team_id, home_goals, &home_agg, home_own, home_nonshot, home_possession));
+        crate::match_log_info!("  {}", fmt_team("AWAY", away_team_id, away_goals, &away_agg, away_own, away_nonshot, away_possession));
     }
 
     // ───────────────────────────────────────────────────────────────────────
@@ -644,7 +733,7 @@ impl<const W: usize, const H: usize> FootballEngine<W, H> {
             if (near_left || near_right) && (near_top || near_bottom)
                 && timestamp % 30_000 < Self::POSITION_RECORD_INTERVAL_MS
             {
-                log::debug!(
+                crate::match_log_debug!(
                     "player at corner: t={}ms id={} team={} state={:?} tactical={:?} pos=({:.1}, {:.1}) velocity=({:.2}, {:.2})",
                     timestamp,
                     player.id,

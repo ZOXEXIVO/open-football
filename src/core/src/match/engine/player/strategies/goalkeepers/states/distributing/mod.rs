@@ -58,303 +58,100 @@ impl StateProcessingHandler for GoalkeeperDistributingState {
 }
 
 impl GoalkeeperDistributingState {
+    /// Pick a teammate to kick the ball to, strongly preferring the
+    /// *centre of the field* — a midfielder near the halfway line — so
+    /// the GK clears the defensive third rather than passing short to a
+    /// defender who immediately gets pressed and loses possession back
+    /// to the attacking team.
+    ///
+    /// The earlier "safe short pass to the nearest defender" version
+    /// produced a death loop: save → pass to full-back → opponent
+    /// closes him down → turnover 20m from goal → shot → save → repeat.
+    /// Real GKs under any pressure clear long, landing the ball at the
+    /// halfway line where their own midfielders can contest it. That's
+    /// the target zone this scoring favours.
+    ///
+    /// Unit scale: 1u = 0.125m, field 840u = 105m. The halfway line
+    /// sits at x = field_width/2. A GK at x ≈ 20u kicks towards x ≈ 420u
+    /// (~50m), matching a real goal kick.
     fn find_best_pass_option<'a>(&'a self, ctx: &'a StateProcessingContext<'a>) -> Option<MatchPlayerLite> {
-        // Goalkeepers should look for long passes to start attacks
-        // Search the entire field including ultra-long distances for goal kicks
-        let max_distance = ctx.context.field_size.width as f32 * 2.5; // Extended for 300m+ passes
+        const MAX_SEARCH: f32 = 560.0; // ~70m, elite GK punt
+        const MIN_RECEIVE_DISTANCE: f32 = 30.0; // no back-passes / tap-outs
+        const BLOCK_CORRIDOR: f32 = 8.0; // lane width for interception check
 
-        // Get goalkeeper's skills to determine passing style
-        let pass_skill = ctx.player.skills.technical.passing / 20.0;
-        let vision_skill = ctx.player.skills.mental.vision / 20.0;
-        let kicking_skill = ctx.player.skills.goalkeeping.kicking / 20.0;
-        let decision_skill = ctx.player.skills.mental.decisions / 20.0;
-        let composure_skill = ctx.player.skills.mental.composure / 20.0;
-        let anticipation_skill = ctx.player.skills.mental.anticipation / 20.0;
-        let technique_skill = ctx.player.skills.goalkeeping.throwing / 20.0;
-
-        // Determine goalkeeper passing style based on skills
-        let is_technical_keeper = pass_skill > 0.7 && vision_skill > 0.7; // Likes build-up play
-        let is_long_ball_keeper = kicking_skill > 0.7 && pass_skill < 0.6; // Prefers long kicks
-        let is_cautious_keeper = composure_skill < 0.5 || decision_skill < 0.5; // Safe, short passes
-        let is_visionary_keeper = vision_skill > 0.8 && anticipation_skill > 0.7; // Sees through balls
-        let is_elite_distributor = vision_skill > 0.85 && technique_skill > 0.8 && kicking_skill > 0.75; // Can attempt extreme passes
+        let field_width = ctx.context.field_size.width as f32;
+        let halfway_x = field_width * 0.5;
 
         let mut best_option: Option<MatchPlayerLite> = None;
         let mut best_score = 0.0;
 
-        for teammate in ctx.players().teammates().nearby(max_distance) {
-            // GRADUATED RECENCY PENALTY: Penalize recent passers instead of hard-skipping
-            let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
-
+        for teammate in ctx.players().teammates().nearby(MAX_SEARCH) {
+            if teammate.tactical_positions.position_group() == PlayerFieldPositionGroup::Goalkeeper {
+                continue;
+            }
             let distance = (teammate.position - ctx.player.position).norm();
-
-            // Skip players too close — GK should distribute long
-            if distance < 50.0 {
+            if distance < MIN_RECEIVE_DISTANCE {
                 continue;
             }
 
-            // Skip teammates with opponents directly between GK and them (interception risk)
+            // Ignore anyone behind or level with the GK — never kick
+            // back toward own goal.
+            let forward_progress = teammate.position.x - ctx.player.position.x;
+            let is_forward = match ctx.player.side {
+                Some(crate::r#match::PlayerSide::Left) => forward_progress > 0.0,
+                Some(crate::r#match::PlayerSide::Right) => forward_progress < 0.0,
+                None => true,
+            };
+            if !is_forward {
+                continue;
+            }
+
+            // Pass lane blocked by an opponent — skip.
             let pass_dir = (teammate.position - ctx.player.position).normalize();
             let blocked = ctx.players().opponents().all().any(|opp| {
                 let to_opp = opp.position - ctx.player.position;
                 let proj = to_opp.dot(&pass_dir);
                 if proj < 10.0 || proj > distance { return false; }
                 let proj_pt = ctx.player.position + pass_dir * proj;
-                (opp.position - proj_pt).norm() < 8.0
+                (opp.position - proj_pt).norm() < BLOCK_CORRIDOR
             });
             if blocked {
                 continue;
             }
 
-            // Skill-based distance preference with ultra-long pass support
-            let distance_bonus = if is_elite_distributor {
-                // Elite distributor: can attempt any distance with vision-based weighting
-                if distance > 300.0 {
-                    // Extreme passes - only elite keepers should attempt
-                    let extreme_confidence = (vision_skill * 0.5) + (kicking_skill * 0.3) + (technique_skill * 0.2);
-                    2.5 + extreme_confidence * 2.0 // Up to 4.5 for world-class keepers
-                } else if distance > 200.0 {
-                    // Ultra-long passes - elite specialty
-                    let ultra_confidence = (vision_skill * 0.6) + (kicking_skill * 0.4);
-                    3.0 + ultra_confidence * 1.5 // Up to 4.5
-                } else if distance > 100.0 {
-                    3.5 // Very long - excellent
-                } else if distance > 60.0 {
-                    2.8 // Long - good
-                } else if distance > 30.0 {
-                    2.0 // Medium - acceptable
-                } else {
-                    1.5 // Short - for build-up
-                }
-            } else if is_long_ball_keeper {
-                // Long ball keeper: heavily prefers long passes, vision limits ultra-long
-                if distance > 300.0 {
-                    // Extreme passes - limited by vision
-                    if vision_skill > 0.7 {
-                        2.5 + (vision_skill - 0.7) * 3.0 // Up to 3.4
-                    } else {
-                        0.8 // Avoid without vision
-                    }
-                } else if distance > 200.0 {
-                    // Ultra-long - good kicking but needs some vision
-                    if vision_skill > 0.6 {
-                        3.0 + (vision_skill - 0.6) * 2.0 // Up to 3.8
-                    } else {
-                        1.5
-                    }
-                } else if distance > 100.0 {
-                    3.5 // Very long pass - excellent
-                } else if distance > 60.0 {
-                    2.5 // Long pass - good
-                } else if distance > 30.0 {
-                    0.8 // Medium pass - less preferred
-                } else {
-                    0.3 // Short pass - avoid
-                }
-            } else if is_visionary_keeper {
-                // Visionary keeper: sees opportunities at all ranges
-                if distance > 300.0 {
-                    // Extreme passes - vision-driven
-                    let vision_multiplier = (vision_skill - 0.8) * 5.0; // 0.0 to 1.0
-                    2.0 + vision_multiplier + (kicking_skill * 1.5)
-                } else if distance > 200.0 {
-                    // Ultra-long - perfect for visionary
-                    2.8 + (vision_skill * 1.5)
-                } else if distance > 100.0 {
-                    3.2 // Very long - sees through balls
-                } else if distance > 60.0 {
-                    2.5 // Long - good vision
-                } else if distance > 30.0 {
-                    2.0 // Medium - builds play
-                } else {
-                    1.8 // Short - safe
-                }
-            } else if is_technical_keeper {
-                // Technical keeper: balanced approach, builds from back
-                if distance > 300.0 {
-                    // Extreme passes - rare for technical keepers
-                    if vision_skill > 0.75 && kicking_skill > 0.7 {
-                        1.5
-                    } else {
-                        0.5 // Avoid
-                    }
-                } else if distance > 200.0 {
-                    // Ultra-long - occasional if skilled
-                    if vision_skill > 0.7 {
-                        1.8
-                    } else {
-                        0.8
-                    }
-                } else if distance > 100.0 {
-                    1.5 // Very long pass - occasional
-                } else if distance > 60.0 {
-                    1.8 // Long pass - good option
-                } else if distance > 30.0 {
-                    2.0 // Medium pass - preferred for build-up
-                } else {
-                    1.5 // Short pass - safe option
-                }
-            } else if is_cautious_keeper {
-                // Cautious keeper: prefers safe, short-medium passes
-                if distance > 300.0 || distance > 200.0 {
-                    0.2 // Ultra/extreme passes - too risky, avoid
-                } else if distance > 100.0 {
-                    0.5 // Very long pass - risky, avoid
-                } else if distance > 60.0 {
-                    0.8 // Long pass - risky
-                } else if distance > 30.0 {
-                    1.5 // Medium pass - acceptable
-                } else {
-                    2.5 // Short pass - safe choice
-                }
-            } else {
-                // Average keeper: standard preference with limited ultra-long ability
-                if distance > 300.0 {
-                    // Extreme passes - very limited
-                    if vision_skill > 0.7 && kicking_skill > 0.7 {
-                        1.2
-                    } else {
-                        0.4
-                    }
-                } else if distance > 200.0 {
-                    // Ultra-long - needs good skills
-                    if vision_skill > 0.65 {
-                        1.5
-                    } else {
-                        0.7
-                    }
-                } else if distance > 100.0 {
-                    2.0
-                } else if distance > 60.0 {
-                    1.5
-                } else if distance > 30.0 {
-                    1.0
-                } else {
-                    0.5
-                }
+            let recency_penalty = ctx.ball().passer_recency_penalty(teammate.id);
+
+            // PRIMARY SIGNAL: how close to the halfway line is this
+            // teammate? Peaks at x = halfway, falls off in both
+            // directions. A receiver at the halfway line scores 3.0;
+            // deep in own half or deep in opponent half scores ~0.5.
+            // This is what drives "kick to the middle of the field".
+            let dist_from_halfway = (teammate.position.x - halfway_x).abs();
+            let halfway_score = 3.0 - (dist_from_halfway / halfway_x) * 2.5;
+            let halfway_score = halfway_score.max(0.5);
+
+            // Receiver-is-open is the other safety signal — a teammate
+            // at the halfway line surrounded by three opponents is still
+            // a bad target.
+            let nearby_opponents = ctx.tick_context.grid.opponents(teammate.id, 15.0).count();
+            let space_bonus = match nearby_opponents {
+                0 => 2.0,
+                1 => 1.2,
+                _ => 0.5,
             };
 
-            // Skill-based position preference with distance consideration
+            // Role bias — kicks to midfielders are the canonical goal
+            // kick; forwards OK too (long ball to striker is classic);
+            // defenders get a heavy penalty because this is exactly the
+            // short-pass-to-full-back trap that spawns the loss-loop.
             let position_bonus = match teammate.tactical_positions.position_group() {
-                PlayerFieldPositionGroup::Forward => {
-                    // Ultra-long passes to forwards are more valuable
-                    let ultra_long_multiplier = if distance > 300.0 {
-                        1.5 // Extreme distance to striker - game-changing
-                    } else if distance > 200.0 {
-                        1.3 // Ultra-long to striker - counter-attack
-                    } else {
-                        1.0
-                    };
-
-                    if is_elite_distributor {
-                        3.5 * ultra_long_multiplier // Elite keepers excel at finding forwards
-                    } else if is_visionary_keeper {
-                        3.0 * ultra_long_multiplier // Visionary keepers love finding forwards
-                    } else if is_long_ball_keeper {
-                        2.8 * ultra_long_multiplier // Long ball keepers target forwards
-                    } else if is_technical_keeper {
-                        1.5 // Technical keepers less direct
-                    } else {
-                        2.0
-                    }
-                }
-                PlayerFieldPositionGroup::Midfielder => {
-                    // Medium to long passes to midfield
-                    let long_pass_multiplier = if distance > 200.0 {
-                        0.8 // Less ideal for ultra-long to midfield
-                    } else if distance > 100.0 {
-                        1.2 // Good for switching play
-                    } else {
-                        1.0
-                    };
-
-                    if is_technical_keeper {
-                        2.5 * long_pass_multiplier // Technical keepers love midfield build-up
-                    } else if is_cautious_keeper {
-                        2.0 * long_pass_multiplier // Safe option for cautious keepers
-                    } else if is_elite_distributor && distance > 150.0 {
-                        2.2 * long_pass_multiplier // Elite can switch play through midfield
-                    } else {
-                        1.5
-                    }
-                }
-                PlayerFieldPositionGroup::Defender => {
-                    // Short passes to defenders, avoid long ones
-                    if distance > 200.0 {
-                        0.3 // Never ultra-long pass to defender
-                    } else if distance > 100.0 {
-                        0.5 // Rarely long pass to defender
-                    } else if is_cautious_keeper {
-                        2.2 // Cautious keepers prefer defenders
-                    } else if is_technical_keeper {
-                        1.8 // Part of build-up play
-                    } else {
-                        0.6 // Others avoid defenders
-                    }
-                }
-                PlayerFieldPositionGroup::Goalkeeper => 0.1,
+                PlayerFieldPositionGroup::Midfielder => 1.6,
+                PlayerFieldPositionGroup::Forward => 1.2,
+                PlayerFieldPositionGroup::Defender => 0.4,
+                PlayerFieldPositionGroup::Goalkeeper => 0.0,
             };
 
-            // Check if receiver is in space
-            let nearby_opponents = ctx.tick_context
-                .grid
-                .opponents(teammate.id, 15.0)
-                .count();
-
-            let space_bonus = if nearby_opponents == 0 {
-                2.0 // Completely free
-            } else if nearby_opponents == 1 {
-                if is_cautious_keeper {
-                    0.8 // Cautious keepers avoid any pressure
-                } else if is_technical_keeper {
-                    1.4 // Technical keepers trust receiver's control
-                } else {
-                    1.2
-                }
-            } else {
-                if is_cautious_keeper {
-                    0.3 // Heavily avoid for cautious keepers
-                } else {
-                    0.6
-                }
-            };
-
-            // Forward progress preference (skill-based)
-            let forward_progress = teammate.position.x - ctx.player.position.x;
-            let forward_bonus = if forward_progress > 0.0 {
-                let base_forward = 1.0 + (forward_progress / ctx.context.field_size.width as f32) * 0.5;
-                if is_visionary_keeper || is_long_ball_keeper {
-                    base_forward * 1.3 // Aggressive forward passing
-                } else if is_cautious_keeper {
-                    base_forward * 0.8 // Less emphasis on forward progress
-                } else {
-                    base_forward
-                }
-            } else {
-                if is_cautious_keeper {
-                    0.7 // More willing to pass back
-                } else if is_technical_keeper {
-                    0.5 // Build-up allows some backward passes
-                } else {
-                    0.2 // Others avoid backward passes
-                }
-            };
-
-            // Skill multipliers based on keeper abilities
-            let skill_factor = if is_technical_keeper {
-                (pass_skill * 0.5) + (vision_skill * 0.3) + (decision_skill * 0.2)
-            } else if is_long_ball_keeper {
-                (kicking_skill * 0.6) + (pass_skill * 0.2) + (vision_skill * 0.2)
-            } else if is_visionary_keeper {
-                (vision_skill * 0.5) + (anticipation_skill * 0.3) + (pass_skill * 0.2)
-            } else if is_cautious_keeper {
-                (composure_skill * 0.4) + (decision_skill * 0.4) + (pass_skill * 0.2)
-            } else {
-                (pass_skill * 0.4) + (vision_skill * 0.4) + (kicking_skill * 0.2)
-            };
-
-            // Calculate final score with skill-based weighting and recency penalty
-            let score = distance_bonus * position_bonus * space_bonus * forward_bonus * skill_factor * recency_penalty;
+            let score = halfway_score * space_bonus * position_bonus * recency_penalty;
 
             if score > best_score {
                 best_score = score;

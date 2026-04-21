@@ -47,6 +47,95 @@ impl<'b> TeamOperationsImpl<'b> {
         self.tactical().phase
     }
 
+    /// Is the attack ready to progress? True when at least one of our
+    /// forwards is in a genuine scoring threat — close to goal, in space,
+    /// and facing a clear lane. When FALSE, defenders and midfielders
+    /// should hold possession and recycle rather than force a forward
+    /// pass: there's nobody to pass TO whose reception would lead to a
+    /// shot, so a risky forward ball will just turn over possession and
+    /// become the opponent's next attack.
+    pub fn is_attack_ready(&self) -> bool {
+        let ctx = self.ctx;
+        let goal_pos = ctx.player().opponent_goal_position();
+        // Scan our forwards / attacking midfielders — any one of them
+        // positioned within ~35m of goal in open space means the attack
+        // is a legitimate threat.
+        ctx.players().teammates().all()
+            .filter(|t| {
+                t.tactical_positions.is_forward()
+                    || t.tactical_positions.is_midfielder()
+            })
+            .any(|t| {
+                let to_goal = (t.position - goal_pos).magnitude();
+                if to_goal > 70.0 {
+                    return false;
+                }
+                // Check space around the forward — an opponent within
+                // 8u means they're marked and not a live shooting threat.
+                let marked_closely = ctx.tick_context.grid
+                    .opponents(t.id, 8.0).count() > 0;
+                !marked_closely
+            })
+    }
+
+    /// Should the team play in "possession mode" right now — i.e. slow
+    /// down, recycle the ball, reject risky forward passes? Real football
+    /// triggers:
+    ///   1. **Just won the ball.** Stabilize for a few seconds before
+    ///      looking to attack — avoids the rushed long-ball turnover
+    ///      that re-loses possession within a breath of winning it.
+    ///   2. **Leading in the match.** Already captured by
+    ///      `prefer_possession()` on the coach (WasteTime / ParkTheBus
+    ///      / SlowDown); we union it here so one helper covers all
+    ///      realistic triggers.
+    ///   3. **Team is tired.** A fatigued squad keeps the ball to rest.
+    ///   4. **Attack not ready.** No forward in a shooting threat — no
+    ///      point pushing forward into nothing.
+    ///   5. **Late in a competitive match.** Final 10 minutes, any
+    ///      team ahead or drawing plays safer than earlier.
+    pub fn should_play_possession(&self) -> bool {
+        let ctx = self.ctx;
+        let coach = self.coach_instruction();
+        if coach.prefer_possession() {
+            return true;
+        }
+
+        // (1) Just won the ball — stabilize window. The coach tracks
+        // `last_possession_gain_tick`; for the first ~300 ticks (3 s)
+        // after winning, keep possession rather than counter-rushing.
+        let current_tick = ctx.context.current_tick();
+        let ticks_since_gain = current_tick.saturating_sub(self.coach().last_possession_gain_tick);
+        if ticks_since_gain < 300 && ctx.team().is_control_ball() {
+            return true;
+        }
+
+        // (3) Team tired — use average condition of outfielders within
+        // 250u of the ball (cheap proxy for "our involved players").
+        let mut total = 0u32;
+        let mut count = 0u32;
+        for t in ctx.players().teammates().nearby(250.0) {
+            if let Some(p) = ctx.context.players.by_id(t.id) {
+                total += p.player_attributes.condition_percentage();
+                count += 1;
+            }
+        }
+        if count > 0 && (total / count) < 50 {
+            return true;
+        }
+
+        // (5) Late game + drawing or leading — even Normal-instruction
+        // teams slow down in the last 10 min when they don't need goals.
+        let half_ms = crate::r#match::engine::engine::MATCH_HALF_TIME_MS as f32;
+        let full_ms = half_ms * 2.0;
+        let match_progress = (ctx.context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
+        if match_progress > 0.88 && self.score_diff() >= 0 {
+            return true;
+        }
+
+        // (4) Attack not set up downfield.
+        !self.is_attack_ready()
+    }
+
     /// Game-management intensity from this team's perspective. Rises
     /// when we are leading, late in the game, and/or the weaker side —
     /// drives safe-pass / hold-the-ball / don't-shoot behaviour.

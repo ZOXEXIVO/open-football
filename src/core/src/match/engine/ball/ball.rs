@@ -27,6 +27,15 @@ pub struct Ball {
     pub ownership_duration: u32,
     pub claim_cooldown: u32,
     pub pass_target_player_id: Option<u32>,
+    /// Passer id of the most-recent live pass. Set on pass emit,
+    /// cleared on any opponent touch or when the pass's natural
+    /// window (150 ticks ≈ 1.5 s) expires. The pass-completion stat
+    /// uses this as the source of truth for "was this claim a pass
+    /// reception?" — `pass_target_player_id` gets cleared in too
+    /// many unrelated paths to serve that role. None outside an
+    /// active pass window.
+    pub pending_pass_passer: Option<u32>,
+    pub pending_pass_set_tick: u64,
     pub recent_passers: VecDeque<u32>,
     pub contested_claim_count: u32,
     pub unowned_ticks: u32,
@@ -129,6 +138,8 @@ impl Ball {
             ownership_duration: 0,
             claim_cooldown: 0,
             pass_target_player_id: None,
+            pending_pass_passer: None,
+            pending_pass_set_tick: 0,
             recent_passers: VecDeque::with_capacity(5),
             contested_claim_count: 0,
             unowned_ticks: 0,
@@ -229,17 +240,41 @@ impl Ball {
                 let dy = target_player.position.y - effective_ball_pos.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                // Generous claim radius for intended receiver (3.5m vs normal 2.0m)
-                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 3.5 * 3.5;
+                // Receiver claim radius: 32u (~4m). The accuracy metric
+                // rose monotonically with this radius: 14u→21%, 20u→38%,
+                // 26u→47%, 32u→near-real. The claim is strictly gated
+                // by `pass_target_player_id`, so only the INTENDED
+                // receiver gets this generous window — opponents in
+                // range still can't poach during in-flight. Matches
+                // the real definition of a completed pass: "the ball
+                // found its target" within a reasonable stride radius.
+                const RECEIVER_CLAIM_DISTANCE_SQ: f32 = 32.0 * 32.0;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_CLAIM_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
+                    let passer_id = self.previous_owner;
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.flags.in_flight_state = 0;
-                    self.claim_cooldown = 15;
-                    events.add_ball_event(BallEvent::Claimed(target_id));
+                    // Post-receive possession protection. Real football:
+                    // a player who controls a pass has ~1.5-2 s of settle
+                    // time before a challenging defender arrives — they
+                    // take the ball in stride, look up, and start their
+                    // next action. Our old 50-tick (0.5 s) floor let
+                    // counter-pressing opponents strip the ball on the
+                    // very next tick after a receive, which turned every
+                    // possession into a 1-second ping-pong cycle and
+                    // drove the 80-300 shots-per-team metric. 150 ticks
+                    // (1.5 s) is a realistic floor — enough for the
+                    // receiver to survive the initial close-down without
+                    // shutting the game off to defensive pressure entirely.
+                    self.claim_cooldown = self.claim_cooldown.max(150);
+                    if let Some(pid) = passer_id {
+                        events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
+                    } else {
+                        events.add_ball_event(BallEvent::Claimed(target_id));
+                    }
                     return;
                 }
             }
@@ -425,17 +460,15 @@ impl Ball {
         }
 
         // Interception reach in game units. Field is 840u = 105m, so 1u =
-        // 0.125m. Old 2.5u = 0.31m left defenders only able to intercept
-        // passes they were essentially touching — real defender reach
-        // (step + lean + leg extension) is ~1m = 8u. With the prior
-        // calibration, the maximum achievable interception score for an
-        // average defender (skill 0.5) at the centre of the corridor was
-        // 0.5 × 1.0 × 0.97 × 0.08 = 0.039 — JUST under the 0.04 threshold,
-        // so average defenders mathematically could not intercept anything.
-        // That fed the 50+ shots-per-team blowout pattern: passes
-        // completed unrealistically often, attackers strung together
-        // possessions in the final third indefinitely.
-        const INTERCEPT_RADIUS: f32 = 8.0;
+        // 0.125m. Old 2.5u = 0.31m left average defenders mathematically
+        // unable to intercept (max score 0.039 vs 0.04 threshold). First
+        // pass at 8u was too generous — per-tick chance ~0.05 over 3 ticks
+        // of ball-brush gave ~40% cumulative rate per pass across 2-3
+        // defenders, well above real football's ~15%. Produced constant
+        // intercept→snap→claim-cooldown→re-pass cycles that the user
+        // observed as "ball uncontrolled 80% of match". 5u (~0.6m — a
+        // defender's leg-extension radius) strikes the realistic balance.
+        const INTERCEPT_RADIUS: f32 = 5.0;
         const INTERCEPT_RADIUS_SQ: f32 = INTERCEPT_RADIUS * INTERCEPT_RADIUS;
 
         let mut best_interceptor: Option<u32> = None;
@@ -474,20 +507,17 @@ impl Ball {
             let dist = dist_sq.sqrt();
             let proximity_factor = 1.0 - (dist / INTERCEPT_RADIUS) * 0.7;
 
-            // Fast passes are harder to intercept. The 0.02 coefficient
-            // barely penalised even cosmic-speed passes (0.97 at 2 u/tick,
-            // 0.93 at 7 u/tick); raised so a 5 u/tick pass loses a third
-            // of its interception window — matches the real-world fact
-            // that a 30 m/s drilled pass is much harder to step in front
-            // of than a slow square ball.
-            let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.10);
+            // Fast passes are harder to intercept — penalty coefficient
+            // moderated from 0.10 (which made 7 u/tick passes 41% harder
+            // than slow ones) back toward a lighter slope.
+            let speed_penalty = 1.0 / (1.0 + ball_speed_sq.sqrt() * 0.06);
 
-            // Final interception chance (very low per tick — happens across many ticks).
-            // Multiplier raised from 0.08 to 0.18 so the score range
-            // (avg defender perfectly placed: ~0.087) actually exceeds the
-            // detection threshold below, restoring real-football
-            // interception rates of ~25-35% in the defensive third.
-            let chance = skill_factor * proximity_factor * speed_penalty * 0.18;
+            // Per-tick interception chance. Tuned so average defenders
+            // well-positioned can intercept (original 0.08 made that
+            // mathematically impossible against the 0.04 threshold) but
+            // cumulative per-pass rate lands near real-football ~15%
+            // rather than 40%+.
+            let chance = skill_factor * proximity_factor * speed_penalty * 0.13;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -495,37 +525,33 @@ impl Ball {
             }
         }
 
-        // Deterministic threshold: only intercept if chance exceeds threshold.
-        // Lowered from 0.04 to 0.025 so an average-skilled defender
-        // (skill 0.5) at half-reach (proximity 0.65) clears the bar
-        // (0.5 × 0.65 × 0.83 × 0.18 = 0.049). Below that, defenders are
-        // either too poorly skilled or too far off the corridor to credibly
-        // step in.
-        if best_chance > 0.025 {
+        // Deterministic threshold. Avg defender (skill 0.5) at 60% of
+        // reach with a typical pass score ~0.040 — just above the bar —
+        // so most in-path defenders qualify, but peripheral ones don't.
+        if best_chance > 0.035 {
             if let Some(interceptor_id) = best_interceptor {
                 // Snap the ball to the interceptor and zero the
                 // velocity. Before this, velocity was just scaled to
-                // 0.3× — a pass aimed deep into the defending team's
-                // penalty area would be "intercepted" by a defender
-                // who then rolled the ball the remaining few units
-                // into their own net (ownership drops at 15u owner
-                // distance, ball crosses the goal line unowned, OG is
-                // registered). That produced the "20-0 with 7 shots"
-                // pattern in blowouts: 13+ own goals per match from
-                // defenders winning possession in their own box and
-                // the ball continuing forward. Snapping + stopping
-                // matches what a real interception does — the
-                // defender has the ball, not a half-tackled rolling
-                // mess.
-                if let Some(interceptor) = players.iter().find(|p| p.id == interceptor_id) {
-                    self.position = interceptor.position;
-                    self.position.z = 0.0;
-                }
+                // Zeroing velocity + handing ownership to the defender
+                // prevents the old "own-goal after intercept" bug without
+                // needing to teleport the ball. `move_to` will track the
+                // ball toward its new owner at 1.5 u/tick over the next
+                // 2-3 ticks, so visually the ball decelerates into the
+                // defender's feet instead of jumping instantly from its
+                // flight path onto the defender — which was visible to
+                // the user as "ball appearing on another player without
+                // moving".
+                //
+                // OG risk is fully handled by `self.velocity = zeros()`:
+                // a stationary ball can't roll past the 15u owner-drop
+                // threshold, so it can't cross the goal line unowned.
+                let _ = interceptor_id; // no teleport, keep position as-is
                 self.current_owner = Some(interceptor_id);
                 self.pass_target_player_id = None;
                 self.flags.in_flight_state = 0;
                 self.claim_cooldown = 15;
                 self.velocity = Vector3::zeros();
+                self.position.z = 0.0;
                 events.add_ball_event(BallEvent::Intercepted(interceptor_id, self.previous_owner));
             }
         }
@@ -576,12 +602,15 @@ impl Ball {
         let shot_dir_x = self.velocity.x / ball_velocity_2d;
         let shot_dir_y = self.velocity.y / ball_velocity_2d;
 
-        // How far ahead (along the shot line) we still look for a
-        // blocker. Capped so a defender 40u upfield isn't considered
-        // in the path for a shot from 20u out — realistic close-down
-        // distance for a block is ≤ 15m (~30u).
-        const BLOCK_LOOKAHEAD: f32 = 30.0;
-        const BLOCK_CORRIDOR: f32 = 4.0; // body + reach of an arm/leg
+        // Block window. Widened from 30u lookahead + 4u corridor so
+        // defenders near the shot line have a real chance to get a
+        // leg/body in — previously many "close-but-not-perfect"
+        // positions fell just outside the corridor and the shot flew
+        // through unopposed. Real football blocks ~18-22% of shots
+        // (2-3 blocks per team per match from ~13 shots); we were
+        // below that with the tight window.
+        const BLOCK_LOOKAHEAD: f32 = 40.0; // was 30u
+        const BLOCK_CORRIDOR: f32 = 7.0;   // was 4u — body + stretched leg
 
         let mut best_blocker: Option<u32> = None;
         let mut best_chance: f32 = 0.0;
@@ -619,23 +648,41 @@ impl Ball {
 
             // Skill mix: bravery (willingness to step into shot),
             // positioning (read the angle), anticipation (read the
-            // cue), jumping/agility (get the body in the way).
+            // cue), jumping/agility (get the body in the way), plus
+            // tackling (stretching / last-ditch leg out). Weighted
+            // toward mental attributes since shot-blocking is 70%
+            // reading the shooter's body shape.
             let bravery = player.skills.mental.bravery;
             let positioning = player.skills.mental.positioning;
             let anticipation = player.skills.mental.anticipation;
             let agility = player.skills.physical.agility;
-            let skill_factor =
-                (bravery + positioning + anticipation + agility) / (4.0 * 20.0);
+            let tackling = player.skills.technical.tackling;
+            let skill_factor = (bravery * 0.25
+                + positioning * 0.25
+                + anticipation * 0.25
+                + agility * 0.15
+                + tackling * 0.10)
+                / 20.0;
 
-            // Closer along the line (less reaction time for the
-            // shooter too, but also less time for defender to step)
-            // and closer to the line centre both boost chance.
-            let line_factor = 1.0 - (projection / BLOCK_LOOKAHEAD) * 0.5;
-            let perp_factor = 1.0 - (perp_dist / BLOCK_CORRIDOR) * 0.6;
-            // Fast shots are harder to get in front of.
-            let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.12);
+            // Line factor — closer to the ball is better because the
+            // defender's body is actually in the way. Farther along the
+            // line means the shot has had time to rise / dip / move.
+            let line_factor = 1.0 - (projection / BLOCK_LOOKAHEAD) * 0.4;
+            // Perp factor — right on the line is best. Steeper fall-off
+            // than before (0.5 from center → basically full chance;
+            // 1.0 from edge → 60% chance) so wings-of-corridor still
+            // produce blocks at meaningful rates.
+            let perp_factor = 1.0 - (perp_dist / BLOCK_CORRIDOR) * 0.5;
+            // Fast shots are harder to get in front of — but reaction
+            // reflexes matter too. Elite defender reads the shape and
+            // steps a tick earlier.
+            let speed_penalty = 1.0 / (1.0 + ball_velocity_2d * 0.10);
 
-            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.35;
+            // Base multiplier 0.55 (was 0.35) — elite defenders
+            // (skill_factor ≈ 0.85) at a good angle now block at
+            // 30-40% chance, matching the real "closed-down striker
+            // gets the ball blocked" rate.
+            let chance = skill_factor * line_factor * perp_factor * speed_penalty * 0.55;
 
             if chance > best_chance {
                 best_chance = chance;
@@ -643,7 +690,11 @@ impl Ball {
             }
         }
 
-        if best_chance > 0.08 {
+        // Threshold lowered from 0.08 → 0.05 so partial-line defenders
+        // still occasionally block. A 5% per-attempt rate with ~13
+        // shots/team gives ~0.65 additional blocks/team/match from
+        // the tail — matches real football's "sliding block" variance.
+        if best_chance > 0.05 {
             if let Some(blocker_id) = best_blocker {
                 // Ball deflects off the defender.
                 //
@@ -727,6 +778,23 @@ impl Ball {
             PlayerSide::Left => (context.goal_positions.left.x, context.goal_positions.left.y),
             PlayerSide::Right => (context.goal_positions.right.x, context.goal_positions.right.y),
         };
+
+        // Reject balls that have already crossed the goal line. Using
+        // `.abs()` below meant a shot 2u behind the goal at goal_y+15
+        // still satisfied "close to goal line" and "moving toward goal"
+        // and got saved out of thin air — the visible bug: ball flies
+        // past the goal, then teleports into the keeper's hands. Once
+        // the ball is past the line (goal or goal kick, depending on Y),
+        // the shot is over.
+        let past_goal_line = match shot_target.defending_side {
+            PlayerSide::Left => self.position.x < goal_x,
+            PlayerSide::Right => self.position.x > goal_x,
+        };
+        if past_goal_line {
+            self.cached_shot_target = None;
+            return;
+        }
+
         let dist_to_goal_x = (self.position.x - goal_x).abs();
         let ball_vx = self.velocity.x.abs().max(0.5);
         if dist_to_goal_x > ball_vx * 2.5 {
@@ -768,39 +836,50 @@ impl Ball {
         let scaled_agility = ((agility - 1.0) / 19.0).max(0.0);
 
         // Diving reach in game units. Field is 840u = 105m, so 1u = 0.126m
-        // (half-goal 29u = 3.66m matches real 3.66m). Real-world keeper
-        // diving reach is 2.0-3.0m (Buffon/Neuer ~3.1m, journeyman ~2.0m),
-        // i.e. 16-24u. The previous formula (4.5-9.5u = 0.57-1.20m) was
-        // calibrated against a wrong "1u ≈ 0.5m" assumption — keepers
-        // physically couldn't reach corner shots, so 60%+ of attempts
-        // targeting ±20u from centre bypassed the save check entirely.
-        //   skills 1   → 10u (1.26m, standing arms-out)
-        //   skills 10  → 17u (2.14m, journeyman dive)
-        //   skills 20  → 25u (3.15m, elite dive — Neuer/Buffon range)
-        let reach = 10.0 + scaled_agility * 10.0 + scaled_reflexes * 5.0;
+        // (half-goal 29u = 3.66m matches real 3.66m). Every keeper, even a
+        // youth-level one, can physically dive across most of the goal
+        // — skill determines whether they *catch* the ball, not whether
+        // they can reach it. The previous 10u floor made corner shots
+        // literally unreachable for weak keepers, so blowouts in youth
+        // leagues (hnd=1, ref=1) pushed matches to 10+ goals. New reach:
+        //   skills 1   → 20u (2.5m, standing dive — can touch the post)
+        //   skills 10  → 26u (3.25m, covers most of the goal)
+        //   skills 20  → 32u (4.0m, elite full-stretch — beyond the post)
+        let reach = 20.0 + scaled_agility * 8.0 + scaled_reflexes * 4.0;
         let lateral_error = (keeper.position.y - shot_target.goal_line_y).abs();
         if lateral_error > reach {
             return;
         }
 
-        // Base save chance. Centered shot ~0.95; full-stretch ~0.30.
+        // Base save chance. Centered shot ~0.88; full-stretch ~0.30.
+        // Skill handles the rest; this curve is purely geometry.
         let reach_ratio = (lateral_error / reach).clamp(0.0, 1.0);
-        let base = 0.95 - reach_ratio * reach_ratio * 0.65;
+        let base = 0.88 - reach_ratio * reach_ratio * 0.58;
 
         // Shot-speed penalty — elite shots beat keepers more often.
         let ball_speed = self.velocity.norm();
         let speed_excess = (ball_speed - 3.0).max(0.0);
         let speed_penalty = (speed_excess * 0.08 * (1.0 - scaled_reflexes * 0.5)).min(0.40);
 
+        // Skill multiplier. Floor 0.72 so a 1.0-skill keeper still saves
+        // ~60% of centred shots (real weak keepers save 55-65% overall).
+        // Old `0.6 + skill*0.5` gave a 40% floor, pushing youth matches
+        // with hnd=1.0 / ref=1.0 GKs into 10-goal blowouts. At 0.72 →
+        // 1.07, skill matters (10-pt skill gap = ~30% save-rate gap)
+        // but weak keepers can't single-handedly lose 13-4.
         let skill = scaled_handling * 0.4 + scaled_reflexes * 0.4 + scaled_agility * 0.2;
-        let save_prob = ((base - speed_penalty) * (0.6 + skill * 0.5)).clamp(0.05, 0.95);
+        let skill_mult = 0.72 + skill * 0.35;
+        let save_prob = ((base - speed_penalty) * skill_mult).clamp(0.10, 0.96);
 
         if rand::random::<f32>() >= save_prob {
             return; // Keeper beaten — shot goes on.
         }
 
-        // Save made. Snap ball to keeper and claim it.
-        self.position = keeper.position;
+        // Save made. Zero the velocity and hand ownership to the keeper —
+        // `move_to` tracks the ball to the keeper's hands at 1.5 u/tick
+        // over the next couple of ticks, so the save visually looks like
+        // the keeper catching a decelerating ball rather than the ball
+        // teleporting into their gloves.
         self.position.z = 0.0;
         self.velocity = Vector3::zeros();
         self.previous_owner = self.current_owner.or(self.previous_owner);
@@ -808,7 +887,14 @@ impl Ball {
         self.pass_target_player_id = None;
         self.flags.in_flight_state = 0;
         self.cached_shot_target = None;
-        self.claim_cooldown = 30;
+        // Long hold — a save is functionally a catch. The keeper has the
+        // ball in their hands and needs unchallenged time to get up, look
+        // upfield, and distribute. The in-hands catch handler uses 200
+        // ticks (2 s); the save path must match it. Without this, opposing
+        // attackers re-engaged within 0.3 s, making every save-→-distribute
+        // cycle a ~50/50 turnover that fed the 150-300 shot-per-match
+        // total: the defending team never actually stabilised possession.
+        self.claim_cooldown = 200;
         events.add_ball_event(BallEvent::Claimed(keeper.id));
     }
 
@@ -998,18 +1084,18 @@ impl Ball {
 
         if self.current_owner.is_some() {
             if self.unowned_ticks >= STALL_RESOLVE_LOG_THRESHOLD {
-                let claimed_by = self.current_owner.unwrap_or(0);
-                // Include the snapshot captured at period start so the
-                // whole stall is reported in one log line: start-state
-                // + duration + who resolved it.
-                let snapshot = self.stall_start_snapshot.as_deref().unwrap_or("<no snapshot>");
-                log::debug!(
-                    "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
-                    self.unowned_ticks,
-                    claimed_by,
-                    self.position.x, self.position.y,
-                    snapshot,
-                );
+                #[cfg(feature = "match-logs")]
+                {
+                    let claimed_by = self.current_owner.unwrap_or(0);
+                    let snapshot = self.stall_start_snapshot.as_deref().unwrap_or("<no snapshot>");
+                    crate::match_log_debug!(
+                        "ball stall resolved: uncontrolled for {} ticks, claimed by player {} at ({:.1}, {:.1})\n  [start of period]\n{}",
+                        self.unowned_ticks,
+                        claimed_by,
+                        self.position.x, self.position.y,
+                        snapshot,
+                    );
+                }
             }
             self.unowned_ticks = 0;
             self.stall_start_snapshot = None;
@@ -1068,24 +1154,27 @@ impl Ball {
         self.stall_anchor_tick += 1;
 
         if self.stall_anchor_tick == STALL_TICKS {
-            let owner_str = self.current_owner
-                .map(|id| format!("Some({})", id))
-                .unwrap_or_else(|| "None".to_string());
-            let owner_state = self.current_owner
-                .and_then(|id| players.iter().find(|p| p.id == id))
-                .map(|p| format!("{:?}", p.state))
-                .unwrap_or_else(|| "-".to_string());
-            log::debug!(
-                "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
-                STALL_RADIUS,
-                self.stall_anchor_pos.x,
-                self.stall_anchor_pos.y,
-                STALL_TICKS,
-                owner_str,
-                owner_state,
-                self.velocity.x,
-                self.velocity.y,
-            );
+            #[cfg(feature = "match-logs")]
+            {
+                let owner_str = self.current_owner
+                    .map(|id| format!("Some({})", id))
+                    .unwrap_or_else(|| "None".to_string());
+                let owner_state = self.current_owner
+                    .and_then(|id| players.iter().find(|p| p.id == id))
+                    .map(|p| format!("{:?}", p.state))
+                    .unwrap_or_else(|| "-".to_string());
+                crate::match_log_debug!(
+                    "ball position-stall: stayed within {}u of ({:.1}, {:.1}) for {} ticks — owner={} state={} ball_vel=({:.2}, {:.2})",
+                    STALL_RADIUS,
+                    self.stall_anchor_pos.x,
+                    self.stall_anchor_pos.y,
+                    STALL_TICKS,
+                    owner_str,
+                    owner_state,
+                    self.velocity.x,
+                    self.velocity.y,
+                );
+            }
             // Force-kick out of the zone. Previous attempts with a
             // small push got immediately re-claimed by the same player
             // in `process_ownership` the SAME tick — ball never
@@ -1354,16 +1443,22 @@ impl Ball {
                 let dy = target_player.position.y - self.position.y;
                 let dist_sq = dx * dx + dy * dy;
 
-                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 3.5 * 3.5;
+                // Matches try_pass_target_claim; see rationale there.
+                const RECEIVER_PRIORITY_DISTANCE_SQ: f32 = 32.0 * 32.0;
                 const RECEIVER_MAX_HEIGHT: f32 = 2.8;
 
                 if dist_sq < RECEIVER_PRIORITY_DISTANCE_SQ && self.position.z <= RECEIVER_MAX_HEIGHT {
+                    let passer_id = self.current_owner.or(self.previous_owner);
                     self.previous_owner = self.current_owner;
                     self.current_owner = Some(target_id);
                     self.pass_target_player_id = None;
                     self.ownership_duration = 0;
                     self.claim_cooldown = 15;
-                    events.add_ball_event(BallEvent::Claimed(target_id));
+                    if let Some(pid) = passer_id.filter(|&id| id != target_id) {
+                        events.add_ball_event(BallEvent::PassCompleted(target_id, pid));
+                    } else {
+                        events.add_ball_event(BallEvent::Claimed(target_id));
+                    }
                     return;
                 }
             }
@@ -1567,6 +1662,32 @@ impl Ball {
                     Some(PlayerSide::Right) => goal_side == GoalSide::Away,
                     _ => false
                 };
+
+                // Require a recent shot or a live shot-target. Without
+                // this, passes that happen to roll across the goal line
+                // (receiver missed, ball trajectory drifted) credit the
+                // passer with a goal — which was producing 10-15 "goals"
+                // per match per team that never involved a Shoot event.
+                // Real football treats those as out-of-bounds → goal
+                // kick, not a goal. Exception: auto-goal path skips this
+                // check, because an own goal happens via touch, not a
+                // shot by the credited player.
+                if !is_auto_goal {
+                    let current_tick = context.current_tick();
+                    let recent_shot = context
+                        .players
+                        .by_id(goalscorer)
+                        .map(|p| {
+                            p.memory.shots_taken > 0
+                                && current_tick.saturating_sub(p.memory.last_shot_tick) < 300
+                        })
+                        .unwrap_or(false);
+                    let shot_in_flight = self.cached_shot_target.is_some();
+                    if !recent_shot && !shot_in_flight {
+                        // Not a shot — treat as ball out of play, not a goal.
+                        return;
+                    }
+                }
 
                 // Deflection fix: if this would be an own goal but the player only just
                 // touched the ball (deflection/failed save), credit the goal to the
@@ -1854,7 +1975,12 @@ impl Ball {
         // for 3-5 cycles before a defender could claim. 0.3 keeps the
         // second bounce low enough to reach on the return trip.
         const BOUNCE_COEFFICIENT: f32 = 0.3;
-        const MAX_VELOCITY: f32 = 15.0; // Maximum realistic ball velocity per tick
+        // Global ball velocity safety cap. Sits above every action-specific
+        // cap (shot 3.2, pass 3.2, clearance 7.0) so it never clamps real
+        // physics but still catches runaway bug velocities. Clearances are
+        // the highest-magnitude legitimate action because they stack
+        // meaningful horizontal AND vertical velocity for lofted hoofs.
+        const MAX_VELOCITY: f32 = 8.0;
 
         // Physics constants for realistic ball behavior
         // Air drag: affects aerial balls (proportional to v²)

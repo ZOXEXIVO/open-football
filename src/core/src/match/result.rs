@@ -83,11 +83,19 @@ const DEDUP_TOLERANCE_SQ: f32 = 0.09; // 0.3 * 0.3
 /// Maximum interval between recorded samples for any on-pitch player.
 /// A stationary GK or sweeper could otherwise go minutes without a new
 /// sample (dedup threshold never tripped). Replay viewers use the gap
-/// between samples as a "player left the pitch" signal, so an infinitely
-/// quiet stretch makes a still-playing player disappear. 2 s is short
-/// enough that the viewer can reliably distinguish "standing still" from
-/// "subbed off" and long enough that storage cost stays negligible.
-const HEARTBEAT_INTERVAL_MS: u64 = 2_000;
+/// between samples as a "player left the pitch" signal.
+///
+/// MUST stay below the viewer's hide-on-gap threshold (1000 ms at the
+/// time of writing). At the old 2 s value, any stationary player got a
+/// sample at t=0, then none until t=2000 — but the viewer hid them the
+/// moment `time > lastTs + 1000`, so the player blinked invisible for
+/// half of every 2-second window. Noticeable as "players disappearing
+/// a few minutes into the match", especially once the NaN-velocity
+/// guard started silencing state bugs by zeroing velocity (which
+/// left those players perfectly stationary and fully exposed to the
+/// blink). 750 ms keeps them continuously visible with ~1 extra KB
+/// of storage per idle player per minute — negligible.
+const HEARTBEAT_INTERVAL_MS: u64 = 750;
 
 /// Quantize a coordinate to 0.1 precision.
 /// This improves dedup hit rate and produces shorter JSON floats.

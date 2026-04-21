@@ -16,7 +16,12 @@ use nalgebra::Vector3;
 const MAX_SHOOTING_DISTANCE: f32 = 90.0; // ~45m - absolute max for elite long shots
 #[allow(dead_code)]
 const MIN_SHOOTING_DISTANCE: f32 = 5.0;
-const POINT_BLANK_DISTANCE: f32 = 24.0; // ~12m - must shoot, goalkeeper is right there
+const POINT_BLANK_DISTANCE: f32 = 36.0; // ~18m — inside-the-box strike. Below this, the
+// forward must shoot rather than dribble toward the keeper. Widened
+// from 24u (3m — practically on the 6-yard line) because at 24u the
+// forward had already run past every shot opportunity. Real football:
+// strikers fire from 16-18 yards frequently; running the ball to
+// inside 3m of the keeper is never a conscious choice.
 #[allow(dead_code)]
 const VERY_CLOSE_RANGE_DISTANCE: f32 = 36.0; // ~18m - anyone can shoot
 const CLOSE_RANGE_DISTANCE: f32 = 48.0; // ~24m - close range shots
@@ -37,6 +42,21 @@ pub struct ForwardRunningState {}
 
 impl StateProcessingHandler for ForwardRunningState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // Offside discipline — if we don't have the ball, we're not
+        // currently pressing the carrier, and we're stranded past the
+        // opposing defensive line, drop back. Standing/Walking check
+        // for this too; Running also needs it because a forward can
+        // legitimately be running UP (making a diagonal, chasing a
+        // through ball, tracking the game's flow) and that's when they
+        // most often drift offside.
+        if !ctx.player.has_ball(ctx)
+            && ctx.player().defensive().is_stranded_offside()
+        {
+            return Some(StateChangeResult::with_forward_state(
+                ForwardState::Returning,
+            ));
+        }
+
         // Team phase — consulted BEFORE any local context. This is what
         // turns eleven independent-agent decisions into something that
         // looks like football. Only the short-window transitions and
@@ -78,56 +98,211 @@ impl StateProcessingHandler for ForwardRunningState {
                 }
             }
 
-            // Priority 0: Point-blank range — MUST shoot to avoid running into the goalkeeper.
-            // Still gated on the player's own cooldown: if this striker
-            // just fired a second ago, they pass instead of striking
-            // again. Otherwise two rebounds in a row = two shots from
-            // the same player = unrealistic tap-in spam.
-            if distance_to_goal <= POINT_BLANK_DISTANCE {
-                if can_shoot_self {
-                    let finishing = ctx.player.skills.technical.finishing / 20.0;
-                    // Even at point blank, very poor finishers may try to pass
-                    if finishing > 0.3 || !ctx.players().teammates().nearby(50.0).any(|_| true) {
-                        return Some(StateChangeResult::with_forward_state(
-                            ForwardState::Shooting,
-                        ));
-                    }
+            // PATIENT POSSESSION — forwards also recycle the ball when
+            // the team is in possession mode (see `should_play_possession`
+            // for the full set of real-football triggers: just won ball,
+            // tired, leading, late game, no attack ready). Gated on not
+            // being in the real finishing zone (>50u from goal) so
+            // strikers in the box still strike; only applied in the
+            // build-up phase.
+            let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+            if !under_pressure
+                && distance_to_goal > 50.0
+                && ctx.tick_context.ball.ownership_duration > 10
+                && ctx.team().should_play_possession()
+            {
+                let player_pos = ctx.player.position;
+                let goal_pos = ctx.player().opponent_goal_position();
+                let to_goal = (goal_pos - player_pos).normalize();
+                // Find a safe outlet: teammate in space, not a recent
+                // passer, pass lane clear. Prefer teammates BEHIND us
+                // (lateral/backward) so we're recycling to a midfielder
+                // or defender rather than forcing the ball further upfield
+                // into a covered attacker.
+                let safe_outlet = ctx.players().teammates().nearby(180.0)
+                    .filter(|t| {
+                        if t.id == ctx.player.id { return false; }
+                        let dist = (t.position - player_pos).magnitude();
+                        if dist < 25.0 || dist > 180.0 { return false; }
+                        let to_t = (t.position - player_pos).normalize();
+                        let fwd = to_t.dot(&to_goal);
+                        // Accept lateral or backward passes only
+                        if fwd >= 0.3 { return false; }
+                        let opp_near = ctx.tick_context.grid
+                            .opponents(t.id, 12.0).count();
+                        opp_near < 2 && ctx.player().has_clear_pass(t.id)
+                    })
+                    .max_by(|a, b| {
+                        // Prefer midfielders over other forwards for
+                        // recycling — they can start a new build-up.
+                        let sa = if a.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
+                        let sb = if b.tactical_positions.is_midfielder() { 10.0 } else { 0.0 };
+                        sa.partial_cmp(&sb).unwrap_or(std::cmp::Ordering::Equal)
+                    });
+                if let Some(target) = safe_outlet {
+                    return Some(StateChangeResult::with_forward_state_and_event(
+                        ForwardState::Running,
+                        Event::PlayerEvent(PlayerEvent::PassTo(
+                            PassingEventContext::new()
+                                .with_from_player_id(ctx.player.id)
+                                .with_to_player_id(target.id)
+                                .with_reason("FWD_PATIENT_POSSESSION")
+                                .build(ctx),
+                        )),
+                    ));
                 }
-                // Point-blank but cooldown is active (just shot, balance
-                // disturbed). The striker can't fire again and must NOT
-                // continue running — they'd collide with the keeper. In
-                // real football a rebound situation like this becomes a
-                // cut-back / squared pass to a supporting runner. If no
-                // teammate is nearby, lay the ball off sideways via the
-                // pass state; it'll pick the best available target.
+            }
+
+            // Priority 0: Point-blank range — MUST shoot to avoid running
+            // into the goalkeeper. Gated on both player AND team cooldown:
+            // without the team gate a chaotic box scramble produces
+            // "striker A shoots, rebounds to B, B shoots, rebounds to C, …"
+            // with each player having a fresh personal cooldown — four
+            // shots in two seconds from the same possession.
+            if distance_to_goal <= POINT_BLANK_DISTANCE {
+                if can_shoot {
+                    // Point-blank = mandatory shoot. The old poor-finisher
+                    // escape clause (finishing < 0.3 + teammates nearby)
+                    // routed the forward to Passing even when no pass was
+                    // viable, so a fin=5 striker in the 18-yard box would
+                    // walk into the keeper. Real football: at 18m out
+                    // with the keeper closing, EVERY forward strikes —
+                    // the shot might be a tame one but they attempt it.
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason("FWD_RUN_POINT_BLANK"),
+                    );
+                }
+                // Cooldown active — rebound scenario, don't chase the
+                // keeper. Lay the ball off via a pass instead.
                 return Some(StateChangeResult::with_forward_state(
                     ForwardState::Passing,
                 ));
             }
 
-            // Priority 0.5: Clear shot within realistic long-range — shoot.
-            // `prefer_possession` (WasteTime / SlowDown / ParkTheBus) skips
-            // this branch so a leading side keeps the ball rather than
-            // piling goals on. Team shot cooldown (`can_shoot`) prevents
-            // the whole front line from rifling shots every tick during
-            // sustained pressure.
-            if can_shoot
+            // Build-up gate: forwards can't fire within 300ms of gaining
+            // possession. Real football demands 2-3s of build-up — shots
+            // that fly in the first half-second of ownership are how
+            // a run-and-receive turns into a shot on every possession.
+            // Point-blank (Priority 0 above) already returned; those are
+            // unavoidable. Everything below is a judgement call, and
+            // judgement calls need at least a beat of control.
+            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+            let has_settled = ownership_ticks >= 30;
+
+            // Teammate-in-better-position pass-over-shot heuristic.
+            // Real strikers pick PASS over SHOT when a teammate is in a
+            // significantly better position — even with a clear sight
+            // of goal. The old logic fired on any "clear shot in range"
+            // which produced hat-tricks every match; in real football
+            // only ~half of clear shooting opportunities become shots,
+            // the rest become assists.
+            let defer_to_teammate = self.has_teammate_with_much_better_shot(ctx, distance_to_goal);
+
+            // Skill-aware shot distance AND willingness. Real football:
+            //   * Low-finishing forwards rarely shoot from distance
+            //   * Low-finishing forwards also hesitate more in general
+            //     (they know their limitations) and pass more often.
+            // These combine into a per-tick "will I pull the trigger"
+            // bias so our 100+ shots / team pattern drops toward the
+            // realistic 13 — especially for poorly-skilled squads that
+            // were otherwise spraying low-xG blasts every possession.
+            let finishing = ctx.player.skills.technical.finishing;
+            let long_shots = ctx.player.skills.technical.long_shots;
+            // Distance ceiling by skill (kept modest; combined with the
+            // willingness gate below for the actual rate effect)
+            let max_shot_distance = if finishing <= 8.0 {
+                45.0
+            } else if finishing <= 11.0 {
+                60.0
+            } else if finishing <= 14.0 {
+                75.0
+            } else if finishing <= 17.0 {
+                if long_shots >= 14.0 { 85.0 } else { 80.0 }
+            } else {
+                90.0
+            };
+
+            // Willingness: a hesitation die-roll per shot opportunity.
+            // Steeply skill-driven so the gap between a fin-5 and fin-18
+            // forward is large — the pro-level striker triggers 80% of
+            // the time, the journeyman-at-wrong-position triggers 10%.
+            // The failed rolls route to Passing, so the shot is genuinely
+            // lost, not just deferred to the next tick.
+            //   fin 5,  comp 8 : 0.08  (almost always passes)
+            //   fin 10, comp 10: 0.30
+            //   fin 14, comp 12: 0.52
+            //   fin 18, comp 15: 0.81
+            let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
+            let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+            // Squared fin_factor steepens the bottom of the curve so
+            // truly poor finishers shoot much less; linear composure
+            // adds a gentle nudge for cool-headed players.
+            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.05, 0.95);
+            let shot_triggered = rand::random::<f32>() < willingness;
+
+            // Priority 0.5: Clear shot within skill-permitted range.
+            let shot_condition_met = has_settled
+                && can_shoot
                 && !prefer_possession
-                && distance_to_goal <= 90.0
-                && ctx.player().has_clear_shot()
-            {
+                && !defer_to_teammate
+                && distance_to_goal <= max_shot_distance
+                && ctx.player().has_clear_shot();
+
+            if shot_condition_met && shot_triggered {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_RUN_PRIO05_CLEAR"),
+                );
+            }
+
+            // Willingness failed — don't force a pass in open field. Just
+            // keep running/dribbling and let the next tick re-evaluate.
+            // Previously this routed to Passing which made forwards hand
+            // off an open-field shot to a teammate for no reason. The
+            // willingness gate still reduces total shot rate (each tick
+            // is an independent roll, so hesitation lasts multiple ticks
+            // on average) without burning the opportunity to a teammate.
+            // We DO force a pass under pressure (teammate better
+            // positioned OR prefer_possession active), handled elsewhere.
+            if shot_condition_met {
+                let under_pressure = ctx.player().pressure().is_under_immediate_pressure();
+                if under_pressure {
+                    return Some(StateChangeResult::with_forward_state(
+                        ForwardState::Passing,
+                    ));
+                }
+                // Open field, hesitation this tick — return None to stay
+                // in Running; re-evaluate next tick.
+                return None;
+            }
+
+            // Priority 0.6: Close-range shot (≤45u) — drop the settled-time
+            // requirement since a forward in the box strikes immediately.
+            let box_shot_condition = can_shoot
+                && !prefer_possession
+                && !defer_to_teammate
+                && distance_to_goal < 45.0
+                && distance_to_goal <= max_shot_distance
+                && ctx.player().has_clear_shot();
+
+            if box_shot_condition && shot_triggered {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_RUN_PRIO06_BOX"),
+                );
+            }
+            if box_shot_condition {
                 return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
+                    ForwardState::Passing,
                 ));
             }
 
-            // Priority 0.6: Inside realistic shooting range (~30m) — shoot.
-            // Same `prefer_possession` guard: a 4-0 team with the ball in
-            // the opponent box on 80th minute should not be adding to the
-            // scoreline; they should recycle possession.
-            if can_shoot && !prefer_possession && distance_to_goal < 60.0 {
+            // If we deferred to a better-positioned teammate, route
+            // through Passing — the pass state will pick them as target.
+            if defer_to_teammate && has_settled {
                 return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
+                    ForwardState::Passing,
                 ));
             }
 
@@ -265,7 +440,10 @@ impl StateProcessingHandler for ForwardRunningState {
                     && ctx.player().has_clear_shot()
                     && ctx.player().shooting().has_good_angle()
                 {
-                    return Some(StateChangeResult::with_forward_state(ForwardState::Shooting));
+                    return Some(
+                        StateChangeResult::with_forward_state(ForwardState::Shooting)
+                            .with_shot_reason("FWD_RUN_ANTI_OSCILLATION"),
+                    );
                 }
                 return Some(StateChangeResult::with_forward_state(ForwardState::Passing));
             }
@@ -412,6 +590,51 @@ impl StateProcessingHandler for ForwardRunningState {
             let field_width = ctx.context.field_size.width as f32;
             let field_height = ctx.context.field_size.height as f32;
             let ball_distance = ctx.ball().distance();
+
+            // SUPPORT PRESSURED TEAMMATE: carrier has the ball but is
+            // under pressure — offer a close safe outlet. Previously
+            // when the carrier was being chased we did nothing (or
+            // drifted away due to the ANTI-FOLLOWING rule), leaving
+            // them no pass option and causing the dribble-flicker the
+            // user saw. Now: if a teammate has the ball AND is in
+            // trouble AND I'm reachable, move to a support spot 20u
+            // from them on the side opposite the nearest defender.
+            if ctx.team().is_control_ball() && ball_distance < 80.0 && ball_distance > 6.0 {
+                if let Some(carrier) = ctx.players().teammates().all()
+                    .find(|t| ctx.ball().owner_id() == Some(t.id))
+                {
+                    // Is the carrier being pressured?
+                    let nearest_opp_to_carrier = ctx.players().opponents().all()
+                        .map(|opp| (opp.position, (opp.position - carrier.position).magnitude()))
+                        .min_by(|a, b| a.1.partial_cmp(&b.1).unwrap_or(std::cmp::Ordering::Equal));
+                    if let Some((opp_pos, opp_dist)) = nearest_opp_to_carrier {
+                        if opp_dist < 15.0 {
+                            // Support target: 22u from carrier, on the
+                            // side AWAY from the defender. Gives a
+                            // clean pass angle.
+                            let carrier_to_opp = (opp_pos - carrier.position).normalize();
+                            let support_offset = -carrier_to_opp * 22.0;
+                            // Bias slightly toward goal so the support
+                            // pass is progressive, not purely lateral.
+                            let to_goal = (ctx.player().opponent_goal_position() - carrier.position).normalize();
+                            let support_target = carrier.position
+                                + support_offset * 0.7
+                                + to_goal * 10.0;
+                            let clamped = Vector3::new(
+                                support_target.x.clamp(30.0, field_width - 30.0),
+                                support_target.y.clamp(40.0, field_height - 40.0),
+                                0.0,
+                            );
+                            let to_target = clamped - ctx.player.position;
+                            if to_target.magnitude() > 3.0 {
+                                let direction = to_target.normalize();
+                                let speed = ctx.player.skills.physical.pace * 0.85;
+                                return Some(direction * speed * fatigue_factor);
+                            }
+                        }
+                    }
+                }
+            }
 
             // ANTI-FOLLOWING: If very close to ball carrier, spread away
             // Use hysteresis: start spreading at 25, stop at 45 to prevent oscillation
@@ -759,22 +982,42 @@ impl ForwardRunningState {
 
     /// Determine if should create space
     fn should_create_space(&self, ctx: &StateProcessingContext) -> bool {
-        // Don't create space if you're the ball carrier or very close to ball
+        // Ball carrier doesn't create space — they MOVE with the ball.
         let ball_distance = ctx.ball().distance();
         if ball_distance < 5.0 {
             return false;
         }
 
-        // Check if another teammate has the ball - if so, we MUST create space
+        // Teammate has the ball: the primary trigger for space creation.
+        // Real football: the WHOLE attacking unit spreads to open passing
+        // lanes and stretch the defence. Previously this only fired when
+        // I was >60u from the ball, which meant close forwards stayed
+        // huddled around the carrier instead of making the diagonal runs
+        // that create triangles.
         if let Some(owner_id) = ctx.ball().owner_id() {
             if owner_id != ctx.player.id {
-                // Teammate has ball - check if they're on our team
                 if let Some(owner) = ctx.context.players.by_id(owner_id) {
                     if owner.team_id == ctx.player.team_id {
-                        // Teammate has ball — create space only if far from ball
-                        // Close forwards should stay ready for through-balls, not drift wide
-                        let ball_distance = ctx.ball().distance();
-                        return ball_distance > 60.0;
+                        // Create space whenever we're clustered with
+                        // another forward / any teammate — the exact
+                        // distance to the ball doesn't matter, what
+                        // matters is whether we're bunched.
+                        let me_pos = ctx.player.position;
+                        let bunched = ctx.players().teammates().all()
+                            .any(|t| {
+                                if t.id == ctx.player.id { return false; }
+                                let d_sq = (t.position - me_pos).norm_squared();
+                                d_sq < 22.0 * 22.0 // < ~2.5m
+                            });
+                        if bunched {
+                            return true;
+                        }
+                        // Even without an immediate cluster: if I'm
+                        // reasonably close to the ball (30-150u, the
+                        // "attacking support" band), make a run to pull
+                        // defenders. Carriers need OPTIONS, not another
+                        // nearby body.
+                        return ball_distance > 30.0 && ball_distance < 150.0;
                     }
                 }
             }
@@ -1091,8 +1334,7 @@ impl ForwardRunningState {
     }
 
     /// Check if a teammate has a MUCH better shot opportunity (vision/teamwork-aware)
-    /// Used in process() to distribute goals across team
-    #[allow(dead_code)]
+    /// Used in process() to defer to a better-positioned teammate.
     fn has_teammate_with_much_better_shot(
         &self,
         ctx: &StateProcessingContext,
@@ -1117,8 +1359,12 @@ impl ForwardRunningState {
             .any(|teammate| {
                 let teammate_distance =
                     (teammate.position - ctx.player().opponent_goal_position()).magnitude();
-                // Teammate must be significantly closer (at least 40% closer)
-                let is_much_closer = teammate_distance < own_distance * 0.6;
+                // Teammate must be significantly closer (at least 35% closer).
+                // Boundary tightened to 0.65 + `<=` so a teammate exactly
+                // 40% closer (e.g. 24u when we're at 40u) still counts
+                // as a better option — previously the strict < at 0.6
+                // missed that exact boundary case.
+                let is_much_closer = teammate_distance <= own_distance * 0.65;
                 let has_clear_pass = ctx.player().has_clear_pass(teammate.id);
                 let not_heavily_marked = ctx.tick_context.grid
                     .opponents(teammate.id, 8.0).count() < 2;

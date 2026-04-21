@@ -21,6 +21,33 @@ pub struct DefenderGuardingState {}
 
 impl StateProcessingHandler for DefenderGuardingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // BOX EMERGENCY — engage the carrier immediately if they're in
+        // our box and we're one of the two closest defenders. Guarding
+        // an off-ball runner is the wrong duty at that moment.
+        if ctx.player().defensive().is_box_emergency_for_me() {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                let d = carrier.distance(ctx);
+                if d < 25.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+        }
+
+        // Crisis override — guarding an off-ball runner is useless when
+        // the actual ball carrier is pressuring our goal. Drop to
+        // Standing so the role block assigns fresh duties against the
+        // active threat.
+        if ctx.player().defensive().is_defensive_crisis() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Standing,
+            ));
+        }
+
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(

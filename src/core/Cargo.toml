@@ -4,6 +4,16 @@ version.workspace = true
 authors.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+# Enables diagnostic logs from the match engine (shot reasons, blowout
+# profile, per-tick ball decisions). Off by default so the production
+# simulator (`simulator.rs`, web runs) stays silent; dev_match enables
+# it for the analytic harness. All match-log sites go through the
+# `match_log_*!` macros in `src/core/src/match_logs.rs` which compile
+# to no-ops when this feature is off.
+match-logs = []
+
 [dependencies]
 chrono = "0.4.44"
 rand = "0.10.1"

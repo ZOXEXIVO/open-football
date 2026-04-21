@@ -48,7 +48,6 @@ impl FootballSimulator {
         let mut result = SimulationResult::new();
 
         let current_date = data.date;
-        let tick_start = Instant::now();
 
         let ctx = GlobalContext::new(SimulationContext::new(data.date), Ai::new());
 
@@ -68,7 +67,6 @@ impl FootballSimulator {
         // unwind the Rayon pool and dump the player's save. We catch,
         // log, and substitute an empty result so the surviving continents
         // still advance.
-        let phase_a = Instant::now();
         let results: Vec<ContinentResult> = data
             .continents
             .par_iter_mut()
@@ -89,13 +87,11 @@ impl FootballSimulator {
                 })
             })
             .collect();
-        let phase_a_ms = phase_a.elapsed().as_millis();
 
         // Phase B: collect and batch-execute all AI requests. Guarded by
         // a timeout so a hung upstream provider can't stall the whole
         // simulation forever — on timeout, responses are dropped and the
         // tick advances without applying AI decisions.
-        let phase_b = Instant::now();
         let all_requests = ctx.ai.drain();
         let ai_count = all_requests.len();
         if !all_requests.is_empty() {
@@ -108,19 +104,15 @@ impl FootballSimulator {
                 ),
             }
         }
-        let phase_b_ms = phase_b.elapsed().as_millis();
 
         // Phase C: process the collected results against post-AI data
-        let phase_c = Instant::now();
         for continent_result in results {
             continent_result.process(data, &mut result);
         }
-        let phase_c_ms = phase_c.elapsed().as_millis();
 
         // Global competitions (Champions League, World Cup, etc.)
         let phase_g = Instant::now();
         GlobalCompetitionSimulator::simulate(data);
-        let phase_g_ms = phase_g.elapsed().as_millis();
 
         // Refresh player indexes only if a transfer actually moved a player
         // between clubs today. Walking the world every day is wasteful.
@@ -146,18 +138,6 @@ impl FootballSimulator {
         }
 
         data.next_date();
-
-        log::info!(
-            "simulate {} total={}ms (A={}ms, B={}ms [{} reqs], C={}ms, global={}ms, idx={}ms)",
-            current_date,
-            tick_start.elapsed().as_millis(),
-            phase_a_ms,
-            phase_b_ms,
-            ai_count,
-            phase_c_ms,
-            phase_g_ms,
-            refresh_ms,
-        );
 
         result
     }

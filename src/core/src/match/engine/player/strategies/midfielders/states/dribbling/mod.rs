@@ -17,19 +17,30 @@ impl StateProcessingHandler for MidfielderDribblingState {
             ));
         }
 
-        // Shooting takes priority — use proper shooting range check
+        // Shooting from dribble — requires BOTH in-range skill AND a
+        // clear shot. Without the lane check, a midfielder dribbling
+        // forward would fire on every tick they're in their personal
+        // shooting-range band (which scales with skill up to ~80u).
+        // Previously this was the dominant midfielder shot path.
         let distance_to_goal = ctx.ball().distance_to_opponent_goal();
-        if ctx.player().shooting().in_shooting_range() {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Shooting,
-            ));
+        if ctx.player().shooting().in_shooting_range()
+            && ctx.player().has_clear_shot()
+        {
+            return Some(
+                StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                    .with_shot_reason("MID_DRIB_IN_RANGE"),
+            );
         }
 
-        // Point-blank — always shoot regardless of skill
-        if distance_to_goal < 50.0 {
-            return Some(StateChangeResult::with_midfielder_state(
-                MidfielderState::Shooting,
-            ));
+        // Point-blank — only inside the box (<25u). Previously labelled
+        // "point-blank" but fired at 50u (~25m) regardless of skill,
+        // which is a mid-range shot, not point-blank. Real football
+        // point-blank = the 6-yard line / inside the box mouth.
+        if distance_to_goal < 25.0 {
+            return Some(
+                StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                    .with_shot_reason("MID_DRIB_POINT_BLANK"),
+            );
         }
 
         let dribbling_skill = ctx.player.skills.technical.dribbling / 20.0;
@@ -37,14 +48,17 @@ impl StateProcessingHandler for MidfielderDribblingState {
         // Skilled dribblers can carry longer (40-80 ticks), less skilled exit earlier (25-40)
         let max_dribble_ticks = (25.0 + dribbling_skill * 55.0) as u64;
 
-        // Check if heavily pressured — multiple opponents closing in
+        // Under heavy pressure — pass first. Only shoot if we're
+        // genuinely in shooting range with a clear lane. Previous
+        // 120u (60m!) gate meant a midfielder under pressure ANYWHERE
+        // in the opposition half would blast the ball at goal.
         let close_opponents = ctx.players().opponents().nearby(15.0).count();
         if close_opponents >= 2 {
-            // Under heavy pressure near goal: shoot
-            if distance_to_goal < 120.0 {
-                return Some(StateChangeResult::with_midfielder_state(
-                    MidfielderState::Shooting,
-                ));
+            if distance_to_goal < 40.0 && ctx.player().has_clear_shot() {
+                return Some(
+                    StateChangeResult::with_midfielder_state(MidfielderState::Shooting)
+                        .with_shot_reason("MID_DRIB_PRESSURED_SHOOT"),
+                );
             }
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::Passing,

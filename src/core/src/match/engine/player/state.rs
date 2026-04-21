@@ -65,6 +65,16 @@ impl PlayerMatchState {
         let state_change_result =
             player_position_group.process(player.in_state_time, player, context, tick_context);
 
+        if state_change_result.start_tackle_cooldown {
+            player.start_tackle_cooldown();
+        }
+
+        // Stash the shot reason on the player. The Shooting state will
+        // consume and clear this when it composes the Shoot event.
+        if let Some(reason) = state_change_result.shot_reason {
+            player.pending_shot_reason = Some(reason);
+        }
+
         if let Some(state) = state_change_result.state {
             Self::change_state(player, state);
         } else {
@@ -72,7 +82,7 @@ impl PlayerMatchState {
         }
 
         if let Some(velocity) = state_change_result.velocity {
-            let max_speed = if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
+            let mut max_speed = if player_position_group == PlayerFieldPositionGroup::Goalkeeper {
                 let speed_context = match player.state {
                     PlayerState::Goalkeeper(GoalkeeperState::Diving)
                     | PlayerState::Goalkeeper(GoalkeeperState::PreparingForSave)
@@ -99,11 +109,40 @@ impl PlayerMatchState {
                 )
             };
 
+            // Ball-carrier speed penalty. Real football: carrying the
+            // ball costs ~15-25% of top sprint — the player has to keep
+            // the ball in stride, look up, and protect it. Without this
+            // penalty attackers outrun every defender as soon as they
+            // take possession, which is why our sim produced 200+ shots
+            // per team: ball carriers could not be caught once they had
+            // a head start. Scaling by dribbling+technique means world-
+            // class carriers lose less (Mbappé/Messi dip from 100% →
+            // 85%), journeymen lose more (typical player dips to 75%).
+            if tick_context.ball.current_owner == Some(player.id)
+                && player_position_group != PlayerFieldPositionGroup::Goalkeeper
+            {
+                let dribbling = player.skills.technical.dribbling / 20.0;
+                let technique = player.skills.technical.technique / 20.0;
+                let carry_retention = 0.75 + (dribbling * 0.5 + technique * 0.5) * 0.10;
+                max_speed *= carry_retention.clamp(0.75, 0.90);
+            }
+
+            // NaN/Inf guard: state velocity functions compose many
+            // divisions and normalizations, and any zero-magnitude vector
+            // put through `.normalize()` anywhere upstream produces a
+            // NaN that propagates into player.velocity → player.position
+            // → the recording → the viewer renders nothing. Catch it
+            // here at the single integration point so no state has to
+            // remember to self-sanitize. Non-finite → zero this tick.
+            let finite = velocity.x.is_finite()
+                && velocity.y.is_finite()
+                && velocity.z.is_finite();
+            let velocity = if finite { velocity } else { nalgebra::Vector3::zeros() };
+
             let velocity_sq = velocity.norm_squared();
             let max_speed_sq = max_speed * max_speed;
 
             if velocity_sq > max_speed_sq && velocity_sq > 0.0 {
-                // Velocity is too high, clamp it to max_speed
                 let velocity_magnitude = velocity_sq.sqrt();
                 player.velocity = velocity * (max_speed / velocity_magnitude);
             } else {

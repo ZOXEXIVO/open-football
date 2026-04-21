@@ -139,15 +139,17 @@ impl PlayerMemory {
     /// gone from their feet, and their stance has broken down. Real
     /// football: a striker effectively takes at most 3-5 shots per
     /// match; back-to-back strikes (<1 s apart) only happen on
-    /// rebounds, which are a different state entirely. The engine
-    /// previously let a striker camped at the post fire a shot every
-    /// AI tick (~100 ms), producing 55-167 shots per team in the rare
-    /// "one side dominates" matches and ballooning scores to 8-14.
+    /// rebounds, which are a different state entirely.
     ///
-    /// Cooldown: 150 ticks (1.5 sim seconds), which matches the real
-    /// minimum between one player's shots in broken play.
+    /// Cooldown: 800 ticks (8 sim seconds). Paired with the team
+    /// cooldown (500 ticks / 5 s) this caps a striker to at most one
+    /// shot per 8 s and limits any single player to ~12 shots in a
+    /// full match — elite real-world strikers top out around 5-6
+    /// shots per 90. 400 was still letting the same striker blast
+    /// three or four attempts in the same possession when rebounds
+    /// fell back to their feet.
     pub fn can_shoot(&self, current_tick: u64) -> bool {
-        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 150;
+        const PLAYER_SHOT_COOLDOWN_TICKS: u64 = 800;
         if self.shots_taken == 0 {
             return true;
         }

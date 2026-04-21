@@ -55,8 +55,17 @@ impl StateProcessingHandler for MidfielderReturningState {
             ));
         }
 
-        // If team has possession, switch to supporting instead of returning home
+        // If team has possession, switch to supporting instead of returning home.
+        // Gate on offside: attack-minded midfielders caught past the
+        // opposing defensive line must keep returning until they're
+        // legal again, or they'll exit Returning only to be flagged
+        // offside on the very next through-ball.
         if ctx.team().is_control_ball() && ctx.ball().distance() < 300.0 {
+            if ctx.player().defensive().is_stranded_offside() {
+                // Stay in Returning — the velocity fn drops us back
+                // toward start_position, which is onside by definition.
+                return None;
+            }
             return Some(StateChangeResult::with_midfielder_state(
                 MidfielderState::AttackSupporting,
             ));

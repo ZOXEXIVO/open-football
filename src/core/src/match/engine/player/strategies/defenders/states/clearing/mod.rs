@@ -39,33 +39,32 @@ impl StateProcessingHandler for DefenderClearingState {
         // Determine clearance direction based on player's side (always clear AWAY from own goal)
         let is_left_side = ctx.player.side == Some(PlayerSide::Left);
 
-        // Clearance distance upfield
-        const CLEAR_DISTANCE: f32 = 25.0;
-
-        // Target X: upfield away from own goal
+        // Clearance target — aim near the halfway line, not just 25u
+        // upfield. A 25u hoof lands still inside our defensive third,
+        // where the same attackers who caused us to clear in the first
+        // place collect it again. Aiming at halfway drops the ball in
+        // contested midfield zone where our midfielders can contest.
+        let halfway_x = field_width * 0.5;
         let target_x = if is_left_side {
-            (ball_position.x + CLEAR_DISTANCE).min(field_width * 0.55)
+            halfway_x.max(ball_position.x + 30.0)
         } else {
-            (ball_position.x - CLEAR_DISTANCE).max(field_width * 0.45)
+            halfway_x.min(ball_position.x - 30.0)
         };
 
         // Target Y: always pull toward field center to stay infield
-        // Blend ball's current Y toward center — the further from center, the stronger the pull
-        let center_pull = 0.6; // 60% toward center
+        let center_pull = 0.6;
         let target_y = ball_position.y + (field_center_y - ball_position.y) * center_pull;
 
         let target_position = Vector3::new(target_x, target_y, 0.0);
-
-        // Calculate the direction vector to the target position
         let direction_to_target = (target_position - ball_position).normalize();
 
-        // Horizontal speed: moderate so ball doesn't fly across the entire pitch
+        // Lofted clearance: strong vertical component + horizontal reach.
+        // Combined magnitude ~6.4 u/tick fits under MAX_CLEAR_VELOCITY (7.0)
+        // so the cap doesn't clip the trajectory. In-engine gravity is
+        // steep — without z ≥ 5, the ball lands short and rolls into
+        // opponents' feet.
         let clear_speed = if at_boundary { 5.0 } else { 4.0 };
-
-        // Calculate horizontal velocity
         let horizontal_velocity = direction_to_target * clear_speed;
-
-        // High z velocity for a proper lofted clearance (boot it into the air)
         let z_velocity = if at_boundary { 6.0 } else { 5.0 };
 
         // Combine horizontal and vertical components

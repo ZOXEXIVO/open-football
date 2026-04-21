@@ -159,6 +159,7 @@ impl PlayerEventDispatcher {
                 Self::handle_ball_collision_event(player_id, field);
             }
             PlayerEvent::TacklingBall(player_id) => {
+                Self::record_team_possession_if_switch(player_id, field, context);
                 Self::handle_tackling_ball_event(player_id, field);
             }
             PlayerEvent::BallOwnerChange(player_id) => {
@@ -195,10 +196,18 @@ impl PlayerEventDispatcher {
                             pass_event_model.to_player_id,
                         );
                     }
+                    let passer_id = pass_event_model.from_player_id;
                     Self::handle_pass_to_event(pass_event_model, field);
+                    // Tag the ball with the passer for pass-accuracy
+                    // accounting. Lives for a short window (150 ticks)
+                    // and is cleared on opponent touch — see ball.rs
+                    // `pending_pass_passer` docs.
+                    field.ball.pending_pass_passer = Some(passer_id);
+                    field.ball.pending_pass_set_tick = context.current_tick();
                 }
             }
             PlayerEvent::ClaimBall(player_id) => {
+                Self::record_team_possession_if_switch(player_id, field, context);
                 Self::handle_claim_ball_event(player_id, field);
             }
             PlayerEvent::MoveBall(player_id, ball_velocity) => {
@@ -208,11 +217,52 @@ impl PlayerEventDispatcher {
                 Self::handle_gain_ball_event(player_id, field);
             }
             PlayerEvent::Shoot(shoot_event_model) => {
-                // Record shot at team level for cooldown
+                // Capture field dimensions up-front so the log block
+                // below (which runs under &Player borrow) doesn't try
+                // to re-borrow field.size. Feature-gated so the capture
+                // compiles away when logs are off.
+                #[cfg(feature = "match-logs")]
+                let field_w = field.size.width as f32;
+                #[cfg(feature = "match-logs")]
+                let field_h = field.size.height as f32;
+
+                // Record shot at team level for cooldown. Log reason +
+                // source context only when `match-logs` feature is
+                // enabled (see `core/src/match_logs.rs`).
                 if let Some(player) = field.get_player(shoot_event_model.from_player_id) {
                     let team_id = player.team_id;
                     let tick = context.current_tick();
+                    #[cfg(feature = "match-logs")]
+                    {
+                        let pos = player.position;
+                        let goal_dist = if let Some(side) = player.side {
+                            let goal_x = match side {
+                                crate::r#match::PlayerSide::Left => field_w,
+                                crate::r#match::PlayerSide::Right => 0.0,
+                            };
+                            let goal_y = field_h / 2.0;
+                            ((pos.x - goal_x).powi(2) + (pos.y - goal_y).powi(2)).sqrt()
+                        } else {
+                            0.0
+                        };
+                        let pos_tag = match player.tactical_position.current_position.position_group() {
+                            PlayerFieldPositionGroup::Goalkeeper => "GK",
+                            PlayerFieldPositionGroup::Defender => "DEF",
+                            PlayerFieldPositionGroup::Midfielder => "MID",
+                            PlayerFieldPositionGroup::Forward => "FWD",
+                        };
+                        crate::match_log_info!(
+                            "SHOT team={} pos={} player={} state={} reason={} dist={:.1} tick={}",
+                            team_id, pos_tag,
+                            shoot_event_model.from_player_id,
+                            player.state,
+                            shoot_event_model.reason, goal_dist, tick
+                        );
+                    }
                     context.coach_for_team_mut(team_id).record_shot(tick);
+                }
+                if let Some(player) = field.get_player_mut(shoot_event_model.from_player_id) {
+                    player.pending_shot_reason = None;
                 }
                 Self::handle_shoot_event(shoot_event_model, field);
             }
@@ -299,10 +349,16 @@ impl PlayerEventDispatcher {
     fn handle_pass_to_event(event_model: PassingEventContext, field: &mut MatchField) {
         let mut rng = rand::rng();
 
-        // Increment pass counters on the passer
+        // Only increment attempts here. `passes_completed` is bumped when
+        // the intended receiver actually claims the ball (see
+        // `handle_claim_ball_event`). Previously both were bumped at
+        // emit-time, so the metric was "passes emitted" — 99% accuracy
+        // regardless of whether the ball reached the target. Real-football
+        // pass accuracy sits around 85%; the inflated metric hid the
+        // fact that our possession loop wasn't losing the ball often
+        // enough via wayward passes.
         if let Some(passer) = field.get_player_mut(event_model.from_player_id) {
             passer.statistics.passes_attempted += 1;
-            passer.statistics.passes_completed += 1;
         }
 
         // Extract player skills and condition
@@ -320,10 +376,26 @@ impl PlayerEventDispatcher {
             .map(|p| p.velocity)
             .unwrap_or(Vector3::zeros());
 
-        // Lead pass: target where the receiver will be, not where they are now
-        // Lead time scales with distance (further = more lead needed)
+        // Lead pass: target where the receiver will be when the ball
+        // arrives. Ground-pass flight time is `distance * 0.015 * 1.15`
+        // ÷ friction ≈ 70-95 ticks across short/medium passes. Elite
+        // passers predict this correctly; poor passers under- or
+        // over-estimate, so the lead itself is skill-dependent.
+        //
+        // Flight-time estimate: we aim `lead_ticks` ahead along the
+        // receiver's current velocity, where `lead_ticks` = a fraction
+        // of true flight time determined by vision + passing quality.
         let pass_distance_est = (receiver_pos - passer_position).magnitude();
-        let lead_ticks = (pass_distance_est / 2.0).clamp(5.0, 30.0);
+        let flight_time_est = (pass_distance_est * 0.85).clamp(25.0, 95.0);
+        // Vision = how well we anticipate the receiver's run.
+        // Passing = technical precision on the pass itself.
+        let anticipation = (skills.vision * 0.6 + skills.passing * 0.4).clamp(0.0, 1.0);
+        // Skilled passers lead fully; poor passers lead only 40-50% of
+        // the ideal. Spread is wide enough that a pass from a skilled
+        // midfielder actually lands in stride, while a defender hoof
+        // regularly misses by a couple of yards.
+        let lead_fraction = 0.40 + anticipation * 0.55; // 0.40..0.95
+        let lead_ticks = flight_time_est * lead_fraction;
         let ideal_target = receiver_pos + receiver_velocity * lead_ticks;
 
         // Always use passer's position as pass origin — ball position may lag behind
@@ -331,13 +403,26 @@ impl PlayerEventDispatcher {
         let ideal_pass_vector = ideal_target - pass_origin;
         let horizontal_distance = Self::calculate_horizontal_distance(&ideal_pass_vector);
 
-        // Apply skill-based targeting error
-        // Better players are more accurate with their intended target
-        let accuracy_factor = overall_quality * skills.concentration;
+        // Skill-based targeting error. Steeper skill spread than the
+        // previous linear formula — an elite passer (passing 18,
+        // technique 18, concentration 18) hits within ~0.4u; an average
+        // passer ~2.5u; a poor passer (all 6) ~7u.
+        // Squared accuracy_factor sharpens the drop-off: the gap
+        // between "world class" and "pro-level" accuracy is larger
+        // than the gap between "pro-level" and "average".
+        let accuracy_factor = (overall_quality * skills.concentration).clamp(0.0, 1.0);
+        let precision = accuracy_factor * accuracy_factor;
 
-        // Distance-based error: longer passes have more positional error
-        let distance_error_factor = (horizontal_distance / 200.0).min(1.5);
-        let max_position_error = 5.0 * (1.0 - accuracy_factor) * distance_error_factor;
+        // Distance-based error: longer passes have more positional error.
+        // Curve also steepened so 20u passes are near-perfect for
+        // skilled players, while 200u passes lose significant accuracy.
+        let distance_error_factor = (horizontal_distance / 250.0).clamp(0.1, 1.8);
+
+        // Max error scales from 0.3u (elite) to 9u (poor), modulated
+        // by distance. Previous constant 5.0 was too low for poor
+        // passers and too high for elite ones — so skill barely
+        // affected outcome.
+        let max_position_error = (0.3 + (1.0 - precision) * 9.0) * distance_error_factor;
 
         // Add random targeting error
         let mut target_error_x = if max_position_error > f32::EPSILON {
@@ -351,11 +436,15 @@ impl PlayerEventDispatcher {
             0.0
         };
 
-        // Miskick chance for very low-technique players — ball goes off target
-        let miskick_chance = (1.0 - skills.technique).powi(3) * 0.15;
+        // Miskick chance — heavily gated by technique. Elite technique
+        // basically never miskicks; poor technique (≤6) fires wild ~8%
+        // of the time (5th-power curve concentrates miskicks among
+        // genuinely unskilled players). Previous cubic curve produced
+        // ~5% even for average players, which muddied the skill signal.
+        let miskick_chance = (1.0 - skills.technique).powi(5) * 0.25;
         if rng.random_range(0.0f32..1.0) < miskick_chance {
-            target_error_x += rng.random_range(-5.0f32..5.0);
-            target_error_y += rng.random_range(-5.0f32..5.0);
+            target_error_x += rng.random_range(-8.0f32..8.0);
+            target_error_y += rng.random_range(-8.0f32..8.0);
         }
 
         // Calculate actual target with error
@@ -365,23 +454,37 @@ impl PlayerEventDispatcher {
             0.0,
         );
 
-        // SAFETY: Prevent miskicked passes from going into passer's own goal
-        // Even the worst passer wouldn't kick the ball directly into their own net
+        // SAFETY: keep pass target away from BOTH goals.
+        // Own goal: obvious — no one passes into their own net.
+        // Opposing goal: a pass aimed within a few yards of the opponent
+        // goal line with even a small error scoots straight into the net
+        // as an unowned ball → `check_goal` credits the passer → logged
+        // as a "goal" that never involved a Shoot event. Logs showed
+        // 10-15 of these per team per match, which was the primary
+        // source of 20+ goal scorelines. Passes should always land in
+        // playable space — clearances and shots have their own explicit
+        // paths for getting the ball across a goal line.
         {
             use crate::r#match::PlayerSide;
             let field_width = field.size.width as f32;
             let goal_safety_margin = 20.0;
             match passer_side {
                 Some(PlayerSide::Left) => {
-                    // Own goal at x ≈ 0 — keep target away from goal line
+                    // Own goal at x ≈ 0; opposing goal at x ≈ field_width.
                     if actual_target.x < goal_safety_margin {
                         actual_target.x = passer_position.x.max(goal_safety_margin);
                     }
+                    if actual_target.x > field_width - goal_safety_margin {
+                        actual_target.x = field_width - goal_safety_margin;
+                    }
                 }
                 Some(PlayerSide::Right) => {
-                    // Own goal at x ≈ field_width — keep target away from goal line
+                    // Own goal at x ≈ field_width; opposing goal at x ≈ 0.
                     if actual_target.x > field_width - goal_safety_margin {
                         actual_target.x = passer_position.x.min(field_width - goal_safety_margin);
+                    }
+                    if actual_target.x < goal_safety_margin {
+                        actual_target.x = goal_safety_margin;
                     }
                 }
                 _ => {}
@@ -453,8 +556,16 @@ impl PlayerEventDispatcher {
             final_z_velocity,
         );
 
-        // CRITICAL: Validate velocity to prevent cosmic-speed passes
-        const MAX_PASS_VELOCITY: f32 = 7.0; // Cap for longest passes including lofted balls
+        // CRITICAL: Validate velocity to prevent cosmic-speed passes.
+        // Field is 840u = 105m (1u = 0.125m), simulation at 100 ticks/s.
+        // Old 7.0 u/tick = 87.5 m/s = 315 km/h — the same unit-conversion
+        // error family as everything else, assuming "1u ≈ 0.5m". Real
+        // football pass speeds: short ball 5-15 m/s, medium 15-25 m/s,
+        // elite driven/long pass tops out ~35 m/s. Cap at 3.2 u/tick
+        // (40 m/s) — elite piledriver territory, never broken by any
+        // outfield pass in real play. Matches the MAX_SHOT_VELOCITY
+        // calibration and restores the real shot/player speed ratio.
+        const MAX_PASS_VELOCITY: f32 = 3.2;
 
         // Check for NaN or infinity
         if final_velocity.x.is_nan() || final_velocity.y.is_nan() || final_velocity.z.is_nan()
@@ -832,6 +943,29 @@ impl PlayerEventDispatcher {
         }
     }
 
+    /// Records a possession gain on the claimant's team coach if this
+    /// claim represents a team switch (previous owner was on the other
+    /// team, or there was no previous owner). Used by `MatchCoach::can_shoot`
+    /// to gate shots behind a build-up window.
+    fn record_team_possession_if_switch(
+        claimant_id: u32,
+        field: &MatchField,
+        context: &mut MatchContext,
+    ) {
+        let claimant_team = match field.players.iter().find(|p| p.id == claimant_id) {
+            Some(p) => p.team_id,
+            None => return,
+        };
+        let previous_team = field.ball.previous_owner
+            .and_then(|pid| field.players.iter().find(|p| p.id == pid))
+            .map(|p| p.team_id);
+        let switched = previous_team.map_or(true, |pt| pt != claimant_team);
+        if switched {
+            let tick = context.current_tick();
+            context.coach_for_team_mut(claimant_team).record_possession_gain(tick);
+        }
+    }
+
     fn handle_claim_ball_event(player_id: u32, field: &mut MatchField) {
         // CLAIM COOLDOWN: Prevent rapid ping-pong between players
         // If the ball was just claimed by someone else, reject this claim
@@ -895,7 +1029,36 @@ impl PlayerEventDispatcher {
             return;
         }
 
-        // No current owner - normal claim
+        // No current owner - normal claim.
+        //
+        // Pass-accuracy accounting: if the ball is within an active
+        // pass window (`pending_pass_passer` set by the pass emit and
+        // not yet cleared by an opponent touch), and this claimant is
+        // a teammate of that passer, credit the pass as completed.
+        // Using `pending_pass_passer` instead of `pass_target_player_id`
+        // because the target flag gets cleared in many unrelated paths
+        // (set-pieces, clearances, save handoffs) and was masking
+        // legitimate same-team receptions. The dedicated passer flag
+        // persists through the real pass window (~150 ticks).
+        if let Some(passer_id) = field.ball.pending_pass_passer {
+            let same_team = field.players.iter()
+                .find(|p| p.id == player_id)
+                .and_then(|claimant| {
+                    field.players.iter()
+                        .find(|p| p.id == passer_id)
+                        .map(|passer| claimant.team_id == passer.team_id)
+                })
+                .unwrap_or(false);
+            if same_team && passer_id != player_id {
+                if let Some(passer) = field.get_player_mut(passer_id) {
+                    passer.statistics.passes_completed += 1;
+                }
+                field.ball.pending_pass_passer = None;
+            } else if !same_team {
+                // Opponent won the pass — accuracy window ends.
+                field.ball.pending_pass_passer = None;
+            }
+        }
         field.ball.previous_owner = field.ball.current_owner;
         field.ball.current_owner = Some(player_id);
         field.ball.pass_target_player_id = None;
@@ -1460,27 +1623,22 @@ impl PlayerEventDispatcher {
             return;
         }
 
+        // Red cards disabled: the tackle/foul pipeline currently fires
+        // far more often than real-world rates, which cascaded into
+        // multiple sent-off players per match and left the viewer with
+        // half-empty teams. Until foul frequency is properly calibrated,
+        // no player gets sent off — direct red or second yellow both
+        // degrade to a yellow caution. `is_sent_off` stays false so the
+        // position recorder keeps the player in the viewer.
         let (second_yellow, ends_with_red) = {
             let player = match field.get_player_mut(fouler_id) {
                 Some(p) => p,
                 None => return,
             };
-            if direct_red {
-                player.statistics.add_red_card(match_second);
-                player.is_sent_off = true;
-                (false, true)
-            } else {
-                // Yellow — check for second caution.
-                player.yellow_cards = player.yellow_cards.saturating_add(1);
-                player.statistics.add_yellow_card(match_second);
-                if player.yellow_cards >= 2 {
-                    player.statistics.add_red_card(match_second);
-                    player.is_sent_off = true;
-                    (true, true)
-                } else {
-                    (false, false)
-                }
-            }
+            player.yellow_cards = player.yellow_cards.saturating_add(1);
+            player.statistics.add_yellow_card(match_second);
+            let _ = direct_red;
+            (false, false)
         };
 
         if ends_with_red {
@@ -1664,9 +1822,15 @@ impl PlayerEventDispatcher {
     }
 
     fn handle_clear_ball_event(velocity: Vector3<f32>, field: &mut MatchField) {
-        // Cap clearance velocity to prevent unrealistic ball speed
-        // Clearances are powerful kicks - higher cap than passes (7.2)
-        const MAX_CLEAR_VELOCITY: f32 = 14.0;
+        // Clearance cap. Needs more headroom than a pass because a
+        // clearance is typically lofted — horizontal AND vertical
+        // components are both meaningful, so the total magnitude
+        // (sqrt(hx² + hy² + vz²)) legitimately exceeds a flat pass.
+        // In-engine gravity is strong (balls fall fast), so a proper
+        // hoof needs ~5 u/tick each of horizontal and vertical to
+        // travel 30-40m before landing. 7.0 total covers that with a
+        // little slack. Still well below the global MAX_VELOCITY safety.
+        const MAX_CLEAR_VELOCITY: f32 = 7.0;
         let speed = velocity.norm();
         let mut capped_velocity = if speed > MAX_CLEAR_VELOCITY {
             velocity * (MAX_CLEAR_VELOCITY / speed)

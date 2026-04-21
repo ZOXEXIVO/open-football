@@ -2,6 +2,7 @@ use nalgebra::Vector3;
 
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler, SteeringBehavior,
@@ -39,86 +40,130 @@ impl StateProcessingHandler for DefenderStandingState {
             ));
         }
 
-        // Loose-ball claim lives in the dispatcher.
-
-        // COUNTER-PRESS: If we just lost the ball, immediately press to win it back
-        // Intensity depends on tactical instructions from staff
-        if ctx.team().has_just_lost_possession() {
-            let counter_press = ctx.team().tactics().counter_press_intensity();
-            let ball_dist = ctx.ball().distance();
-            // Press range scales with intensity: 40 (defensive) to 100 (gegenpressing)
-            let counter_press_range = 40.0 + counter_press * 60.0;
-            if ball_dist < counter_press_range {
-                if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                    if ctx.player().defensive().is_best_defender_for_opponent(&opponent)
-                        || opponent.distance(ctx) < 30.0
-                    {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Pressing,
-                        ));
-                    }
+        // BOX EMERGENCY — carrier is in our penalty area; one of the
+        // two closest defenders engages regardless of role assignment.
+        // The role system is geometry-driven and usually correct, but
+        // inside the box there's no time to run through it; the
+        // half-tick the role reassignment takes is the half-tick the
+        // forward uses to shoot.
+        if ctx.player().defensive().is_box_emergency_for_me() {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                let d = carrier.distance(ctx);
+                if d < 25.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
                 }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
             }
         }
 
-        // Check for nearby opponents with the ball - press them if we're best positioned
+        // STEP UP — closest defender to a carrier approaching our
+        // penalty area meets them outside the box. Real football:
+        // you don't wait for the attacker to reach the 6-yard line
+        // before you challenge; you step out at 18-22 yards.
+        if ctx.player().defensive().should_step_up_to_meet_attacker() {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Pressing,
+            ));
+        }
+
+        // Loose-ball claim lives in the dispatcher.
+
+        // Ball-carrier response is fully role-driven. DefensiveRole assigns
+        // exactly one Primary (presser), one Cover (goal-side safety),
+        // optionally one Help (picks up a dangerous pass option) per
+        // ball-carrier scenario; the rest hold shape. Geometry-driven
+        // rank assignment means if the primary is dribbled past, the old
+        // cover promotes to primary on the next tick automatically.
         if let Some(opponent) = ctx.players().opponents().with_ball().next() {
             let distance_to_opponent = opponent.distance(ctx);
 
-            if distance_to_opponent < TACKLE_DISTANCE {
+            // Tackle range — but ONLY if we're the Primary (closest
+            // defender) or there's a box emergency. Previously any
+            // defender within 40u would lunge, causing 3-4 defenders
+            // to converge on the same carrier. That drove both the
+            // foul spike (multiple simultaneous tackle attempts with
+            // independent foul rolls) and the "running in groups"
+            // visual — the whole back line pulled out of shape.
+            let is_primary_or_emergency =
+                matches!(
+                    ctx.player().defensive().defensive_role_for_ball_carrier(),
+                    DefensiveRole::Primary
+                )
+                || ctx.player().defensive().is_box_emergency_for_me();
+            if distance_to_opponent < TACKLE_DISTANCE && is_primary_or_emergency {
                 return Some(StateChangeResult::with_defender_state(
                     DefenderState::Tackling,
                 ));
             }
 
-            // Ball carrier heading toward this defender — engage regardless of "best" status
-            if distance_to_opponent < 80.0 {
-                let carrier_vel = ctx.tick_context.positions.players.velocity(opponent.id);
-                let carrier_speed = carrier_vel.magnitude();
-                if carrier_speed > 0.1 {
-                    let to_defender = (ctx.player.position - opponent.position).normalize();
-                    let approach = carrier_vel.normalize().dot(&to_defender);
-                    if approach > 0.3 {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Pressing,
-                        ));
-                    }
-                }
-            }
+            // Counter-press window: we just lost the ball. Widen the
+            // press engagement range — even Cover/Help roles become
+            // Primary if the ball is within counter-press distance.
+            let counter_press_active = ctx.team().has_just_lost_possession();
+            let counter_press_range = if counter_press_active {
+                40.0 + ctx.team().tactics().counter_press_intensity() * 60.0
+            } else {
+                0.0
+            };
 
-            // Context-aware pressing distance: tighter in defensive third
-            let pressing_threshold = if ctx.ball().on_own_side()
+            // Engage-threshold: how close the ball carrier has to be for
+            // the Primary role to actually commit to pressing. Outside
+            // this, defenders hold shape until the carrier gets closer.
+            let press_engage_threshold = if ctx.ball().on_own_side()
                 && ctx.ball().distance_to_own_goal() < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD {
                 PRESSING_DISTANCE_DEFENSIVE_THIRD
             } else {
                 PRESSING_DISTANCE
             };
 
-            // Only press if we're the best defender for this opponent (coordination)
-            if distance_to_opponent < pressing_threshold {
-                if ctx.player().defensive().is_best_defender_for_opponent(&opponent) {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                } else {
-                    // Not the best defender — check if we can support the press
-                    if ctx.player().defensive().can_support_press(&opponent) {
+            let role = ctx.player().defensive().defensive_role_for_ball_carrier();
+            match role {
+                DefensiveRole::Primary => {
+                    // Own-third override: if the ball is in our defensive
+                    // third AND we're the Primary, we commit to press at
+                    // any reachable range. Previously the
+                    // PRESSING_DISTANCE_DEFENSIVE_THIRD gate (60u) left
+                    // Primary defenders passive when the carrier was at
+                    // 71-150u in the defensive third — they'd route to
+                    // Covering via the push-up/shape logic below and
+                    // walk backward while the attacker approached the
+                    // box. In the own third, the Primary must chase.
+                    let in_own_third = ctx.ball().on_own_side()
+                        && ctx.ball().distance_to_own_goal()
+                            < ctx.context.field_size.width as f32 * FIELD_THIRD_THRESHOLD;
+                    let must_engage_own_third = in_own_third && distance_to_opponent < 150.0;
+
+                    if distance_to_opponent < press_engage_threshold
+                        || must_engage_own_third
+                        || (counter_press_active && ctx.ball().distance() < counter_press_range)
+                    {
                         return Some(StateChangeResult::with_defender_state(
                             DefenderState::Pressing,
                         ));
                     }
-                    // Another defender is better positioned - look for unmarked opponents
-                    if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(MARKING_DISTANCE * 2.0) {
-                        return Some(StateChangeResult::with_defender_state(
-                            DefenderState::Marking,
-                        ));
-                    }
-                    // No unmarked opponent but ball is close - provide cover depth
-                    if ctx.ball().on_own_side() {
+                }
+                DefensiveRole::Cover => {
+                    if distance_to_opponent < press_engage_threshold + 30.0
+                        && ctx.ball().on_own_side()
+                    {
                         return Some(StateChangeResult::with_defender_state(
                             DefenderState::Covering,
                         ));
                     }
+                }
+                DefensiveRole::Help => {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Marking,
+                    ));
+                }
+                DefensiveRole::Hold => {
+                    // Fall through to the rest of the Standing logic —
+                    // ball carrier exists but we have no immediate duty,
+                    // so the normal shape/threat/walk flow handles us.
                 }
             }
         }
@@ -141,25 +186,16 @@ impl StateProcessingHandler for DefenderStandingState {
         }
 
         // Check for ball interception opportunities
-        if ctx.ball().on_own_side() {
-            if ball_ops.is_towards_player_with_angle(0.8)
-                && ball_ops.distance() < INTERCEPTION_DISTANCE
-            {
-                return Some(StateChangeResult::with_defender_state(
-                    DefenderState::Intercepting,
-                ));
-            }
-
-            // Only press if opponent has the ball AND we're best positioned
-            if let Some(opponent) = ctx.players().opponents().with_ball().next() {
-                if ball_ops.distance() < PRESSING_DISTANCE
-                    && ctx.player().defensive().is_best_defender_for_opponent(&opponent)
-                {
-                    return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Pressing,
-                    ));
-                }
-            }
+        // Loose-ball interception — ball incoming in our half, no owner yet.
+        // Ball-carrier pressing is already handled by the role block at the
+        // top of this function.
+        if ctx.ball().on_own_side()
+            && ball_ops.is_towards_player_with_angle(0.8)
+            && ball_ops.distance() < INTERCEPTION_DISTANCE
+        {
+            return Some(StateChangeResult::with_defender_state(
+                DefenderState::Intercepting,
+            ));
         }
 
         if self.should_push_up(ctx) {

@@ -1,5 +1,6 @@
 use crate::r#match::defenders::states::DefenderState;
 use crate::r#match::defenders::states::common::{DefenderCondition, ActivityIntensity};
+use crate::r#match::player::strategies::players::DefensiveRole;
 use crate::r#match::{
     ConditionContext, MatchPlayerLite, StateChangeResult, StateProcessingContext,
     StateProcessingHandler,
@@ -13,13 +14,30 @@ const BALL_PROXIMITY_THRESHOLD: f32 = 15.0; // Increased from 10.0 - react earli
 const HEADING_HEIGHT: f32 = 1.5;
 const HEADING_DISTANCE: f32 = 5.0;
 const GOAL_SIDE_WEIGHT: f32 = 0.6; // How much to prioritize being goal-side
-const SWITCH_OPPONENT_THRESHOLD: f32 = 50.0; // Distance to consider switching marking target
 
 #[derive(Default, Clone)]
 pub struct DefenderMarkingState {}
 
 impl StateProcessingHandler for DefenderMarkingState {
     fn process(&self, ctx: &StateProcessingContext) -> Option<StateChangeResult> {
+        // BOX EMERGENCY — stop marking an off-ball runner if the
+        // carrier is INSIDE our penalty area and we're one of the two
+        // closest defenders. A shot is imminent; engage the carrier
+        // regardless of marking duties.
+        if ctx.player().defensive().is_box_emergency_for_me() {
+            if let Some(carrier) = ctx.players().opponents().with_ball().next() {
+                let d = carrier.distance(ctx);
+                if d < 25.0 {
+                    return Some(StateChangeResult::with_defender_state(
+                        DefenderState::Tackling,
+                    ));
+                }
+                return Some(StateChangeResult::with_defender_state(
+                    DefenderState::Pressing,
+                ));
+            }
+        }
+
         // Take ball only if best positioned — prevents swarming
         if ctx.ball().should_take_ball_immediately() && ctx.team().is_best_player_to_chase_ball() {
             return Some(StateChangeResult::with_defender_state(
@@ -85,13 +103,15 @@ impl StateProcessingHandler for DefenderMarkingState {
                 }
             }
 
-            // Check if another defender is already engaging this opponent
-            // If so, look for unmarked threats
-            if ctx.player().defensive().is_opponent_being_engaged(&opponent) {
-                if let Some(_unmarked) = ctx.player().defensive().find_unmarked_opponent(SWITCH_OPPONENT_THRESHOLD) {
-                    // Switch to covering to find better position
+            // Role check: if a ball carrier exists and our role has
+            // flipped away from Help, route back through Standing so the
+            // role block can reassign us (Primary if we're now closest,
+            // Cover if we're goal-side second, Hold otherwise).
+            if ctx.players().opponents().with_ball().next().is_some() {
+                let role = ctx.player().defensive().defensive_role_for_ball_carrier();
+                if role != DefensiveRole::Help {
                     return Some(StateChangeResult::with_defender_state(
-                        DefenderState::Covering,
+                        DefenderState::Standing,
                     ));
                 }
             }
@@ -99,9 +119,11 @@ impl StateProcessingHandler for DefenderMarkingState {
             // Continue marking
             None
         } else {
-            // No opponent to mark found
+            // No opponent to mark — drop to Standing so the role block
+            // there can re-evaluate (HoldingLine would route Help straight
+            // back to Marking, causing a state ping-pong).
             Some(StateChangeResult::with_defender_state(
-                DefenderState::HoldingLine,
+                DefenderState::Standing,
             ))
         }
     }
@@ -164,27 +186,23 @@ impl StateProcessingHandler for DefenderMarkingState {
 }
 
 impl DefenderMarkingState {
-    /// Find the best marking target using coordination system
-    /// Prefers unmarked opponents to avoid double-marking
+    /// Find the best marking target using the role system.
+    /// In the Help role (ball carrier active), pick the most dangerous
+    /// non-carrier unmarked opponent — this cuts pass lanes around the
+    /// primary presser. Otherwise (no live ball-carrier scenario) fall
+    /// back to the generic "find most dangerous opponent" scan.
     fn find_best_marking_target(&self, ctx: &StateProcessingContext) -> Option<MatchPlayerLite> {
-        // First, try to find an unmarked dangerous opponent
-        if let Some(unmarked) = ctx.player().defensive().find_unmarked_opponent(100.0) {
-            return Some(unmarked);
-        }
-
-        // If all dangerous opponents are marked, use the traditional scoring
-        // but only if we're the best defender for them
-        let dangerous = self.find_most_dangerous_opponent(ctx);
-
-        if let Some(ref opp) = dangerous {
-            // Only take over marking if we're significantly better positioned
-            if ctx.player().defensive().is_best_defender_for_opponent(opp) {
-                return dangerous;
+        if ctx.players().opponents().with_ball().next().is_some() {
+            if let Some(help_target) = ctx.player().defensive().find_help_target() {
+                return Some(help_target);
             }
         }
 
-        // Return the dangerous opponent anyway if no other option
-        dangerous
+        // No live carrier: mark the most dangerous unmarked opponent.
+        ctx.player()
+            .defensive()
+            .find_unmarked_opponent(100.0)
+            .or_else(|| self.find_most_dangerous_opponent(ctx))
     }
 
     /// Find the most dangerous opponent to mark based on multiple factors

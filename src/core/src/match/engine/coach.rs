@@ -89,6 +89,18 @@ pub struct MatchCoach {
     pub last_update_tick: u64,
     /// Team's last shot tick (for team-wide shot cooldown)
     pub last_shot_tick: u64,
+    /// Tick when this team most recently gained possession. Used as a
+    /// build-up gate: teams can't shoot within a short window of winning
+    /// the ball, which forces an outlet pass / progression instead of
+    /// hack-and-counter. Updated by the match loop on possession-change.
+    pub last_possession_gain_tick: u64,
+    /// Shots fired in the current possession. Reset when we lose the
+    /// ball (possession change TO us, FROM us). Real football: one
+    /// quality chance per possession. Rebound / tap-in scrambles
+    /// (ball leaves owner briefly but team keeps control) don't
+    /// count as a new possession — the cap holds until the opposition
+    /// touches the ball.
+    pub shots_this_possession: u32,
 }
 
 impl Default for MatchCoach {
@@ -97,6 +109,8 @@ impl Default for MatchCoach {
             instruction: CoachInstruction::Normal,
             last_update_tick: 0,
             last_shot_tick: 0,
+            last_possession_gain_tick: 0,
+            shots_this_possession: 0,
         }
     }
 }
@@ -216,13 +230,45 @@ impl MatchCoach {
         };
     }
 
-    /// Whether the team should allow a shot right now (team-level cooldown)
+    /// Whether the team should allow a shot right now (team-level cooldown).
+    /// 500 ticks = 5 seconds between any shot by this team.
+    ///
+    /// Math: real football ≈ 13 shots / team / 90min = one shot every
+    /// ~4100 ticks. A 500-tick floor caps team shots at 108 per match
+    /// and lets the rate fall well below that when opportunities don't
+    /// materialise. At 200 ticks the cap was 270, which the simulator
+    /// was approaching in desperation-attack matches (one team losing
+    /// 0-5 and spam-shooting from anywhere). At 500, a losing team
+    /// can still fire ~100 times (plenty) but can't rebound-spam the
+    /// same possession four times per second.
     pub fn can_shoot(&self, current_tick: u64) -> bool {
-        // Minimum 50 ticks (~0.5 seconds) between team shots
-        current_tick.saturating_sub(self.last_shot_tick) >= 50
+        // Per-team shot cadence — see type docs for the full rationale.
+        let shot_spaced = current_tick.saturating_sub(self.last_shot_tick) >= 500;
+        // Build-up gate: a team that just won possession can't fire
+        // within ~1 second. Real football: even elite counter-attacks
+        // need at least one progressive pass before a shot arrives.
+        let settled = current_tick.saturating_sub(self.last_possession_gain_tick) >= 100;
+        // Possession-phase shot cap: at most ONE shot per possession.
+        // This is the single biggest natural-logic lever for shot
+        // volume. Real football: a possession produces a chance OR a
+        // turnover, not "three chances over seven seconds of box
+        // scramble." The counter resets on possession change; rebounds
+        // where the team keeps control DON'T count as a new possession,
+        // so rebound-spam is naturally capped. Sets the realistic
+        // "one good look per attack" rhythm.
+        let phase_allows = self.shots_this_possession < 1;
+        shot_spaced && settled && phase_allows
+    }
+
+    /// Record that this team just won possession. Starts the build-up
+    /// gate AND resets the per-possession shot counter.
+    pub fn record_possession_gain(&mut self, current_tick: u64) {
+        self.last_possession_gain_tick = current_tick;
+        self.shots_this_possession = 0;
     }
 
     pub fn record_shot(&mut self, current_tick: u64) {
         self.last_shot_tick = current_tick;
+        self.shots_this_possession += 1;
     }
 }

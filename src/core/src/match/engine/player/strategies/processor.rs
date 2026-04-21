@@ -267,9 +267,16 @@ impl<'p> StateProcessor<'p> {
     }
 
     pub fn process<H: StateProcessingHandler>(self, handler: H) -> StateProcessingResult {
+        // Match progress drives the late-game fatigue curve. Uses the
+        // match half-time constant so debug / release builds both give
+        // the correct 0..1 progression over their configured match length.
+        let half_ms = crate::r#match::engine::engine::MATCH_HALF_TIME_MS as f32;
+        let full_ms = half_ms * 2.0;
+        let match_progress = (self.context.total_match_time as f32 / full_ms).clamp(0.0, 1.0);
         let condition_ctx = ConditionContext {
             in_state_time: self.in_state_time,
             player: self.player,
+            match_progress,
         };
 
         // Process player conditions
@@ -294,6 +301,15 @@ impl<'p> StateProcessor<'p> {
         // common logic
         let complete_result = |state_results: StateChangeResult,
                                mut result: StateProcessingResult| {
+            // Propagate the tackle-cooldown signal regardless of whether
+            // the handler also changed state — a successful tackle
+            // returns a state-change + cooldown, but a keep-current-state
+            // (None) wouldn't hit the `if let Some(state)` branch below.
+            result.start_tackle_cooldown = state_results.start_tackle_cooldown;
+            // Propagate the shot reason the same way — tagged at the
+            // transition point, consumed by the Shooting state when it
+            // composes the Shoot event.
+            result.shot_reason = state_results.shot_reason;
             if let Some(state) = state_results.state {
                 if need_extended_state_logging {
                     debug!("Player, Id={}, State {:?}", player_id, state);
@@ -319,6 +335,10 @@ impl<'p> StateProcessor<'p> {
 pub struct ConditionContext<'sp> {
     pub in_state_time: u64,
     pub player: &'sp mut MatchPlayer,
+    /// Match progress 0.0..1.0 (0 = kickoff, 1.0 = 90'). Feeds the
+    /// second-half fatigue-curve: recovery slows and sprint cost rises
+    /// as the match progresses, so late-game players genuinely fade.
+    pub match_progress: f32,
 }
 
 pub struct StateProcessingContext<'sp> {
@@ -375,6 +395,14 @@ pub struct StateProcessingResult {
     pub state: Option<PlayerState>,
     pub velocity: Option<Vector3<f32>>,
     pub events: EventCollection,
+    /// Propagated up from the per-state `StateChangeResult`. Consumed by
+    /// `state.rs` to bump `player.tackle_cooldown`.
+    pub start_tackle_cooldown: bool,
+    /// Tagged reason to attach to the next Shoot event fired by this
+    /// player. Matches the pass-reason pattern. Written to
+    /// `player.pending_shot_reason` by `state.rs` so the Shooting state
+    /// can read it when composing the event.
+    pub shot_reason: Option<&'static str>,
 }
 
 impl Default for StateProcessingResult {
@@ -389,6 +417,8 @@ impl StateProcessingResult {
             state: None,
             velocity: None,
             events: EventCollection::new(),
+            start_tackle_cooldown: false,
+            shot_reason: None,
         }
     }
 }
@@ -398,6 +428,20 @@ pub struct StateChangeResult {
     pub velocity: Option<Vector3<f32>>,
 
     pub events: EventCollection,
+
+    /// Defender signalled "I just attempted a tackle" — the state.rs
+    /// update loop consumes this and bumps `player.tackle_cooldown` so
+    /// the next ~100 ticks of Tackling-state entries short-circuit
+    /// without rolling an attempt. Must live on the result (not be
+    /// applied directly in the state) because `ctx.player` is an
+    /// immutable borrow inside the state processor.
+    pub start_tackle_cooldown: bool,
+    /// Tag the NEXT Shoot event fired by this player with this reason.
+    /// Set by transitions to the Shooting state so the resulting
+    /// Shoot event carries the decision-path context. Mirrors how
+    /// pass events carry `with_reason(...)` — see Shooting state
+    /// for the consumer.
+    pub shot_reason: Option<&'static str>,
 }
 
 impl Default for StateChangeResult {
@@ -412,94 +456,97 @@ impl StateChangeResult {
             state: None,
             velocity: None,
             events: EventCollection::new(),
+            start_tackle_cooldown: false,
+            shot_reason: None,
         }
+    }
+
+    /// Tag the next Shoot event fired by this player with `reason`.
+    /// Fluent helper to keep transition sites readable —
+    /// `StateChangeResult::with_forward_state(Shooting).with_shot_reason("FWD_PRIO_06")`.
+    pub fn with_shot_reason(mut self, reason: &'static str) -> Self {
+        self.shot_reason = Some(reason);
+        self
     }
 
     pub fn with(state: PlayerState) -> Self {
         StateChangeResult {
             state: Some(state),
-            velocity: None,
-            events: EventCollection::new(),
+            ..Self::new()
         }
     }
 
     pub fn with_goalkeeper_state(state: GoalkeeperState) -> Self {
         StateChangeResult {
             state: Some(Goalkeeper(state)),
-            velocity: None,
-            events: EventCollection::new(),
+            ..Self::new()
         }
     }
 
     pub fn with_goalkeeper_state_and_event(state: GoalkeeperState, event: Event) -> Self {
         StateChangeResult {
             state: Some(Goalkeeper(state)),
-            velocity: None,
             events: EventCollection::with_event(event),
+            ..Self::new()
         }
     }
 
     pub fn with_defender_state(state: DefenderState) -> Self {
         StateChangeResult {
             state: Some(Defender(state)),
-            velocity: None,
-            events: EventCollection::new(),
+            ..Self::new()
         }
     }
 
     pub fn with_defender_state_and_event(state: DefenderState, event: Event) -> Self {
         StateChangeResult {
             state: Some(Defender(state)),
-            velocity: None,
             events: EventCollection::with_event(event),
+            ..Self::new()
         }
     }
 
     pub fn with_midfielder_state(state: MidfielderState) -> Self {
         StateChangeResult {
             state: Some(Midfielder(state)),
-            velocity: None,
-            events: EventCollection::new(),
+            ..Self::new()
         }
     }
 
     pub fn with_midfielder_state_and_event(state: MidfielderState, event: Event) -> Self {
         StateChangeResult {
             state: Some(Midfielder(state)),
-            velocity: None,
             events: EventCollection::with_event(event),
+            ..Self::new()
         }
     }
 
     pub fn with_forward_state(state: ForwardState) -> Self {
         StateChangeResult {
             state: Some(Forward(state)),
-            velocity: None,
-            events: EventCollection::new(),
+            ..Self::new()
         }
     }
 
     pub fn with_forward_state_and_event(state: ForwardState, event: Event) -> Self {
         StateChangeResult {
             state: Some(Forward(state)),
-            velocity: None,
             events: EventCollection::with_event(event),
+            ..Self::new()
         }
     }
 
     pub fn with_event(event: Event) -> Self {
         StateChangeResult {
-            state: None,
-            velocity: None,
             events: EventCollection::with_event(event),
+            ..Self::new()
         }
     }
 
     pub fn with_events(events: EventCollection) -> Self {
         StateChangeResult {
-            state: None,
-            velocity: None,
             events,
+            ..Self::new()
         }
     }
 }

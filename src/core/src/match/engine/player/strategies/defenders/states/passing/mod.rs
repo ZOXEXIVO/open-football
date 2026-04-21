@@ -21,28 +21,26 @@ impl StateProcessingHandler for DefenderPassingState {
             ));
         }
 
-        // Under heavy pressure - make a quick decision
+        // Under heavy pressure — prefer a safe pass, any safe pass. The
+        // old rule "clear if safe pass < 20u" was too eager; a short
+        // safe pass is still a ball-retention win. Only escalate to
+        // Clearing when truly no safe pass exists. Bulk of the 80+
+        // clearances per match came from this branch firing whenever a
+        // short passing option was available but too close.
         if ctx.player().pressure().is_under_heavy_pressure() {
             return if let Some(safe_option) = ctx.player().passing().find_safe_pass_option() {
-                let dist = (safe_option.position - ctx.player.position).magnitude();
-                if dist >= 20.0 {
-                    Some(StateChangeResult::with_defender_state_and_event(
-                        DefenderState::Standing,
-                        Event::PlayerEvent(PlayerEvent::PassTo(
-                            PassingEventContext::new()
-                                .with_from_player_id(ctx.player.id)
-                                .with_to_player_id(safe_option.id)
-                                .with_reason("DEF_PASSING_UNDER_PRESSURE")
-                                .build(ctx),
-                        )),
-                    ))
-                } else {
-                    Some(StateChangeResult::with_defender_state(
-                        DefenderState::Clearing,
-                    ))
-                }
+                Some(StateChangeResult::with_defender_state_and_event(
+                    DefenderState::Standing,
+                    Event::PlayerEvent(PlayerEvent::PassTo(
+                        PassingEventContext::new()
+                            .with_from_player_id(ctx.player.id)
+                            .with_to_player_id(safe_option.id)
+                            .with_reason("DEF_PASSING_UNDER_PRESSURE")
+                            .build(ctx),
+                    )),
+                ))
             } else {
-                // No safe option, clear the ball
+                // No safe option at all — hoof it.
                 Some(StateChangeResult::with_defender_state(
                     DefenderState::Clearing,
                 ))

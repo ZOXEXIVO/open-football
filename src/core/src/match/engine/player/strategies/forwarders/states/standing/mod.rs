@@ -13,22 +13,64 @@ impl StateProcessingHandler for ForwardStandingState {
         // Check if the forward still has the ball
         if ctx.player.has_ball(ctx) {
             let distance_to_goal = ctx.ball().distance_to_opponent_goal();
+            // Settle before striking: 30 ticks = ~300ms. Without this the
+            // forward can receive + shoot in the same half-second, which
+            // turns every possession into a strike.
+            let ownership_ticks = ctx.tick_context.ball.ownership_duration;
+            let has_settled = ownership_ticks >= 30;
+            let can_shoot = ctx.team().can_shoot() && ctx.player().can_shoot();
 
-            // PRIORITY: Close to goal — shoot immediately (no cooldown)
-            // Forwards should ALWAYS shoot when in range rather than pass
-            if distance_to_goal <= 60.0 && ctx.player().shooting().in_shooting_range() {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
+            // Point-blank (≤24u / ~12m) — shoot regardless of build-up;
+            // a defender closing or keeper right there means it's now or
+            // never. Still honours cooldowns.
+            if distance_to_goal <= 24.0
+                && can_shoot
+                && ctx.player().shooting().in_shooting_range()
+            {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_STAND_POINT_BLANK"),
+                );
+            }
+
+            // Skill-gated trigger: see running/mod.rs for rationale.
+            // Poor finishers hesitate, elite finishers pull the trigger
+            // confidently. Reduces total shot rate across the squad in
+            // proportion to skill rather than concentrating shots in
+            // a few high-skill hands.
+            let finishing = ctx.player.skills.technical.finishing;
+            let fin_factor = (finishing / 20.0).clamp(0.0, 1.0);
+            let comp_factor = (ctx.player.skills.mental.composure / 20.0).clamp(0.0, 1.0);
+            // See running/mod.rs for curve rationale. Squared fin_factor
+            // makes truly poor finishers shoot far less often.
+            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.05, 0.95);
+            let shot_triggered = rand::random::<f32>() < willingness;
+
+            if has_settled
+                && can_shoot
+                && shot_triggered
+                && distance_to_goal <= 60.0
+                && ctx.player().shooting().in_shooting_range()
+                && ctx.player().has_clear_shot()
+            {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_STAND_CLEAR"),
+                );
             }
 
             // Cooldown for medium/long range shots to prevent rapid-fire spam
             const SHOOTING_COOLDOWN: u64 = 20;
 
-            if ctx.player().should_attempt_shot() && ctx.in_state_time > SHOOTING_COOLDOWN {
-                return Some(StateChangeResult::with_forward_state(
-                    ForwardState::Shooting,
-                ));
+            if has_settled
+                && can_shoot
+                && ctx.player().should_attempt_shot()
+                && ctx.in_state_time > SHOOTING_COOLDOWN
+            {
+                return Some(
+                    StateChangeResult::with_forward_state(ForwardState::Shooting)
+                        .with_shot_reason("FWD_STAND_RANGE"),
+                );
             }
 
             if let Some(_) = self.find_best_teammate_to_pass(ctx) {
@@ -59,6 +101,16 @@ impl StateProcessingHandler for ForwardStandingState {
             // Minimum time in standing state to prevent rapid state oscillation
             if ctx.in_state_time < 10 {
                 return None;
+            }
+
+            // Offside discipline — if we're stranded beyond the opposing
+            // defensive line while our team doesn't have the ball, drop
+            // back. Otherwise we stay camped near the opponent's goal
+            // and every upfield clearance finds us offside.
+            if ctx.player().defensive().is_stranded_offside() {
+                return Some(StateChangeResult::with_forward_state(
+                    ForwardState::Returning,
+                ));
             }
 
             // If the forward doesn't have the ball, decide to move or press

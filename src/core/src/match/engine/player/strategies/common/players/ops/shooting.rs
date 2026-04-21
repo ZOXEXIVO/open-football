@@ -28,6 +28,34 @@ impl<'p> ShootingOperationsImpl<'p> {
         ShootingOperationsImpl { ctx }
     }
 
+    /// Expected-goals estimate for a shot taken right now. Mirrors the
+    /// xG formula in `handle_shoot_event` so decisions use the same
+    /// quality curve the post-hoc stat does. Returns 0..0.9 on a scale
+    /// where 0.55 = penalty-spot chance, 0.08 = 20-yard long shot,
+    /// <0.04 = hopeless spray. Used as a pre-shot gate so forwards
+    /// don't burn cooldowns on low-quality attempts that real players
+    /// would skip in favour of a pass.
+    pub fn expected_xg(&self) -> f32 {
+        let d = self.ctx.ball().distance_to_opponent_goal();
+        let distance_factor = if d <= 10.0 {
+            0.55
+        } else if d <= 30.0 {
+            0.55 - (d - 10.0) / 20.0 * 0.30
+        } else if d <= 60.0 {
+            0.25 - (d - 30.0) / 30.0 * 0.18
+        } else if d <= 120.0 {
+            0.07 - (d - 60.0) / 60.0 * 0.05
+        } else {
+            0.02
+        };
+        let finishing = (self.ctx.player.skills.technical.finishing / 20.0).clamp(0.0, 1.0);
+        let skill_mult = 0.7 + finishing * 0.6; // 0.7 .. 1.3
+        // Penalise a pressured / blocked shot — matches the real gameplay
+        // where a defender in the corridor drastically reduces xG.
+        let clarity_mult = if self.ctx.player().has_clear_shot() { 1.0 } else { 0.40 };
+        (distance_factor * skill_mult * clarity_mult).clamp(0.0, 0.90)
+    }
+
     /// Check if player is in shooting range (skill-aware)
     pub fn in_shooting_range(&self) -> bool {
         let distance_to_goal = self.ctx.ball().distance_to_opponent_goal();

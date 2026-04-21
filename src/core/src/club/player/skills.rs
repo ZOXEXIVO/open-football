@@ -93,12 +93,16 @@ impl PlayerSkills {
     /// Calculate maximum speed without condition factor (raw speed based on skills only)
     /// Returns units/tick scaled for 10ms tick on 840-unit field (~105m pitch).
     /// At 1u = 0.125m and 100 ticks/s:
-    ///   pace=1  → 0.48 u/tick = ~6.0 m/s  (slowest pro sprint)
-    ///   pace=20 → 0.84 u/tick = ~10.5 m/s (Mbappé/Davies range)
-    /// Old range (0.217–0.578) assumed "1u ≈ 0.5m" and produced 2.7–7.2 m/s
-    /// (walking pace at the low end). That left defenders unable to close down
-    /// attackers and goalkeepers unable to track laterally during shot flight,
-    /// which fed the blowout pattern.
+    ///   pace=1  → 0.36 u/tick = ~4.5 m/s  (slow jog / low-pace fatigued player)
+    ///   pace=20 → 0.63 u/tick = ~7.9 m/s  (solid pro sprint)
+    /// Range trimmed ~25% from the prior 0.48–0.84 band. The higher band
+    /// was technically closer to real top-end speeds (Mbappé ~10.5 m/s),
+    /// but combined with slowed ball velocity (shots 3.2, passes 3.2)
+    /// it made outfield play feel too frantic — defenders closing down
+    /// attackers in half a second, waypoint cycles flickering. This
+    /// slower band keeps the shot/player ratio near real football's
+    /// ~3.75× (shot 3.2 / elite 0.63 ≈ 5× — still fast enough for goals)
+    /// while making player movement human-trackable.
     pub fn max_speed(&self) -> f32 {
         let pace_factor = (self.physical.pace as f32 - 1.0) / 19.0;
         let acceleration_factor = (self.physical.acceleration as f32 - 1.0) / 19.0;
@@ -109,8 +113,8 @@ impl PlayerSkills {
             + 0.2 * acceleration_factor
             + 0.1 * agility_factor;
 
-        let min_speed = 0.48;
-        let max_speed = 0.84;
+        let min_speed = 0.36;
+        let max_speed = 0.63;
 
         min_speed + skill_blend * (max_speed - min_speed)
     }

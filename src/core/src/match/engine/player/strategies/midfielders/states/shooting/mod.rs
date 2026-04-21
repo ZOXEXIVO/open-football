@@ -20,6 +20,18 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
+        // Offside abort — an attack-minded midfielder pushed past the
+        // defensive line shouldn't fire: the goal wouldn't count and
+        // the shot would just waste a cooldown. Drop back to Returning
+        // instead. Complements the offside checks on Running/Standing
+        // by catching the edge case where a player entered Shooting
+        // while legal but became stranded before the actual strike.
+        if ctx.player().defensive().is_stranded_offside() {
+            return Some(StateChangeResult::with_midfielder_state(
+                MidfielderState::Returning,
+            ));
+        }
+
         // Per-player cooldown — same reasoning as the forward
         // Shooting state. A midfielder who struck recently isn't
         // balanced to strike again within 1.5 s.
@@ -39,13 +51,20 @@ impl StateProcessingHandler for MidfielderShootingState {
             ));
         }
 
-        let reason = if distance_to_goal <= 30.0 {
-            "MID_SHOOTING_CLOSE"
-        } else if distance_to_goal <= 60.0 {
-            "MID_SHOOTING_MEDIUM"
-        } else {
-            "MID_SHOOTING_LONG"
-        };
+        // Use the transition-point reason if one was tagged (matches
+        // the forward Shooting pattern + the pass-reason convention).
+        // Falls back to distance bucket only when the transition came
+        // from a path that didn't tag.
+        let reason = ctx.player.pending_shot_reason
+            .unwrap_or_else(|| {
+                if distance_to_goal <= 30.0 {
+                    "MID_SHOOTING_CLOSE"
+                } else if distance_to_goal <= 60.0 {
+                    "MID_SHOOTING_MEDIUM"
+                } else {
+                    "MID_SHOOTING_LONG"
+                }
+            });
 
         Some(StateChangeResult::with_midfielder_state_and_event(MidfielderState::Standing, Event::PlayerEvent(PlayerEvent::Shoot(
             ShootingEventContext::new()
