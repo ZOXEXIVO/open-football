@@ -40,7 +40,7 @@ pub(crate) fn select_starting_eleven(
     // ref=1 after the (x-1)/19 scaling clamp — save rate effectively
     // 0%, and the league generated repeatable 10+ goal blowouts. This
     // order keeps a real keeper in goal whenever possible.
-    let picked_gk = pick_best_goalkeeper(available, &used_ids, engine, staff, is_friendly)
+    let picked_gk = pick_best_goalkeeper(available, &used_ids, engine, staff, is_friendly, match_importance)
         .or_else(|| pick_any_goalkeeper_fallback(available, &used_ids));
     if let Some(gk) = picked_gk {
         squad.push(MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false));
@@ -157,7 +157,7 @@ pub(crate) fn select_substitutes(
     let mut used_ids: Vec<u32> = Vec::new();
 
     // 1. Backup goalkeeper
-    if let Some(gk) = pick_best_goalkeeper(remaining, &used_ids, engine, staff, is_friendly) {
+    if let Some(gk) = pick_best_goalkeeper(remaining, &used_ids, engine, staff, is_friendly, match_importance) {
         subs.push(MatchPlayer::from_player(team_id, gk, PlayerPositionType::Goalkeeper, false));
         used_ids.push(gk.id);
     }
@@ -261,14 +261,26 @@ fn pick_best_goalkeeper<'p>(
     engine: &ScoringEngine,
     staff: &Staff,
     is_friendly: bool,
+    match_importance: f32,
 ) -> Option<&'p Player> {
+    // In real football the #1 keeper plays everything unless injured,
+    // genuinely out of form, or the fixture is low priority (early cup
+    // rounds, dead rubbers). Injury/suspension is already filtered before
+    // we get here; poor form is baked into `goalkeeper_score` via
+    // match_readiness + condition_floor_penalty. The missing rotation
+    // trigger was fixture importance — `development_minutes_bonus` only
+    // fires when match_importance < 0.5, giving an underplayed backup a
+    // boost on cup nights but vanishing for league games, so the #1 GK
+    // isn't displaced by a workload signal that doesn't apply to keepers.
     available
         .iter()
         .filter(|p| !used_ids.contains(&p.id))
         .filter(|p| p.positions.is_goalkeeper())
         .max_by(|a, b| {
-            let score_a = engine.goalkeeper_score(a, staff, is_friendly);
-            let score_b = engine.goalkeeper_score(b, staff, is_friendly);
+            let score_a = engine.goalkeeper_score(a, staff, is_friendly)
+                + engine.development_minutes_bonus(a, match_importance);
+            let score_b = engine.goalkeeper_score(b, staff, is_friendly)
+                + engine.development_minutes_bonus(b, match_importance);
             score_a.partial_cmp(&score_b).unwrap_or(std::cmp::Ordering::Equal)
         })
         .copied()

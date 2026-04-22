@@ -61,6 +61,9 @@ impl PipelineProcessor {
 
             for team in &club.teams.teams {
                 for player in &team.players.players {
+                    if player.is_on_loan() {
+                        continue;
+                    }
                     let value = PlayerValuationCalculator::calculate_value_with_price_level(
                         player,
                         date,

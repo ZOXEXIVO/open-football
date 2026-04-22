@@ -89,6 +89,12 @@ impl CountryResult {
             // fresh between windows so the next window opens with current data.
             PipelineProcessor::refresh_shadow_reports(country, current_date);
 
+            // Prune stale `Wnt` statuses whose originating interest has
+            // since been cleared (window reset, transfer completion, or
+            // shortlist exhaustion). Without this the flag latches forever
+            // and the transfer page reports "Wanted" with no interested clubs.
+            PipelineProcessor::sync_wanted_status(country);
+
             debug!(
                 "Transfer Activity - Listings: {}, Negotiations: {}, Completed: {}",
                 summary.total_listings, summary.active_negotiations, summary.completed_transfers

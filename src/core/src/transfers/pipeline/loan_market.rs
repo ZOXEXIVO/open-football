@@ -13,6 +13,12 @@ use crate::{
     ClubPhilosophy, Country, Person, PlayerFieldPositionGroup, PlayerStatusType, ReputationLevel,
 };
 
+// Loans fund short-term development or rotation minutes. Players older
+// than this are signed cheap permanent (or as free agents) rather than
+// loaned, so loan targeting above it is noise regardless of whether the
+// move is request-driven or opportunistic.
+const MAX_LOAN_TARGET_AGE: u8 = 34;
+
 impl PipelineProcessor {
     // ============================================================
     // Step 6.5: Scan Loan Market — Small clubs proactively seek loans
@@ -207,7 +213,10 @@ impl PipelineProcessor {
 
                 // Relaxed thresholds: min_ability - 5, age_max + 3
                 let relaxed_min = request.min_ability.saturating_sub(5);
-                let relaxed_age_max = request.preferred_age_max.saturating_add(3);
+                let relaxed_age_max = request
+                    .preferred_age_max
+                    .saturating_add(3)
+                    .min(MAX_LOAN_TARGET_AGE);
 
                 if let Some(best) = loan_listings
                     .iter()
@@ -252,6 +261,7 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
+                            && l.age <= MAX_LOAN_TARGET_AGE
                             && l.ability >= avg_ability.saturating_sub(5)
                             && l.asking_price * 0.8 <= max_loan_fee
                             && !country
@@ -284,6 +294,7 @@ impl PipelineProcessor {
                     .filter(|l| {
                         l.club_id != club.id
                             && !club.is_rival(l.club_id)
+                            && l.age <= MAX_LOAN_TARGET_AGE
                             && l.ability >= avg_ability.saturating_sub(8)
                             && l.asking_price * 0.8 <= max_loan_fee
                             && !country
@@ -537,7 +548,10 @@ impl PipelineProcessor {
                         !club.is_rival(p.club_id)
                             && p.position_group == request.position.position_group()
                             && p.skill_ability >= relaxed_min
-                            && p.age <= request.preferred_age_max.saturating_add(3)
+                            && p.age <= request
+                                .preferred_age_max
+                                .saturating_add(3)
+                                .min(MAX_LOAN_TARGET_AGE)
                             && p.age >= request.preferred_age_min
                             && p.estimated_value * 0.1 <= max_loan_fee
                             && p.skill_ability >= avg_ability.saturating_sub(10)

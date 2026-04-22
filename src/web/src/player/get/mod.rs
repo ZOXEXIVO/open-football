@@ -4,7 +4,7 @@ use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
-use axum::extract::{Path, State};
+use axum::extract::{Path, Query, State};
 use axum::response::IntoResponse;
 use core::utils::FormattingUtils;
 use core::Person;
@@ -20,6 +20,12 @@ use serde::Deserialize;
 pub struct PlayerGetRequest {
     pub lang: String,
     pub player_id: u32,
+}
+
+#[derive(Deserialize, Default)]
+pub struct PlayerGetQuery {
+    #[serde(default)]
+    pub debug: Option<String>,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -45,6 +51,49 @@ pub struct PlayerGetTemplate {
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
     pub is_injured: bool,
+    pub debug: Option<PlayerDebugDto>,
+}
+
+pub struct PlayerDebugDto {
+    pub current_ability: u8,
+    pub potential_ability: u8,
+    pub current_reputation: i16,
+    pub home_reputation: i16,
+    pub world_reputation: i16,
+    pub condition_raw: i16,
+    pub condition_pct: u32,
+    pub fitness_raw: i16,
+    pub jadedness_raw: i16,
+    pub natural_fitness: f32,
+    pub match_readiness_skill: f32,
+    pub days_since_last_match: u16,
+    pub sharpness_derived: f32,
+    pub is_injured: bool,
+    pub injury_days_remaining: u16,
+    pub recovery_days_remaining: u16,
+    pub is_in_recovery: bool,
+    pub injury_proneness: u8,
+    pub injury_count: u8,
+    pub form_rating: f32,
+    pub form_bonus_derived: f32,
+    pub minutes_last_7: f32,
+    pub minutes_last_30: f32,
+    pub matches_last_14: u8,
+    pub is_fatigued: bool,
+    pub is_overloaded: bool,
+    pub played: u16,
+    pub played_subs: u16,
+    pub average_rating: f32,
+    pub squad_status: String,
+    pub last_transfer_date: String,
+    pub training_performance: f32,
+    pub sessions_completed: u16,
+    pub work_rate: f32,
+    pub determination: f32,
+    pub teamwork: f32,
+    pub position_primary: String,
+    pub position_primary_level: u8,
+    pub statuses: String,
 }
 
 pub struct PlayerViewModel {
@@ -222,9 +271,11 @@ impl PlayerStatusDto {
 pub async fn player_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerGetRequest>,
+    Query(query): Query<PlayerGetQuery>,
 ) -> ApiResult<impl IntoResponse> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
+    let debug_enabled = query.debug.is_some();
 
     let simulator_data = guard
         .as_ref()
@@ -304,6 +355,7 @@ pub async fn player_get_action(
         let is_goalkeeper = player.position().is_goalkeeper();
         let is_on_loan = player.is_on_loan();
         let is_injured = player.player_attributes.is_injured;
+        let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
         return Ok(PlayerGetTemplate {
             css_version: CSS_VERSION,
@@ -331,6 +383,7 @@ pub async fn player_get_action(
             is_goalkeeper,
             is_on_loan,
             is_injured,
+            debug,
         });
     }
 
@@ -375,6 +428,7 @@ pub async fn player_get_action(
 
         let is_goalkeeper = player.position().is_goalkeeper();
         let sub_title = i18n.t("player_status_retired").to_string();
+        let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
         return Ok(PlayerGetTemplate {
             css_version: CSS_VERSION,
@@ -397,10 +451,108 @@ pub async fn player_get_action(
             is_goalkeeper,
             is_on_loan: false,
             is_injured: false,
+            debug,
         });
     }
 
     Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)))
+}
+
+fn build_debug_dto(player: &Player) -> PlayerDebugDto {
+    let attrs = &player.player_attributes;
+    let load = &player.load;
+
+    let days_since = attrs.days_since_last_match as f32;
+    let sharpness = if days_since <= 3.0 {
+        1.0
+    } else if days_since <= 7.0 {
+        0.95
+    } else if days_since <= 14.0 {
+        0.85
+    } else if days_since <= 28.0 {
+        0.70
+    } else {
+        0.55
+    };
+
+    let apps = player.statistics.played + player.statistics.played_subs;
+    let form_bonus = if load.form_rating > 0.0 {
+        (load.form_rating - 6.5).clamp(-1.5, 1.5)
+    } else if apps > 3 {
+        (player.statistics.average_rating - 6.5).clamp(-1.5, 1.5)
+    } else {
+        0.0
+    };
+
+    let squad_status = player
+        .contract
+        .as_ref()
+        .map(|c| format!("{:?}", c.squad_status))
+        .unwrap_or_else(|| "None".to_string());
+
+    let last_transfer_date = player
+        .last_transfer_date
+        .map(|d| d.format("%Y-%m-%d").to_string())
+        .unwrap_or_else(|| "-".to_string());
+
+    let primary = player.position();
+    let primary_level = player
+        .positions
+        .positions
+        .iter()
+        .find(|p| p.position == primary)
+        .map(|p| p.level)
+        .unwrap_or(0);
+
+    let statuses = player
+        .statuses
+        .get()
+        .iter()
+        .map(|s| format!("{:?}", s))
+        .collect::<Vec<_>>()
+        .join(",");
+
+    PlayerDebugDto {
+        current_ability: attrs.current_ability,
+        potential_ability: attrs.potential_ability,
+        current_reputation: attrs.current_reputation,
+        home_reputation: attrs.home_reputation,
+        world_reputation: attrs.world_reputation,
+        condition_raw: attrs.condition,
+        condition_pct: attrs.condition_percentage(),
+        fitness_raw: attrs.fitness,
+        jadedness_raw: attrs.jadedness,
+        natural_fitness: player.skills.physical.natural_fitness,
+        match_readiness_skill: player.skills.physical.match_readiness,
+        days_since_last_match: attrs.days_since_last_match,
+        sharpness_derived: sharpness,
+        is_injured: attrs.is_injured,
+        injury_days_remaining: attrs.injury_days_remaining,
+        recovery_days_remaining: attrs.recovery_days_remaining,
+        is_in_recovery: attrs.is_in_recovery(),
+        injury_proneness: attrs.injury_proneness,
+        injury_count: attrs.injury_count,
+        form_rating: load.form_rating,
+        form_bonus_derived: form_bonus,
+        minutes_last_7: load.minutes_last_7,
+        minutes_last_30: load.minutes_last_30,
+        matches_last_14: load.matches_last_14(),
+        is_fatigued: load.is_fatigued(),
+        is_overloaded: load.is_overloaded(),
+        played: player.statistics.played,
+        played_subs: player.statistics.played_subs,
+        average_rating: player.statistics.average_rating,
+        squad_status,
+        last_transfer_date,
+        training_performance: player.training.training_performance,
+        sessions_completed: player.training.sessions_completed,
+        work_rate: player.skills.mental.work_rate,
+        determination: player.skills.mental.determination,
+        teamwork: player.skills.mental.teamwork,
+        position_primary: primary.get_short_name().to_string(),
+        position_primary_level: primary_level,
+        statuses,
+    }
 }
 
 fn get_attributes(player: &Player) -> PlayerAttributesDto {

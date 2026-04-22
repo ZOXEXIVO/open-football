@@ -14,8 +14,8 @@ use crate::transfers::staff_resolver::StaffResolver;
 use crate::utils::FormattingUtils;
 use crate::transfers::TransferWindowManager;
 use crate::{
-    ClubPhilosophy, ClubTransferStrategy, Country, Person, ReputationLevel, StaffPosition,
-    WageCalculator,
+    ClubPhilosophy, ClubTransferStrategy, Country, Person, PlayerStatusType, ReputationLevel,
+    StaffPosition, WageCalculator,
 };
 
 /// Continuous buying aggressiveness from reputation ratio.
@@ -710,6 +710,49 @@ impl PipelineProcessor {
 
             // Staff recommendations
             plan.staff_recommendations.retain(|r| r.player_id != player_id);
+        }
+    }
+
+    /// Reconcile `Wnt` statuses with actual interest. `Wnt` is added during
+    /// scouting but has no intrinsic expiry — when window resets wipe all
+    /// interest tracking, the status lingers and players appear "Wanted"
+    /// with no interested clubs behind it. This walks the country once per
+    /// invocation, collects the set of still-tracked player ids, and strips
+    /// `Wnt` from anyone who is no longer on any club's radar.
+    pub fn sync_wanted_status(country: &mut Country) {
+        use std::collections::HashSet;
+
+        let mut tracked: HashSet<u32> = HashSet::new();
+        for club in &country.clubs {
+            let plan = &club.transfer_plan;
+            for assignment in &plan.scouting_assignments {
+                for obs in &assignment.observations {
+                    tracked.insert(obs.player_id);
+                }
+            }
+            for r in &plan.scouting_reports {
+                tracked.insert(r.player_id);
+            }
+            for s in &plan.shortlists {
+                for c in &s.candidates {
+                    tracked.insert(c.player_id);
+                }
+            }
+            for r in &plan.staff_recommendations {
+                tracked.insert(r.player_id);
+            }
+        }
+
+        for club in &mut country.clubs {
+            for team in &mut club.teams.teams {
+                for player in team.players.players.iter_mut() {
+                    if player.statuses.get().contains(&PlayerStatusType::Wnt)
+                        && !tracked.contains(&player.id)
+                    {
+                        player.statuses.remove(PlayerStatusType::Wnt);
+                    }
+                }
+            }
         }
     }
 

@@ -304,5 +304,50 @@
             </tbody>
         </table>
     </section>
+
+    {% if let Some(d) = debug %}
+    <section class="fm-debug-fields" hidden aria-hidden="true" data-debug="squad-selection" style="display:none">
+        <input type="hidden" data-field="player_id" value="{{ player_id }}">
+        <input type="hidden" data-field="current_ability" value="{{ d.current_ability }}">
+        <input type="hidden" data-field="potential_ability" value="{{ d.potential_ability }}">
+        <input type="hidden" data-field="current_reputation" value="{{ d.current_reputation }}">
+        <input type="hidden" data-field="home_reputation" value="{{ d.home_reputation }}">
+        <input type="hidden" data-field="world_reputation" value="{{ d.world_reputation }}">
+        <input type="hidden" data-field="condition_raw" value="{{ d.condition_raw }}">
+        <input type="hidden" data-field="condition_pct" value="{{ d.condition_pct }}">
+        <input type="hidden" data-field="fitness_raw" value="{{ d.fitness_raw }}">
+        <input type="hidden" data-field="jadedness_raw" value="{{ d.jadedness_raw }}">
+        <input type="hidden" data-field="natural_fitness" value="{{ d.natural_fitness }}">
+        <input type="hidden" data-field="match_readiness_skill" value="{{ d.match_readiness_skill }}">
+        <input type="hidden" data-field="days_since_last_match" value="{{ d.days_since_last_match }}">
+        <input type="hidden" data-field="sharpness_derived" value="{{ d.sharpness_derived }}">
+        <input type="hidden" data-field="is_injured" value="{{ d.is_injured }}">
+        <input type="hidden" data-field="injury_days_remaining" value="{{ d.injury_days_remaining }}">
+        <input type="hidden" data-field="recovery_days_remaining" value="{{ d.recovery_days_remaining }}">
+        <input type="hidden" data-field="is_in_recovery" value="{{ d.is_in_recovery }}">
+        <input type="hidden" data-field="injury_proneness" value="{{ d.injury_proneness }}">
+        <input type="hidden" data-field="injury_count" value="{{ d.injury_count }}">
+        <input type="hidden" data-field="form_rating" value="{{ d.form_rating }}">
+        <input type="hidden" data-field="form_bonus_derived" value="{{ d.form_bonus_derived }}">
+        <input type="hidden" data-field="minutes_last_7" value="{{ d.minutes_last_7 }}">
+        <input type="hidden" data-field="minutes_last_30" value="{{ d.minutes_last_30 }}">
+        <input type="hidden" data-field="matches_last_14" value="{{ d.matches_last_14 }}">
+        <input type="hidden" data-field="is_fatigued" value="{{ d.is_fatigued }}">
+        <input type="hidden" data-field="is_overloaded" value="{{ d.is_overloaded }}">
+        <input type="hidden" data-field="played" value="{{ d.played }}">
+        <input type="hidden" data-field="played_subs" value="{{ d.played_subs }}">
+        <input type="hidden" data-field="average_rating" value="{{ d.average_rating }}">
+        <input type="hidden" data-field="squad_status" value="{{ d.squad_status }}">
+        <input type="hidden" data-field="last_transfer_date" value="{{ d.last_transfer_date }}">
+        <input type="hidden" data-field="training_performance" value="{{ d.training_performance }}">
+        <input type="hidden" data-field="sessions_completed" value="{{ d.sessions_completed }}">
+        <input type="hidden" data-field="work_rate" value="{{ d.work_rate }}">
+        <input type="hidden" data-field="determination" value="{{ d.determination }}">
+        <input type="hidden" data-field="teamwork" value="{{ d.teamwork }}">
+        <input type="hidden" data-field="position_primary" value="{{ d.position_primary }}">
+        <input type="hidden" data-field="position_primary_level" value="{{ d.position_primary_level }}">
+        <input type="hidden" data-field="statuses" value="{{ d.statuses }}">
+    </section>
+    {% endif %}
 </div>
 {% endblock %}

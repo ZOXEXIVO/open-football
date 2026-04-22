@@ -7,6 +7,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::IntoResponse;
 use core::r#match::player::statistics::MatchStatisticType;
+use core::r#match::MatchResultRaw;
 use core::SimulatorData;
 use serde::{Deserialize, Serialize};
 
@@ -73,6 +74,8 @@ pub struct MatchPlayer {
     pub sub_minute: Option<u32>,
     pub subbed_off_minute: Option<u32>,
     pub is_player_of_the_match: bool,
+    pub rating: String,
+    pub rating_tier: &'static str,
 }
 
 #[derive(Serialize)]
@@ -335,7 +338,7 @@ pub async fn match_get_action(
             .main
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
                     p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -347,7 +350,7 @@ pub async fn match_get_action(
             .substitutes
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
                     p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -367,7 +370,7 @@ pub async fn match_get_action(
             .main
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_out_id == *pid) {
                     p.subbed_off_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -379,7 +382,7 @@ pub async fn match_get_action(
             .substitutes
             .iter()
             .filter_map(|pid| {
-                let mut p = to_match_player(*pid, simulator_data, motm_id)?;
+                let mut p = to_match_player(*pid, simulator_data, motm_id, result_details)?;
                 if let Some(sub) = result_details.substitutions.iter().find(|s| s.player_in_id == *pid) {
                     p.sub_minute = Some(sub_time_to_minute(sub.match_time_ms, result_details.match_time_ms));
                 }
@@ -423,8 +426,30 @@ pub async fn match_get_action(
     })
 }
 
-fn to_match_player(player_id: u32, simulator_data: &SimulatorData, motm_id: Option<u32>) -> Option<MatchPlayer> {
+fn to_match_player(
+    player_id: u32,
+    simulator_data: &SimulatorData,
+    motm_id: Option<u32>,
+    result_details: &MatchResultRaw,
+) -> Option<MatchPlayer> {
     let player = simulator_data.player(player_id)?;
+    let (rating, rating_tier) = result_details
+        .player_stats
+        .get(&player_id)
+        .map(|s| {
+            let r = s.match_rating;
+            let tier = if r < 6.0 {
+                "low"
+            } else if r < 7.0 {
+                "mid"
+            } else if r < 8.0 {
+                "good"
+            } else {
+                "great"
+            };
+            (format!("{:.1}", r), tier)
+        })
+        .unwrap_or_else(|| (String::new(), ""));
     Some(MatchPlayer {
         id: player.id,
         last_name: player.full_name.display_last_name().to_string(),
@@ -432,6 +457,8 @@ fn to_match_player(player_id: u32, simulator_data: &SimulatorData, motm_id: Opti
         sub_minute: None,
         subbed_off_minute: None,
         is_player_of_the_match: motm_id == Some(player_id),
+        rating,
+        rating_tier,
     })
 }
 

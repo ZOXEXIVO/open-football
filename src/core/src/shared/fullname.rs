@@ -45,12 +45,27 @@ impl FullName {
         self.nickname.as_deref().filter(|n| !n.is_empty())
     }
 
+    // Single-name players (Brazilian convention — "Bremer", "Kaká") arrive
+    // from source data with last_name="" and the mononym in first_name. Treat
+    // them like nicknamed players: the mononym is the display surname, and
+    // display_first_name is empty so "{first} {last}" doesn't emit a leading
+    // space.
+    fn is_mononym(&self) -> bool {
+        self.last_name.is_empty() && !self.first_name.is_empty()
+    }
+
     pub fn display_last_name(&self) -> &str {
-        self.effective_nickname().unwrap_or(&self.last_name)
+        if let Some(nick) = self.effective_nickname() {
+            return nick;
+        }
+        if self.is_mononym() {
+            return &self.first_name;
+        }
+        &self.last_name
     }
 
     pub fn display_first_name(&self) -> &str {
-        if self.effective_nickname().is_some() {
+        if self.effective_nickname().is_some() || self.is_mononym() {
             ""
         } else {
             &self.first_name
@@ -62,6 +77,9 @@ impl Display for FullName {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         if let Some(nickname) = self.effective_nickname() {
             return write!(f, "{}", nickname);
+        }
+        if self.is_mononym() {
+            return write!(f, "{}", self.first_name);
         }
         let mut name = format!("{} {}", self.last_name, self.first_name);
         if let Some(middle_name) = self.middle_name.as_ref() {
@@ -126,5 +144,14 @@ mod tests {
 
         assert_eq!(fullname.display_last_name(), "Doe");
         assert_eq!(fullname.display_first_name(), "John");
+    }
+
+    #[test]
+    fn test_mononym() {
+        let fullname = FullName::new("Bremer".to_string(), "".to_string());
+
+        assert_eq!(fullname.display_last_name(), "Bremer");
+        assert_eq!(fullname.display_first_name(), "");
+        assert_eq!(format!("{}", fullname), "Bremer");
     }
 }

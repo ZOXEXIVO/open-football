@@ -41,18 +41,50 @@ impl Club {
             reason: &'static str,
         }
 
-        // Ability floor of the main team — average of the three weakest
-        // players. Youth players above this level belong in the first team.
-        let main_ability_floor = {
-            // current_abilities_desc returns descending; take the tail for
-            // the bottom three.
-            let cas = self.teams.teams[main_idx].players.current_abilities_desc();
-            if cas.is_empty() {
-                0
+        // Per-position promotion floor on the main team. Using a single
+        // global "bottom-3 CA" floor across all positions caused a keeper
+        // ping-pong: a youth GK at CA 82 cleared the global floor (~75)
+        // even when the main team already had three senior keepers at
+        // 100+, so the depth-cap demoted a keeper every pass and another
+        // youth GK got promoted the next week. The position-aware floor
+        // below is the real signal — "does this youth displace an actual
+        // peer at the same role?" — and it resolves the churn without
+        // special-casing the goalkeeper position. Also enforces a minimum
+        // depth per group: if main has fewer than `MIN_MAIN_DEPTH` at a
+        // position (retirement, transfer, release), any youth above
+        // `DEPTH_GAP_FLOOR` is eligible to plug the gap.
+        const MIN_MAIN_DEPTH: &[(PlayerFieldPositionGroup, usize)] = &[
+            (PlayerFieldPositionGroup::Goalkeeper, 2),
+            (PlayerFieldPositionGroup::Defender, 6),
+            (PlayerFieldPositionGroup::Midfielder, 6),
+            (PlayerFieldPositionGroup::Forward, 4),
+        ];
+        const DEPTH_GAP_FLOOR: u8 = 60;
+
+        let group_stats = |group: PlayerFieldPositionGroup| -> (usize, u8) {
+            let cas: Vec<u8> = self.teams.teams[main_idx]
+                .players
+                .iter()
+                .filter(|p| p.position().position_group() == group)
+                .map(|p| p.player_attributes.current_ability)
+                .collect();
+            let worst = cas.iter().copied().min().unwrap_or(0);
+            (cas.len(), worst)
+        };
+
+        let promotion_threshold = |group: PlayerFieldPositionGroup| -> u8 {
+            let (count, worst) = group_stats(group);
+            let min_depth = MIN_MAIN_DEPTH
+                .iter()
+                .find(|(g, _)| *g == group)
+                .map(|(_, d)| *d)
+                .unwrap_or(0);
+            if count < min_depth {
+                DEPTH_GAP_FLOOR
             } else {
-                let n = cas.len().min(3).max(1);
-                let tail = &cas[cas.len() - n..];
-                (tail.iter().map(|&a| a as u16).sum::<u16>() / n as u16) as u8
+                // Strictly greater than the current worst — equal CA wouldn't
+                // improve depth but would still trigger the demotion cycle.
+                worst.saturating_add(1)
             }
         };
 
@@ -75,8 +107,8 @@ impl Club {
                 let listed = statuses.contains(&PlayerStatusType::Lst)
                     || statuses.contains(&PlayerStatusType::Loa);
 
-                // High ability → promote straight to main team
-                if ca >= main_ability_floor && !listed {
+                let floor = promotion_threshold(p.position().position_group());
+                if ca >= floor && !listed {
                     moves.push(PendingMove {
                         from: ti,
                         to: main_idx,

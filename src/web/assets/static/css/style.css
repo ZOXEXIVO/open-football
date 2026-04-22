@@ -4086,6 +4086,35 @@ a:link, a:visited, a:hover, a:active {
     background: rgba(244, 67, 54, 0.12);
 }
 
+.fm-rating-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 5px;
+    border-radius: 3px;
+    flex-shrink: 0;
+    letter-spacing: 0.2px;
+}
+
+.fm-rating-low {
+    color: #f44336;
+    background: rgba(244, 67, 54, 0.14);
+}
+
+.fm-rating-mid {
+    color: #00bcd4;
+    background: rgba(0, 188, 212, 0.14);
+}
+
+.fm-rating-good {
+    color: #4caf50;
+    background: rgba(76, 175, 80, 0.14);
+}
+
+.fm-rating-great {
+    color: #00c853;
+    background: rgba(0, 200, 83, 0.14);
+}
+
 .fm-match-squad-home .fm-squad-player {
     flex-direction: row;
 }
