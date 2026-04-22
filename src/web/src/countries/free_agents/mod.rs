@@ -37,7 +37,7 @@ pub struct CountryFreeAgentsTemplate {
 }
 
 pub struct FreeAgentPlayerDto {
-    pub id: u32,
+    pub slug: String,
     pub first_name: String,
     pub last_name: String,
     pub position: String,
@@ -110,7 +110,7 @@ pub async fn country_free_agents_action(
 
                         let position = player.positions.display_positions_compact();
                         Some(FreeAgentPlayerDto {
-                            id: player.id,
+                            slug: player.slug(),
                             first_name: player.full_name.display_first_name().to_string(),
                             last_name: player.full_name.display_last_name().to_string(),
                             position,

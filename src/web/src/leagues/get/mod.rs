@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -45,7 +46,7 @@ pub struct LeagueGetTemplate {
 }
 
 pub struct LeaguePlayerStatItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub team_name: String,
     pub team_slug: String,
@@ -327,7 +328,7 @@ pub async fn league_get_action(
         .into_iter()
         .take(10)
         .map(|(player_id, player_name, team_name, team_slug, played, goals)| LeaguePlayerStatItem {
-            player_id,
+            player_slug: player_history_slug(simulator_data, player_id, &player_name),
             player_name,
             team_name,
             team_slug,
@@ -340,7 +341,7 @@ pub async fn league_get_action(
         .into_iter()
         .take(10)
         .map(|(player_id, player_name, team_name, team_slug, played, assists)| LeaguePlayerStatItem {
-            player_id,
+            player_slug: player_history_slug(simulator_data, player_id, &player_name),
             player_name,
             team_name,
             team_slug,
@@ -353,7 +354,7 @@ pub async fn league_get_action(
         .into_iter()
         .take(10)
         .map(|(player_id, player_name, team_name, team_slug, played, rating)| LeaguePlayerStatItem {
-            player_id,
+            player_slug: player_history_slug(simulator_data, player_id, &player_name),
             player_name,
             team_name,
             team_slug,

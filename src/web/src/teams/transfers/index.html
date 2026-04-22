@@ -21,7 +21,7 @@
             <tbody>
                 {% for item in items %}
                 <tr>
-                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                     <td class="sq-pos">{{ item.position }}</td>
                     <td>{{ item.value }}</td>
                 </tr>
@@ -61,7 +61,7 @@
                 <tbody>
                     {% for item in incoming_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.fee }}</td>
                         <td>{{ item.date }}</td>
@@ -92,7 +92,7 @@
                 <tbody>
                     {% for item in outgoing_transfers %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.fee }}</td>
                         <td>{{ item.date }}</td>
@@ -125,7 +125,7 @@
                 <tbody>
                     {% for item in incoming_loans %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.date }}</td>
                         <td>{{ item.end_date }}</td>
@@ -156,7 +156,7 @@
                 <tbody>
                     {% for item in outgoing_loans %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.other_team_slug }}">{{ item.other_team }}</a></td>
                         <td>{{ item.date }}</td>
                         <td>{{ item.end_date }}</td>

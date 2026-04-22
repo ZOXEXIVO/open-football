@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -56,19 +57,20 @@ pub struct MatchGetTemplate {
     pub away_color_background: String,
     pub away_color_foreground: String,
     pub player_of_the_match_id: u32,
+    pub player_of_the_match_slug: String,
     pub player_of_the_match_name: String,
     pub match_recordings_enabled: bool,
 }
 
 pub struct GoalEventDisplay {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub minute: u32,
     pub is_auto_goal: bool,
 }
 
 pub struct MatchPlayer {
-    pub id: u32,
+    pub slug: String,
     pub last_name: String,
     pub position: String,
     pub sub_minute: Option<u32>,
@@ -252,7 +254,7 @@ pub async fn match_get_action(
                 (g.time * 90 / result_details.match_time_ms) as u32
             } else { 0 };
             GoalEventDisplay {
-                player_id: g.player_id,
+                player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
                 minute,
                 is_auto_goal: g.is_auto_goal,
@@ -278,7 +280,7 @@ pub async fn match_get_action(
                 (g.time * 90 / result_details.match_time_ms) as u32
             } else { 0 };
             GoalEventDisplay {
-                player_id: g.player_id,
+                player_slug: player_history_slug(simulator_data, g.player_id, &player_name),
                 player_name,
                 minute,
                 is_auto_goal: g.is_auto_goal,
@@ -290,6 +292,9 @@ pub async fn match_get_action(
     let motm_name = motm_id
         .and_then(|id| simulator_data.player(id))
         .map(|p| format!("{} {}", p.full_name.display_first_name(), p.full_name.display_last_name()))
+        .unwrap_or_default();
+    let motm_slug = motm_id
+        .map(|id| player_history_slug(simulator_data, id, &motm_name))
         .unwrap_or_default();
 
     let title = format!("{} - {}", home_team_name, away_team_name);
@@ -421,6 +426,7 @@ pub async fn match_get_action(
                 .unwrap_or_else(|| "#ffffff".to_string())
         } else { "#ffffff".to_string() },
         player_of_the_match_id: motm_id.unwrap_or(0),
+        player_of_the_match_slug: motm_slug,
         player_of_the_match_name: motm_name,
         match_recordings_enabled: core::is_match_recordings_mode() && league.is_some_and(|l| !l.friendly),
     })
@@ -451,7 +457,7 @@ fn to_match_player(
         })
         .unwrap_or_else(|| (String::new(), ""));
     Some(MatchPlayer {
-        id: player.id,
+        slug: player.slug(),
         last_name: player.full_name.display_last_name().to_string(),
         position: player.position().get_short_name().to_string(),
         sub_minute: None,

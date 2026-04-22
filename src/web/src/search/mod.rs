@@ -83,6 +83,7 @@ pub struct SearchClubDto {
 #[derive(Serialize)]
 pub struct SearchPlayerDto {
     pub id: u32,
+    pub slug: String,
     pub name: String,
     pub country_code: String,
     pub team_name: String,
@@ -179,6 +180,7 @@ pub async fn search_api_action(
                                 .unwrap_or_default();
                             players.push(SearchPlayerDto {
                                 id: player.id,
+                                slug: player.slug(),
                                 name: full.trim().to_string(),
                                 country_code,
                                 team_name: team.name.clone(),

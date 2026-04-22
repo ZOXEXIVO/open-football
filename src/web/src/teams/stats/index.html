@@ -26,7 +26,7 @@
                 {% for p in players %}
                 <tr>
                     <td class="ts-pos">{{ p.position }}</td>
-                    <td class="ts-name"><a href="/{{ lang }}/players/{{ p.id }}">{{ p.last_name }} {{ p.first_name }}</a></td>
+                    <td class="ts-name"><a href="/{{ lang }}/players/{{ p.slug }}">{{ p.last_name }} {{ p.first_name }}</a></td>
                     <td class="ts-col">{{ p.played }}{% if p.played_subs > 0 %} ({{ p.played_subs }}){% endif %}</td>
                     <td class="ts-col">{{ p.goals }}</td>
                     <td class="ts-col">{{ p.assists }}</td>

@@ -149,6 +149,18 @@ impl Player {
         PlayerBuilder::new()
     }
 
+    /// Canonical URL segment for this player: `{id}-{ascii-folded-name}`.
+    /// Falls back to just the id when the name folds to nothing (e.g. all
+    /// punctuation), so every player is guaranteed a resolvable URL.
+    pub fn slug(&self) -> String {
+        let name_slug = self.full_name.slug();
+        if name_slug.is_empty() {
+            self.id.to_string()
+        } else {
+            format!("{}-{}", self.id, name_slug)
+        }
+    }
+
     /// Is this player protected from being targeted by other clubs?
     ///
     /// A player signed during the currently open transfer window cannot be

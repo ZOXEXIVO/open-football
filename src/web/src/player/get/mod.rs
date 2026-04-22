@@ -1,11 +1,12 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::{resolve_player_page, PlayerPage};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, Query, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
 use core::Person;
 use core::Player;
@@ -19,7 +20,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct PlayerGetRequest {
     pub lang: String,
-    pub player_id: u32,
+    pub player_slug: String,
 }
 
 #[derive(Deserialize, Default)]
@@ -46,6 +47,7 @@ pub struct PlayerGetTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
+    pub player_slug: String,
     pub club_id: u32,
     pub player: PlayerViewModel,
     pub is_goalkeeper: bool,
@@ -272,7 +274,7 @@ pub async fn player_get_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerGetRequest>,
     Query(query): Query<PlayerGetQuery>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
     let debug_enabled = query.debug.is_some();
@@ -281,10 +283,21 @@ pub async fn player_get_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
+    let (player, team_opt, canonical) = match resolve_player_page(
+        simulator_data,
+        &route_params.player_slug,
+        &route_params.lang,
+        "",
+    )? {
+        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Redirect(r) => return Ok(r),
+    };
+
     let now = simulator_data.date.date();
 
-    // Try active player first
-    if let Some((player, team)) = simulator_data.player_with_team(route_params.player_id) {
+    // Active player branch (team is Some) uses the full country+neighbors flow;
+    // retired players (team is None) follow the compact flow below.
+    if let Some(team) = team_opt {
         // Resolve country: try simulation participant first, fall back to country_info map
         let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
             (country.slug.clone(), country.code.clone(), country.name.clone())
@@ -378,84 +391,82 @@ pub async fn player_get_action(
             lang: route_params.lang.clone(),
             active_tab: "overview",
             player_id: player.id,
+            player_slug: canonical,
             club_id: team.club_id,
             player: player_vm,
             is_goalkeeper,
             is_on_loan,
             is_injured,
             debug,
-        });
+        }.into_response());
     }
 
-    // Try retired player
-    if let Some(player) = simulator_data.retired_player(route_params.player_id) {
-        let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
-            (country.slug.clone(), country.code.clone(), country.name.clone())
-        } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
-            (info.slug.clone(), info.code.clone(), info.name.clone())
-        } else {
-            (String::new(), String::new(), String::new())
-        };
+    // Retired player branch (team is None)
+    let (country_slug, country_code, country_name) = if let Some(country) = simulator_data.country(player.country_id) {
+        (country.slug.clone(), country.code.clone(), country.name.clone())
+    } else if let Some(info) = simulator_data.country_info.get(&player.country_id) {
+        (info.slug.clone(), info.code.clone(), info.name.clone())
+    } else {
+        (String::new(), String::new(), String::new())
+    };
 
-        let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
+    let title = format!("{} {}", player.full_name.display_first_name(), player.full_name.display_last_name());
 
-        let player_vm = PlayerViewModel {
-            id: player.id,
-            contract: None,
-            birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
-            age: player.age(now),
-            team_slug: String::new(),
-            team_name: String::new(),
-            country_slug,
-            country_code,
-            country_name,
-            skills: get_skills(player),
-            conditions: get_conditions(player),
-            current_ability: get_current_ability_stars(player),
-            potential_ability: get_potential_ability_stars(player),
-            value: String::from("-"),
-            preferred_foot: player.preferred_foot_str().to_string(),
-            player_attributes: get_attributes(player),
-            statistics: get_statistics(player),
-            friendly_statistics: get_friendly_statistics(player),
-            cup_statistics: get_cup_statistics(player),
-            status: PlayerStatusDto::new(player.statuses.get()),
-            position_map: get_position_map(player),
-            loan_status: None,
-            injury_days: None,
-            generated: player.generated,
-        };
+    let player_vm = PlayerViewModel {
+        id: player.id,
+        contract: None,
+        birth_date: player.birth_date.format("%d.%m.%Y").to_string(),
+        age: player.age(now),
+        team_slug: String::new(),
+        team_name: String::new(),
+        country_slug,
+        country_code,
+        country_name,
+        skills: get_skills(player),
+        conditions: get_conditions(player),
+        current_ability: get_current_ability_stars(player),
+        potential_ability: get_potential_ability_stars(player),
+        value: String::from("-"),
+        preferred_foot: player.preferred_foot_str().to_string(),
+        player_attributes: get_attributes(player),
+        statistics: get_statistics(player),
+        friendly_statistics: get_friendly_statistics(player),
+        cup_statistics: get_cup_statistics(player),
+        status: PlayerStatusDto::new(player.statuses.get()),
+        position_map: get_position_map(player),
+        loan_status: None,
+        injury_days: None,
+        generated: player.generated,
+    };
 
-        let is_goalkeeper = player.position().is_goalkeeper();
-        let sub_title = i18n.t("player_status_retired").to_string();
-        let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
+    let is_goalkeeper = player.position().is_goalkeeper();
+    let sub_title = i18n.t("player_status_retired").to_string();
+    let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
-        return Ok(PlayerGetTemplate {
-            css_version: CSS_VERSION,
-            computer_name: &COMPUTER_NAME,
-            title,
-            sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
-            sub_title_suffix: String::new(),
-            sub_title,
-            sub_title_link: String::new(),
-            sub_title_country_code: String::new(),
-            header_color: "#808080".to_string(),
-            foreground_color: "#ffffff".to_string(),
-            menu_sections: Vec::new(),
-            i18n,
-            lang: route_params.lang.clone(),
-            active_tab: "overview",
-            player_id: player.id,
-            club_id: 0,
-            player: player_vm,
-            is_goalkeeper,
-            is_on_loan: false,
-            is_injured: false,
-            debug,
-        });
-    }
-
-    Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)))
+    Ok(PlayerGetTemplate {
+        css_version: CSS_VERSION,
+        computer_name: &COMPUTER_NAME,
+        title,
+        sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
+        sub_title_suffix: String::new(),
+        sub_title,
+        sub_title_link: String::new(),
+        sub_title_country_code: String::new(),
+        header_color: "#808080".to_string(),
+        foreground_color: "#ffffff".to_string(),
+        menu_sections: Vec::new(),
+        i18n,
+        lang: route_params.lang.clone(),
+        active_tab: "overview",
+        player_id: player.id,
+        player_slug: canonical,
+        club_id: 0,
+        player: player_vm,
+        is_goalkeeper,
+        is_on_loan: false,
+        is_injured: false,
+        debug,
+    }.into_response())
 }
 
 fn build_debug_dto(player: &Player) -> PlayerDebugDto {

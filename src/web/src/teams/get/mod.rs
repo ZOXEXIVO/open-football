@@ -48,6 +48,7 @@ pub struct TeamGetTemplate {
 
 pub struct TeamPlayer {
     pub id: u32,
+    pub slug: String,
     pub last_name: String,
     pub first_name: String,
     pub behaviour: String,
@@ -138,6 +139,7 @@ pub async fn team_get_action(
 
             TeamPlayer {
                 id: p.id,
+                slug: p.slug(),
                 first_name: p.full_name.display_first_name().to_string(),
                 position_sort: p.position(),
                 position,
@@ -192,6 +194,7 @@ pub async fn team_get_action(
 
                         players.push(TeamPlayer {
                             id: player.id,
+                            slug: player.slug(),
                             first_name: player.full_name.display_first_name().to_string(),
                             position_sort: player.position(),
                             position,

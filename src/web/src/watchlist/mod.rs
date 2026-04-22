@@ -20,6 +20,7 @@ pub fn watchlist_routes() -> axum::Router<GameAppData> {
 
 pub struct WatchlistPlayerDto {
     pub id: u32,
+    pub slug: String,
     pub last_name: String,
     pub first_name: String,
     pub position: String,
@@ -100,6 +101,7 @@ pub async fn watchlist_page_action(
 
                 Some(WatchlistPlayerDto {
                     id: player.id,
+                    slug: player.slug(),
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,
@@ -141,6 +143,7 @@ pub async fn watchlist_page_action(
 
                 Some(WatchlistPlayerDto {
                     id: player.id,
+                    slug: player.slug(),
                     first_name: player.full_name.display_first_name().to_string(),
                     last_name: player.full_name.display_last_name().to_string(),
                     position,

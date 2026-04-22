@@ -38,7 +38,7 @@
                     {% for item in completed_transfers %}
                     {% if !item.is_loan %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
                         <td><span class="fm-transfer-fee">{{ item.fee }}</span></td>
@@ -68,7 +68,7 @@
                     {% for item in completed_transfers %}
                     {% if item.is_loan %}
                     <tr>
-                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                        <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.from_team_slug }}">{{ item.from_team }}</a></td>
                         <td><a href="/{{ lang }}/teams/{{ item.to_team_slug }}">{{ item.to_team }}</a></td>
                         <td><span class="fm-loan-badge">{{ item.fee }}</span></td>
@@ -113,7 +113,7 @@
             <tbody>
                 {% for item in active_negotiations %}
                 <tr>
-                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_id }}">{{ item.player_name }}</a></td>
+                    <td class="sq-name"><a href="/{{ lang }}/players/{{ item.player_slug }}">{{ item.player_name }}</a></td>
                     <td><a href="/{{ lang }}/teams/{{ item.selling_team_slug }}">{{ item.selling_team }}</a></td>
                     <td><a href="/{{ lang }}/teams/{{ item.buying_team_slug }}">{{ item.buying_team }}</a></td>
                     <td>{{ item.offer_amount }}</td>

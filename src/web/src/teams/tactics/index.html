@@ -23,7 +23,7 @@
                 <div class="fm-pitch-corner-bl"></div>
                 <div class="fm-pitch-corner-br"></div>
                 {% for fp in formation_players %}
-                <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.id }}">
+                <a class="fm-pitch-player {{ fp.css_class }}" href="/{{ lang }}/players/{{ fp.slug }}">
                     <div class="fm-pitch-player-dot"></div>
                     <div class="fm-pitch-player-name">{{ fp.last_name }}</div>
                 </a>

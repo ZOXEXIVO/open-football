@@ -1,11 +1,12 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::{resolve_player_page, PlayerPage};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
 use core::SimulatorData;
 use serde::Deserialize;
@@ -13,7 +14,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct PlayerHistoryRequest {
     pub lang: String,
-    pub player_id: u32,
+    pub player_slug: String,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -34,6 +35,7 @@ pub struct PlayerHistoryTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
+    pub player_slug: String,
     pub club_id: u32,
     pub items: Vec<PlayerHistorySeasonItem>,
     pub totals: PlayerHistoryStats,
@@ -116,7 +118,7 @@ fn find_team_location(simulator_data: &SimulatorData, team_slug: &str) -> Option
 pub async fn player_history_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerHistoryRequest>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
@@ -124,16 +126,14 @@ pub async fn player_history_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    // Try active player first, fall back to retired
-    let active = simulator_data.player_with_team(route_params.player_id);
-    let retired_player;
-    let (player, team_opt): (&core::Player, Option<&core::Team>) = if let Some((p, t)) = active {
-        (p, Some(t))
-    } else if let Some(p) = simulator_data.retired_player(route_params.player_id) {
-        retired_player = p;
-        (retired_player, None)
-    } else {
-        return Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)));
+    let (player, team_opt, canonical) = match resolve_player_page(
+        simulator_data,
+        &route_params.player_slug,
+        &route_params.lang,
+        "/history",
+    )? {
+        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Redirect(r) => return Ok(r),
     };
 
     let is_retired = team_opt.is_none();
@@ -238,14 +238,15 @@ pub async fn player_history_action(
             i18n,
             lang: route_params.lang.clone(),
             active_tab: "history",
-            player_id: route_params.player_id,
+            player_id: player.id,
+            player_slug: canonical.clone(),
             club_id: 0,
             items,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: false,
             is_injured: false,
-        })
+        }.into_response())
     } else {
         let team = team_opt.unwrap();
 
@@ -269,14 +270,15 @@ pub async fn player_history_action(
             i18n,
             lang: route_params.lang.clone(),
             active_tab: "history",
-            player_id: route_params.player_id,
+            player_id: player.id,
+            player_slug: canonical,
             club_id: team.club_id,
             items,
             totals,
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: player.is_on_loan(),
             is_injured: player.player_attributes.is_injured,
-        })
+        }.into_response())
     }
 }
 

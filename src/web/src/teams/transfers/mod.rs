@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -58,14 +59,14 @@ pub struct TeamTransfersTemplate {
 }
 
 pub struct TransferListItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub position: String,
     pub value: String,
 }
 
 pub struct TransferHistoryItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub other_team: String,
     pub other_team_slug: String,
@@ -74,7 +75,7 @@ pub struct TransferHistoryItem {
 }
 
 pub struct LoanHistoryItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub other_team: String,
     pub other_team_slug: String,
@@ -156,7 +157,7 @@ pub async fn team_transfers_action(
         .filter_map(|ti| {
             let player = team.players().into_iter().find(|p| p.id == ti.player_id)?;
             Some(TransferListItem {
-                player_id: player.id,
+                player_slug: player.slug(),
                 player_name: format!(
                     "{} {}",
                     player.full_name.display_first_name(), player.full_name.display_last_name()
@@ -186,7 +187,7 @@ pub async fn team_transfers_action(
                 if t.to_club_id == club_id {
                     let other_team_slug = find_team_slug(simulator_data, t.from_club_id);
                     incoming_transfers.push(TransferHistoryItem {
-                        player_id: t.player_id,
+                        player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
                         player_name: t.player_name.clone(),
                         other_team: t.from_team_name.clone(),
                         other_team_slug,
@@ -197,7 +198,7 @@ pub async fn team_transfers_action(
                 if t.from_club_id == club_id {
                     let other_team_slug = find_team_slug(simulator_data, t.to_club_id);
                     outgoing_transfers.push(TransferHistoryItem {
-                        player_id: t.player_id,
+                        player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
                         player_name: t.player_name.clone(),
                         other_team: t.to_team_name.clone(),
                         other_team_slug,
@@ -227,7 +228,7 @@ pub async fn team_transfers_action(
                 .unwrap_or_default();
 
             Some(LoanHistoryItem {
-                player_id: p.id,
+                player_slug: p.slug(),
                 player_name: format!(
                     "{} {}",
                     p.full_name.display_first_name(),
@@ -258,7 +259,7 @@ pub async fn team_transfers_action(
 
                         let contract = player.contract_loan.as_ref().unwrap();
                         outgoing_loans.push(LoanHistoryItem {
-                            player_id: player.id,
+                            player_slug: player.slug(),
                             player_name: format!(
                                 "{} {}",
                                 player.full_name.display_first_name(),

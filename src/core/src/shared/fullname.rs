@@ -1,3 +1,4 @@
+use deunicode::deunicode;
 use std::fmt::{Display, Formatter, Result};
 
 #[derive(Debug, Clone)]
@@ -71,6 +72,49 @@ impl FullName {
             &self.first_name
         }
     }
+
+    /// ASCII-folded, dash-joined slug of the display name. Nickname players
+    /// (Ronaldinho) and mononyms (Bremer) produce a single-segment slug;
+    /// standard "first last" names produce two segments. Returns an empty
+    /// string only if every source character was unprintable after folding —
+    /// callers combine this with the numeric id so the URL always resolves.
+    pub fn slug(&self) -> String {
+        let first = self.display_first_name();
+        let last = self.display_last_name();
+
+        let mut name = String::with_capacity(first.len() + last.len() + 1);
+        name.push_str(first);
+        if !first.is_empty() && !last.is_empty() {
+            name.push(' ');
+        }
+        name.push_str(last);
+
+        slug_from_display(&name)
+    }
+}
+
+/// Produce a URL-safe slug from an arbitrary display name string.
+/// Shares the exact folding rules used by `FullName::slug` so slugs
+/// computed from a live `Player` always match those built from historical
+/// records that only kept a pre-rendered `player_name`.
+pub fn slug_from_display(display: &str) -> String {
+    let folded = deunicode(display);
+    let mut out = String::with_capacity(folded.len());
+    let mut prev_dash = true;
+    for ch in folded.chars() {
+        let lower = ch.to_ascii_lowercase();
+        if lower.is_ascii_alphanumeric() {
+            out.push(lower);
+            prev_dash = false;
+        } else if !prev_dash {
+            out.push('-');
+            prev_dash = true;
+        }
+    }
+    if out.ends_with('-') {
+        out.pop();
+    }
+    out
 }
 
 impl Display for FullName {
@@ -153,5 +197,53 @@ mod tests {
         assert_eq!(fullname.display_last_name(), "Bremer");
         assert_eq!(fullname.display_first_name(), "");
         assert_eq!(format!("{}", fullname), "Bremer");
+    }
+
+    #[test]
+    fn slug_simple_latin() {
+        let fn_ = FullName::new("Unai".to_string(), "Simon".to_string());
+        assert_eq!(fn_.slug(), "unai-simon");
+    }
+
+    #[test]
+    fn slug_folds_diacritics() {
+        let fn_ = FullName::new("Iñigo".to_string(), "Martínez".to_string());
+        assert_eq!(fn_.slug(), "inigo-martinez");
+
+        let fn_ = FullName::new("Thomas".to_string(), "Müller".to_string());
+        assert_eq!(fn_.slug(), "thomas-muller");
+    }
+
+    #[test]
+    fn slug_handles_nickname_only() {
+        let fn_ = FullName::with_nickname(
+            "Ronaldo".to_string(),
+            "de Lima".to_string(),
+            "Ronaldinho".to_string(),
+        );
+        assert_eq!(fn_.slug(), "ronaldinho");
+    }
+
+    #[test]
+    fn slug_handles_mononym() {
+        let fn_ = FullName::new("Bremer".to_string(), "".to_string());
+        assert_eq!(fn_.slug(), "bremer");
+
+        let fn_ = FullName::new("Kaká".to_string(), "".to_string());
+        assert_eq!(fn_.slug(), "kaka");
+    }
+
+    #[test]
+    fn slug_collapses_punctuation() {
+        let fn_ = FullName::new("Jean-Pierre".to_string(), "O'Brien".to_string());
+        assert_eq!(fn_.slug(), "jean-pierre-o-brien");
+    }
+
+    #[test]
+    fn slug_transliterates_cyrillic() {
+        let fn_ = FullName::new("Игорь".to_string(), "Акинфеев".to_string());
+        let slug = fn_.slug();
+        assert!(!slug.is_empty());
+        assert!(slug.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'));
     }
 }

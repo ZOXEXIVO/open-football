@@ -39,7 +39,7 @@ pub struct TeamStatsTemplate {
 }
 
 pub struct TeamPlayerStats {
-    pub id: u32,
+    pub slug: String,
     pub last_name: String,
     pub first_name: String,
     pub position: String,
@@ -100,7 +100,7 @@ pub async fn team_stats_action(
     let players: Vec<TeamPlayerStats> = raw_players
         .iter()
         .map(|(p, _)| TeamPlayerStats {
-            id: p.id,
+            slug: p.slug(),
             last_name: p.full_name.display_last_name().to_string(),
             first_name: p.full_name.display_first_name().to_string(),
             position: p.position().get_short_name().to_string(),

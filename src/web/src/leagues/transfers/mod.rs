@@ -1,6 +1,7 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::player_history_slug;
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
@@ -54,7 +55,7 @@ pub struct SeasonOption {
 }
 
 pub struct CompletedTransferItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub from_team: String,
     pub from_team_slug: String,
@@ -67,7 +68,7 @@ pub struct CompletedTransferItem {
 
 
 pub struct NegotiationItem {
-    pub player_id: u32,
+    pub player_slug: String,
     pub player_name: String,
     pub selling_team: String,
     pub selling_team_slug: String,
@@ -167,7 +168,7 @@ pub async fn league_transfers_action(
             let from_team_slug = get_first_team_slug(simulator_data, country, t.from_club_id);
             let to_team_slug = get_first_team_slug(simulator_data, country, t.to_club_id);
             CompletedTransferItem {
-                player_id: t.player_id,
+                player_slug: player_history_slug(simulator_data, t.player_id, &t.player_name),
                 player_name: t.player_name.clone(),
                 from_team: t.from_team_name.clone(),
                 from_team_slug,
@@ -210,7 +211,7 @@ pub async fn league_transfers_action(
                 .map(|t| t.slug.clone())
                 .unwrap_or_default();
             Some(NegotiationItem {
-                player_id: n.player_id,
+                player_slug: player_history_slug(simulator_data, n.player_id, &player_name),
                 player_name,
                 selling_team: selling_club.name.clone(),
                 selling_team_slug,

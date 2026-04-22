@@ -111,7 +111,6 @@ impl FootballSimulator {
         }
 
         // Global competitions (Champions League, World Cup, etc.)
-        let phase_g = Instant::now();
         GlobalCompetitionSimulator::simulate(data);
 
         // Refresh player indexes only if a transfer actually moved a player

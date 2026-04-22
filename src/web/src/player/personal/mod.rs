@@ -1,11 +1,12 @@
 pub mod routes;
 
 use crate::common::default_handler::{CSS_VERSION, COMPUTER_NAME};
+use crate::common::slug::{resolve_player_page, PlayerPage};
 use crate::views::{self, MenuSection};
 use crate::{ApiError, ApiResult, GameAppData, I18n};
 use askama::Template;
 use axum::extract::{Path, State};
-use axum::response::IntoResponse;
+use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
 use core::Player;
 use core::SimulatorData;
@@ -14,7 +15,7 @@ use serde::Deserialize;
 #[derive(Deserialize)]
 pub struct PlayerPersonalRequest {
     pub lang: String,
-    pub player_id: u32,
+    pub player_slug: String,
 }
 
 #[derive(Template, askama_web::WebTemplate)]
@@ -35,6 +36,7 @@ pub struct PlayerPersonalTemplate {
     pub lang: String,
     pub active_tab: &'static str,
     pub player_id: u32,
+    pub player_slug: String,
     pub club_id: u32,
     pub is_on_loan: bool,
     pub is_injured: bool,
@@ -130,7 +132,7 @@ pub struct PlayerLanguageDto {
 pub async fn player_personal_action(
     State(state): State<GameAppData>,
     Path(route_params): Path<PlayerPersonalRequest>,
-) -> ApiResult<impl IntoResponse> {
+) -> ApiResult<Response> {
     let i18n = state.i18n.for_lang(&route_params.lang);
     let guard = state.data.read().await;
 
@@ -138,15 +140,15 @@ pub async fn player_personal_action(
         .as_ref()
         .ok_or_else(|| ApiError::InternalError("Simulator data not loaded".to_string()))?;
 
-    let active = simulator_data.player_with_team(route_params.player_id);
-    let player = if let Some((p, _)) = active {
-        p
-    } else if let Some(p) = simulator_data.retired_player(route_params.player_id) {
-        p
-    } else {
-        return Err(ApiError::NotFound(format!("Player with ID {} not found", route_params.player_id)));
+    let (player, team_opt, canonical) = match resolve_player_page(
+        simulator_data,
+        &route_params.player_slug,
+        &route_params.lang,
+        "/personal",
+    )? {
+        PlayerPage::Found { player, team, canonical_slug } => (player, team, canonical_slug),
+        PlayerPage::Redirect(r) => return Ok(r),
     };
-    let team_opt = active.map(|(_, t)| t);
 
     let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
         get_neighbor_teams(team.club_id, simulator_data, &i18n)?
@@ -212,6 +214,7 @@ pub async fn player_personal_action(
         lang: route_params.lang.clone(),
         active_tab: "personal",
         player_id: player.id,
+        player_slug: canonical,
         club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
@@ -224,7 +227,7 @@ pub async fn player_personal_action(
         favorite_clubs,
         player_info,
         reputation,
-    })
+    }.into_response())
 }
 
 fn get_personality(player: &Player) -> PersonalityDto {

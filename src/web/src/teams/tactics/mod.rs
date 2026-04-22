@@ -41,7 +41,7 @@ pub struct TeamTacticsTemplate {
 }
 
 pub struct FormationPlayer {
-    pub id: u32,
+    pub slug: String,
     pub last_name: String,
     pub css_class: String,
 }
@@ -98,7 +98,7 @@ pub async fn team_tactics_get_action(
         if let Some(player) = best_player {
             used_player_ids.push(player.id);
             formation_players.push(FormationPlayer {
-                id: player.id,
+                slug: player.slug(),
                 last_name: player.full_name.display_last_name().to_string(),
                 css_class: position_to_css_class(required_pos),
             });
