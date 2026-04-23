@@ -10,7 +10,7 @@
     <a class="fm-tab{% if active_tab == "events" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/events">{{ i18n.t("events") }}</a>
     <a class="fm-tab{% if active_tab == "matches" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/matches">{{ i18n.t("matches") }}</a>
     <a class="fm-tab{% if active_tab == "history" %} active{% endif %}" href="/{{ lang }}/players/{{ player_slug }}/history">{{ i18n.t("history") }}</a>
-    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}">
+    <div class="fm-tabbar-dropdown" id="player-edit-dd" data-player-id="{{ player_id }}" data-club-id="{{ club_id }}" data-is-loan="{{ is_on_loan }}" data-is-injured="{{ is_injured }}" data-is-unhappy="{{ is_unhappy }}">
         <button class="fm-tabbar-dropdown-toggle" onclick="var p=this.parentElement;p.classList.toggle('fm-dd-open');if(p.classList.contains('fm-dd-open')){var t=this.closest('.fm-tabbar').getBoundingClientRect();var m=document.getElementById('player-edit-menu');m.style.top=t.bottom+'px';if(window.innerWidth>=576){var b=this.getBoundingClientRect();m.style.right=(window.innerWidth-b.right)+'px';m.style.left='';m.style.width=''}else{m.style.right='';m.style.left='0';m.style.width='100%'}}">
             {{ i18n.t("edit") }} <span class="fm-dd-arrow">&#9660;</span>
         </button>
@@ -55,23 +55,52 @@
     // Build menu from data attributes
     var isInjured = dd.dataset.isInjured === 'true';
     var isLoan = dd.dataset.isLoan === 'true';
-    var items = [];
+    var isUnhappy = dd.dataset.isUnhappy === 'true';
+    var isFreeAgent = clubId === '0';
+    var sep = '<div class="fm-dd-sep"></div>';
+    var groups = [];
 
-    if (isInjured) {
-        items.push('<button onclick="playerClearInjury(' + playerId + ')">Clear Injury</button>');
+    // Group 1: Move on Free
+    if (!isFreeAgent) {
+        groups.push('<button onclick="playerMoveOnFree(' + playerId + ')">{{ i18n.t("move_on_free") }}</button>');
     }
 
-    if (isLoan) {
-        items.push('<button onclick="playerCancelLoan(' + playerId + ')">{{ i18n.t("cancel_loan") }}</button>');
-    }
+    // Group 2: Clear actions
+    var clearItems = [];
+    if (isUnhappy) clearItems.push('<button onclick="playerClearUnhappy(' + playerId + ')">{{ i18n.t("clear_unhappy") }}</button>');
+    if (isInjured) clearItems.push('<button onclick="playerClearInjury(' + playerId + ')">Clear Injury</button>');
+    if (clearItems.length > 0) groups.push(clearItems.join(''));
 
+    // Group 3: Transfer actions
+    var transferItems = [];
+    if (!isFreeAgent && isLoan) transferItems.push('<button onclick="playerCancelLoan(' + playerId + ')">{{ i18n.t("cancel_loan") }}</button>');
     if (!isLoan) {
-        if (items.length > 0) items.push('<div class="fm-dd-sep"></div>');
-        items.push('<button onclick="playerTransfer(' + playerId + ')">{{ i18n.t("transfer") }}</button>');
-        items.push('<button onclick="playerLoan(' + playerId + ')">{{ i18n.t("loan") }}</button>');
+        transferItems.push('<button onclick="playerTransfer(' + playerId + ')">{{ i18n.t("transfer") }}</button>');
+        if (!isFreeAgent) transferItems.push('<button onclick="playerLoan(' + playerId + ')">{{ i18n.t("loan") }}</button>');
     }
+    if (transferItems.length > 0) groups.push(transferItems.join(''));
 
-    menu.innerHTML = items.join('');
+    menu.innerHTML = groups.join(sep);
+
+    window.playerMoveOnFree = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        OpenFootballDialog.confirm({
+            title: '{{ i18n.t("move_on_free") }}',
+            message: '{{ i18n.t("move_on_free_confirm") }}',
+            confirmText: '{{ i18n.t("move_on_free") }}',
+            cancelText: '{{ i18n.t("cancel") }}',
+            onConfirm: function() {
+                fetch('/api/players/' + pid + '/move-on-free', { method: 'POST' })
+                    .then(function() { refreshContent(); });
+            }
+        });
+    };
+
+    window.playerClearUnhappy = function(pid) {
+        dd.classList.remove('fm-dd-open');
+        fetch('/api/players/' + pid + '/clear-unhappy', { method: 'POST' })
+            .then(function() { refreshContent(); });
+    };
 
     window.playerClearInjury = function(pid) {
         dd.classList.remove('fm-dd-open');
@@ -95,15 +124,18 @@
 
     window.playerTransfer = function(pid) {
         dd.classList.remove('fm-dd-open');
+        var fields = [
+            {
+                name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
+                placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
+            }
+        ];
+        if (!isFreeAgent) {
+            fields.push({ name: 'fee', label: '{{ i18n.t("transfer_fee") }}', type: 'number', placeholder: '0', value: '0' });
+        }
         OpenFootballDialog.open({
             title: '{{ i18n.t("transfer_player") }}',
-            fields: [
-                {
-                    name: 'to_club_id', label: '{{ i18n.t("destination_club") }}', type: 'autocomplete',
-                    placeholder: '{{ i18n.t("search_club") }}', url: '/api/clubs?exclude=' + clubId
-                },
-                { name: 'fee', label: '{{ i18n.t("transfer_fee") }}', type: 'number', placeholder: '0', value: '0' }
-            ],
+            fields: fields,
             confirmText: '{{ i18n.t("transfer") }}',
             cancelText: '{{ i18n.t("cancel") }}',
             onConfirm: function(data) {
@@ -111,7 +143,7 @@
                 fetch('/api/players/' + pid + '/transfer', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to_club_id: parseInt(data.to_club_id), fee: parseInt(data.fee) || 0 })
+                    body: JSON.stringify({ to_club_id: parseInt(data.to_club_id), fee: isFreeAgent ? 0 : (parseInt(data.fee) || 0) })
                 }).then(function() { refreshContent(); });
             }
         });

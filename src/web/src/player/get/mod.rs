@@ -53,6 +53,7 @@ pub struct PlayerGetTemplate {
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
     pub is_injured: bool,
+    pub is_unhappy: bool,
     pub debug: Option<PlayerDebugDto>,
 }
 
@@ -368,6 +369,7 @@ pub async fn player_get_action(
         let is_goalkeeper = player.position().is_goalkeeper();
         let is_on_loan = player.is_on_loan();
         let is_injured = player.player_attributes.is_injured;
+        let is_unhappy = player.statuses.get().contains(&PlayerStatusType::Unh);
         let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
         return Ok(PlayerGetTemplate {
@@ -397,6 +399,7 @@ pub async fn player_get_action(
             is_goalkeeper,
             is_on_loan,
             is_injured,
+            is_unhappy,
             debug,
         }.into_response());
     }
@@ -440,7 +443,11 @@ pub async fn player_get_action(
     };
 
     let is_goalkeeper = player.position().is_goalkeeper();
-    let sub_title = i18n.t("player_status_retired").to_string();
+    let sub_title = if player.retired {
+        i18n.t("player_status_retired").to_string()
+    } else {
+        i18n.t("free_agent").to_string()
+    };
     let debug = if debug_enabled { Some(build_debug_dto(player)) } else { None };
 
     Ok(PlayerGetTemplate {
@@ -465,6 +472,7 @@ pub async fn player_get_action(
         is_goalkeeper,
         is_on_loan: false,
         is_injured: false,
+        is_unhappy: false,
         debug,
     }.into_response())
 }

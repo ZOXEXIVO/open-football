@@ -56,7 +56,7 @@ impl StateProcessingHandler for ForwardDribblingState {
             );
         }
 
-      // Prevent infinite dribbling - timeout after 40 ticks to reassess.
+        // Prevent infinite dribbling - timeout after 40 ticks to reassess.
         if ctx.in_state_time > 40 {
             if can_shoot && distance_to_goal < 60.0 && ctx.player().has_clear_shot() {
                 return Some(
@@ -108,8 +108,8 @@ impl StateProcessingHandler for ForwardDribblingState {
                 target: ctx.player().opponent_goal_position(),
                 slowing_distance: 150.0,
             }
-            .calculate(ctx.player)
-            .velocity,
+                .calculate(ctx.player)
+                .velocity,
         )
     }
 
@@ -120,12 +120,6 @@ impl StateProcessingHandler for ForwardDribblingState {
 }
 
 impl ForwardDribblingState {
-    fn has_space_to_dribble(&self, ctx: &StateProcessingContext) -> bool {
-        let dribble_distance = 15.0;
-
-        !ctx.players().opponents().exists(dribble_distance)
-    }
-
     fn should_cross(&self, ctx: &StateProcessingContext) -> bool {
         let field_height = ctx.context.field_size.height as f32;
         let y = ctx.player.position.y;

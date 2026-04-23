@@ -14,7 +14,7 @@ use chrono::{Datelike, Duration, NaiveDateTime};
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::panic::{self, AssertUnwindSafe};
-use std::time::{Duration as StdDuration, Instant};
+use std::time::Duration as StdDuration;
 
 /// Lightweight country info for nationality lookups.
 /// Covers ALL countries (not just simulation participants).
@@ -77,14 +77,14 @@ impl FootballSimulator {
                 panic::catch_unwind(AssertUnwindSafe(|| {
                     continent.simulate(ctx_ref.with_continent(cid))
                 }))
-                .unwrap_or_else(|payload| {
-                    let msg = panic_message(&payload);
-                    log::error!(
+                    .unwrap_or_else(|payload| {
+                        let msg = panic_message(&payload);
+                        log::error!(
                         "continent {} ({}) panicked during simulate: {}. tick continues with empty result.",
                         cid, name, msg
                     );
-                    ContinentResult::new(cid, Vec::new(), Vec::new())
-                })
+                        ContinentResult::new(cid, Vec::new(), Vec::new())
+                    })
             })
             .collect();
 
@@ -115,15 +115,13 @@ impl FootballSimulator {
 
         // Refresh player indexes only if a transfer actually moved a player
         // between clubs today. Walking the world every day is wasteful.
-        let refresh = Instant::now();
-        let mut refresh_ms = 0u128;
+
         if data.dirty_player_index {
             if let Some(mut indexes) = data.indexes.take() {
                 indexes.refresh_player_indexes(data);
                 data.indexes = Some(indexes);
             }
             data.dirty_player_index = false;
-            refresh_ms = refresh.elapsed().as_millis();
         }
 
         // Seed history for any players created today that haven't been seeded
@@ -155,6 +153,8 @@ pub struct SimulatorData {
     /// Set to true whenever a transfer moves a player between clubs. Checked
     /// by the simulator to decide whether to rebuild player location indexes.
     pub dirty_player_index: bool,
+
+    pub free_agents: Vec<Player>,
 
     pub watchlist: Vec<u32>,
 
@@ -200,6 +200,7 @@ impl SimulatorData {
             transfer_pool: TransferPool::new(),
             indexes: None,
             dirty_player_index: false,
+            free_agents: Vec::new(),
             watchlist: Vec::new(),
             global_competitions,
             country_info,
@@ -295,8 +296,8 @@ impl SimulatorData {
                     // cheaply as possible before we pay any allocation cost.
                     if only_empty
                         && !club.teams.iter().any(|t| {
-                            t.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
-                        })
+                        t.players.iter().any(|p| p.statistics_history.needs_current_season_seed())
+                    })
                     {
                         continue;
                     }

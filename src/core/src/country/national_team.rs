@@ -1042,6 +1042,7 @@ impl NationalTeam {
             promises: Vec::new(),
             pending_signing: None,
             generated: true,
+            retired: false,
             load: PlayerLoad::new(),
             pending_contract_ask: None,
         }

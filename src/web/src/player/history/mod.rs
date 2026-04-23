@@ -8,7 +8,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::utils::FormattingUtils;
-use core::SimulatorData;
+use core::{PlayerStatusType, SimulatorData};
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -42,6 +42,7 @@ pub struct PlayerHistoryTemplate {
     pub is_goalkeeper: bool,
     pub is_on_loan: bool,
     pub is_injured: bool,
+    pub is_unhappy: bool,
 }
 
 pub struct PlayerHistorySeasonItem {
@@ -136,7 +137,7 @@ pub async fn player_history_action(
         PlayerPage::Redirect(r) => return Ok(r),
     };
 
-    let is_retired = team_opt.is_none();
+    let has_no_team = team_opt.is_none();
 
     let (neighbor_teams, country_leagues) = if let Some(team) = team_opt {
         get_neighbor_teams(team.club_id, simulator_data, &i18n)?
@@ -222,14 +223,19 @@ pub async fn player_history_action(
         clean_sheets: career_totals.clean_sheets,
     };
 
-    if is_retired {
+    if has_no_team {
+        let sub_title = if player.retired {
+            i18n.t("retired").to_string()
+        } else {
+            i18n.t("free_agent").to_string()
+        };
         Ok(PlayerHistoryTemplate {
             css_version: CSS_VERSION,
             computer_name: &COMPUTER_NAME,
             title,
             sub_title_prefix: i18n.t(player.position().as_i18n_key()).to_string(),
             sub_title_suffix: String::new(),
-            sub_title: i18n.t("retired").to_string(),
+            sub_title,
             sub_title_link: String::new(),
             sub_title_country_code: String::new(),
             header_color: "#808080".to_string(),
@@ -246,6 +252,7 @@ pub async fn player_history_action(
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: false,
             is_injured: false,
+            is_unhappy: false,
         }.into_response())
     } else {
         let team = team_opt.unwrap();
@@ -278,6 +285,7 @@ pub async fn player_history_action(
             is_goalkeeper: player.position().is_goalkeeper(),
             is_on_loan: player.is_on_loan(),
             is_injured: player.player_attributes.is_injured,
+            is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
         }.into_response())
     }
 }

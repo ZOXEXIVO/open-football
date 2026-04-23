@@ -8,6 +8,7 @@ use askama::Template;
 use axum::extract::{Path, State};
 use axum::response::{IntoResponse, Response};
 use core::HappinessEventType;
+use core::PlayerStatusType;
 use core::SimulatorData;
 use serde::Deserialize;
 
@@ -70,6 +71,7 @@ pub struct PlayerEventsTemplate {
     pub club_id: u32,
     pub is_on_loan: bool,
     pub is_injured: bool,
+    pub is_unhappy: bool,
     pub events: Vec<PlayerEventDto>,
 }
 
@@ -124,7 +126,13 @@ pub async fn player_events_action(
         sub_title_suffix: String::new(),
         sub_title: team_opt
             .map(|t| t.name.clone())
-            .unwrap_or_else(|| i18n.t("retired").to_string()),
+            .unwrap_or_else(|| {
+                if player.retired {
+                    i18n.t("retired").to_string()
+                } else {
+                    i18n.t("free_agent").to_string()
+                }
+            }),
         sub_title_link: team_opt
             .map(|t| format!("/{}/teams/{}", &route_params.lang, &t.slug))
             .unwrap_or_default(),
@@ -171,6 +179,7 @@ pub async fn player_events_action(
         club_id: team_opt.map(|t| t.club_id).unwrap_or(0),
         is_on_loan: player.is_on_loan(),
         is_injured: player.player_attributes.is_injured,
+        is_unhappy: player.statuses.get().contains(&PlayerStatusType::Unh),
         events,
     }.into_response())
 }

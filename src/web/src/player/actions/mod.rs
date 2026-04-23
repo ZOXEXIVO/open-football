@@ -50,6 +50,73 @@ fn get_team_info_by_club_id(sim: &core::SimulatorData, club_id: u32) -> Option<E
     get_team_info(sim, ci, coi, cli)
 }
 
+// ── Move on free ───────────────────────────────────────────────
+
+pub async fn move_on_free_action(
+    State(state): State<GameAppData>,
+    Path(params): Path<PlayerPathParam>,
+) -> impl IntoResponse {
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+
+    if let Some(ref mut arc_data) = *guard {
+        let sim = Arc::make_mut(arc_data);
+
+        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
+            Some(pos) => pos,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        let mut player = match sim.continents[ci].countries[coi].clubs[cli]
+            .teams.teams[ti].players.take_player(&params.player_id)
+        {
+            Some(p) => p,
+            None => return StatusCode::NOT_FOUND,
+        };
+
+        player.contract = None;
+        player.contract_loan = None;
+        player.statuses.remove(core::PlayerStatusType::Lst);
+        player.statuses.remove(core::PlayerStatusType::Trn);
+        player.statuses.remove(core::PlayerStatusType::Bid);
+        player.statuses.remove(core::PlayerStatusType::Enq);
+        player.statuses.remove(core::PlayerStatusType::Wnt);
+        player.statuses.remove(core::PlayerStatusType::Req);
+        player.statuses.remove(core::PlayerStatusType::Frt);
+        player.statuses.remove(core::PlayerStatusType::Unh);
+        player.statuses.remove(core::PlayerStatusType::Loa);
+        player.happiness.clear();
+
+        sim.free_agents.push(player);
+        sim.rebuild_indexes();
+        return StatusCode::OK;
+    }
+
+    StatusCode::NOT_FOUND
+}
+
+// ── Clear unhappy ──────────────────────────────────────────────
+
+pub async fn clear_unhappy_action(
+    State(state): State<GameAppData>,
+    Path(params): Path<PlayerPathParam>,
+) -> impl IntoResponse {
+    let data = Arc::clone(&state.data);
+    let mut guard = data.write().await;
+
+    if let Some(ref mut arc_data) = *guard {
+        let sim = Arc::make_mut(arc_data);
+
+        if let Some(player) = sim.player_mut(params.player_id) {
+            player.statuses.remove(core::PlayerStatusType::Unh);
+            player.happiness.clear();
+            return StatusCode::OK;
+        }
+    }
+
+    StatusCode::NOT_FOUND
+}
+
 // ── Clear injury ────────────────────────────────────────────────
 
 pub async fn clear_injury_action(
@@ -163,16 +230,6 @@ pub async fn transfer_action(
         let date = sim.date.date();
         let fee = body.fee.unwrap_or(0) as f64;
 
-        let (ci, coi, cli, ti) = match sim.find_player_position(params.player_id) {
-            Some(pos) => pos,
-            None => return StatusCode::NOT_FOUND,
-        };
-
-        let source = match get_team_info(sim, ci, coi, cli) {
-            Some(t) => t,
-            None => return StatusCode::NOT_FOUND,
-        };
-
         let (dci, dcoi, dcli, dti) = match sim.find_club_main_team(body.to_club_id) {
             Some(pos) => pos,
             None => return StatusCode::NOT_FOUND,
@@ -183,21 +240,40 @@ pub async fn transfer_action(
             None => return StatusCode::NOT_FOUND,
         };
 
-        // Get player name before taking
-        let player_name = sim.continents[ci].countries[coi].clubs[cli]
-            .teams.teams[ti].players.players.iter()
-            .find(|p| p.id == params.player_id)
-            .map(|p| p.full_name.to_string())
-            .unwrap_or_default();
+        // Try to take player from a team, or from the free agents pool
+        let from_team = sim.find_player_position(params.player_id);
 
-        let mut player = match sim.continents[ci].countries[coi].clubs[cli]
-            .teams.teams[ti].players.take_player(&params.player_id)
-        {
-            Some(p) => p,
-            None => return StatusCode::NOT_FOUND,
+        let (mut player, source_info) = if let Some((ci, coi, cli, ti)) = from_team {
+            let source = match get_team_info(sim, ci, coi, cli) {
+                Some(t) => t,
+                None => return StatusCode::NOT_FOUND,
+            };
+
+            let p = match sim.continents[ci].countries[coi].clubs[cli]
+                .teams.teams[ti].players.take_player(&params.player_id)
+            {
+                Some(p) => p,
+                None => return StatusCode::NOT_FOUND,
+            };
+
+            (p, Some((ci, coi, source)))
+        } else {
+            // Take from free agents pool
+            let idx = match sim.free_agents.iter().position(|p| p.id == params.player_id) {
+                Some(i) => i,
+                None => return StatusCode::NOT_FOUND,
+            };
+            let p = sim.free_agents.swap_remove(idx);
+            (p, None)
         };
 
-        player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
+        let player_name = player.full_name.to_string();
+
+        if let Some((_, _, ref source)) = source_info {
+            player.on_manual_transfer(&source.info, &dest.info, Some(fee), date);
+        } else {
+            player.on_manual_transfer(&dest.info, &dest.info, None, date);
+        }
 
         // Clear transfer-related statuses: player is joining a new club
         player.statuses.remove(core::PlayerStatusType::Lst);
@@ -218,10 +294,6 @@ pub async fn transfer_action(
         let salary = player.contract.as_ref().map(|c| c.salary).unwrap_or(1000);
         let mut new_contract = PlayerClubContract::new(salary, expiration);
 
-        // Rank the incoming player against destination teammates in the
-        // SAME position group, not the whole squad. Whole-squad ranking
-        // mislabels a specialist (goalkeeper, lone striker) as NotNeeded
-        // simply because outfield depth skews the CA distribution.
         let player_ca = player.player_attributes.current_ability;
         let player_age = core::utils::DateUtils::age(player.birth_date, date);
         let player_group = player.position().position_group();
@@ -230,7 +302,7 @@ pub async fn transfer_action(
             .filter(|p| p.position().position_group() == player_group)
             .map(|p| p.player_attributes.current_ability)
             .collect();
-        dest_cas.push(player_ca); // include the player themselves
+        dest_cas.push(player_ca);
         dest_cas.sort_unstable_by(|a, b| b.cmp(a));
         new_contract.squad_status = core::PlayerSquadStatus::calculate(player_ca, player_age, &dest_cas);
 
@@ -240,22 +312,37 @@ pub async fn transfer_action(
         sim.continents[dci].countries[dcoi].clubs[dcli]
             .teams.teams[dti].players.add(player);
 
-        // Record in transfer history (both countries if cross-country)
+        // Record in transfer history
         let transfer_type = if fee > 0.0 { TransferType::Permanent } else { TransferType::Free };
-        let completed = CompletedTransfer::new(
-            params.player_id, player_name,
-            source.club_id, source.team_id, source.info.name.clone(),
-            dest.club_id, dest.info.name.clone(),
-            date,
-            CurrencyValue::new(fee, Currency::Usd),
-            transfer_type,
-        ).with_reason("Manual".to_string());
 
-        sim.continents[ci].countries[coi]
-            .transfer_market.transfer_history.push(completed.clone());
+        if let Some((ci, coi, ref source)) = source_info {
+            let completed = CompletedTransfer::new(
+                params.player_id, player_name,
+                source.club_id, source.team_id, source.info.name.clone(),
+                dest.club_id, dest.info.name.clone(),
+                date,
+                CurrencyValue::new(fee, Currency::Usd),
+                transfer_type,
+            ).with_reason("Manual".to_string());
 
-        // Also record in dest country if different
-        if (dci, dcoi) != (ci, coi) {
+            sim.continents[ci].countries[coi]
+                .transfer_market.transfer_history.push(completed.clone());
+
+            if (dci, dcoi) != (ci, coi) {
+                sim.continents[dci].countries[dcoi]
+                    .transfer_market.transfer_history.push(completed);
+            }
+        } else {
+            // Free agent signing — record only in destination country
+            let completed = CompletedTransfer::new(
+                params.player_id, player_name,
+                0, 0, String::from("Free Agent"),
+                dest.club_id, dest.info.name.clone(),
+                date,
+                CurrencyValue::new(0.0, Currency::Usd),
+                TransferType::Free,
+            ).with_reason("Manual".to_string());
+
             sim.continents[dci].countries[dcoi]
                 .transfer_market.transfer_history.push(completed);
         }

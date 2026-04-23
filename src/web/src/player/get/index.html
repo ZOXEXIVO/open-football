@@ -46,7 +46,11 @@
                         </div>
                         {% else %}
                         <div class="fm-ph-meta">
+                            {% if player.contract.is_some() %}
                             <span class="fm-detail-value fm-ph-contracted">{{ i18n.t("contracted_to") }} <a href="/{{ lang }}/teams/{{ player.team_slug }}">{{ player.team_name }}</a></span>
+                            {% else %}
+                            <span class="fm-detail-value fm-ph-contracted">{{ i18n.t("free_agent") }}</span>
+                            {% endif %}
                         </div>
                         {% endif %}
                         <div class="fm-ph-meta">

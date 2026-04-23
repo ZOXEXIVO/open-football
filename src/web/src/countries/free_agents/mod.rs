@@ -95,35 +95,24 @@ pub async fn country_free_agents_action(
 
     let now = simulator_data.date.date();
 
-    let mut players: Vec<FreeAgentPlayerDto> = country
-        .clubs
+    let mut players: Vec<FreeAgentPlayerDto> = simulator_data
+        .free_agents
         .iter()
-        .flat_map(|club| {
-            club.teams.teams.iter().flat_map(move |team| {
-                team.players
-                    .players
-                    .iter()
-                    .filter_map(move |player| {
-                        if player.contract.is_some() || player.is_on_loan() {
-                            return None;
-                        }
-
-                        let position = player.positions.display_positions_compact();
-                        Some(FreeAgentPlayerDto {
-                            slug: player.slug(),
-                            first_name: player.full_name.display_first_name().to_string(),
-                            last_name: player.full_name.display_last_name().to_string(),
-                            position,
-                            age: DateUtils::age(player.birth_date, now),
-                            current_ability: get_ability_stars(
-                                player.player_attributes.current_ability,
-                            ),
-                            potential_ability: get_ability_stars(
-                                player.player_attributes.potential_ability,
-                            ),
-                        })
-                    })
-            })
+        .map(|player| {
+            let position = player.positions.display_positions_compact();
+            FreeAgentPlayerDto {
+                slug: player.slug(),
+                first_name: player.full_name.display_first_name().to_string(),
+                last_name: player.full_name.display_last_name().to_string(),
+                position,
+                age: DateUtils::age(player.birth_date, now),
+                current_ability: get_ability_stars(
+                    player.player_attributes.current_ability,
+                ),
+                potential_ability: get_ability_stars(
+                    player.player_attributes.potential_ability,
+                ),
+            }
         })
         .collect();
 

@@ -280,6 +280,10 @@ impl SimulatorData {
                 }
             }
         }
+        // Check free agents pool
+        if let Some(player) = self.free_agents.iter().find(|p| p.id == id) {
+            return Some(player);
+        }
         None
     }
 
@@ -299,10 +303,14 @@ impl SimulatorData {
         // Phase 1: immutable search for array indices
         let pos = self.find_player_position(id);
 
-        // Phase 2: mutable access at known position
-        let (ci, coi, cli, ti) = pos?;
-        self.continents[ci].countries[coi].clubs[cli]
-            .teams.teams[ti].players.find_mut(id)
+        if let Some((ci, coi, cli, ti)) = pos {
+            // Phase 2: mutable access at known position
+            return self.continents[ci].countries[coi].clubs[cli]
+                .teams.teams[ti].players.find_mut(id);
+        }
+
+        // Check free agents pool
+        self.free_agents.iter_mut().find(|p| p.id == id)
     }
 
     pub fn find_player_position(&self, id: u32) -> Option<(usize, usize, usize, usize)> {

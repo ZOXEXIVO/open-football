@@ -449,6 +449,7 @@ impl CountryResult {
                 debug!("Overdue retirement: {} (age {})", player.full_name, player.age(date));
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
+                player.retired = true;
                 country.retired_players.push(player);
             }
         }
@@ -531,6 +532,7 @@ impl CountryResult {
                 debug!("Player retired: {} (age {})", player.full_name, player.age(date));
                 player.statuses.add(date, PlayerStatusType::Ret);
                 player.contract = None;
+                player.retired = true;
                 country.retired_players.push(player);
             }
         }

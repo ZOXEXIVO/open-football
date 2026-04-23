@@ -5,6 +5,14 @@ use axum::Router;
 pub fn routes() -> Router<GameAppData> {
     Router::new()
         .route(
+            "/api/players/{player_id}/move-on-free",
+            post(super::move_on_free_action),
+        )
+        .route(
+            "/api/players/{player_id}/clear-unhappy",
+            post(super::clear_unhappy_action),
+        )
+        .route(
             "/api/players/{player_id}/clear-injury",
             post(super::clear_injury_action),
         )

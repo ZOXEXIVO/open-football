@@ -130,6 +130,7 @@
   "flair": "Flair",
   "formation": "Formation",
   "free": "free",
+  "free_agent": "Free Agent",
   "free_agents": "Free Agents",
   "free_kick_taking": "Free kick taking",
   "from": "From",
@@ -643,6 +644,9 @@
   "loan_player": "Loan Player",
   "cancel_loan": "Cancel Loan",
   "cancel_loan_confirm": "Cancel this player's loan and return to parent club?",
+  "move_on_free": "Move on Free",
+  "move_on_free_confirm": "Release this player on a free transfer?",
+  "clear_unhappy": "Clear Unhappy",
   "n_seasons": "{n} Season|{n} Seasons",
 
   "dec_transfer_listed": "Transfer listed",

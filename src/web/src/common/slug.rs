@@ -61,6 +61,8 @@ pub fn resolve_player_page<'a>(
 
     let (player, team) = if let Some((p, t)) = data.player_with_team(player_id) {
         (p, Some(t))
+    } else if let Some(p) = data.free_agents.iter().find(|p| p.id == player_id) {
+        (p, None)
     } else if let Some(p) = data.retired_player(player_id) {
         (p, None)
     } else {

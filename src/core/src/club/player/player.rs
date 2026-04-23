@@ -123,6 +123,8 @@ pub struct Player {
     /// fill, youth intake, synthetic national-team filler). False when loaded
     /// from the source database. Useful for filtering, telemetry, and UI hints.
     pub generated: bool,
+
+    pub retired: bool,
 }
 
 /// What the manager committed to. Deliberately narrow — each new variant
