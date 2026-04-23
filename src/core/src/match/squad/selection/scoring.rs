@@ -544,28 +544,54 @@ impl ScoringEngine {
         score
     }
 
-    /// Goalkeeper score
+    /// Goalkeeper score — CA first, keeper-specific skills second, everything
+    /// else a tiebreaker. `perceived_quality()` composes from outfield skills
+    /// (finishing, dribbling, tackling, passing…) and never reads the
+    /// goalkeeping block, so for a keeper-vs-keeper comparison it reflects
+    /// the wrong attributes. We anchor on `current_ability` (so the better
+    /// keeper plays) and add a GK-specific skill composite that actually
+    /// reads handling, reflexes, aerial ability, and distribution.
     pub fn goalkeeper_score(&self, player: &Player, staff: &Staff, is_friendly: bool) -> f32 {
-        let p = &self.profile;
-
+        let ca = player.player_attributes.current_ability as f32 / 10.0;
+        let gk_q = self.gk_perceived_quality(player);
         let gk_level = player
             .positions
             .get_level(PlayerPositionType::Goalkeeper) as f32;
-        let quality = self.perceived_quality(player);
         let readiness = self.match_readiness(player);
 
-        let mut score = gk_level * (0.30 * (1.0 - p.tactical_blindness * 0.3))
-            + quality * (0.25 + p.judging_accuracy * 0.05)
-            + readiness * (0.25 + p.conservatism * 0.05);
+        let mut score = ca * 2.0
+            + gk_q * 1.0
+            + gk_level * 0.10
+            + readiness * 0.20;
 
         score -= self.condition_floor_penalty(player, is_friendly);
 
-        let rep = self.reputation_score(player);
-        let rel = self.relationship_score(player, staff);
-        score += rep * 0.4;
-        let rel_dampening = if rel < 0.0 { 1.0 } else { (1.0 - rep * 0.15).max(0.3) };
-        score += rel * rel_dampening * 0.4;
+        score += self.reputation_score(player) * 0.30;
+        score += self.relationship_score(player, staff) * 0.30;
 
         score
+    }
+
+    /// Keeper-specific skill composite. Mirrors `perceived_quality` but
+    /// built from the goalkeeping skill block plus the mental/physical
+    /// attributes that actually matter for shot-stopping, crosses, and
+    /// distribution. All inputs are on the 1-20 scale, so the result is
+    /// 1-20 too — directly comparable to readiness and gk_level terms.
+    fn gk_perceived_quality(&self, player: &Player) -> f32 {
+        let gk = &player.skills.goalkeeping;
+        let m = &player.skills.mental;
+        let ph = &player.skills.physical;
+
+        let shot_stopping = (gk.handling + gk.reflexes + gk.one_on_ones) / 3.0;
+        let aerial = (gk.aerial_reach + gk.command_of_area + ph.jumping) / 3.0;
+        let distribution = (gk.kicking + gk.throwing + gk.passing) / 3.0;
+        let sweeper = (gk.rushing_out + gk.communication + m.decisions + m.anticipation) / 4.0;
+        let keeper_mind = (m.concentration + m.positioning + m.composure + m.bravery) / 4.0;
+
+        shot_stopping * 0.40
+            + aerial * 0.20
+            + keeper_mind * 0.20
+            + sweeper * 0.10
+            + distribution * 0.10
     }
 }
