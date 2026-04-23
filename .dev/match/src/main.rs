@@ -9,7 +9,7 @@ use core::{PeopleNameGeneratorData, PlayerGenerator};
 use axum::response::IntoResponse;
 use flate2::write::GzEncoder;
 use flate2::Compression;
-use rand::Rng;
+use rand::RngExt;
 use rayon::prelude::*;
 use serde::Serialize;
 use std::io::Write;

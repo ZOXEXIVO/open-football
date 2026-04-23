@@ -238,7 +238,11 @@ impl StateProcessingHandler for ForwardRunningState {
             // Squared fin_factor steepens the bottom of the curve so
             // truly poor finishers shoot much less; linear composure
             // adds a gentle nudge for cool-headed players.
-            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.05, 0.95);
+            // Floor at 0.20 (not 0.05): even a low-finishing striker in
+            // a clear shot opportunity should pull the trigger on ~20%
+            // of ticks in the window, not 5%. 0.05 made low-skill
+            // forwards defer indefinitely instead of attempting shots.
+            let willingness = (fin_factor * fin_factor * 0.80 + comp_factor * 0.15).clamp(0.20, 0.95);
             let shot_triggered = rand::random::<f32>() < willingness;
 
             // Priority 0.5: Clear shot within skill-permitted range.

@@ -406,10 +406,12 @@ impl<'p> PlayerOperationsImpl<'p> {
             return false;
         }
 
-        // Close-pressure check: a defender within 8u of the shooter
+        // Close-pressure check: a defender within 5u of the shooter
         // closes the shooting angle regardless of where they stand
-        // relative to the direct line.
-        let immediate_pressure = self.ctx.players().opponents().nearby(8.0)
+        // relative to the direct line. 5u (~2.5 m) matches "defender
+        // breathing on you, but shot still possible"; 8u was
+        // shoulder-to-shoulder and rejected nearly every box shot.
+        let immediate_pressure = self.ctx.players().opponents().nearby(5.0)
             .any(|opp| !opp.tactical_positions.is_goalkeeper());
         if immediate_pressure {
             return false;
@@ -443,29 +445,28 @@ impl<'p> PlayerOperationsImpl<'p> {
                     + opp_skills.technical.tackling
                     + opp_skills.mental.positioning)
                     / 60.0; // 0..1
-                let corridor_half_width = 5.0 + def_quality * 9.0; // 5..14
+                let corridor_half_width = 4.0 + def_quality * 6.0; // 4..10
 
                 perp_distance < corridor_half_width
             })
             .count();
 
         // DEFENDER-DENSITY GATE. Zero blockers = clearly clear. One
-        // blocker = contested — only elite finishers (finishing 15+)
-        // force through. Two or more = organised defence, shot is
-        // practically impossible and only a world-class striker
-        // attempts it. This is the second-biggest natural-logic shot
-        // filter: real football defences pack the box, and the
-        // shooter recognising "too many bodies" and passing
-        // instead is the behaviour we need.
+        // blocker = contested — average forwards (fin ~9+) can still
+        // shoot through. Two or more = organised defence, needs a
+        // quality striker (fin ~14+). Real football defences pack the
+        // box but strikers still get shots away; the earlier 0.75 / 0.90
+        // thresholds meant only fin-15+ / fin-18+ forwards ever shot in
+        // traffic, which collapsed total shot volume.
         match blockers {
             0 => true,
             1 => {
                 let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-                finishing >= 0.75
+                finishing >= 0.45
             }
             _ => {
                 let finishing = self.ctx.player.skills.technical.finishing / 20.0;
-                finishing >= 0.90
+                finishing >= 0.70
             }
         }
     }
